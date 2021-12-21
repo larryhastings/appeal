@@ -851,7 +851,7 @@ by your `render()` method.
 `Option` class.  `Option` behaves identically
 to `MultiOption`, except it only permits
 specifying the option once on the command-line.
-(Which means it will only your `option()`
+(Which means it will only call your `option()`
 method once.)
 
 
