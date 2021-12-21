@@ -1,0 +1,4 @@
+POSIX command-line guidelines
+
+        https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/basedefs/V1_chap12.html
+
