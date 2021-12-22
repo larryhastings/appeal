@@ -82,7 +82,7 @@ you're already halfway to understanding Appeal!
 Appeal isn't like other command-line parsing libraries.
 In fact, you really shouldn't think of Appeal as a
 "command-line parsing library" per se. And, although you
-work with Appeal by defining functions, shouldn't you
+work with Appeal by defining functions, you shouldn't
 think of these functions as "callbacks" either.
 
 Appeal lets you design *APIs* callable from the command-line.
