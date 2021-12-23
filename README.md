@@ -1276,6 +1276,13 @@ you can add logging options to every one of your commands, without
 having to re-implement it each time.  (Though in most cases it's
 probably better to add such options to a global command function.)
 
+Internally this works exactly like you'd expect.  Since the
+`log` parameter consumes no command-line arguments, Appeal will
+always call its annotation.  Specifying any of the options will
+set arguments for that call.  And the resulting `Logging` object
+will be passed in as the argument to `log`.
+
+
 What's really going on here is that, from Appeal's perspective,
 *there's no difference between a "command function" and a
 "converter".*  A command function is just a converter that
@@ -1332,18 +1339,19 @@ Creates a new Appeal instance.
 If `help` is true, Appeal automatically adds help support to
 your program:
 
-* Adds `-h` and `--help` options that print basic help.
-* If your Appeal instance has any commands, automatically
-  adds a `help` command (if one has not already been defined).
+* Adds hard-coded `-h` and `--help` options that print basic help.
+* If your Appeal instance has any commands, and you haven't defined
+  a `help` command, automatically adds a `help` command.
 
 If `version` is true, it should be a string denoting the version
 of your program.  Appeal will automatically add version support
 to your program:
 
-* Adds `-v` and `--version` options that prints the version string.
-* If your Appeal instance has any commands, automatically
-  adds a `version` command (if one has not already been defined)
-  which also prints the version string.
+* Adds hard-coded `-v` and `--version` options that print
+  the version string.
+* If your Appeal instance has any commands, and you haven't defined
+  a `version` command, automatically adds a `version` command
+  which prints the version string.
 
 `positional_argument_usage_format` is the format string used
 to format positional arguments for usage.  The only valid
@@ -1362,18 +1370,18 @@ for that keyword-only parameter.
 
 The API for a `default_options` callable should be:
 
-    default_options(appeal, fn, parameter_name, annotation, default)
+    default_options(appeal, callable, parameter_name, annotation, default)
 
 * `appeal` is the Appeal instance.
-* `fn` is the command function or converter the parameter is defined on.
+* `callable` is the command function or converter the parameter is defined on.
 * `parameter_name` is the name of the keyword-only parameter that does
    not have any explicitly defined options.
-* `annotation` is the annotation function for this parameter.  This may
+* `annotation` is the annotation for this parameter.  This may
    be explicitly set on the function, or it may be inferred from the
-   default parameter.  It will never be `inspect.Parameter.empty`.
+   default parameter.  It may never be `inspect.Parameter.empty`.
 * `default` is the default value for this parameter.  Since Appeal
    requires that keyword-only parameters must always have default values,
-   this will never be `inspect.Parameter.empty`.
+   this may never be `inspect.Parameter.empty`.
 
 The return value of `default_options` is ignored.
 
@@ -1384,19 +1392,19 @@ documented below.
 `Appeal.command(name=None)`
 
 Used as a decorator.  Returns a callable that accepts a single
-parameter `fn`, which must be a callable.
+parameter `callable`, which must be a callable.
 
 Adds the callable as a command
 for the current Appeal instance.  If `name` is `None`, the name of
-the command will be `fn.__name__`.
+the command will be `callable.__name__`.
 
-(Doesn't modify `fn` in any way.)
+(Doesn't modify `callable` in any way.)
 
 
 `Appeal.global_command()`
 
 Used as a decorator.  Returns a callable that accepts a single
-parameter `fn`, which must be a callable.
+parameter `callable`, which must be a callable.
 
 Sets the *global command* for this Appeal object.  This is
 the command that processes global options before the first
@@ -1405,57 +1413,68 @@ command function.
 Can only be set on the topmost Appeal object.  (You can't
 call `app.command('foo').global_command()`.)
 
-(Doesn't modify `fn` in any way.)
+(Doesn't modify `callable` in any way.)
 
 
 `Appeal.default_command()`
 
 Used as a decorator.  Returns a callable that accepts a single
-parameter `fn`, which must be a callable.
+parameter `callable`, which must be a callable.
 
-Sets the *default command*.  The default command is run when
-your Appeal instance has subcommands, but the user doesn't supply
-the name of a command on the command-line.
+Sets the *default command* for this Appeal object.  The default
+command is run when your Appeal instance has subcommands,
+but the user doesn't supply the name of a command on the command-line.
 
 Your default command function must not take any parameters.
 
-(Doesn't modify `fn` in any way.)
+(Doesn't modify `callable` in any way.)
 
 
 `Appeal.option(parameter_name, *options, annotation=empty, default=empty)`
 
 Used as a decorator.  Returns a callable that accepts a single
-parameter `fn`, which must be a callable.
+parameter `callable`, which must be a callable.
 
 Maps an option on the command-line to the parameter `parameter_name`
 on the decorated function.  All subsequent positional parameters
-are options, like `--verbose` or `-v`.  (Thus they must be strings,
+are options, like `--verbose` or `-v`.  (Thus, they must be strings,
 either exactly two characters long, or four or more characters long.)
 
-If supplied, `annotation` is the converter that will be used if this
+`annotation` is the converter that will be used if this
 option is invoked.  If no explicit `annotation` is supplied,
-`Appeal.option()` will use the annotation calculated from the
-decorated function's signature.
+`Appeal.option()` will default to `type(default)`.
+
+`default` is the default value for this option.  Since this parameter
+only comes into play if the user specifies this option, a `default` value
+here is nearly useless.  But it does have two uses:
+
+* If the type of the annotation is a subclass of `Option`, this default
+  value will be passed in to `Option.init()`.
+* If no `annotation` is specified, the annotation defaults to
+  `type(default)`.
+
+It's illegal to call `Appeal.option()` without specifying a value
+for either `annotation` or `default`.
 
 Raises `AppealConfigurationError` if any `option` has already been
 mapped inside this `Appeal` instance *with a different signature.*
 
-(Doesn't modify `fn` in any way.)
+(Doesn't modify `callable` in any way.)
 
 
 `Appeal.argument(self, parameter_name, *, usage=None)`
 
 Used as a decorator.  Returns a callable that accepts a single
-parameter `fn`, which must be a callable.
+parameter `callable`, which must be a callable.
 
 Allos for configuration of a positional (or positional-or-keyword)
 parameter on a command function or converter.  `parameter_name` is the
-name of the parameter; it must be a parameter of the decorated `fn`.
+name of the parameter; it must be a parameter of the decorated `callable`.
 
 Currently the only supported configuration is `usage`, which specifies
 the string that will represent this parameter in usage information.
 
-(Doesn't modify `fn` in any way.)
+(Doesn't modify `callable` in any way.)
 
 
 `Appeal.main(args=None)`
@@ -1512,7 +1531,7 @@ Notes on the default option semantics:
 
 * What if you have multiple keyword-only parameters that have
   the same first letter?  Only the first mapping succeeds.
-  So if you use `def myfn(*, block_type=None, bad_block=None)`
+  So if you use `def myoptions(*, block_type=None, bad_block=None)`
   as an Appeal command, `-b` will map to `block_type`.  If you
   want it to map to `bad_block`, just swap the two keyword-only
   parameters so `bad_block` is first, or explicitly define your
