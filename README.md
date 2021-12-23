@@ -7,59 +7,63 @@
 
 ## Quickstart
 
-    import appeal
-    import sys
+```Python
+import appeal
+import sys
 
-    app = appeal.Appeal()
+app = appeal.Appeal()
 
-    @app.command()
-    def hello(name):
-        print(f"Hello, {name}!")
+@app.command()
+def hello(name):
+    print(f"Hello, {name}!")
 
-    app.main()
-
+app.main()
+```
 
 Here's a simple ``fgrep`` utility:
 
-    import appeal
-    import sys
+```Python
+import appeal
+import sys
 
-    app = appeal.Appeal()
+app = appeal.Appeal()
 
-    @app.command()
-    def fgrep(pattern, *files, ignore_case=False):
-        if not files:
-            files = ['-']
-        print_file = len(files) > 1
-        if ignore_case:
-            pattern = pattern.lower()
-        for file in files:
-            if file == "-":
-                f = sys.stdin
+@app.command()
+def fgrep(pattern, *files, ignore_case=False):
+    if not files:
+        files = ['-']
+    print_file = len(files) > 1
+    if ignore_case:
+        pattern = pattern.lower()
+    for file in files:
+        if file == "-":
+            f = sys.stdin
+        else:
+            f = open(file, "rt")
+        for line in f:
+            if ignore_case:
+                match = pattern in line.lower()
             else:
-                f = open(file, "rt")
-            for line in f:
-                if ignore_case:
-                    match = pattern in line.lower()
-                else:
-                    match = pattern in line
-                if match:
-                    if print_file:
-                        print(file + ": ", end="")
-                    print(line.rstrip())
-            if file != "-":
-                f.close()
+                match = pattern in line
+            if match:
+                if print_file:
+                    print(file + ": ", end="")
+                print(line.rstrip())
+        if file != "-":
+            f.close()
 
 
-    if __name__ == "__main__":
-        app.main()
+if __name__ == "__main__":
+    app.main()
+```
 
 
 ## Overview
 
 Appeal is a command-line argument processing library for
 Python, like `argparse`, `optparse`, `getopt`, `click`,
-and `docopt`.  But Appeal takes a refreshing new approach.
+`docopt`, and `Typer`.  But Appeal takes a refreshing new
+approach.
 
 Other libraries have complicated, cumbersome interfaces
 that force you to repeat yourself over and over.
@@ -78,8 +82,8 @@ you're already halfway to understanding Appeal!
 Appeal isn't like other command-line parsing libraries.
 In fact, you really shouldn't think of Appeal as a
 "command-line parsing library" per se. And, although you
-work with Appeal by defining functions, nor should you
-think of these functions as "callbacks".
+work with Appeal by defining functions, you shouldn't
+think of these functions as "callbacks" either.
 
 Appeal lets you design *APIs* callable from the command-line.
 It's just like any other Python library API--except that
@@ -143,8 +147,8 @@ would be the name of the file you wanted to search.
 
 A *command* is a special kind of argument some programs
 use to specify what function you want the program to perform.
-A good example of a program that uses commands is "git";
-when you run "git add" or "git commit", "add" and "commit"
+A good example of a program that uses commands is `git`;
+when you run `git add` or `git commit`, `add` and `commit`
 are both *commands.*  The command is always the first
 argument to a program that uses them.
 
@@ -187,8 +191,10 @@ command options can be long options or short options, too.
 
 Now let's consider a Python function call:
 
-    def fgrep(pattern, filename, *, ignore_case=False):
-        ...
+```Python
+def fgrep(pattern, filename, *, ignore_case=False):
+    ...
+```
 
 We can draw some similarities between Python
 function calls and command-lines.
@@ -223,14 +229,16 @@ refer to these collectively as *positional parameters.)*
 In all our examples, we're going to work with a script
 called `mygit.py`.  The first version looks like this:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def hello(name):
-        print(f"Hello, {name}!")
+@app.command()
+def hello(name):
+    print(f"Hello, {name}!")
 
-    app.main()
+app.main()
+```
 
 If you now ran `python3 mygit.py help hello`, you'd
 see usage information for your `hello` command.
@@ -267,7 +275,9 @@ So!  If you ran this command at the command-line:
 
 Appeal would call your `hello()` function like this:
 
-    hello('world')
+```Python
+hello('world')
+```
 
 The return value from your command function is the return
 code for your program.  If you return `None` or `0`, that's
@@ -281,14 +291,16 @@ statement, Python behaves as if your function ended with
 
 Let's change up our example, and add an optional parameter:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def fgrep(pattern, filename=None):
-        print(f"fgrep {pattern} {filename}")
+@app.command()
+def fgrep(pattern, filename=None):
+    print(f"fgrep {pattern} {filename}")
 
-    app.main()
+app.main()
+```
 
 Now `filename` is optional, with a default value of `None`.
 
@@ -298,7 +310,9 @@ You can call `mygit.py fgrep` with both parameters.  Running this:
 
 results in Appeal calling your `fgrep()` function like this:
 
-    fgrep('WM_CREATE', 'window.c')
+```Python
+fgrep('WM_CREATE', 'window.c')
+```
 
 But you can also omit the `filename` parameter.
 If you run this command at the command-line:
@@ -307,7 +321,9 @@ If you run this command at the command-line:
 
 Appeal would call `fgrep()` like this:
 
-    fgrep('WM_CREATE', None)
+```Python
+fgrep('WM_CREATE', None)
+```
 
 Actually that's not 100% accurate.  When Appeal
 builds the arguments to call your `fgrep()` function,
@@ -315,7 +331,9 @@ it only passes in the arguments you passed in on the
 command-line.  So actually Appeal calls your `fgrep()`
 function like this:
 
-    fgrep('WM_CREATE')
+```Python
+fgrep('WM_CREATE')
+```
 
 And it's Python that sets the `filename` parameter to `None`.
 
@@ -325,14 +343,16 @@ takes `*args` (internally called a *var_positional*
 parameter) can accept as many positional arguments as the
 user wants to supply.  Here's a demonstration:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def fgrep(pattern, *filenames):
-        print(f"fgrep {pattern} {filenames}")
+@app.command()
+def fgrep(pattern, *filenames):
+    print(f"fgrep {pattern} {filenames}")
 
-    app.main()
+app.main()
+```
 
 Now the user could pass in no filenames, one filename,
 fifty filenames--as many as they want!  They'd all be
@@ -346,14 +366,16 @@ Now let's examine what Appeal does with keyword-only
 parameters.  Let's add three keyword-only parameters
 to our example:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def fgrep(pattern, *filenames, color="", number=0, ignore_case=False):
-        print(f"fgrep {pattern} {filenames} {color!r} {number} {ignore_case}")
+@app.command()
+def fgrep(pattern, *filenames, color="", number=0, ignore_case=False):
+    print(f"fgrep {pattern} {filenames} {color!r} {number} {ignore_case}")
 
-    app.main()
+app.main()
+```
 
 Now the `fgrep` command-line usage looks like this:
 
@@ -421,7 +443,9 @@ Let's put it all together!  If you ran this command at the command-line:
 
 Appeal would call `fgrep()` like this:
 
-    fgrep('WM_CREATE', 'window.c', color='blue', number=3, ignore_case=True)
+```Python
+fgrep('WM_CREATE', 'window.c', color='blue', number=3, ignore_case=True)
+```
 
 And if you ran this command at the command-line:
 
@@ -429,7 +453,9 @@ And if you ran this command at the command-line:
 
 Appeal would call `fgrep()` like this:
 
-    fgrep('boogaloo', color='green')
+```Python
+fgrep('boogaloo', color='green')
+```
 
 
 ## The Global Command, Subcommands, And The Default Command
@@ -442,7 +468,7 @@ of this document, `mygit.py` takes a `--debug`
 option specified before the command--which makes it
 a "global option".
 
-Appeal supports global options too.  It's simple:
+Appeal supports global options, too.  It's simple:
 just write a command function like normal, but
 instead of decorating it with `command()`, decorate
 it with `global_command()`.  Appeal will process all
@@ -460,13 +486,15 @@ decorate your command function with two chained
 command calls, specifying the name of the existing
 command in the first call, like so:
 
-    @app.command()
-    def db(...):
-        ...
+```Python
+@app.command()
+def db(...):
+    ...
 
-    @app.command("db").command()
-    def deploy(...):
-        ...
+@app.command("db").command()
+def deploy(...):
+    ...
+```
 
 This adds a `deploy` subcommand under the `db` command.
 You call it from the command-line like so:
@@ -479,7 +507,7 @@ That's what the *default command* is for.  The
 default command is a command function Appeal will
 run for you if your Appeal instance has commands,
 and the user doesn't supply one.  For example,
-if `mygit.py` has tend different commands, but the
+if `mygit.py` has ten different commands, but the
 user just runs
 
     mygit.py
@@ -498,9 +526,11 @@ For example, if you wanted your program to run the `status`
 command when the user didn't specify a command, you could
 do this:
 
-    @app.default_command()
-    def default():
-        return status()
+```Python
+@app.default_command()
+def default():
+    return status()
+```
 
 Notice that the default command doesn't take any arguments
 or options.  It simply can't accept any, by definition.
@@ -513,10 +543,11 @@ name of the command to run.)
 
 And yes, subcommands can have a default command too:
 
-    @app.command('db').default_command()
-    def db_default():
-        return db_status()
-
+```Python
+@app.command('db').default_command()
+def db_default():
+    return db_status()
+```
 
 ## Annotations And Introspection
 
@@ -525,14 +556,16 @@ to conceptually represent types.  Appeal supports annotations
 too; they explicitly tell Appeal what type of object a parameter
 wants.  For example:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def fgrep(pattern, *filenames, id:float=None):
-        print(f"fgrep {pattern} {filenames} {id}")
+@app.command()
+def fgrep(pattern, *filenames, id:float=None):
+    print(f"fgrep {pattern} {filenames} {id}")
 
-    app.main()
+app.main()
+```
 
 Here `id` has a default value of `None`, but it also has
 an explicit annotation of `float`.   If the user uses `--id`
@@ -576,17 +609,19 @@ strings from the command-line into Python objects.
 
 Let's tie it all together with another example:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    def int_and_float(integer: int, real: float):
-        return [integer*3, real*5]
+def int_and_float(integer: int, real: float):
+    return [integer*3, real*5]
 
-    @app.command()
-    def fgrep(pattern, *filenames, position:int_and_float=(0, 0.0)):
-        print(f"fgrep {pattern} {filenames} {position}")
+@app.command()
+def fgrep(pattern, *filenames, position:int_and_float=(0, 0.0)):
+    print(f"fgrep {pattern} {filenames} {position}")
 
-    app.main()
+app.main()
+```
 
 Here, Appeal would introspect `fgrep()`, then also
 introspect `int_and_float()`.  The resulting usage
@@ -606,7 +641,9 @@ So now if you ran:
 
 Appeal would call:
 
-    fgrep('funkyfresh', position=[6, 65.0])
+```Python
+fgrep('funkyfresh', position=[6, 65.0])
+```
 
 Finally, let's change the example to demonstrate something
 else: although converters can be any callable, user-defined
@@ -614,22 +651,24 @@ classes work fine too.  And Appeal can correctly infer the
 type based on the default value for any type.  So consider
 this example:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    class IntAndFloat:
-        def __init__(self, integer: int, real: float):
-            self.integer = integer * 3
-            self.real = real * 5
+class IntAndFloat:
+    def __init__(self, integer: int, real: float):
+        self.integer = integer * 3
+        self.real = real * 5
 
-        def __repr__(self):
-            return f"<IntAndFloat {self.integer} {self.real}>"
+    def __repr__(self):
+        return f"<IntAndFloat {self.integer} {self.real}>"
 
-    @app.command()
-    def fgrep(pattern, *filenames, position=IntAndFloat(0, 0.0)):
-        print(f"fgrep {pattern} {filenames} {position}")
+@app.command()
+def fgrep(pattern, *filenames, position=IntAndFloat(0, 0.0)):
+    print(f"fgrep {pattern} {filenames} {position}")
 
-    app.main()
+app.main()
+```
 
 This example behaves essentially the same as the previous example
 in this section, except the formatting of `position` is slightly
@@ -713,14 +752,16 @@ you to specify `-v` more than once to make
 it *more* verbose.  Here's how you'd do that
 with Appeal:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def fgrep(*, verbose:appeal.counter()=0):
-        print(f"fgrep {verbose=}")
+@app.command()
+def fgrep(*, verbose:appeal.counter()=0):
+    print(f"fgrep {verbose=}")
 
-    app.main()
+app.main()
+```
 
 If the user ran
 
@@ -728,7 +769,9 @@ If the user ran
 
 Appeal would call
 
-    fgrep()
+```Python
+fgrep()
+```
 
 allowing Python to pass in the default value of `0` to `verbose`.
 And if the user ran
@@ -737,20 +780,24 @@ And if the user ran
 
 Appeal would call
 
-    fgrep(verbose=3)
+```Python
+fgrep(verbose=3)
+```
 
 `accumulator` handles options that take a single oparg.
 It remembers them all and returns them in a single array.
 Like so:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def fgrep(*, pattern:appeal.accumulator=[]):
-        print(f"fgrep {pattern=}")
+@app.command()
+def fgrep(*, pattern:appeal.accumulator=[]):
+    print(f"fgrep {pattern=}")
 
-    app.main()
+app.main()
+```
 
 If the user ran
 
@@ -758,20 +805,24 @@ If the user ran
 
 Appeal would call
 
-    fgrep(pattern=['three', 'four', 'fiv5'])
+```Python
+fgrep(pattern=['three', 'four', 'fiv5'])
+```
 
 What if you don't want strings, but another type?  Using crazy
 science magic from the future, `accumulator` is actually
 parameterized.  You can say:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def fgrep(*, pattern:appeal.accumulator[int]=[]):
-        print(f"fgrep {pattern=}")
+@app.command()
+def fgrep(*, pattern:appeal.accumulator[int]=[]):
+    print(f"fgrep {pattern=}")
 
-    app.main()
+app.main()
+```
 
 and now the opargs to `--id` will all be converted using int.
 
@@ -792,16 +843,18 @@ Of course, you can also subclass `MultiOption` to make your own
 converter classes with custom behavior. `MultiOption` subclasses
 can override these three methods:
 
-    class Option:
+```Python
+class Option:
 
-        def init(self, default):
-            ...
+    def init(self, default):
+        ...
 
-        def option(self, ...):
-            ...
+    def option(self, ...):
+        ...
 
-        def render(self):
-            ...
+    def render(self):
+        ...
+```
 
 Well, actually, subclasses are *required* to override
 `option()` and `render()`.  But `init()` is optional.
@@ -818,7 +871,7 @@ Appeal command function, several things happen:
   method on the object.
 * After finishing processing the command-line,
   Appeal will call the `render()` method on the
-  object, and pass the value it returned as the
+  object, and pass the value it returns as the
   argument to that keyword-only parameter.
 
 The most powerful part of this interface: you can
@@ -834,10 +887,12 @@ with one being an `int` and the other being
 a `float`, you would define `option()` in your
 subclass as:
 
-    class MyMultiOption(appeal.MultiOption):
+```Python
+class MyMultiOption(appeal.MultiOption):
 
-        def option(self, a:int, b:float):
-            ....
+    def option(self, a:int, b:float):
+        ....
+```
 
 Every time the user specified your option,
 it would take two opargs, and they would be
@@ -851,7 +906,7 @@ by your `render()` method.
 `Option` class.  `Option` behaves identically
 to `MultiOption`, except it only permits
 specifying the option once on the command-line.
-(Which means it will only call your `option()`
+(Which means it will only your `option()`
 method once.)
 
 
@@ -867,14 +922,16 @@ of a list of values.  For that, you can use Appeal's `validate()`
 converter.  For example, this command restricts the `direction`
 parameter to one of six canonical directions:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    def go(direction:appeal.validate('up', 'down', 'left', 'right', 'forward', 'back')):
-        print(f"go {direction=}")
+@app.command()
+def go(direction:appeal.validate('up', 'down', 'left', 'right', 'forward', 'back')):
+    print(f"go {direction=}")
 
-    app.main()
+app.main()
+```
 
 You can pass in an explicit type using a `type=`
 named argument to `validate()`; if you omit it,
@@ -883,12 +940,8 @@ it uses the type of the first argument.
 Appeal also has a built-in range validator
 called `validate_range()`.  It takes `start`
 and `stop` arguments the same way Python's
-`range()` function does.
-Then, if the user passes in a value outside
-that range,
-
-Note that `validate_range()` differs from
-Python's `range()` in one subtle way:
+`range()` function does. Note that `validate_range()`
+differs from Python's `range()` in one subtle way:
 values that are *equal* to `stop` are allowed.
 
 If you prefer, you can "clamp"
@@ -944,18 +997,20 @@ but you can override those by passing in a
 Here's a simple example of how to implement the above `go`
 command with Appeal:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    @app.command()
-    @app.option("direction", "--north", annotation=lambda: "north")
-    @app.option("direction", "--south", annotation=lambda: "south")
-    @app.option("direction", "--east",  annotation=lambda: "east")
-    @app.option("direction", "--west",  annotation=lambda: "west")
-    def go(*, direction='north'):
-        print(f"go {direction=}")
+@app.command()
+@app.option("direction", "--north", annotation=lambda: "north")
+@app.option("direction", "--south", annotation=lambda: "south")
+@app.option("direction", "--east",  annotation=lambda: "east")
+@app.option("direction", "--west",  annotation=lambda: "west")
+def go(*, direction='north'):
+    print(f"go {direction=}")
 
-    app.main()
+app.main()
+```
 
 All these annotations return a string.  But actually you can
 return any type you want--and you can even map multiple
@@ -987,20 +1042,22 @@ wants.
 
 But what if you did... *this?*
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    def int_float(i: int, f: float):
-        return (i, f)
+def int_float(i: int, f: float):
+    return (i, f)
 
-    def my_converter(i_f: int_float, s: str):
-        return [i_f, s]
+def my_converter(i_f: int_float, s: str):
+    return [i_f, s]
 
-    @app.command()
-    def recurse(a:str, b:my_converter=[(0, 0), '']):
-        print(f"recurse {a=} {b=}")
+@app.command()
+def recurse(a:str, b:my_converter=[(0, 0), '']):
+    print(f"recurse {a=} {b=}")
 
-    app.main()
+app.main()
+```
 
 Would it surprise you to know--yes, it actually works!
 The `my_converter()` parameter `i_f` is a positional parameter
@@ -1029,20 +1086,22 @@ consumes three command-line arguments.
 
 Now let's add an option and see what changes:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    def int_float(i: int, f: float):
-        return (i, f)
+def int_float(i: int, f: float):
+    return (i, f)
 
-    def my_converter(i_f: int_float, s: str, *, verbose=False):
-        return [i_f, s, verbose]
+def my_converter(i_f: int_float, s: str, *, verbose=False):
+    return [i_f, s, verbose]
 
-    @app.command()
-    def recurse2(a:str, b:my_converter=[(0, 0), '', False]):
-        print(f"recurse2 {a=} {b=}")
+@app.command()
+def recurse2(a:str, b:my_converter=[(0, 0), '', False]):
+    print(f"recurse2 {a=} {b=}")
 
-    app.main()
+app.main()
+```
 
 Now the usage looks like this:
 
@@ -1066,7 +1125,9 @@ runs this command:
 
 Appeal calls your function like so:
 
-    recurse2('xyz')
+```Python
+recurse2('xyz')
+```
 
 Since Appeal never called `my_converter()`, it can't
 map `--verbose`.  It can only map `--verbose` once it
@@ -1091,7 +1152,9 @@ And if you add that `--verbose` flag:
 
 Appeal calls you like this:
 
-    recurse2('pdq', my_converter(int('1'), float('2'), xyz, verbose=True))
+```Python
+recurse2('pdq', my_converter(int('1'), float('2'), xyz, verbose=True))
+```
 
 You can supply the `-v` or `--verbose` anywhere *after* the second parameter.
 
@@ -1121,24 +1184,26 @@ really are!
 
 But recursive converters are just the beginning.  What if you did... *this?*
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    def my_converter(a: int, *, verbose=False):
-        return [a, verbose]
+def my_converter(a: int, *, verbose=False):
+    return [a, verbose]
 
-    @app.command()
-    def inception(*, option:my_converter=[0, False]):
-        print(f"inception {option=}")
+@app.command()
+def inception(*, option:my_converter=[0, False]):
+    print(f"inception {option=}")
 
-    app.main()
+app.main()
+```
 
 Woah, that works too!  We've created an option that
 *itself* takes an option.  If you run `fgrep --option`,
 you can now also specify `-v` or `--verbose`--but only
 *after* you've specified `--option`.
 
-Options that map other options
+## Options that map other options
 
 In case you're wondering: `Appeal.option()` must
 decorate the function that takes the parameter you're
@@ -1152,17 +1217,19 @@ all have the same options.)
 
 But we're just getting started!  How about this:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    def my_converter(a: int, *, verbose=False):
-        return [a, verbose]
+def my_converter(a: int, *, verbose=False):
+    return [a, verbose]
 
-    @app.command()
-    def repetition(*args:my_converter):
-        print(f"repetition {args=}")
+@app.command()
+def repetition(*args:my_converter):
+    print(f"repetition {args=}")
 
-    app.main()
+app.main()
+```
 
 That works too, and I bet you're already guessing what it
 does.  This version of `weird` accepts as many `int` arguments
@@ -1171,22 +1238,24 @@ can optionally take a `-v` or `--verbose` flag.
 
 I'll give you one more example:
 
-    import appeal
-    app = appeal.Appeal()
+```Python
+import appeal
+app = appeal.Appeal()
 
-    class Logging:
-        def __init__(self, *, verbose=False, log_level='info'):
-            self.verbose = verbose
-            self.log_level = log_level
+class Logging:
+    def __init__(self, *, verbose=False, log_level='info'):
+        self.verbose = verbose
+        self.log_level = log_level
 
-        def __repr__(self):
-            return f"<Logging verbose={self.verbose} log_level={self.log_level}>"
+    def __repr__(self):
+        return f"<Logging verbose={self.verbose} log_level={self.log_level}>"
 
-    @app.command()
-    def mixin(log:Logging):
-        print(f"mixin {log=}")
+@app.command()
+def mixin(log:Logging):
+    print(f"mixin {log=}")
 
-    app.main()
+app.main()
+```
 
 Can you guess what usage for `mixin` looks like?  (Probably!)
 It looks like this:
@@ -1478,45 +1547,51 @@ those for the arguments, options, and opargs of your subcommand:
   (parameters before `*,` or `*args,`) map to positional
   arguments.  This:
 
-    @app.command()
-    def fgrep(pattern, file, file2=None):
-        ...
+  ```Python
+  @app.command()
+  def fgrep(pattern, file, file2=None):
+      ...
+  ```
 
-    would take two required command-line arguments, "pattern"
-    and "file", and an optional third command-line argument "file2".
+  would take two required command-line arguments, "pattern"
+  and "file", and an optional third command-line argument "file2".
 
 * Keyword-only parameters map to options.  They must have a default
   value.  The name of the
   parameter is the name of the option, e.g. this subcommand
   accepts a `--verbose` argument:
 
-```
-    @app.command()
-    def foo(*, verbose=False):
-        ...
-```
+  ```Python
+  @app.command()
+  def foo(*, verbose=False):
+      ...
+  ```
 
 * If an argument to your function has an annotation, that
-    value is called to convert the string from the command-line
-    before passing in to your function.  e.g.
+  value is called to convert the string from the command-line
+  before passing in to your function.  e.g.
 
-        @app.command()
-        def foo(level:int):
-            ...
+  ```Python
+  @app.command()
+  def foo(level:int):
+      ...
+  ```
 
-    would call `int` on the string from the command-line before
-    passing it in to level.
+  would call `int` on the string from the command-line before
+  passing it in to level.
 
 * If a parameter to your function doesn't have an annotation,
-    but *does* have a default value, it behaves as if you added
-    an annotation of `type(default_value)`.  e.g.
+  but *does* have a default value, it behaves as if you added
+  an annotation of `type(default_value)`.  e.g.
 
-        @app.command()
-        def foo(level=0):
-            ...
+  ```Python
+  @app.command()
+  def foo(level=0):
+      ...
+  ```
 
-    would also call `int` on the string from the command-line before
-    passing it in to `level`.
+  would also call `int` on the string from the command-line before
+  passing it in to `level`.
 
   * Keyword-only parameters with a `bool` annotation or a boolean
     default value are special: they don't take an argument.  Instead,
@@ -1531,9 +1606,11 @@ those for the arguments, options, and opargs of your subcommand:
     their order in Python*++*, Appeal gives the single-letter shortcut to
     the first parameter that starts with that letter.  e.g.
 
-        @app.command()
-        def foo(*, verbose=False, varigated=0):
-            ...
+    ```Python
+    @app.command()
+    def foo(*, verbose=False, varigated=0):
+        ...
+    ```
 
     `-v` would map to `--verbose`, not `--varigated`.
 
@@ -1544,9 +1621,11 @@ with a "usage" string like this:
 
 you'd write it as follows:
 
-    @app.command()
-    def fgrep(pattern, *file, verbose=False, level=0):
-        ...
+```Python
+@app.command()
+def fgrep(pattern, *file, verbose=False, level=0):
+    ...
+```
 
  *++* This is now guaranteed behavior in current Python, and even
     in the Python 3 series before that, it was always true anyway.
@@ -1637,13 +1716,14 @@ a default value, then design the annotation function
 to take one argument that *also* has a default value.
 Like so:
 
-    def jobs(jobs:int=math.inf):
-        return jobs
+```Python
+def jobs(jobs:int=math.inf):
+    return jobs
 
-    @app.command()
-    def make(*targets, jobs:jobs=1):
-        ...
-
+@app.command()
+def make(*targets, jobs:jobs=1):
+    ...
+```
 
 
 Restrictions on Appeal command functions:
