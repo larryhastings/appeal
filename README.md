@@ -1067,8 +1067,11 @@ Would it surprise you to know--yes, it actually works!
 Converters have been fully recursive this
 *whole time.*  Actually this has been hiding in plain sight
 all along--all the examples using `int_and_float()` are recursive
-like this, because `int_and_float()` has parameters annotated
-with `int` and `float`.
+too, because `int_and_float()` has parameters annotated with
+`int` and `float`.  Of course, those functions only take
+a single argument, which is a string; `my_converter()` takes
+two positional parameters, which are themselves annotated.
+But the principles are the same.
 
 How does this get mapped to the command-line?  Appeal "flattens"
 the tree of converter functions into a linear series of
@@ -1108,9 +1111,10 @@ Now the usage looks like this:
 
     recurse2 a [i [-v|--verbose] f s]
 
-Notice: the options aren't created until *after* the first
+Notice: the way Appeal renders it in the usage
+string, the options aren't created until *after* the first
 argument in the optional argument group.  This may seem
-strange but it totally makes sense.
+strange but that's how it works--that's how it *has* to work.
 
 From a high conceptual level, Appeal doesn't know that
 you've "entered" the optional argument group until it
@@ -1137,7 +1141,7 @@ only becomes true the moment you supply that second
 command-line argument.
 
 Once you *do* supply that second command-line argument,
-you have to supply three more.
+you have to supply two more, for a total of four.
 
     recurse2 pdq 1 2 xyz
 
@@ -1147,26 +1151,23 @@ Appeal calls your function like so:
 
     recurse2 pdq 1 2 xyz
 
-And if you add that `--verbose` flag:
+And in this example, you can supply the `-v` or `--verbose` anywhere *after*
+the second parameter.  So if your command-line looks like this:
 
     recurse2 pdq 1 2 xyz -v
 
-Appeal calls you like this:
+Appeal calls `recurse()` like this:
 
 ```Python
 recurse2('pdq', my_converter(int('1'), float('2'), xyz, verbose=True))
 ```
-
-In this example, you can supply the `-v` or `--verbose` anywhere *after*
-the second parameter.
 
 
 Take a look back at all the examples in this document, and consider
 that anywhere you specify a function or type, you can pass in nearly
 any callable you like.
 
-For example, the parameterized
-version of `mapping` isn't limited just to simple types.
+For example, the parameterized version of `mapping` isn't limited just to simple types.
 If you used `mapping[str, int_float]` as the annotation
 for a keyword-only parameter, that option would consume
 three arguments on the command line: a `str`, an `int`, and
@@ -1219,7 +1220,7 @@ with more than one converter, they all have the same options.)
 
 ### Multiple options that aren't MultiOptions
 
-But we're just getting started!  How about this:
+We're just getting started!  How about this:
 
 ```Python
 import appeal
@@ -1242,7 +1243,7 @@ can optionally take a `-v` or `--verbose` flag.
 
 ### Positional parameters that only consume options
 
-I'll give you one more example:
+I'll give you one more crazy example:
 
 ```Python
 import appeal
@@ -1378,7 +1379,7 @@ The API for a `default_options` callable should be:
    not have any explicitly defined options.
 * `annotation` is the annotation for this parameter.  This may
    be explicitly set on the function, or it may be inferred from the
-   default parameter.  It may never be `inspect.Parameter.empty`.
+   default parameter.
 * `default` is the default value for this parameter.  Since Appeal
    requires that keyword-only parameters must always have default values,
    this may never be `inspect.Parameter.empty`.
