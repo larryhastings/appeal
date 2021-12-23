@@ -164,13 +164,21 @@ for name, expected in (
         test_count += 1
 
 for script in ("text.py", "argument_grouping.py"):
-    p = subprocess.run(["python3", "../appeal/" + script, "-n"], stdout=subprocess.PIPE)
+    cmdline = ["python3", "../appeal/" + script, "-n"]
+    if verbose:
+        cmdline.append("-v")
+    p = subprocess.run(cmdline, stdout=subprocess.PIPE)
     if p.returncode:
         sys.stdout.flush()
         os.write(sys.stdout.fileno(), p.stdout)
         sys.exit(p.returncode)
-    script_tests_run = int(p.stdout.decode('ascii').strip())
-    test_count += script_tests_run
+    if verbose:
+        test_count = "(whatever)"
+        sys.stdout.flush()
+        os.write(sys.stdout.fileno(), p.stdout)
+    else:
+        script_tests_run = int(p.stdout.decode('ascii').strip())
+        test_count += script_tests_run
 
 print(f"All {test_count} tests passed.")
 sys.exit(0)
