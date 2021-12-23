@@ -108,22 +108,22 @@ by POSIX and by popular programs.  Here's a sample
 command-line, illustrating all the various types of things
 you might ever see:
 
-    % ./mygit.py --debug add --flag ro -v -xz myfile.txt
-      ^          ^       ^   ^      ^  ^  ^   ^
-      |          |       |   |      |  |  |   |
-      |          |       |   |      |  |  |   argument
-      |          |       |   |      |  |  |
-      |          |       |   |      |  |  multiple short options
-      |          |       |   |      |  |
-      |          |       |   |      |  short option
-      |          |       |   |      |
-      |          |       |   |      oparg
-      |          |       |   |
-      |          |       |   long option
-      |          |       |
-      |          |       command
-      |          |
-      |          global long option
+    % ./script.py --debug add --flag ro -v -xz myfile.txt
+      ^           ^       ^   ^      ^  ^  ^   ^
+      |           |       |   |      |  |  |   |
+      |           |       |   |      |  |  |   argument
+      |           |       |   |      |  |  |
+      |           |       |   |      |  |  multiple short options
+      |           |       |   |      |  |
+      |           |       |   |      |  short option
+      |           |       |   |      |
+      |           |       |   |      oparg
+      |           |       |   |
+      |           |       |   long option
+      |           |       |
+      |           |       command
+      |           |
+      |           global long option
       |
       program name
 
@@ -227,7 +227,7 @@ refer to these collectively as *positional parameters.)*
 ## Our First Example
 
 In all our examples, we're going to work with a script
-called `mygit.py`.  The first version looks like this:
+called `script.py`.  The first version looks like this:
 
 ```Python
 import appeal
@@ -240,11 +240,11 @@ def hello(name):
 app.main()
 ```
 
-If you now ran `python3 mygit.py help hello`, you'd
+If you now ran `python3 script.py help hello`, you'd
 see usage information for your `hello` command.
 It'd start like this:
 
-    usage: mygit.py hello name
+    usage: script.py hello name
 
 Already, a lot has happened!  Let's go over it piece by piece:
 
@@ -271,7 +271,7 @@ Already, a lot has happened!  Let's go over it piece by piece:
 
 So!  If you ran this command at the command-line:
 
-    % python3 mygit.py hello world
+    % python3 script.py hello world
 
 Appeal would call your `hello()` function like this:
 
@@ -304,9 +304,9 @@ app.main()
 
 Now `filename` is optional, with a default value of `None`.
 
-You can call `mygit.py fgrep` with both parameters.  Running this:
+You can call `script.py fgrep` with both parameters.  Running this:
 
-    % python3 mygit.py fgrep WM_CREATE window.c
+    % python3 script.py fgrep WM_CREATE window.c
 
 results in Appeal calling your `fgrep()` function like this:
 
@@ -317,7 +317,7 @@ fgrep('WM_CREATE', 'window.c')
 But you can also omit the `filename` parameter.
 If you run this command at the command-line:
 
-    % python3 mygit.py fgrep WM_CREATE
+    % python3 script.py fgrep WM_CREATE
 
 Appeal would call `fgrep()` like this:
 
@@ -379,7 +379,7 @@ app.main()
 
 Now the `fgrep` command-line usage looks like this:
 
-    usage: mygit.py fgrep [-c|--color str] [-n|--number int] [-i|--ignore_case] pattern [str]...
+    usage: script.py fgrep [-c|--color str] [-n|--number int] [-i|--ignore_case] pattern [str]...
 
 Again, a lot just happened.
 
@@ -439,7 +439,7 @@ to that parameter.)
 
 Let's put it all together!  If you ran this command at the command-line:
 
-    % python3 mygit.py fgrep -i --number 3 --color blue WM_CREATE window.c
+    % python3 script.py fgrep -i --number 3 --color blue WM_CREATE window.c
 
 Appeal would call `fgrep()` like this:
 
@@ -449,7 +449,7 @@ fgrep('WM_CREATE', 'window.c', color='blue', number=3, ignore_case=True)
 
 And if you ran this command at the command-line:
 
-    % python3 mygit.py fgrep --color green boogaloo
+    % python3 script.py fgrep --color green boogaloo
 
 Appeal would call `fgrep()` like this:
 
@@ -464,7 +464,7 @@ Many programs that support "commands" also have
 "global options".  Global options are options
 specified on the command-line *before* the command.
 For example, in the example command-line at the top
-of this document, `mygit.py` takes a `--debug`
+of this document, `script.py` takes a `--debug`
 option specified before the command--which makes it
 a "global option".
 
@@ -499,7 +499,7 @@ def deploy(...):
 This adds a `deploy` subcommand under the `db` command.
 You call it from the command-line like so:
 
-    mygit.py [global arguments and options] db [db arguments and options] deploy [deploy arguments and options]
+    script.py [global arguments and options] db [db arguments and options] deploy [deploy arguments and options]
 
 Finally, what should Appeal do if your program
 takes commands, but the user doesn't supply one?
@@ -507,10 +507,10 @@ That's what the *default command* is for.  The
 default command is a command function Appeal will
 run for you if your Appeal instance has commands,
 and the user doesn't supply one.  For example,
-if `mygit.py` has ten different commands, but the
+if `script.py` has ten different commands, but the
 user just runs
 
-    mygit.py
+    script.py
 
 without any arguments, Appeal would run the default
 command.
@@ -627,7 +627,7 @@ Here, Appeal would introspect `fgrep()`, then also
 introspect `int_and_float()`.  The resulting usage
 string would now look like this:
 
-    usage: mygit.py fgrep [-p|--position integer real] pattern [str]...
+    usage: script.py fgrep [-p|--position integer real] pattern [str]...
 
 `--position` takes *two* opargs.  Appeal would
 call `int` on the first one and `float` on the second
@@ -637,7 +637,7 @@ be passed in to the `position` parameter on `fgrep()`.
 
 So now if you ran:
 
-    % python3 mygit.py fgrep -p 2 13 funkyfresh
+    % python3 script.py fgrep -p 2 13 funkyfresh
 
 Appeal would call:
 
@@ -765,7 +765,7 @@ app.main()
 
 If the user ran
 
-    % python3 mygit.py fgrep
+    % python3 script.py fgrep
 
 Appeal would call
 
@@ -776,7 +776,7 @@ fgrep()
 allowing Python to pass in the default value of `0` to `verbose`.
 And if the user ran
 
-    % python3 mygit.py fgrep -v --verbose -v
+    % python3 script.py fgrep -v --verbose -v
 
 Appeal would call
 
@@ -801,7 +801,7 @@ app.main()
 
 If the user ran
 
-    % python3 mygit.py fgrep --pattern three -p four --pattern fiv5
+    % python3 script.py fgrep --pattern three -p four --pattern fiv5
 
 Appeal would call
 
