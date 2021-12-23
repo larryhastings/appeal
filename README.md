@@ -957,11 +957,11 @@ be annoying to use if `stop` itself was an
 illegal value--particularly if the types
 were floats.)
 
-Appeal validation functions are easy to write,
-so if these are insufficient to your needs,
-it's no problem to write your own.  Take a look
+Appeal validation functions are straightforward to write.
+So, if these are insufficient to your needs,
+you can easily write your own.  Take a look
 at the implementations of `validate()` and
-`validate_range()` to see one way to do it!
+`validate_range()` inside Appeal to see one way to do it!
 
 
 ## Multiple Options For The Same Parameter
@@ -986,13 +986,13 @@ even using different converters!
 
 To manually define your own options, use the `Appeal.option()`
 method on your Appeal instance.  It's a decorator you
-apply to your command function.  The first parameter is
+apply to your command function.  The first argument is
 the name of the parameter you want the option to write
 to.  After that is one or more options you want to
-map to this parameter.  By default, `Appeal.option()` uses
-the default value and annotation from the parameter,
-but you can override those by passing in a
-`default` or `annotation` argument.
+map to this parameter.  `Appeal.option()` also takes
+`default` and `annotation` keyword-only parameters,
+allowing you to specify respectively the default value or
+annotation for this option.
 
 Here's a simple example of how to implement the above `go`
 command with Appeal:
@@ -1059,17 +1059,18 @@ def recurse(a:str, b:my_converter=[(0, 0), '']):
 app.main()
 ```
 
-Would it surprise you to know--yes, it actually works!
 The `my_converter()` parameter `i_f` is a positional parameter
 that, itself, *takes positional parameters.*
 
-Converters have actually been fully recursive this
-*whole time.*  Actually this fact was hiding in plain sight:
-examples using `int_and_float()` have always been recursive,
-because `int_and_float()` has parameters annotated with `int`
-and `float`.
+Would it surprise you to know--yes, it actually works!
 
-How does this work on the command-line?  Appeal "flattens"
+Converters have been fully recursive this
+*whole time.*  Actually this has been hiding in plain sight
+all along--all the examples using `int_and_float()` are recursive
+like this, because `int_and_float()` has parameters annotated
+with `int` and `float`.
+
+How does this get mapped to the command-line?  Appeal "flattens"
 the tree of converter functions into a linear series of
 arguments and options.  In this case the usage would look
 like this:
@@ -1108,8 +1109,8 @@ Now the usage looks like this:
     recurse2 a [i [-v|--verbose] f s]
 
 Notice: the options aren't created until *after* the first
-argument in the optional argument group.  This may be
-surprising, but it makes total sense.
+argument in the optional argument group.  This may seem
+strange but it totally makes sense.
 
 From a high conceptual level, Appeal doesn't know that
 you've "entered" the optional argument group until it
@@ -1156,12 +1157,12 @@ Appeal calls you like this:
 recurse2('pdq', my_converter(int('1'), float('2'), xyz, verbose=True))
 ```
 
-You can supply the `-v` or `--verbose` anywhere *after* the second parameter.
+In this example, you can supply the `-v` or `--verbose` anywhere *after*
+the second parameter.
 
 
-Take a look back at all the
-examples in this document, and consider that anywhere
-you specify a function or type, you can pass in nearly
+Take a look back at all the examples in this document, and consider
+that anywhere you specify a function or type, you can pass in nearly
 any callable you like.
 
 For example, the parameterized
@@ -1178,11 +1179,15 @@ really are!
 
 ## Now Witness The Power Of This Fully Armed And Operational Battle Station
 
+But recursive converters are just the beginning!
+
 > Buckle your seatbelt, Dorothy--because Kansas is going bye-bye.
 >
 > --Cypher, "The Matrix" (1999)
 
-But recursive converters are just the beginning.  What if you did... *this?*
+## Options that map other options
+
+What if you did... *this?*
 
 ```Python
 import appeal
@@ -1203,17 +1208,16 @@ Woah, that works too!  We've created an option that
 you can now also specify `-v` or `--verbose`--but only
 *after* you've specified `--option`.
 
-## Options that map other options
-
 In case you're wondering: `Appeal.option()` must
 decorate the function that takes the parameter you're
-mapping an option *to.*  So if you wanted to define
+mapping an option *to.*  So if you want to define
 explicit options for the `verbose` parameter to
 `my_converter` in the above example, you'd add
-`Appeal.option()` decorators to `my_converter`,
-not to `inception`.  (Which means, if you use
-`my_converter` with more than one converter, they
-all have the same options.)
+decorate `my_converter` with `Appeal.option()` calls,
+not `inception`.  (This also means, if you use `my_converter`
+with more than one converter, they all have the same options.)
+
+## Multiple options that aren't MultiOptions
 
 But we're just getting started!  How about this:
 
@@ -1235,6 +1239,8 @@ That works too, and I bet you're already guessing what it
 does.  This version of `weird` accepts as many `int` arguments
 as the user wants to specify on the command-line, and *each one*
 can optionally take a `-v` or `--verbose` flag.
+
+## Positional parameters that only consume options
 
 I'll give you one more example:
 
@@ -1277,7 +1283,7 @@ happens to be mapped to a command.  So anything you can do
 with a command function, you can do with a converter too.
 A converter can define options, it can be decorated with
 `app.option()` (or `app.argument()` which we haven't
-discussed), it can have accept any kind of parameter defined
+discussed yet), it can have accept any kind of parameter defined
 by Python, and any parameter can use (almost) any converter.
 And those converters can recursively use other converters.
 
