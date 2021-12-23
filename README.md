@@ -1185,7 +1185,7 @@ But recursive converters are just the beginning!
 >
 > --Cypher, "The Matrix" (1999)
 
-## Options that map other options
+### Options that map other options
 
 What if you did... *this?*
 
@@ -1217,7 +1217,7 @@ decorate `my_converter` with `Appeal.option()` calls,
 not `inception`.  (This also means, if you use `my_converter`
 with more than one converter, they all have the same options.)
 
-## Multiple options that aren't MultiOptions
+### Multiple options that aren't MultiOptions
 
 But we're just getting started!  How about this:
 
@@ -1240,7 +1240,7 @@ does.  This version of `weird` accepts as many `int` arguments
 as the user wants to specify on the command-line, and *each one*
 can optionally take a `-v` or `--verbose` flag.
 
-## Positional parameters that only consume options
+### Positional parameters that only consume options
 
 I'll give you one more example:
 
