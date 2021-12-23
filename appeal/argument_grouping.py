@@ -465,7 +465,8 @@ class ParameterGrouper:
 
 if __name__ == "__main__":
     import sys
-    want_output = "-v" in sys.argv
+    want_output = ("-v" in sys.argv) or ("--verbose" in sys.argv) # ironic, no?
+    just_the_number = ("-n" in sys.argv) or ("--number" in sys.argv)
 
     test_counter = 0
     fail_counter = 0
@@ -509,7 +510,8 @@ if __name__ == "__main__":
 
         result = "E" if failed else "."
         test_counter += 1
-        print(result, end='')
+        if not just_the_number:
+            print(result, end='')
         if failed:
             fail_counter += 1
             print(f"\ntest {test_counter} failed:")
@@ -588,6 +590,9 @@ if __name__ == "__main__":
     test(rip,
         "required=['i', 'f'] optional=[['i', 'f'], ['i', 'f']]")
 
-
-    print("")
-    print(f"{test_counter - fail_counter} out of {test_counter} tests succeeded.")
+    if just_the_number:
+        print(test_counter)
+    else:
+        print("")
+        print(f"{test_counter - fail_counter} out of {test_counter} tests succeeded.")
+    sys.exit(fail_counter)

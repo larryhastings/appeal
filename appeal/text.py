@@ -105,8 +105,6 @@ def _test_presplit_textwrap(input, expected, margin=79):
     assert got == expected, f"presplit_textwrap test #{test_number} failed!\n{   input=}\n{expected=}\n{     got=}"
 
 def test_presplit_textwrap():
-    global test_number
-    test_number = 0
     _test_presplit_textwrap(
         "hello there. how are you? i am fine! so there's that.".split(),
         "hello there.  how are you?  i am fine!  so there's that.")
@@ -304,8 +302,6 @@ def _test_fancy_text_split(input, expected):
     assert got == expected, f"fancy_text_split test #{test_number} failed!\n{   input=}\n{expected=}\n{     got=}"
 
 def test_fancy_text_split():
-    global test_number
-    test_number = 0
     _test_fancy_text_split(
         "hey there party people",
         ['hey', 'there', 'party', 'people'],
@@ -350,8 +346,10 @@ def merge_columns(*blobs, column_spacing=1, extra_lines_after_too_long=0):
 
     Each "blob" is a tuple of three items:
         (text, min_width, max_width)
-    Text should be a single text string, with newline
-    characters separating lines.
+    'text' should be a single text string, with newline
+    characters separating lines. 'min_width' and 'max_width'
+    are the minimum and maximum permissible widths for that
+    column.
 
     The width of each column starts by calculating the width of the
     longest line and adding 1 (so there is a space between columns).
@@ -359,11 +357,12 @@ def merge_columns(*blobs, column_spacing=1, extra_lines_after_too_long=0):
     Each line of text is padded with spaces to bring it up to this
     desired width.
 
-    If this calcualted width is greater than max_width, then some
+    If this calculated width is greater than max_width, then some
     special formatting takes over.  Let's call the column that
     exceeds its max width Cn, for n'th Column.  Columns C0 through
-    Cn will print normally, but columns Cn+1 and up will be paused
-    until the _last_ line of Cn that exceeds max_width.
+    Cn will print normally, but columns Cn+1 and up will be "paused",
+    and won't start printing until after the _last_ line of Cn that
+    exceeds max_width.
 
     As an example, calling merge_columns() as follows:
         merge_columns(
@@ -464,8 +463,6 @@ def _test_merge_columns(input, expected, **kwargs):
     assert got == expected, f"merge_columns test #{test_number} failed!\n{     input=}\n{expected=}\n{     got=}"
 
 def test_merge_columns():
-    global test_number
-    test_number = 0
     _test_merge_columns([("1\n2\n3", 5, 5), ("howdy\nhello\nhi, how are you?\ni'm fine.", 5, 40), ("ending\ntext!", 80, 80)],
         "1    howdy            ending\n2    hello            text!\n3    hi, how are you?\n     i'm fine.")
     _test_merge_columns([("super long lines here\nI mean, they just go on and on.\n(text)\nshort now\nhowever.\nthank\nthe maker!", 5, 15), ("this is the second column.\ndoes it have to wait?  it should.", 20, 60)],
@@ -499,8 +496,6 @@ def _test_pipeline(columns, expected):
     assert got == expected, f"pipeline test #{test_number} failed!\n{     input=}\n{expected=}\n{     got=}"
 
 def test_pipeline():
-    global test_number
-    test_number = 0
     _test_pipeline(
         (
             (
@@ -559,7 +554,13 @@ def test_pipeline():
 if __name__ == "__main__":
     import sys
     verbose = ("-v" in sys.argv) or ("--verbose" in sys.argv) # ironic, no?
+    just_the_number = ("-n" in sys.argv) or ("--number" in sys.argv)
     test_presplit_textwrap()
     test_fancy_text_split()
     test_merge_columns()
     test_pipeline()
+    if just_the_number:
+        print(test_number)
+    else:
+        print(f"All {test_number} tests passed.")
+    sys.exit(0)

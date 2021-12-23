@@ -163,5 +163,14 @@ for name, expected in (
             sys.exit(-1)
         test_count += 1
 
+for script in ("text.py", "argument_grouping.py"):
+    p = subprocess.run(["python3", "../appeal/" + script, "-n"], stdout=subprocess.PIPE)
+    if p.returncode:
+        sys.stdout.flush()
+        os.write(sys.stdout.fileno(), p.stdout)
+        sys.exit(p.returncode)
+    script_tests_run = int(p.stdout.decode('ascii').strip())
+    test_count += script_tests_run
+
 print(f"All {test_count} tests passed.")
 sys.exit(0)
