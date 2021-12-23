@@ -384,15 +384,16 @@ class opcode(enum.Enum):
     create_converter = 5
     load_converter = 6
     load_o = 7
-    append_args = 8
-    store_kwargs = 9
-    map_option = 10
-    consume_argument = 11
-    flush_multioption = 12
-    set_group = 13
-    push_context = 14
-    pop_context = 15
-    end = 16
+    load_option = 8
+    append_args = 9
+    store_kwargs = 10
+    map_option = 11
+    consume_argument = 12
+    flush_multioption = 13
+    set_group = 14
+    push_context = 15
+    pop_context = 16
+    end = 17
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
@@ -586,6 +587,21 @@ class CharmInstructionLoadO(CharmInstructionKeyBase):
     """
     op = opcode.load_o
 
+class CharmInstructionLoadOption(CharmInstruction):
+    """
+    load_o <key>
+
+    Loads a Converter object from 'converters[key]' and
+    stores a reference in the 'o' register.
+    """
+    op = opcode.load_option
+
+    def __init__(self, option):
+        self.option = option
+
+    def __repr__(self):
+        return f"<load_option option={self.option}>"
+
 class CharmInstructionAppendArgs(CharmInstruction):
     """
     append_args <parameter> <usage>
@@ -633,7 +649,7 @@ class CharmInstructionPushContext(CharmInstructionNoArgBase):
     """
     push_context
 
-    Pushes the current 'converter', 'total', and 'group'
+    Pushes the current 'converter', 'total', 'option', and 'group'
     registers on the stack.
     """
     op = opcode.push_context
@@ -808,6 +824,12 @@ class CharmAssembler:
     def load_o(self, key):
         op = CharmInstructionLoadO(
             key=key,
+            )
+        return self.append(op)
+
+    def load_option(self, key):
+        op = CharmInstructionLoadOption(
+            option=option,
             )
         return self.append(op)
 
@@ -1302,6 +1324,7 @@ class CharmCompiler:
         group = None
         converter = None
         o = None
+        option = None
         stack = []
 
         optional = False
@@ -1367,9 +1390,9 @@ class CharmCompiler:
             if op.op == opcode.consume_argument:
                 o = '(string value)'
             if op.op == opcode.push_context:
-                stack.append((converter, o, total, group))
+                stack.append((converter, o, option, total, group))
             if op.op == opcode.pop_context:
-                converter, o, total, group = stack.pop()
+                converter, o, option, total, group = stack.pop()
 
             i += 1
 
@@ -1481,6 +1504,7 @@ class CharmInterpreter:
         # registers
         self.converter = None
         self.o = None
+        self.option = None
         self.total = None
         self.group = None
         self.converters = {}
@@ -1542,14 +1566,14 @@ class CharmInterpreter:
         self.i = CharmProgramIterator(program)
 
     def push_context(self):
-        context = [self.converter, self.o, self.total, self.group]
+        context = [self.converter, self.o, self.option, self.total, self.group]
         self.context_stack.append(context)
         if self.stack:
             self.stack[-1][-1] += 1
 
     def _pop_context(self):
         context = self.context_stack.pop()
-        self.converter, self.o, self.total, self.group = context
+        self.converter, self.o, self.option, self.total, self.group = context
 
     def pop_context(self):
         self._pop_context()
@@ -1869,6 +1893,12 @@ def charm_parse(appeal, program, argi):
                     print(f"##     load_o {op.key=} {o=!s}")
                 continue
 
+            if op.op == opcode.load_option:
+                ci.option = op.option
+                if want_prints:
+                    print(f"##     load_option {op.option=} {o=!s}")
+                continue
+
             if op.op == opcode.map_option:
                 options_bucket[op.option] = op.program
                 if want_prints:
@@ -1889,7 +1919,7 @@ def charm_parse(appeal, program, argi):
                     existing = ci.converter.kwargs_converters[op.name]
                     if not ((existing == converter) and isinstance(existing, MultiOption)):
                         # TODO: this is terrible UI, must fix.
-                        raise AppealUsageError(f"option is illegal, kwarg already set, {existing=} {hex(id(existing))} {converter=} {hex(id(converter))}")
+                        raise AppealUsageError(f"{ci.option} specified more than once.")
                     # we're setting the kwarg to the value it's already set to,
                     # and it's a multioption, so this is fine.
                     continue
@@ -2133,7 +2163,8 @@ def charm_parse(appeal, program, argi):
             # that's because we push each program on the interpreter.  so, LIFO.
             for error_option, program, maximum_arguments, split_value, is_last in reversed(queue):
                 if want_prints:
-                    print(f"#]     call program={program=} {split_value=}")
+                    print(f"#]     executing option {option} {split_value=}")
+                    print(f"#]     call program={program=}")
 
                 if not is_last:
                     total = program.total
@@ -2150,6 +2181,7 @@ def charm_parse(appeal, program, argi):
                     if want_prints:
                         print(f"#]     pushing split value {split_value!r} on argi")
 
+                ci.option = error_option
                 ci.call(program)
             break
 
