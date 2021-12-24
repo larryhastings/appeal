@@ -75,6 +75,8 @@ def multisplit(s, separators):
     """
     if not s or not separators:
         return [s]
+    if len(separators) == 1:
+        return s.split(separators[0])
     splits = []
     while s:
         candidates = []
