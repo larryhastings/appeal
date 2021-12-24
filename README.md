@@ -418,8 +418,8 @@ Fifth, `--number` also takes an oparg, but it has a default of `0`.
 Appeal noticed that too, so `--number` says it wants an `int`.
 Appeal automatically converts the string from the command-line
 into a Python object for you, using the type of the default value.
-(Appeal did that for `--color` too, except `--color` just wants a str
-so no conversion was necessary.)  When the user provides an oparg
+(Appeal did that for `--color` too--except `--color` takes a str,
+so no conversion is necessary.)  When the user provides an oparg
 to `--number` on the command-line, it must be followed by an
 oparg; Appeal will take that oparg, pass it in to `int`, then take
 the return value from `int` and pass it in to the `number` parameter.
@@ -470,10 +470,20 @@ a "global option".
 
 Appeal supports global options, too.  It's simple:
 just write a command function like normal, but
-instead of decorating it with `command()`, decorate
-it with `global_command()`.  Appeal will process all
+instead of decorating it with `Appeal.command()`, decorate
+it with `Appeal.global_command()`.  Appeal will process all
 those options before command, and call your global
 command function.
+
+`Appeal.global_command()` also gets used for programs that
+don't use "commands".  Although the "command" command-line
+paradigm is popular these days, most programs don't bother
+with them.  For example, `ls`, `grep`, and... hey! `python`
+itself!
+
+Naturally, Appeal supports this behavior.  Simply decorate
+one function with `Appeal.global_command()` and don't add
+any command functions.
 
 On the flip side of this coin, Appeal also supports
 *subcommands*.  This is often supported by command-line
@@ -497,7 +507,7 @@ def deploy(...):
 ```
 
 This adds a `deploy` subcommand under the `db` command.
-You call it from the command-line like so:
+So now the whole command-line looks something like this:
 
     script.py [global arguments and options] db [db arguments and options] deploy [deploy arguments and options]
 
@@ -554,7 +564,7 @@ def db_default():
 Python 3 supports annotations for function parameters, meant
 to conceptually represent types.  Appeal supports annotations
 too; they explicitly tell Appeal what type of object a parameter
-wants.  For example:
+requires.  For example:
 
 ```Python
 import appeal
@@ -570,9 +580,15 @@ app.main()
 Here `id` has a default value of `None`, but it also has
 an explicit annotation of `float`.   If the user uses `--id`
 on the command-line, it must be followed by an oparg,
-which Appeal will convert to a `float`.  (So the annotation
-and the type of the default don't *necessarily* have to
-agree... although it's usually a good idea.)
+which Appeal will convert to a Python object by calling `float`.
+(And, as you can see, the annotation and the type of the default
+don't *necessarily* have to agree... although it's usually a
+good idea.)
+
+Although annotations are *meant* to represent types, Appeal
+actually accepts any callable--it can be a type, or a
+user-defined class, or just a regular function.  Appeal
+calls these annotations *converters.*
 
 Here's how Appeal decides on the converter for a parameter,
 from highest-priority to lowest-priority:
@@ -587,17 +603,12 @@ from highest-priority to lowest-priority:
     instead.
   - If `type(default)` is `bool`, and the parameter is a
     keyword-only parameter, Appeal will use a special internal
-    class that provides the special-case "negate the default"
+    class that implements the special-case "negate the default"
     behavior for options with boolean default values.
 * If the signature for that parameter lacks both an annotation
   *and* a default value, Appeal uses `str` as the converter.
 
-Although annotations are *meant* to represent types, Appeal
-actually accepts any callable--it can be a type, or a
-user-defined class, or just a regular function.  Appeal
-calls these annotations *converters.*  And converters sure
-are powerful!
-
+Converters are surprisingly flexible.
 For example, Appeal will introspect the converter for a
 keyword-only parameter and map all its positional arguments
 into opargs.  That's how Appeal supports options that take
@@ -717,11 +728,12 @@ Happily that's easy to do in Appeal.  Just write a converter
 function that accepts a string, breaks it into substrings
 however you like, and returns the list.
 
-Appeal provides a converter that does just that, called
-`appeal.split()` .  You pass in as many delimiter strings
-as you want, and `appeal.split()` will split the command-line
-across all of them.  (If you don't specify any delimiters,
-`appeal.split()` will split at every whitespace character.)
+Although... you don't need to bother!  Appeal also provides
+a converter that does it for you, called `appeal.split()`.
+You pass in as many delimiter strings as you want, and
+`appeal.split()` will split the command-line across all of
+them.  (If you don't specify any delimiters, `appeal.split()`
+will split at every whitespace character.)
 
 
 ## Specifying An Option More Than Once
