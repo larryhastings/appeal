@@ -160,7 +160,7 @@ option: *short options* and *long options.*
 followed by one or more individual characters, which
 are the short option strings.  In the above example,
 we specify two sets of short options: the first is `-v`,
-the second is `-xz`.  Here You can combine options togther,
+the second is `-xz`.  You can combine options togther,
 and it's the same as specifying them separately.  We
 could have said `-vxz`, or `-v -x -z`.  These all mean
 the same thing.  When we talk about short options, we
@@ -250,20 +250,20 @@ Already, a lot has happened!  Let's go over it piece by piece:
 
 * We created an `Appeal` object called `app`.
   This object will handle processing the command-line
-  and calling your function.
-* We decorated a function with `@app.command()`,
+  and calling the appropriate command function.
+* We decorated the function `hello()` with `@app.command()`,
   a method call on our Appeal object.
-  This tells Appeal that the function should be a
+  This tells Appeal that `hello()` should be a
   *command*, using the name of the function as the
   command string, and translating the function's
   parameters into the command-line parameters.
-  So our command is called `hello`.  We call a function
-  decorated with `@app.command()` a *command function.*
+  So our command-line command is called `hello`.
+  We call a function decorated with `@app.command()`
+  a *command function.*
 * Our `hello()` command function takes one positional
   parameters, `name`.  Therefore, our `hello` command
-  on the command-line takes one positional
-  argument, which we identify as `name`
-  in the usage string.
+  on the command-line takes one positional argument,
+  which we identify as `name` in the usage string.
 * Appeal also automatically created simple help for our
   program, displaying *usage* information.  Usage shows
   you what command-line options and arguments the command
@@ -278,6 +278,10 @@ Appeal would call your `hello()` function like this:
 ```Python
 hello('world')
 ```
+
+and you'd be rewarded with:
+
+    Hello, world!
 
 The return value from your command function is the return
 code for your program.  If you return `None` or `0`, that's
@@ -302,9 +306,10 @@ def fgrep(pattern, filename=None):
 app.main()
 ```
 
-Now `filename` is optional, with a default value of `None`.
+Now our command is called `fgrep`, and it takes two parameters.
+The second one, `filename`, is optional, with a default value of `None`.
 
-You can call `script.py fgrep` with both parameters.  Running this:
+You can of course specify both parameters yourself.  Running this:
 
     % python3 script.py fgrep WM_CREATE window.c
 
@@ -390,20 +395,26 @@ added `'--'` to the front of the parameter name,
 and turned that into an option.  (Also, if the parameter
 name has any underscores, Appeal turns those into dashes.)
 
-Second, options are *always optional.*
+Second, Appeal also automatically uses the first letter of a
+keyword-only argument as a short option.  So the
+`color` keyword-only parameter becomes both the `--color`
+*and* `-c` options.  When running your program, the user
+can use `-c` or `--color` interchangably.  The same goes
+for `-i` and `--ignore_case`, and for `-n` and `--number`.
+
+(What if you have two keyword-only parameters that start
+with the same letter?  The first one gets the short option.
+If we added a keyword-only parameter named `credit` to the
+end of `fgrep()`'s parameter list, Appeal would map `color`
+to `--color` and `-c`, but only map `credit` to `--credit`.)
+
+Third, options are *always optional.*
 (As a pedantic wag might put it--"the clue's right there in the name.")
 Therefore, in Appeal, keyword-only
 parameters to command functions must *always* have a
 default value.  (Python programmers usually have default
 values for their keyword-only parameters anyway, so this
 requirement isn't a big deal.)
-
-Third, Appeal automatically uses the first letter of a
-keyword-only argument as a short option.  So the
-`color` keyword-only parameter becomes both the `--color`
-*and* `-c` options.  When running your program, the user
-can use `-c` or `--color` interchangably.  The same goes
-for `-i` and `--ignore_case`, and for `-n` and `--number`.
 
 Fourth, notice that `--color` takes an argument, or *oparg.*
 Appeal noticed that the `color` parameter had a default
@@ -415,7 +426,7 @@ will take the string off the command-line and pass it
 straight into the `color` parameter.
 
 Fifth, `--number` also takes an oparg, but it has a default of `0`.
-Appeal noticed that too, so `--number` says it wants an `int`.
+Appeal infers from that that `--number` should be an `int`.
 Appeal automatically converts the string from the command-line
 into a Python object for you, using the type of the default value.
 (Appeal did that for `--color` too--except `--color` takes a str,
@@ -469,10 +480,10 @@ option specified before the command--which makes it
 a "global option".
 
 Appeal supports global options, too.  It's simple:
-just write a command function like normal, but
+write your command function like normal, but
 instead of decorating it with `Appeal.command()`, decorate
 it with `Appeal.global_command()`.  Appeal will process all
-those options before command, and call your global
+those options before the command, and call your global
 command function.
 
 `Appeal.global_command()` also gets used for programs that
@@ -486,7 +497,7 @@ one function with `Appeal.global_command()` and don't add
 any command functions.
 
 On the flip side of this coin, Appeal also supports
-*subcommands*.  This is often supported by command-line
+*subcommands*.  This is a common feature of command-line
 parsing libraries, though it's rarely-used in practice.
 The idea is, your command can *itself* be followed by
 another command.
@@ -527,8 +538,8 @@ command.
 
 If you don't specify a default command, Appeal has
 a built-in default *default command*.  The default *default
-command* raises a usage error which prints basic help
-information.
+command* raises a usage error, which means it prints basic help
+information and exits.
 
 To specify your own default command, just decorate a
 command function with the `Appeal.default_command()` decorator.
@@ -638,7 +649,7 @@ Here, Appeal would introspect `fgrep()`, then also
 introspect `int_and_float()`.  The resulting usage
 string would now look like this:
 
-    usage: script.py fgrep [-p|--position integer real] pattern [str]...
+    usage: script.py fgrep [-p|--position integer real] pattern [filenames]...
 
 `--position` takes *two* opargs.  Appeal would
 call `int` on the first one and `float` on the second
@@ -709,7 +720,7 @@ to convert them.
 
 ## Converter Flexibility
 
-You can use almost any function you like as an annotation,
+You can use almost any function as an annotation...
 within reason.  Appeal will introspect your annotation,
 determine its input parameters, and call it to convert
 the command-line argument into the argument it passes
@@ -954,7 +965,7 @@ called `validate_range()`.  It takes `start`
 and `stop` arguments the same way Python's
 `range()` function does. Note that `validate_range()`
 differs from Python's `range()` in one subtle way:
-values that are *equal* to `stop` are allowed.
+values *equal* to `stop` are allowed.
 
 If you prefer, you can "clamp"
 the value the user passed in to the range,
@@ -1071,18 +1082,19 @@ def recurse(a:str, b:my_converter=[(0, 0), '']):
 app.main()
 ```
 
-The `my_converter()` parameter `i_f` is a positional parameter
-that, itself, *takes positional parameters.*
+The `my_converter()` parameter `i_f` is a positional
+parameter with an annotation that, itself,
+*takes two positional parameters.*
 
 Would it surprise you to know--yes, it actually works!
 
-Converters have been fully recursive this
-*whole time.*  Actually this has been hiding in plain sight
+Converters have been fully recursive this *whole time.*
+Actually this fact has been hiding in plain sight
 all along--all the examples using `int_and_float()` are recursive
 too, because `int_and_float()` has parameters annotated with
 `int` and `float`.  Of course, those functions only take
-a single argument, which is a string; `my_converter()` takes
-two positional parameters, which are themselves annotated.
+a single string argument; `my_converter()` takes two
+annotated positional parameters.
 But the principles are the same.
 
 How does this get mapped to the command-line?  Appeal "flattens"
@@ -1092,7 +1104,7 @@ like this:
 
     recurse a [i f s]
 
-The `recurse` command takes either one or four command-line
+This tells you the `recurse` command takes either one or four command-line
 arguments.  That optional group of three command-line arguments
 has a special name in Appeal: it's an "argument group".
 Technically, Appeal views this command-line as taking two
@@ -1225,10 +1237,11 @@ In case you're wondering: `Appeal.option()` must
 decorate the function that takes the parameter you're
 mapping an option *to.*  So if you want to define
 explicit options for the `verbose` parameter to
-`my_converter` in the above example, you'd add
+`my_converter` in the above example, you'd
 decorate `my_converter` with `Appeal.option()` calls,
-not `inception`.  (This also means, if you use `my_converter`
-with more than one converter, they all have the same options.)
+not `inception`.  (This also means, everywhere you
+use `my_converter` as a converter, it will behave
+the same, including taking the same options.)
 
 ### Multiple options that aren't MultiOptions
 
@@ -1251,7 +1264,7 @@ app.main()
 That works too, and I bet you're already guessing what it
 does.  This version of `weird` accepts as many `int` arguments
 as the user wants to specify on the command-line, and *each one*
-can optionally take a `-v` or `--verbose` flag.
+can optionally take its own `-v` or `--verbose` flag.
 
 ### Positional parameters that only consume options
 
@@ -1282,16 +1295,16 @@ It looks like this:
     mixin [-v|--verbose] [-l|--log-level str]
 
 Even though `log` is a positional parameter, it doesn't consume
-any positional arguments on the command-line.  The `logging()`
+any positional arguments on the command-line.  The `Logging`
 converter only adds options!  This is what object-oriented
-programmers might call a "mix-in".  With the `logging()` converter,
+programmers might call a "mix-in".  With the `Logging` converter,
 you can add logging options to every one of your commands, without
 having to re-implement it each time.  (Though in most cases it's
 probably better to add such options to a global command function.)
 
 Internally this works exactly like you'd expect.  Since the
 `log` parameter consumes no command-line arguments, Appeal will
-always call its annotation.  Specifying any of the options will
+always call its converter.  Specifying any of the options will
 set arguments for that call.  And the resulting `Logging` object
 will be passed in as the argument to `log`.
 
@@ -1307,7 +1320,7 @@ discussed yet), it can have accept any kind of parameter defined
 by Python, and any parameter can use (almost) any converter.
 And those converters can recursively use other converters.
 
-Anything can be used with anything:
+Realy, anything can be used with anything:
 
 * Converters for positional parameters
   can take positional parameters, or keyword-only parameters, or `*args`, or `**kwargs`.
