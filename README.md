@@ -82,8 +82,8 @@ you're already halfway to understanding Appeal!
 Appeal isn't like other command-line parsing libraries.
 In fact, you really shouldn't think of Appeal as a
 "command-line parsing library" per se. And, although you
-work with Appeal by defining functions, you shouldn't
-think of these functions as "callbacks" either.
+work with Appeal by passing in functions for Appeal to call,
+you shouldn't think of these functions as "callbacks".
 
 Appeal lets you design *APIs* callable from the command-line.
 It's just like any other Python library API--except that
