@@ -224,10 +224,12 @@ For the sake of clarity and consiseness, I'll always
 refer to these collectively as *positional parameters.)*
 
 
-## Our First Example
+## Hello, World!
 
-In all our examples, we're going to work with a script
-called `script.py`.  The first version looks like this:
+Let's see Appeal in action, with our first example.
+In all our examples we're going to assume your program
+is called `script.py`.  Let's say `script.py` looked like
+this:
 
 ```Python
 import appeal
@@ -490,7 +492,8 @@ command function.
 don't use "commands".  Although the "command" command-line
 paradigm is popular these days, most programs don't bother
 with them.  For example, `ls`, `grep`, and... hey! `python`
-itself!
+itself!  None of these programs support commands, but they
+all support command-line arguments and options.
 
 Naturally, Appeal supports this behavior.  Simply decorate
 one function with `Appeal.global_command()` and don't add
@@ -847,7 +850,7 @@ def fgrep(*, pattern:appeal.accumulator[int]=[]):
 app.main()
 ```
 
-and now the opargs to `--id` will all be converted using int.
+and now the opargs to `--pattern` will all be converted using int.
 
 You can even specify multiple types as arguments to the
 parameterized version of `accumulator`, separated by commas.
@@ -1095,12 +1098,18 @@ too, because `int_and_float()` has parameters annotated with
 `int` and `float`.  Of course, those functions only take
 a single string argument; `my_converter()` takes two
 annotated positional parameters.
-But the principles are the same.
+But the principles remain the same.
 
-How does this get mapped to the command-line?  Appeal "flattens"
-the tree of converter functions into a linear series of
-arguments and options.  In this case the usage would look
-like this:
+Still, this is a more complex situation than we've seen before.
+`recurse` takes a positional parameter `b` that has a default
+value, but its converter takes multiple positional parameters,
+and one of those *also* has a converter that takes multiple
+positional parameters.  How does Appeal map this to the
+command-line?
+
+Appeal "flattens" the tree of converter functions into a linear
+series of arguments and options.  In this case the usage string
+would look like this:
 
     recurse a [i f s]
 
@@ -1111,6 +1120,11 @@ Technically, Appeal views this command-line as taking two
 "argument groups": the first group is required, and consumes
 one command-line argument; the second group is optional, and
 consumes three command-line arguments.
+
+(We actually saw our first "argument group" in the
+second example in the
+**Annotations And Introspection** section above, but
+that time the argument group was an oparg.)
 
 Now let's add an option and see what changes:
 
@@ -1135,20 +1149,19 @@ Now the usage looks like this:
 
     recurse2 a [i [-v|--verbose] f s]
 
-Notice: the way Appeal renders it in the usage
-string, the options aren't created until *after* the first
+Notice the way Appeal renders it in the usage
+string--the options aren't created until *after* the first
 argument in the optional argument group.  This may seem
-strange but that's how it works--that's how it *has* to work.
+strange but that's how it works.  That's how it *has* to work.
 
-From a high conceptual level, Appeal doesn't know that
+Why?  From a high conceptual level, Appeal doesn't know that
 you've "entered" the optional argument group until it
 sees the user supply the first argument for that group.
 So it doesn't create the options defined in that group
 until after the first argument.
 
-This high conceptual level maps directly down to how
-Appeal calls your function.  Consider, if the user
-runs this command:
+This high conceptual level corresponds exactly to how Appeal
+calls your function.  Consider, if the user runs this command:
 
     recurse2 xyz
 
