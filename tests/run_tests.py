@@ -31,11 +31,18 @@
 import os.path
 import sys
 
+import os.path
+import shlex
+import subprocess
+import sys
+
 script_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
-appeal_dir = os.path.join(script_dir, "..")
+appeal_dir = os.path.normpath(os.path.join(script_dir, ".."))
 sys_path_0 = os.path.abspath(sys.path[0])
 assert sys_path_0 == script_dir
 sys.path.insert(1, appeal_dir)
+
+
 
 import appeal
 import builtins
@@ -1263,24 +1270,29 @@ class SmokeTests(unittest.TestCase):
 ## bit-rotting.
 ##
 
-readme = os.path.normpath(os.path.join(sys.argv[0], "../../README.md"))
+readme = os.path.normpath(os.path.join(appeal_dir, "README.md"))
 with open(readme, "rt") as f:
     lines = f.read()
+
+in_code = False
 readme_tests = collections.defaultdict(list)
 readme_test = []
 section = None
 for line in lines.split("\n"):
-    stripped = line.lstrip()
-    if stripped == line:
-        if line.startswith("##"):
-            section = line[2:].strip()
+    if line.startswith("##"):
+        section = line.partition(' ')[2].strip()
         continue
-    stripped = stripped.rstrip()
-    if (not readme_test) and (stripped == "import appeal"):
+    stripped = line.strip()
+    if stripped.startswith("```"):
+        in_code = not in_code
+    if in_code and (not readme_test) and (stripped == "import appeal"):
         readme_test.append(line)
     elif readme_test:
         if stripped == "app.main()":
             # don't append line, we don't want it anyway
+            # in fact, we probably want to lose the previous line too
+            if readme_test[-1] == 'if __name__ == "__main__":':
+                readme_test.pop()
             t = "\n".join(readme_test)
             t = textwrap.dedent(t)
             readme_tests[section].append([t, 0])
@@ -1290,10 +1302,9 @@ for line in lines.split("\n"):
 
 # print the tests
 if "-v" in sys.argv:
-    print()
     for section, tests in readme_tests.items():
-        print(repr(section))
         for i, l in enumerate(tests):
+            print(repr(section))
             t, counter = l
             print(f"    [ #{i}")
             for line in t.split("\n"):
@@ -1322,6 +1333,77 @@ class ReadmeTests(unittest.TestCase):
         app = process = None
         l[1] = count + 1
 
+    # 'Quickstart'
+    #     [ #0
+    #     import appeal
+    #     import sys
+    #
+    #     app = appeal.Appeal()
+    #
+    #     @app.command()
+    #     def hello(name):
+    #         print(f"Hello, {name}!")
+    #
+    #     app.main()
+    #     ]
+    def test_quickstart_0_1(self):
+        self.exec_readme(
+            'Quickstart',
+            0,
+            "hello world",
+            "Hello, world!",
+            )
+
+
+    # 'Quickstart'
+    #     [ #1
+    #     import appeal
+    #     import sys
+    #
+    #     app = appeal.Appeal()
+    #
+    #     @app.command()
+    #     def fgrep(pattern, *files, ignore_case=False):
+    #         if not files:
+    #             files = ['-']
+    #         print_file = len(files) > 1
+    #         if ignore_case:
+    #             pattern = pattern.lower()
+    #         for file in files:
+    #             if file == "-":
+    #                 f = sys.stdin
+    #             else:
+    #                 f = open(file, "rt")
+    #             for line in f:
+    #                 if ignore_case:
+    #                     match = pattern in line.lower()
+    #                 else:
+    #                     match = pattern in line
+    #                 if match:
+    #                     if print_file:
+    #                         print(file + ": ", end="")
+    #                     print(line.rstrip())
+    #             if file != "-":
+    #                 f.close()
+    #
+    #
+    #     if __name__ == "__main__":
+    #         app.main()
+    #     ]
+    def test_quickstart_1_1(self):
+        # we're testing fgrep, using test.py itself as the input file.
+        # let's search for a string that exists exactly once.
+        # it's a little tricky because the string needs to be on the
+        # command-line, and also in the output string that we're matching against.
+        # so, we use automatic string concatenation to break up the special string.
+        self.exec_readme(
+            'Quickstart',
+            1,
+            "fgrep xy" f"zzy '{script_dir}/run_tests.py'",
+            # xyzzy!
+            "# xyz" "zy!",
+            )
+
 
     # 'Our First Example'
     #     [ #0
@@ -1333,10 +1415,10 @@ class ReadmeTests(unittest.TestCase):
     #     ]
     def test_our_first_example_0_1(self):
         self.exec_readme(
-            'Our First Example',
+            'Hello, World!',
             0,
-            "fgrep WM_CREATE window.c",
-            "fgrep WM_CREATE window.c",
+            "hello world",
+            "Hello, world!",
             )
 
     def test_default_values_and_star_args_0_1(self):
@@ -1406,7 +1488,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Options, Opargs, And Keyword-Only Parameters',
             0,
-            "fgrep WM_CREATE --color red a b c --id 33 -v",
+            "fgrep WM_CREATE --color red a b c --number 33 -i",
             "fgrep WM_CREATE ('a', 'b', 'c') 'red' 33 True",
             )
 
@@ -1414,7 +1496,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Options, Opargs, And Keyword-Only Parameters',
             0,
-            "fgrep poodle -v x --id 88 y --color blue z",
+            "fgrep poodle -i x -n 88 y --color blue z",
             "fgrep poodle ('x', 'y', 'z') 'blue' 88 True",
             )
 
@@ -1422,7 +1504,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Options, Opargs, And Keyword-Only Parameters',
             0,
-            "fgrep poodle x --id 88 y --color blue z",
+            "fgrep poodle x --number 88 y --color blue z",
             "fgrep poodle ('x', 'y', 'z') 'blue' 88 False",
             )
 
@@ -1886,7 +1968,7 @@ class ReadmeTests(unittest.TestCase):
     #     ]
     def test_now_witness_the_power_of_this_etc_0_1(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
+            'Options that map other options',
             0,
             "inception",
             "inception option=[0, False]",
@@ -1894,7 +1976,7 @@ class ReadmeTests(unittest.TestCase):
 
     def test_now_witness_the_power_of_this_etc_0_2(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
+            'Options that map other options',
             0,
             "inception -o 33",
             "inception option=[33, False]",
@@ -1902,7 +1984,7 @@ class ReadmeTests(unittest.TestCase):
 
     def test_now_witness_the_power_of_this_etc_0_3(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
+            'Options that map other options',
             0,
             "inception -o1965 -v",
             "inception option=[1965, True]",
@@ -1910,7 +1992,7 @@ class ReadmeTests(unittest.TestCase):
 
     def test_now_witness_the_power_of_this_etc_0_4(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
+            'Options that map other options',
             0,
             "inception --option=2112 --verbose",
             "inception option=[2112, True]",
@@ -1928,24 +2010,24 @@ class ReadmeTests(unittest.TestCase):
     #     ]
     def test_now_witness_the_power_of_this_etc_1_1(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
-            1,
+            "Multiple options that aren't MultiOptions",
+            0,
             "repetition",
             "repetition args=()",
             )
 
     def test_now_witness_the_power_of_this_etc_1_2(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
-            1,
+            "Multiple options that aren't MultiOptions",
+            0,
             "repetition 0",
             "repetition args=([0, False],)",
             )
 
     def test_now_witness_the_power_of_this_etc_1_2(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
-            1,
+            "Multiple options that aren't MultiOptions",
+            0,
             "repetition 0 1 -v 2 3 --verbose 4 5",
             "repetition args=([0, False], [1, False], [2, True], [3, False], [4, True], [5, False])",
             )
@@ -1971,32 +2053,32 @@ class ReadmeTests(unittest.TestCase):
     #     ]
     def test_now_witness_the_power_of_this_etc_2_1(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
-            2,
+            'Positional parameters that only consume options',
+            0,
             "mixin",
             "mixin log=<Logging verbose=False log_level=info>",
             )
 
     def test_now_witness_the_power_of_this_etc_2_2(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
-            2,
+            'Positional parameters that only consume options',
+            0,
             "mixin --log-level ascerbic -v",
             "mixin log=<Logging verbose=True log_level=ascerbic>",
             )
 
     def test_now_witness_the_power_of_this_etc_2_3(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
-            2,
+            'Positional parameters that only consume options',
+            0,
             "mixin -ldidactic  --verbose",
             "mixin log=<Logging verbose=True log_level=didactic>",
             )
 
     def test_now_witness_the_power_of_this_etc_2_4(self):
         self.exec_readme(
-            'Now Witness The Power Of This Fully Armed And Operational Battle Station',
-            2,
+            'Positional parameters that only consume options',
+            0,
             "mixin -lelective",
             "mixin log=<Logging verbose=False log_level=elective>",
             )
