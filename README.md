@@ -162,16 +162,17 @@ are the short option strings.  In the above example,
 we specify two sets of short options: the first is `-v`,
 the second is `-xz`.  You can combine options togther,
 and it's the same as specifying them separately.  We
-could have said `-vxz`, or `-v -x -z`.  These all mean
+could have said `-vxz`, or `-v -x -z`; these both do
 the same thing.  When we talk about short options, we
-say it with the dash; `-v` would be pronounced "dash v".
+say the word "dash" followed by the letter.  For example,
+`-v` would be pronounced "dash v".
 
 *Long options* start with two dashes, `--`.  Everything
 after the two dashes is the name of the option.  In the
 above example, we can see one long option, `--flag`.
 Again, when we talk about long options, we say the
-dashes out loud, like `--flag` would be pronounced
-"dash dash flag".
+dashes out loud, followed by the words from the option.
+For example, `--flag` would be pronounced "dash dash flag".
 
 Both types of options can optionally take one (or more)
 arguments of their own.  An argument to an option is
@@ -1350,6 +1351,110 @@ But it's reassuring to know that, whatever command-line API
 metaphor you want to express, it's not just *possible* in
 Appeal--it's *easy.*
 
+
+## Classes, Instances, And Preparers
+
+Maybe you've noticed--all the examples so far have used
+standard Python functions as Appeal commands.  Perhaps you've
+wondered: can you use method calls too?  The answer is, yes
+of course!  But it's slightly more complicated.
+
+Appeal's whole purpose in life is to call functions by
+pulling data from the command-line.  Whenever it sees a
+parameter, it thinks "okay, I have to supply an argument
+to that.  So if you map an *unbound* method call to a command:
+
+```Python
+class MyApp:
+    @app.command()
+    def sum(self, *operands: int):
+        return sum(*operands)
+```
+
+Appeal would see the `self` parameter and think "aha! I'm gonna
+put a string there!"  So, we need to prevent Appeal from seeing
+that parameter in the first place.
+
+Appeal supports two techniques for mapping bound method calls to
+commands.  The first is straightforward, but a bit inflexible:
+simply create the instance of your class, and call `app.command()()`
+on the bound instances.  Like this:
+
+```Python
+app = appeal.Appeal()
+class MyApp:
+    def sum(self, *operands: int):
+        return sum(*operands)
+
+o = MyApp()
+app.command()(o.sum)
+app.main()
+```
+
+Since Appeal only ever sees the bound method, it doesn't even
+*see* the `self` parameter in the signature.  (The signature
+of a bound method doesn't include `self`.)
+
+This works fine... but maybe it looks a little weird.  We're no
+longer decorating functions (or methods), instead we're calling
+the decorator function directly and passing in the bound method.
+It also restricts us to one instance of `MyApp` per Appeal
+instance, which may be restrictive.
+
+The other technique uses a little magic to provide a more
+familiar-looking interface.  You call `Appeal.command_method()`
+to create a `CommandMethodPreparer` object, which you
+use to decorate the method calls of one of your classes;
+then you call `bind` on that object to pass in the instance
+of that class you want to bind those methods to.  This
+returns a callable you pass in to `Appeal.preparer`, which
+binds the method to that instance so Appeal can call it.
+This function works like a decorator; Appeal passes in a
+function, and the function returns the function that Appeal
+actually calls.
+
+Here's an example of using `Appeal.command_method()`:
+
+```Python
+import appeal
+
+app = appeal.Appeal()
+command_method = app.command_method()
+
+class MyApp:
+    def __init__(self, id):
+        self.id = id
+
+    def __repr__(self):
+        return f"<MyApp id={self.id!r}>"
+
+    @command_method()
+    def add(self, a, b, c):
+        print(f"MyApp add {self=} {a=} {b=} {c=}")
+
+my_app = MyApp("dingus")
+
+p = app.processor()
+p.preparer(command_method.bind(my_app))
+p.main()
+```
+
+This is the first time you're seeing the `Processor`
+object.  All the runtime information for processing
+a command-line lives in the `Processor` object; in
+fact, `Appeal.main` and `Appeal.process` are both
+thin wrappers over the equivalent methods on the
+`Processor` object.  Moving all the runtime information
+into the `Processor` object lets you process multiple
+command-lines with the same Appeal object, even
+simultaneously!
+
+Under the covers, the `command_method` decorator
+wraps the method with a `functools.partial` object,
+passing in a placeholder object for the `self` parameter.
+Then `command_method.bind()` replaces the placeholder for
+the real instance.  For maximum compatibility, it actually
+uses  `getattr()` to bind the instance to the method.
 
 ## Writing Help
 

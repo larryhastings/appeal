@@ -24,37 +24,54 @@
 # OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-# Ensure that this script tests the local appeal source code
-# (rather than the installed version of appeal, if any)
-# regardless of where it is run from.
-
-import os.path
-import sys
-
-import os.path
-import shlex
-import subprocess
-import sys
-
-script_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
-appeal_dir = os.path.normpath(os.path.join(script_dir, ".."))
-sys_path_0 = os.path.abspath(sys.path[0])
-assert sys_path_0 == script_dir
-sys.path.insert(1, appeal_dir)
-
-
-
-import appeal
 import builtins
 import collections
 import math
 import os.path
 import shlex
+import subprocess
 import sys
 import textwrap
 import unittest
 
+
+def preload_local_appeal():
+    """
+    Pre-load the local "appeal" module, to preclude finding
+    an already-installed one on the path.
+    """
+    from os.path import abspath, dirname, isfile, join, normpath
+    import sys
+    appeal_dir = abspath(dirname(sys.argv[0]))
+    while True:
+        appeal_init = join(appeal_dir, "appeal/__init__.py")
+        if isfile(appeal_init):
+            break
+        appeal_dir = normpath(join(appeal_dir, ".."))
+    sys.path.insert(1, appeal_dir)
+    import appeal
+    return appeal_dir
+
+appeal_dir = preload_local_appeal()
+import appeal
+
+
 app = command = process = None
+
+def capture_stdout(cmdline):
+    text = []
+    def print_capture(*a, end="\n", sep=" "):
+        t = sep.join([str(o) for o in a])
+        t += end
+        text.append(t)
+    actual_print = builtins.print
+    builtins.print = print_capture
+    process(shlex.split(cmdline))
+    builtins.print = actual_print
+    text = "".join(text)
+    return text
+
+
 
 
 def int_float_verbose(x_int:int, y_float:float, *, verbose=False):
@@ -288,20 +305,6 @@ def five_a(*, d:five_d=None, e=False, f=False):
 def five_level_stack(*, a:five_a=None, b=False, c=False):
     return (five_level_stack, a, b, c)
 
-def capture_stdout(cmdline):
-    text = []
-    def print_capture(*a, end="\n", sep=" "):
-        t = sep.join([str(o) for o in a])
-        t += end
-        text.append(t)
-    actual_print = builtins.print
-    builtins.print = print_capture
-    process(shlex.split(cmdline))
-    builtins.print = actual_print
-    text = "".join(text)
-    return text
-
-
 class SmokeTests(unittest.TestCase):
     def setUp(self):
         global app
@@ -314,7 +317,9 @@ class SmokeTests(unittest.TestCase):
             version="0.5",
             )
         command = app.command()
-        process = app.process
+        def my_process(args):
+            return app.process(args)
+        process = my_process
 
     def assert_process(self, cmdline, result):
         self.assertEqual(process(shlex.split(cmdline)), result)
@@ -1253,11 +1258,15 @@ class SmokeTests(unittest.TestCase):
 ## compile and execute, then run at least one test on each.
 ##
 ## Executable tests in README.md are always indented from
-## the left margin, and always look like this:
+## the left margin, are per-documentation-section,
+## and always take this form:
 ##
 ##     import appeal
 ##     ...
-##     app.main()
+##     app.main([...]
+##
+## (As in, they start with a line that reads "import appeal",
+## and ends with a line that starts with "app.main(".)
 ##
 ## They're stored in readme_tests, a dict mapping
 ## "section name" to a list of tests from that section.
@@ -1278,27 +1287,58 @@ in_code = False
 readme_tests = collections.defaultdict(list)
 readme_test = []
 section = None
+
 for line in lines.split("\n"):
-    if line.startswith("##"):
-        section = line.partition(' ')[2].strip()
-        continue
-    stripped = line.strip()
-    if stripped.startswith("```"):
-        in_code = not in_code
-    if in_code and (not readme_test) and (stripped == "import appeal"):
+    stripped = line.lstrip()
+    if stripped == line:
+        if line.startswith("##"):
+            while line.startswith("#"):
+                line = line[1:]
+            section = line.strip()
+            # if we had a malformed test, throw it away here
+            readme_test.clear()
+            continue
+    stripped = stripped.rstrip()
+    if stripped == "import appeal":
+        readme_test.clear()
         readme_test.append(line)
     elif readme_test:
-        if stripped == "app.main()":
-            # don't append line, we don't want it anyway
-            # in fact, we probably want to lose the previous line too
-            if readme_test[-1] == 'if __name__ == "__main__":':
-                readme_test.pop()
+        if stripped.startswith(("app.main(", "p.main(")):
+            # don't actually append the app.main(), we don't want it
+            # but add a correctly-indented 'pass' so it still parses
+            prefix = line.partition(stripped)[0]
+            pass_line = prefix + "pass"
+            readme_test.append(pass_line)
+
             t = "\n".join(readme_test)
             t = textwrap.dedent(t)
             readme_tests[section].append([t, 0])
             readme_test = []
+            # print("[test]", section, len(readme_tests[section]), repr(t)[:30] + "[...]")
         else:
             readme_test.append(line)
+
+# for line in lines.split("\n"):
+#     if line.startswith("##"):
+#         section = line.partition(' ')[2].strip()
+#         continue
+#     stripped = line.strip()
+#     if stripped.startswith("```"):
+#         in_code = not in_code
+#     if in_code and (not readme_test) and (stripped == "import appeal"):
+#         readme_test.append(line)
+#     elif readme_test:
+#         if stripped == "app.main()":
+#             # don't append line, we don't want it anyway
+#             # in fact, we probably want to lose the previous line too
+#             if readme_test[-1] == 'if __name__ == "__main__":':
+#                 readme_test.pop()
+#             t = "\n".join(readme_test)
+#             t = textwrap.dedent(t)
+#             readme_tests[section].append([t, 0])
+#             readme_test = []
+#         else:
+#             readme_test.append(line)
 
 # print the tests
 if "-v" in sys.argv:
@@ -1320,13 +1360,22 @@ class ReadmeTests(unittest.TestCase):
 
         l = readme_tests[section][index]
         text, count = l
+        text = "p = None\napp = None\n" + text
         code = compile(text, "-", "exec")
-        globals = {}
+        globals_dict = {}
         # print(section, index)
         # print(repr(text))
-        result = exec(code, globals, globals)
-        app = globals['app']
-        process = app.process
+        result = exec(code, globals_dict, globals_dict)
+        app = globals_dict['app']
+        p = globals_dict['p']
+
+        def my_process(args):
+            nonlocal p
+            if not p:
+                p = app.processor()
+            p(args)
+            return p
+        process = my_process
 
         result = capture_stdout(cmdline)
         self.assertEqual(result.strip(), expected)
@@ -1399,7 +1448,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Quickstart',
             1,
-            "fgrep xy" f"zzy '{script_dir}/run_tests.py'",
+            "fgrep xy" f"zzy '{appeal_dir}/tests/run_tests.py'",
             # xyzzy!
             "# xyz" "zy!",
             )
@@ -2083,6 +2132,41 @@ class ReadmeTests(unittest.TestCase):
             "mixin log=<Logging verbose=False log_level=elective>",
             )
 
+
+    # 'Classes, Instances, And Preparers'                                                 [202/1984]
+    #     [ #0
+    #     import appeal
+    #
+    #     app = appeal.Appeal()
+    #     command_method = app.command_method()
+    #
+    #     class MyApp:
+    #         def __init__(self, id):
+    #             self.id = id
+    #
+    #         def __repr__(self):
+    #             return f"<MyApp id={self.id!r}>"
+    #
+    #         @command_method()
+    #         def add(self, a, b, c):
+    #             print(f"MyApp add {self=} {a=} {b=} {c=}")
+    #
+    #     my_app = MyApp("dingus")
+    #
+    #     p = app.processor()
+    #     p.preparer(command_method.bind(my_app))
+    #     pass
+    #     ]
+
+    def test_classes_instances_and_preparers_0_1(self):
+        self.exec_readme(
+            'Classes, Instances, And Preparers',
+            0,
+            "add f g h",
+            "MyApp add self=<MyApp id='dingus'> a='f' b='g' c='h'",
+            )
+
+
 exit_code = 0
 try:
     unittest.main()
@@ -2095,7 +2179,6 @@ for section, tests in readme_tests.items():
     for i, (text, counter) in enumerate(tests):
         if counter == 0:
             not_run.append((section, i))
-
 if not_run:
     print()
     print("The following README.md tests weren't run:")

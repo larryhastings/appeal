@@ -64,46 +64,16 @@ empty = inspect.Parameter.empty
 
 
 
-def multisplit(s, separators):
-    """
-    Like str.split(), but separators is an iterable
-    of strings to separate on.  (separators can be a
-    string, in which case multisplit separates on each
-    character.)
-
-    multsplit('ab:cd,ef', ':,') => ["ab", "cd", "ef"]
-    """
-    if not s or not separators:
-        return [s]
-    if len(separators) == 1:
-        return s.split(separators[0])
-    splits = []
-    while s:
-        candidates = []
-        for separator in separators:
-            split, found, trailing = s.partition(separator)
-            if found:
-                candidates.append((len(split), split, trailing))
-        if not candidates:
-            break
-        candidates.sort()
-        _, fragment, s = candidates[0]
-        splits.append(fragment)
-    splits.append(s)
-    return splits
-
-
 # which PushBackIterator do you want?
 
 if 0:
     # totally legit high-performance version with racing stripes
-    # where debugging is annoying
+    # (but debugging is annoying)
     class PushbackIterator:
         def __init__(self, iterable=None):
-            if iterable:
-                self.iterators = [iter(iterable)]
-            else:
-                self.iterators = []
+            i = self.iterators = []
+            if iterable is not None:
+                i.append(iter(iterable))
 
         def __iter__(self):
             return self
@@ -145,10 +115,10 @@ else:
     # debug-friendly low-performance version that makes kittens sad
     class PushbackIterator:
         def __init__(self, iterable=None):
-            if iterable:
-                self.values = collections.deque(iterable)
-            else:
-                self.values = collections.deque(iterable)
+            args = ()
+            if iterable is not None:
+                args = (iterable,)
+            self.values = collections.deque(*args)
 
         def __iter__(self):
             return self
@@ -245,7 +215,8 @@ class AppealCommandError(AppealBaseException):
     """
     pass
 
-
+class Preparer:
+    pass
 
 #
 # used to ensure that the user doesn't use an uncalled
@@ -274,6 +245,143 @@ def is_legal_annotation(annotation):
         return result
     return True
 
+
+def partial_rebind_method(partial, placeholder, self):
+    """
+    Binds an unbound method curried with a placeholder
+    object to an instance and returns the bound method.
+
+    All these statements must be true:
+        * "parital" must be a functools.partial() object
+          with exactly one curried positional argument
+          and zero curried keyword arguments.
+        * The one curried positional argument must be
+          equal to "placeholder".
+
+    If any of those statements are false, raises ValueError.
+
+    If all those statements are true, this function:
+        * extracts the callable from the partial,
+        * uses getattr(self, callable.__name__) to
+          bind callable to self.
+    """
+    if not isinstance(partial, functools.partial):
+        raise ValueError("partial is not a functools.partial object")
+    if (   (len(partial.args) != 1)
+        or (partial.args[0] != placeholder)
+        or len(partial.keywords)):
+        raise ValueError("partial curried arguments don't match [placeholder]")
+    # print(f"BIND METHOD WORKED\n>> {partial.func=}\n>> {placeholder=}\n>> {self=}\n>> {partial.func.__name__=}\n>> {self.add=}\n>> {getattr(self, partial.func.__name__)}")
+    f = partial
+    # for i in range(1, 220):
+    #     print(f"~~ {i:2} partial={f!r}")
+    #     if not isinstance(f, functools.partial):
+    #         break
+    #     f = f.func
+    bound_method = getattr(self, partial.func.__name__)
+    # print("       >> ", bound_method)
+    return bound_method
+
+def partial_rebind_positional(partial, placeholder, instance):
+    """
+    Replaces the first positional argument of a
+    functools.partial object with a different argument.
+
+    All these statements must be true:
+        * "parital" must be a functools.partial() object
+          with exactly one curried positional argument
+          and zero curried keyword arguments.
+        * The one curried positional argument must be
+          equal to "placeholder".
+
+    If any of those statements are false, raises ValueError.
+
+    If all those statements are true, this function:
+        * extracts the callable from the partial,
+        * uses getattr(self, callable.__name__) to
+          bind callable to self.
+    """
+    if not isinstance(partial, functools.partial):
+        raise ValueError("partial is not a functools.partial object")
+    if (   (len(partial.args) != 1)
+        or (partial.args[0] != placeholder)
+        or len(partial.keywords)):
+        raise ValueError("partial curried arguments don't match [placeholder]")
+    return functools.partial(partial.func, instance)
+
+def partial_replace_map(partial, map):
+    """
+    Replaces curried values in a functools.partial()
+    object.  The map should be of the form
+        {old: new}
+    where "old" is a curried value in partial,
+    which will be replaced with "new".
+
+    Returns a new partial object with:
+        * all positional values matching "old"
+          replaced with "new", and
+        * all keyword-only values whose value
+          matches "old" replaced with "new".
+
+    "old" values that don't appear as a curried
+    value in partial are ignored and harmless.
+    """
+    func = partial.func
+    if isinstance(func, functools.partial):
+        func = partial_replace_map(func, map)
+    new_args = []
+    for value in partial.args:
+        new_args.append(map.get(value, value))
+    new_kwargs = {}
+    for key, value in partial.keywords.items():
+        new_kwargs[key] = map.get(value, value)
+    return functools.partial(func, *new_args, **new_kwargs)
+
+def partial_replace(partial, **kwargs):
+    """
+    Keyword-argument convience wrapper function
+    for partial_replace_map().
+    """
+    return partial_replace_map(partial, kwargs)
+
+def partial_replace_map_self(partial, map):
+    """
+    Does the same thing as partial_replace_map(),
+    with one exception: the first positional value
+    curried by the partial object is treated like
+    a "self" object, and the curried function is
+    assumed to be an unbound method.  For maximum
+    compatibility, and *only* in this case,
+    partial_replace_map_self will call
+    getattr() on this "self" object to create a
+    bound method version of fn by looking it up
+    *by name*.
+    """
+    func = partial.func
+    args = partial.args
+    kwargs = partial.keywords
+    if isinstance(func, functools.partial):
+        func = partial_replace_map_self(func, map)
+    elif args:
+        args = list(args)
+        self = args.pop(0)
+        self = map.get(self, self)
+        # print(f"Handled a self {self!r}")
+        name = func.__name__
+        assert hasattr(self, name)
+        func = getattr(self, name)
+        if not (args or kwargs):
+            return func
+    new_args = []
+    for value in args:
+        new_args.append(map.get(value, value))
+    new_kwargs = {}
+    for key, value in kwargs.items():
+        new_kwargs[key] = map.get(value, value)
+    return functools.partial(func, *new_args, **new_kwargs)
+
+def no_op_prepare(fn):
+    return fn
 
 ##
 ## charm
@@ -377,6 +485,69 @@ class CharmProgram:
         return self.opcodes[index]
 
 
+
+"""
+# cpp
+
+# This is a preprocessor block.
+# This Python code prints out the opcode enum.
+
+def print_enum(names, i=0):
+    for name in names.split():
+        print(f"    {name.strip()} = {i}")
+        i += 1
+
+print('class opcode(enum.Enum):')
+
+print_enum('''
+    invalid
+    jump
+    jump_relative
+    branch_on_o
+    call
+    create_converter
+    load_converter
+    load_o
+    load_o_option
+    append_args
+    store_kwargs
+    map_option
+    consume_argument
+    flush_multioption
+    set_group
+    push_context
+    pop_context
+    end
+
+''')
+
+print('''
+    # these are removed by the peephole optimizer.
+    # the interpreter never sees them.
+    # (well... unless you leave in comments during debugging.)
+''')
+
+print_enum('''
+    no_op
+    comment
+    label
+    jump_to_label
+    branch_on_o_to_label
+''', i=100)
+
+print()
+
+"""
+
+# Don't modify this stuff directly!
+# Everything from here to the
+#         # cpp
+# line below is generated.
+#
+# Modify the code in the quotes above and run
+#         % python3 cpp.py __init__.py
+# to regenerate.
+
 class opcode(enum.Enum):
     invalid = 0
     jump = 1
@@ -386,25 +557,30 @@ class opcode(enum.Enum):
     create_converter = 5
     load_converter = 6
     load_o = 7
-    load_option = 8
-    append_args = 9
-    store_kwargs = 10
-    map_option = 11
-    consume_argument = 12
-    flush_multioption = 13
-    set_group = 14
-    push_context = 15
-    pop_context = 16
-    end = 17
+    load_o_context = 8
+    load_o_option = 9
+    append_args = 10
+    store_kwargs = 11
+    map_option = 12
+    consume_argument = 13
+    flush_multioption = 14
+    set_group = 15
+    push_context = 16
+    pop_context = 17
+    end = 18
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
-    # (unless you leave in comments during debugging.)
-    label = 100,
-    jump_to_label = 101,
-    branch_on_o_to_label = 102
-    no_op = 103
-    comment = 104
+    # (well... unless you leave in comments during debugging.)
+
+    no_op = 100
+    comment = 101
+    label = 102
+    jump_to_label = 103
+    branch_on_o_to_label = 104
+
+# cpp
+
 
 class CharmInstruction:
     op = opcode.invalid
@@ -589,20 +765,20 @@ class CharmInstructionLoadO(CharmInstructionKeyBase):
     """
     op = opcode.load_o
 
-class CharmInstructionLoadOption(CharmInstruction):
+class CharmInstructionLoadOOption(CharmInstruction):
     """
     load_o <key>
 
     Loads a Converter object from 'converters[key]' and
     stores a reference in the 'o' register.
     """
-    op = opcode.load_option
+    op = opcode.load_o_option
 
     def __init__(self, option):
         self.option = option
 
     def __repr__(self):
-        return f"<load_option option={self.option}>"
+        return f"<load_o_option option={self.option}>"
 
 class CharmInstructionAppendArgs(CharmInstruction):
     """
@@ -628,7 +804,7 @@ class CharmInstructionAppendArgs(CharmInstruction):
     def __repr__(self):
         return f"<append_args callable={self.callable} parameter={self.parameter} usage={self.usage} usage_callable={self.usage_callable} usage_parameter={self.usage_parameter}>"
 
-class CharmInstructionStoreKwargs(CharmInstructionNoArgBase):
+class CharmInstructionStoreKwargs(CharmInstruction):
     """
     store_kwargs <name>
 
@@ -829,8 +1005,8 @@ class CharmAssembler:
             )
         return self.append(op)
 
-    def load_option(self, key):
-        op = CharmInstructionLoadOption(
+    def load_o_option(self, key):
+        op = CharmInstructionLoadOOption(
             option=option,
             )
         return self.append(op)
@@ -1098,6 +1274,12 @@ class CharmCompiler:
         maps_to_positional = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
         tracked_by_argument_grouping = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
 
+        # hard-coded, at least for now
+        if parameter.annotation is not empty:
+            cls = parameter.annotation
+        elif parameter.default is not empty:
+            cls = type(parameter.default)
+
         callable = parameter.annotation
         cls = self.root.map_to_converter(parameter)
         signature = cls.get_signature(parameter)
@@ -1275,7 +1457,7 @@ class CharmCompiler:
         def signature(p):
             cls = self.appeal.map_to_converter(p)
             signature = cls.get_signature(p)
-            return strip_self_from_signature(signature)
+            return signature
         pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
         pgi = pg.iter_all()
 
@@ -1456,7 +1638,7 @@ def charm_print(program, indent=''):
                         seen.add(value_id)
                     continue
                 if slot == "callable":
-                    value = value.__name__
+                    value = value.__name__ if value is not None else value
                 elif value == empty:
                     value = "(empty)"
                 elif isinstance(value, ArgumentCounter):
@@ -1895,10 +2077,10 @@ def charm_parse(appeal, program, argi):
                     print(f"##     load_o {op.key=} {o=!s}")
                 continue
 
-            if op.op == opcode.load_option:
+            if op.op == opcode.load_o_option:
                 ci.option = op.option
                 if want_prints:
-                    print(f"##     load_option {op.option=} {o=!s}")
+                    print(f"##     load_o_option {op.option=} {o=!s}")
                 continue
 
             if op.op == opcode.map_option:
@@ -1983,7 +2165,7 @@ def charm_parse(appeal, program, argi):
 
             if op.op == opcode.branch_on_o:
                 if want_prints:
-                    print(f"##     branch_on_o o={ci.o} {op.delta=}")
+                    print(f"##     branch_on_o o={ci.o} {op.address=}")
                 if ci.o:
                     ci.i.jump(op.address)
                 continue
@@ -2289,7 +2471,7 @@ class Converter:
     def get_signature(cls, parameter):
         if hasattr(cls, "signature"):
             return cls.signature
-        return inspect.signature(parameter.annotation)
+        return inspect.signature(parameter.annotation, follow_wrapped=False)
 
     def reset(self):
         # collections of converters we'll use to compute *args and **kwargs.
@@ -2308,28 +2490,29 @@ class Converter:
     def __repr__(self):
         return f"<{self.__class__.__name__} callable={self.callable.__name__}>"
 
-    def convert(self):
+    def convert(self, processor):
         # print(f"{self=} {self.args_converters=} {self.kwargs_converters=}")
         for iterable in (self.args_converters, self.kwargs_converters.values()):
             for converter in iterable:
                 if converter and not isinstance(converter, str):
                     # print(f"{self=}.convert, {converter=}")
-                    converter.convert()
+                    converter.convert(processor)
 
         for converter in self.args_converters:
             if converter and not isinstance(converter, str):
-                converter = converter.execute()
+                converter = converter.execute(processor)
             self.args.append(converter)
         for name, converter in self.kwargs_converters.items():
             if converter and not isinstance(converter, str):
-                converter = converter.execute()
+                converter = converter.execute(processor)
             self.kwargs[name] = converter
 
-    def execute(self):
+    def execute(self, processor):
         # print(f"calling {self.callable}(*{self.args}, **{self.kwargs})")
-        return self.callable(*self.args, **self.kwargs)
-
-
+        # return processor.execute_preparers(self.callable)(self.args, self.kwargs)
+        rebound = processor.execute_preparers(self.callable)
+        # print(f"\nEXECUTE {self.callable=} {rebound=} {inspect.signature(rebound)=} {self.args=} {self.kwargs=}")
+        return rebound(*self.args, **self.kwargs)
 
 
 class InferredConverter(Converter):
@@ -2343,7 +2526,7 @@ class InferredConverter(Converter):
     def get_signature(cls, parameter):
         if hasattr(cls, "signature"):
             return cls.signature
-        return inspect.signature(type(parameter.default))
+        return inspect.signature(type(parameter.default), follow_wrapped=False)
 
 class InferredSequenceConverter(InferredConverter):
     @classmethod
@@ -2362,7 +2545,7 @@ class InferredSequenceConverter(InferredConverter):
             parameters.append(p)
         return inspect.Signature(parameters)
 
-    def execute(self):
+    def execute(self, processor):
         return self.callable(self.args)
 
 
@@ -2384,7 +2567,7 @@ class SimpleTypeConverter(Converter):
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.callable} args_converters={self.args_converters} value={self.value}>"
 
-    def convert(self):
+    def convert(self, processor):
         if not self.args_converters:
             # explicitly allow "make -j"
             if self.default is not empty:
@@ -2392,7 +2575,7 @@ class SimpleTypeConverter(Converter):
             raise AppealUsageError(f"no argument supplied for {self}, we should have raised an error earlier huh.")
         self.value = self.callable(self.args_converters[0])
 
-    def execute(self):
+    def execute(self, processor):
         return self.value
 
 
@@ -2443,7 +2626,7 @@ class InferredOption(Option):
     def get_signature(cls, parameter):
         if hasattr(cls, "signature"):
             return cls.signature
-        return inspect.signature(type(parameter.default))
+        return inspect.signature(type(parameter.default), follow_wrapped=False)
 
 class InferredSequenceOption(InferredOption):
     @classmethod
@@ -2462,17 +2645,43 @@ class InferredSequenceOption(InferredOption):
             parameters.append(p)
         return inspect.Signature(parameters)
 
-    def execute(self):
+    def execute(self, processor):
         return self.callable(self.args)
 
 
-def strip_self_from_signature(signature):
+def strip_first_argument_from_signature(signature):
+    # suppresses the first argument from the signature,
+    # regardless of its name.
+    # (the name "self" is traditional, but it's mostly not enforced
+    # by the language.  though I think no-argument super() might depend on it.)
     parameters = collections.OrderedDict(signature.parameters)
-    if not 'self' in parameters:
+    if not parameters:
+        raise AppealConfigurationError(f"strip_first_argument_from_signature: was passed zero-argument signature {signature}")
+    for name, p in parameters.items():
+        break
+    del parameters[name]
+    if 'return' in parameters:
+        return_annotation = parameters['return']
+        del parameters['return']
+    else:
+        return_annotation = empty
+    return inspect.Signature(parameters.values(), return_annotation=return_annotation)
+
+
+def strip_self_from_signature(signature):
+    # suppresses self from the signature.
+    parameters = collections.OrderedDict(signature.parameters)
+    if not parameters:
+        return signature
+    # the self parameter must be first
+    for name, p in parameters.items():
+        break
+    if name != "self":
         return signature
     del parameters['self']
     if 'return' in parameters:
         return_annotation = parameters['return']
+        del parameters['return']
     else:
         return_annotation = empty
     return inspect.Signature(parameters.values(), return_annotation=return_annotation)
@@ -2494,14 +2703,15 @@ class SingleOption(Option):
             return cls.signature
         # we need the signature of cls.option
         # but *without self*
-        signature = inspect.signature(cls.option)
-        return strip_self_from_signature(signature)
+        signature = inspect.signature(cls.option, follow_wrapped=False)
+        signature = strip_first_argument_from_signature(signature)
+        return signature
 
-    def execute(self):
+    def execute(self, processor):
         self.option(*self.args, **self.kwargs)
         return self.render()
 
-    # Your subclass of Option or MultiOption is required
+    # Your subclass of SingleOption or MultiOption is required
     # to define its own option() and render() methods.
     # init() is optional.
 
@@ -2568,18 +2778,19 @@ class MultiOption(SingleOption):
         self.multi_converters.append((self.args_converters, self.kwargs_converters))
         self.reset()
 
-    def convert(self):
+    def convert(self, processor):
         self.flush()
         for args, kwargs in self.multi_converters:
             self.args = []
             self.kwargs = {}
             self.args_converters = args
             self.kwargs_converters = kwargs
-            super().convert()
+            super().convert(processor)
             self.multi_args.append((self.args, self.kwargs))
 
-    def execute(self):
+    def execute(self, processor):
         for args, kwargs in self.multi_args:
+            # print(f"CALLING {self.option=} {args=} {kwargs=}")
             self.option(*args, **kwargs)
         return self.render()
 
@@ -2721,7 +2932,7 @@ def split(*separators, strip=False):
         raise AppealConfigurationError("split(): every separator must be a non-empty string")
 
     def split(str):
-        values = multisplit(str, separators)
+        values = text.multisplit(str, separators)
         if strip:
             values = [s.strip() for s in values]
         return values
@@ -2922,7 +3133,6 @@ def unbound_callable(callable):
 
 
 event_clock = time.monotonic_ns
-event_start = event_clock()
 
 unspecified = object()
 
@@ -3142,32 +3352,6 @@ class Appeal:
         self._calculate_full_name()
 
         self.log_events = log_events
-        self.events = []
-
-    def log_event(self, event):
-        if not self.log_events:
-            return
-        self.events.append((event, event_clock()))
-
-    def dump_log(self):
-        if not self.log_events:
-            return
-        def format_time(t):
-            seconds = t // 1000000000
-            nanoseconds = t - seconds
-            return f"[{seconds:02}.{nanoseconds:09}]"
-
-        print()
-        print("event log")
-        print(f"  elapsed time   per event      event")
-        print(f"  -------------- -------------- -------------")
-
-        previous = 0
-        for event, t in self.events:
-            elapsed = t - event_start
-            delta = elapsed - previous
-            print(f"  {format_time(elapsed)} {format_time(delta)} {event}")
-            previous = elapsed
 
     def format_positional_parameter(self, name):
         return self.root.positional_argument_usage_format.format(
@@ -3206,6 +3390,37 @@ class Appeal:
         if not a:
             a = Appeal(name=name, parent=self)
         return a
+
+    class CommandMethodPreparer(Preparer):
+        def __init__(self, appeal, *, bind_method=True):
+            self.appeal = appeal
+            self.bind_method = bind_method
+            self.placeholder = object()
+
+        def command(self, name=None):
+            def command(fn):
+                fn2 = functools.partial(fn, self.placeholder)
+                functools.update_wrapper(fn2, fn)
+                self.appeal.command(name=name)(fn2)
+                return fn
+            return command
+
+        def __call__(self, name=None):
+            return self.command(name=name)
+
+        def bind(self, instance):
+            rebinder = partial_rebind_method if self.bind_method else partial_rebind_positional
+            def prepare(fn):
+                try:
+                    return rebinder(fn, self.placeholder, instance)
+                except ValueError:
+                    return fn
+            return prepare
+
+    def command_method(self, bind_method=True):
+        return self.CommandMethodPreparer(self, bind_method=bind_method)
+
+
 
     def argument(self, parameter, *, usage=None):
         def argument(callable):
@@ -3324,7 +3539,7 @@ class Appeal:
             return self.usage_str, self.split_summary, self.doc_sections
 
         if not self._global_program:
-            self.analyze()
+            self.analyze(None)
 
         callable = self._global
         fn_name = callable.__name__
@@ -3341,7 +3556,7 @@ class Appeal:
 
         if commands:
             for name, child in commands.items():
-                child.analyze()
+                child.analyze(None)
                 child_usage_str, child_split_summary, child_doc_sections = child.compute_usage()
                 commands_definitions[name] = child_split_summary
 
@@ -4015,7 +4230,7 @@ class Appeal:
             def no_op(): pass
             self._global = no_op
             docstring = ""
-        self.analyze()
+        self.analyze(None)
         # print(f"FOO-USAGE {self._global=} {self._global_program=}")
         # usage_str = charm_usage(self._global_program)
         # print(self.name, usage_str)
@@ -4100,6 +4315,107 @@ class Appeal:
             return callable
         return closure
 
+    class Processor:
+        def __init__(self, appeal):
+            self.events = []
+            self.log_event("process start")
+
+            self.appeal = appeal
+            self.preparers = []
+
+            self.commands = []
+            self.breadcrumbs = []
+            self.result = None
+
+        def push_breadcrumb(self, breadcrumb):
+            self.breadcrumbs.append(breadcrumb)
+
+        def pop_breadcrumb(self):
+            return self.breadcrumbs.pop()
+
+        def format_breadcrumbs(self):
+            return " ".join(self.breadcrumbs)
+
+        def log_event(self, event):
+            self.events.append((event, event_clock()))
+
+        def preparer(self, preparer):
+            if not callable(preparer):
+                raise ValueError(f"{preparer} is not callable")
+            self.preparers.append(preparer)
+
+        def execute_preparers(self, fn):
+            for preparer in self.preparers:
+                try:
+                    fn = preparer(fn)
+                except ValueError:
+                    pass
+            return fn
+
+
+        def print_log(self):
+            if not self.events:
+                return
+            def format_time(t):
+                seconds = t // 1000000000
+                nanoseconds = t - seconds
+                return f"{seconds:02}.{nanoseconds:09}"
+
+            start_time = previous = self.events[0][1]
+            formatted = []
+            for i, (event, t) in enumerate(self.events):
+                elapsed = t - start_time
+                if i:
+                    delta = elapsed - previous
+                    formatted[-1][-1] = format_time(delta)
+                formatted.append([event, format_time(elapsed), "            "])
+                previous = elapsed
+
+            print()
+            print("[event log]")
+            print(f"  start         elapsed       event")
+            print(f"  ------------  ------------  -------------")
+
+            for event, start, elapsed in formatted:
+                print(f"  {start}  {elapsed}  {event}")
+
+        def __call__(self, args=None):
+            if args is None:
+                args = sys.argv[1:]
+            self.args = args
+            self.argi = argi = PushbackIterator(args)
+
+            appeal = self.appeal
+            if appeal.support_version:
+                if (len(args) == 1) and args[0] in ("-v", "--version"):
+                    return appeal.version()
+                if appeal.commands and (not "version" in appeal.commands):
+                    appeal.command()(appeal.version)
+
+            if appeal.support_help:
+                if (len(args) == 1) and args[0] in ("-h", "--help"):
+                    return appeal.help()
+                if appeal.commands and (not "help" in appeal.commands):
+                    appeal.command()(appeal.help)
+
+            appeal.analyze(self)
+            appeal.parse(self)
+            appeal.convert(self)
+            result = self.result = appeal.execute(self)
+            self.log_event("process complete")
+            if want_prints:
+                self.print_log()
+            return result
+
+        def main(self, args=None):
+            try:
+                sys.exit(self(args=args))
+            except AppealUsageError as e:
+                print("Error:", str(e))
+                self.appeal.usage(usage=True)
+                sys.exit(-1)
+
+
     def _analyze_attribute(self, name):
         if not getattr(self, name):
             return None
@@ -4114,129 +4430,86 @@ class Appeal:
             # print(f"compiled program for {name}, {program}")
         return program
 
-    def analyze(self):
+    def analyze(self, processor):
+        if processor:
+            callable = getattr(self, "_global")
+            if callable:
+                name = getattr(callable, "__name__", repr(callable))
+            else:
+                name = "None"
+            processor.log_event(f"analyze start ({name})")
         self._analyze_attribute("_global")
 
-    def _parse_attribute(self, name, argi, commands):
+    def _parse_attribute(self, name, processor):
         program = self._analyze_attribute(name)
         if not program:
             return None
         if want_prints:
             charm_print(program)
-        converter = charm_parse(self, program, argi)
-        commands.append(converter)
+        converter = charm_parse(self, program, processor.argi)
+        processor.commands.append(converter)
         return converter
 
-    def parse(self, argi, commands):
-        self._parse_attribute("_global", argi, commands)
+    def parse(self, processor):
+        callable = getattr(self, "_global")
+        if callable:
+            name = getattr(callable, "__name__", repr(callable))
+        else:
+            name = "None"
+        processor.log_event(f"parse start ({name})")
 
-        if not argi:
+        self._parse_attribute("_global", processor)
+
+        if not processor.argi:
             # if there are no arguments waiting here,
             # then they didn't want to run a command.
             # if any commands are defined, and they didn't specify one,
             # if there's a default command, run it.
             # otherwise, that's an error.
-            default_converter = self._parse_attribute("_default", argi, commands)
+            default_converter = self._parse_attribute("_default", processor)
             if (not default_converter) and self.commands:
                 raise AppealUsageError("no command specified.")
             return
 
         if self.commands:
             # okay, we have arguments waiting, and there are commands defined.
-            for command_name in argi:
+            for command_name in processor.argi:
                 sub_appeal = self.commands.get(command_name)
                 if not sub_appeal:
                     # partial spelling check would go here, e.g. "sta" being short for "status"
                     self.error(f"unknown command {command_name}")
                 # don't append! just parse.
                 # the recursive Appeal.parse call will append.
-                sub_appeal.analyze()
-                sub_appeal.parse(argi, commands)
-                if not (self.repeat and argi):
+                sub_appeal.analyze(processor)
+                sub_appeal.parse(processor)
+                if not (self.repeat and processor.argi):
                     break
 
-        if argi:
-            leftovers = " ".join(shlex.quote(s) for s in argi)
+        if processor.argi:
+            leftovers = " ".join(shlex.quote(s) for s in processor.argi)
             raise AppealUsageError(f"leftover cmdline arguments! {leftovers!r}")
 
-    def ___parse(self, argi, commands):
+    def convert(self, processor):
+        processor.log_event("convert start")
+        for command in processor.commands:
+            command.convert(processor)
 
-        if self._global_command:
-            append_and_parse(self._global_command)
-
-        # okay, we have arguments waiting.
-        # (if we don't have commands, then idk what to do with this.)
-        if self.commands:
-            # okay, we have arguments waiting, and there are commands defined.
-            while argi:
-                command_name = next(argi)
-                sub_appeal = self.commands.get(command_name)
-                if not sub_appeal:
-                    # partial spelling check would go here, e.g. "sta" being short for "status"
-                    self.error(f"unknown command {command_name}")
-                # don't append! just parse.
-                # the recursive Appeal.parse call will append.
-                sub_appeal.analyze()
-                sub_appeal.parse(argi, commands)
-                if not (self.repeat and argi):
-                    break
-
-        if argi:
-            leftovers = " ".join(shlex.quote(s) for s in argi)
-            raise AppealUsageError(f"leftover cmdline arguments! {leftovers!r}")
-
-    def convert(self, commands):
-        for command in commands:
-            command.convert()
-
-    def execute(self, commands):
+    def execute(self, processor):
+        processor.log_event("execute start")
         result = None
-        for command in commands:
-            result = command.execute()
+        for command in processor.commands:
+            result = command.execute(processor)
             if result:
                 break
         return result
 
+    def processor(self):
+        return self.Processor(self)
+
     def process(self, args=None):
-        self.log_event("process start")
-        if args is None:
-            args = sys.argv[1:]
-
-        if self.support_version:
-            if (len(args) == 1) and args[0] in ("-v", "--version"):
-                return self.version()
-            if self.commands and (not "version" in self.commands):
-                self.command()(self.version)
-
-        if self.support_help:
-            if (len(args) == 1) and args[0] in ("-h", "--help"):
-                return self.help()
-            if self.commands and (not "help" in self.commands):
-                self.command()(self.help)
-
-        self.log_event("analyze start")
-        self.analyze()
-
-        self.log_event("parse start")
-        argi = PushbackIterator(args)
-        commands = []
-        self.parse(argi, commands)
-
-        self.log_event("convert start")
-        self.convert(commands)
-
-        self.log_event("execute start")
-        result = self.execute(commands)
-        self.dump_log()
-        return result
-
+        processor = self.processor()
+        return processor(args)
 
     def main(self, args=None):
-        self.log_event("main start")
-        try:
-            sys.exit(self.process(args))
-        except AppealUsageError as e:
-            print("Error:", str(e))
-            self.usage(usage=True)
-            sys.exit(-1)
-
+        processor = self.processor()
+        processor.main(args)
