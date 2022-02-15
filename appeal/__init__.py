@@ -246,7 +246,46 @@ def is_legal_annotation(annotation):
     return True
 
 
-def partial_rebind_method(partial, placeholder, self):
+def _partial_rebind(partial, placeholder, instance, method):
+    stack = []
+    rebind = False
+
+    if not isinstance(partial, functools.partial):
+        raise ValueError("partial is not a functools.partial object")
+    while isinstance(partial, functools.partial):
+        stack.append(partial)
+        func = partial = partial.func
+    counter = 0
+    while stack:
+        counter += 1
+        # print(f"*** {counter} {stack=}\n*** {partial=}")
+        partial = stack.pop()
+        if (   (len(partial.args) == 1)
+            and (partial.args[0] == placeholder)
+            and (not len(partial.keywords))):
+                rebind = True
+                if method and (not counter):
+                    # print(f"*** using getattr method")
+                    func = getattr(instance, func.__name__)
+                else:
+                    # print(f"*** using new partial method")
+                    func2 = functools.partial(func, instance)
+                    functools.update_wrapper(func2, func)
+                    func = func2
+                # print(f"*** func is now {func}")
+                partial = func
+                continue
+        # print(f"*** {partial.func=} != {func=} == {rebind=}")
+        if partial.func != func:
+            partial = functools.partial(func, *partial.args, **partial.keywords)
+            functools.update_wrapper(partial, func)
+
+        func = partial
+    # print(f"*** returning {partial!r}\n")
+    return partial
+
+
+def partial_rebind_method(partial, placeholder, instance):
     """
     Binds an unbound method curried with a placeholder
     object to an instance and returns the bound method.
@@ -265,22 +304,7 @@ def partial_rebind_method(partial, placeholder, self):
         * uses getattr(self, callable.__name__) to
           bind callable to self.
     """
-    if not isinstance(partial, functools.partial):
-        raise ValueError("partial is not a functools.partial object")
-    if (   (len(partial.args) != 1)
-        or (partial.args[0] != placeholder)
-        or len(partial.keywords)):
-        raise ValueError("partial curried arguments don't match [placeholder]")
-    # print(f"BIND METHOD WORKED\n>> {partial.func=}\n>> {placeholder=}\n>> {self=}\n>> {partial.func.__name__=}\n>> {self.add=}\n>> {getattr(self, partial.func.__name__)}")
-    f = partial
-    # for i in range(1, 220):
-    #     print(f"~~ {i:2} partial={f!r}")
-    #     if not isinstance(f, functools.partial):
-    #         break
-    #     f = f.func
-    bound_method = getattr(self, partial.func.__name__)
-    # print("       >> ", bound_method)
-    return bound_method
+    return _partial_rebind(partial, placeholder, instance, True)
 
 def partial_rebind_positional(partial, placeholder, instance):
     """
@@ -301,13 +325,7 @@ def partial_rebind_positional(partial, placeholder, instance):
         * uses getattr(self, callable.__name__) to
           bind callable to self.
     """
-    if not isinstance(partial, functools.partial):
-        raise ValueError("partial is not a functools.partial object")
-    if (   (len(partial.args) != 1)
-        or (partial.args[0] != placeholder)
-        or len(partial.keywords)):
-        raise ValueError("partial curried arguments don't match [placeholder]")
-    return functools.partial(partial.func, instance)
+    return _partial_rebind(partial, placeholder, instance, False)
 
 def partial_replace_map(partial, map):
     """
@@ -335,7 +353,10 @@ def partial_replace_map(partial, map):
     new_kwargs = {}
     for key, value in partial.keywords.items():
         new_kwargs[key] = map.get(value, value)
-    return functools.partial(func, *new_args, **new_kwargs)
+    func2 = functools.partial(func, *new_args, **new_kwargs)
+    functools.update_wrapper(func2, func)
+    return func2
+
 
 def partial_replace(partial, **kwargs):
     """
@@ -378,7 +399,9 @@ def partial_replace_map_self(partial, map):
     new_kwargs = {}
     for key, value in kwargs.items():
         new_kwargs[key] = map.get(value, value)
-    return functools.partial(func, *new_args, **new_kwargs)
+    func2 = functools.partial(func, *new_args, **new_kwargs)
+    functools.update_wrapper(func2, func)
+    return func2
 
 def no_op_prepare(fn):
     return fn
@@ -3205,6 +3228,9 @@ class Appeal:
         self.full_name = ""
         self.depth = -1
 
+        self.processor_preparer = None
+        self.appeal_preparer = None
+
         self.usage_str = self.summary_str = self.doc_str = None
 
         # in root Appeal instance, self.root == self, self.parent == None
@@ -3391,19 +3417,59 @@ class Appeal:
             a = Appeal(name=name, parent=self)
         return a
 
+    class Rebinder(Preparer):
+        def __init__(self, *, bind_method=True):
+            self.bind_method = bind_method
+            self.placeholder = f"_r_{hex(id(object()))}"
+
+        def __call__(self, fn):
+            # print(f"generic rebinder wrapped {fn=} with partial for {self.placeholder=}")
+            fn2 = functools.partial(fn, self.placeholder)
+            functools.update_wrapper(fn2, fn)
+            return fn2
+
+        def bind(self, instance):
+            rebinder = partial_rebind_method if self.bind_method else partial_rebind_positional
+            def prepare(fn):
+                try:
+                    # print(f"\nattempting rebind of\n    {fn=}\n    {self.placeholder=}\n    {instance=}\n    {rebinder=}\n")
+                    return rebinder(fn, self.placeholder, instance)
+                except ValueError:
+                    return fn
+            return prepare
+
     class CommandMethodPreparer(Preparer):
         def __init__(self, appeal, *, bind_method=True):
             self.appeal = appeal
             self.bind_method = bind_method
-            self.placeholder = object()
+            self.placeholder = f"_cmp_{hex(id(object()))}"
 
         def command(self, name=None):
             def command(fn):
+                # print(f"command wrapped {fn=} with partial for {self.placeholder=}")
                 fn2 = functools.partial(fn, self.placeholder)
                 functools.update_wrapper(fn2, fn)
                 self.appeal.command(name=name)(fn2)
                 return fn
             return command
+
+        def global_command(self):
+            def global_command(fn):
+                # print(f"global_command wrapped {fn=} with partial for {self.placeholder=}")
+                fn2 = functools.partial(fn, self.placeholder)
+                functools.update_wrapper(fn2, fn)
+                self.appeal.global_command()(fn2)
+                return fn
+            return global_command
+
+        def default_command(self):
+            def default_command(fn):
+                # print(f"default_command wrapped {fn=} with partial for {self.placeholder=}")
+                fn2 = functools.partial(fn, self.placeholder)
+                functools.update_wrapper(fn2, fn)
+                self.appeal.default_command()(fn2)
+                return fn
+            return global_command
 
         def __call__(self, name=None):
             return self.command(name=name)
@@ -3412,6 +3478,7 @@ class Appeal:
             rebinder = partial_rebind_method if self.bind_method else partial_rebind_positional
             def prepare(fn):
                 try:
+                    # print(f"\nattempting rebind of\n    {fn=}\n    {self.placeholder=}\n    {instance=}\n    {rebinder=}\n")
                     return rebinder(fn, self.placeholder, instance)
                 except ValueError:
                     return fn
@@ -3420,6 +3487,55 @@ class Appeal:
     def command_method(self, bind_method=True):
         return self.CommandMethodPreparer(self, bind_method=bind_method)
 
+    def bind_processor(self):
+        if not self.processor_preparer:
+            self.processor_preparer = self.Rebinder(bind_method=False)
+        return self.processor_preparer
+
+    def bind_appeal(self):
+        if not self.appeal_preparer:
+            self.appeal_preparer = self.Rebinder(bind_method=False)
+        return self.appeal_preparer
+
+    def app_class(self, bind_method=True):
+        command_method = self.CommandMethodPreparer(self, bind_method=bind_method)
+
+        def app_class():
+            def app_class(cls):
+                # print("\n<app_class d> 0 in decorator, called on", cls)
+                assert isinstance(cls, type)
+                signature = inspect.signature(cls)
+                bind_processor = self.bind_processor()
+                # print(f"<app_class d> 1 {bind_processor=}")
+                # print(f"<app_class d> 2 {bind_processor.placeholder=}")
+
+                def fn(processor, *args, **kwargs):
+                    # print(f"\n[app_class gc] in global command, {cls=} {processor=}\n")
+                    # print(f"\n[app_class gc] {args=}\n")
+                    # print(f"\n[app_class gc] {kwargs=}\n")
+                    o = cls(*args, **kwargs)
+                    # print(f"\n[app_class gc] binding {o=}\n")
+                    processor.preparer(command_method.bind(o))
+                    return None
+                # print(f"<app_class d> 3 {inspect.signature(fn)=}")
+                # print(f"<app_class d> 4 {inspect.signature(bind_processor)=}")
+                # print(f"    {fn=}")
+                # print(f"    {isinstance(fn, functools.partial)=}")
+                fn = bind_processor(fn)
+
+                # print(f"<app_class d> 6 {inspect.signature(fn)=}")
+                # print(f"    {fn=}")
+                # print(f"    {isinstance(fn, functools.partial)=}")
+                fn.__signature__ = signature
+                # print(f"<app_class d> 7 {inspect.signature(fn)=}")
+
+                self.global_command()(fn)
+                # print(f"<app_class d> 8 {self._global=}")
+                return cls
+            return app_class
+
+        # print("appeal.app_class returning", app_class, command_method)
+        return app_class, command_method
 
 
     def argument(self, parameter, *, usage=None):
@@ -4342,6 +4458,7 @@ class Appeal:
         def preparer(self, preparer):
             if not callable(preparer):
                 raise ValueError(f"{preparer} is not callable")
+            # print(f"((( adding {preparer=}")
             self.preparers.append(preparer)
 
         def execute_preparers(self, fn):
@@ -4397,6 +4514,18 @@ class Appeal:
                     return appeal.help()
                 if appeal.commands and (not "help" in appeal.commands):
                     appeal.command()(appeal.help)
+
+            if appeal.appeal_preparer:
+                # print(f"bind appeal.appeal_preparer to {self.appeal=}")
+                self.preparer(appeal.appeal_preparer.bind(self.appeal))
+            if appeal.processor_preparer:
+                # print(f"bind appeal.processor_preparer to {self=}")
+                self.preparer(appeal.processor_preparer.bind(self))
+
+            # print()
+            # for p in self.preparers:
+            #     print("[[]] preparer", p)
+            # print()
 
             appeal.analyze(self)
             appeal.parse(self)
