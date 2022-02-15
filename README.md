@@ -1401,19 +1401,49 @@ the decorator function directly and passing in the bound method.
 It also restricts us to one instance of `MyApp` per Appeal
 instance, which may be restrictive.
 
-The other technique uses a little magic to provide a more
-familiar-looking interface.  You call `Appeal.command_method()`
-to create a `CommandMethodPreparer` object, which you
-use to decorate the method calls of one of your classes;
-then you call `bind` on that object to pass in the instance
-of that class you want to bind those methods to.  This
+The other technique uses a little magic to provide a convenient
+and familiar-looking interface.  `Appeal.app_class()` gives you
+two decorators; you use one to decorate your class, and the
+other to decorate methods in the class.  Appeal will instantiate
+your class for you, and your `__init__` method will be used
+as your app's "global command" for global options!
+
+```Python
+import appeal
+
+app = appeal.Appeal()
+app_class, command_method = app.app_class()
+
+@app_class()
+class MyApp:
+    def __init__(self, *, verbose=False):
+        print(f"MyApp init {verbose=}")
+        self.verbose = verbose
+
+    def __repr__(self):
+        return "<MyApp>"
+
+    @command_method()
+    def add(self, a, b, c):
+        print(f"MyApp add {self=} {a=} {b=} {c=} {self.verbose=}")
+
+app.main()
+```
+
+Under the covers, this calls `Appeal.command_method()`
+to create a `CommandMethodPreparer` object.
+First, you decorate the method calls of your class with this
+object.
+You then call the `bind` on that object to pass in the instance
+of that class you want to bind those methods to (though `app_class()`
+takes care of that for you).  `bind()`
 returns a callable you pass in to `Appeal.preparer`, which
 binds the method to that instance so Appeal can call it.
 This function works like a decorator; Appeal passes in a
 function, and the function returns the function that Appeal
 actually calls.
 
-Here's an example of using `Appeal.command_method()`:
+Here's an example of using `Appeal.command_method()` by hand:
 
 ```Python
 import appeal
@@ -1423,6 +1453,7 @@ command_method = app.command_method()
 
 class MyApp:
     def __init__(self, id):
+        print(f"MyApp init {id=}")
         self.id = id
 
     def __repr__(self):
@@ -1454,7 +1485,7 @@ wraps the method with a `functools.partial` object,
 passing in a placeholder object for the `self` parameter.
 Then `command_method.bind()` replaces the placeholder for
 the real instance.  For maximum compatibility, it actually
-uses  `getattr()` to bind the instance to the method.
+uses `getattr()` to bind the instance to the method.
 
 ## Writing Help
 

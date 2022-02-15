@@ -62,7 +62,25 @@ KEYWORD_ONLY = inspect.Parameter.KEYWORD_ONLY
 VAR_KEYWORD = inspect.Parameter.VAR_KEYWORD
 empty = inspect.Parameter.empty
 
+def update_wrapper(wrapped, wrapper):
+    """
+    update_wrapper() adds a '__wrapped__'
+    attribute.  inspect.signature() then
+    follows that attribute, which means it
+    returns the wrong (original) signature
+    for partial objects if we call
+    update_wrapper on them.
 
+    I don't need the __wrapped__ attribute for
+    anything, so for now I just remove them.
+
+    I filed an issue to ask about this:
+        https://bugs.python.org/issue46761
+    """
+    functools.update_wrapper(wrapped, wrapper)
+    if hasattr(wrapped, '__wrapped__'):
+        delattr(wrapped, '__wrapped__')
+    return wrapped
 
 # which PushBackIterator do you want?
 
@@ -263,14 +281,17 @@ def _partial_rebind(partial, placeholder, instance, method):
         if (   (len(partial.args) == 1)
             and (partial.args[0] == placeholder)
             and (not len(partial.keywords))):
-                rebind = True
-                if method and (not counter):
+                # if we try to use getattr, but it fails,
+                # fail over to a functools partial
+                use_getattr = method and (not counter)
+                if use_getattr:
                     # print(f"*** using getattr method")
-                    func = getattr(instance, func.__name__)
-                else:
+                    func2 = getattr(instance, func.__name__, None)
+                    use_getattr = func2 is not None
+                if not use_getattr:
                     # print(f"*** using new partial method")
                     func2 = functools.partial(func, instance)
-                    functools.update_wrapper(func2, func)
+                    update_wrapper(func2, func)
                     func = func2
                 # print(f"*** func is now {func}")
                 partial = func
@@ -278,7 +299,7 @@ def _partial_rebind(partial, placeholder, instance, method):
         # print(f"*** {partial.func=} != {func=} == {rebind=}")
         if partial.func != func:
             partial = functools.partial(func, *partial.args, **partial.keywords)
-            functools.update_wrapper(partial, func)
+            update_wrapper(partial, func)
 
         func = partial
     # print(f"*** returning {partial!r}\n")
@@ -354,7 +375,7 @@ def partial_replace_map(partial, map):
     for key, value in partial.keywords.items():
         new_kwargs[key] = map.get(value, value)
     func2 = functools.partial(func, *new_args, **new_kwargs)
-    functools.update_wrapper(func2, func)
+    update_wrapper(func2, func)
     return func2
 
 
@@ -400,7 +421,7 @@ def partial_replace_map_self(partial, map):
     for key, value in kwargs.items():
         new_kwargs[key] = map.get(value, value)
     func2 = functools.partial(func, *new_args, **new_kwargs)
-    functools.update_wrapper(func2, func)
+    update_wrapper(func2, func)
     return func2
 
 def no_op_prepare(fn):
@@ -3417,16 +3438,40 @@ class Appeal:
             a = Appeal(name=name, parent=self)
         return a
 
+    def __call__(self, callable):
+        assert callable and builtins.callable(callable)
+        self._global = callable
+        if self.root != self:
+            if self.name is None:
+                self.name = callable.__name__
+                self._calculate_full_name()
+            self.parent.commands[self.name] = self
+        return callable
+
+    def global_command(self):
+        if self.root != self:
+            raise AppealConfigurationError("only the root Appeal instance can have a global command")
+        return self.__call__
+
+    def default_command(self):
+        def closure(callable):
+            assert callable and builtins.callable(callable)
+            self._default = callable
+            return callable
+        return closure
+
     class Rebinder(Preparer):
         def __init__(self, *, bind_method=True):
             self.bind_method = bind_method
             self.placeholder = f"_r_{hex(id(object()))}"
 
-        def __call__(self, fn):
-            # print(f"generic rebinder wrapped {fn=} with partial for {self.placeholder=}")
+        def wrap(self, fn):
             fn2 = functools.partial(fn, self.placeholder)
-            functools.update_wrapper(fn2, fn)
+            update_wrapper(fn2, fn)
             return fn2
+
+        def __call__(self, fn):
+            return self.wrap(fn)
 
         def bind(self, instance):
             rebinder = partial_rebind_method if self.bind_method else partial_rebind_positional
@@ -3438,26 +3483,26 @@ class Appeal:
                     return fn
             return prepare
 
-    class CommandMethodPreparer(Preparer):
+    class CommandMethodPreparer(Rebinder):
         def __init__(self, appeal, *, bind_method=True):
+            super().__init__(bind_method=bind_method)
             self.appeal = appeal
-            self.bind_method = bind_method
             self.placeholder = f"_cmp_{hex(id(object()))}"
 
         def command(self, name=None):
             def command(fn):
-                # print(f"command wrapped {fn=} with partial for {self.placeholder=}")
-                fn2 = functools.partial(fn, self.placeholder)
-                functools.update_wrapper(fn2, fn)
+                fn2 = self.wrap(fn)
                 self.appeal.command(name=name)(fn2)
                 return fn
             return command
 
+        def __call__(self, name=None):
+            return self.command(name=name)
+
         def global_command(self):
             def global_command(fn):
                 # print(f"global_command wrapped {fn=} with partial for {self.placeholder=}")
-                fn2 = functools.partial(fn, self.placeholder)
-                functools.update_wrapper(fn2, fn)
+                fn2 = self.wrap(fn)
                 self.appeal.global_command()(fn2)
                 return fn
             return global_command
@@ -3465,14 +3510,10 @@ class Appeal:
         def default_command(self):
             def default_command(fn):
                 # print(f"default_command wrapped {fn=} with partial for {self.placeholder=}")
-                fn2 = functools.partial(fn, self.placeholder)
-                functools.update_wrapper(fn2, fn)
+                fn2 = self.wrap(fn)
                 self.appeal.default_command()(fn2)
                 return fn
             return global_command
-
-        def __call__(self, name=None):
-            return self.command(name=name)
 
         def bind(self, instance):
             rebinder = partial_rebind_method if self.bind_method else partial_rebind_positional
@@ -4409,142 +4450,6 @@ class Appeal:
                 raise AppealUsageError(f'"{name}" is not a legal command.')
         appeal.usage(usage=True, summary=True, doc=True)
 
-    def __call__(self, callable):
-        assert callable and builtins.callable(callable)
-        self._global = callable
-        if self.root != self:
-            if self.name is None:
-                self.name = callable.__name__
-                self._calculate_full_name()
-            self.parent.commands[self.name] = self
-        return callable
-
-    def global_command(self):
-        if self.root != self:
-            raise AppealConfigurationError("only the root Appeal instance can have a global command")
-        return self.__call__
-
-    def default_command(self):
-        def closure(callable):
-            assert callable and builtins.callable(callable)
-            self._default = callable
-            return callable
-        return closure
-
-    class Processor:
-        def __init__(self, appeal):
-            self.events = []
-            self.log_event("process start")
-
-            self.appeal = appeal
-            self.preparers = []
-
-            self.commands = []
-            self.breadcrumbs = []
-            self.result = None
-
-        def push_breadcrumb(self, breadcrumb):
-            self.breadcrumbs.append(breadcrumb)
-
-        def pop_breadcrumb(self):
-            return self.breadcrumbs.pop()
-
-        def format_breadcrumbs(self):
-            return " ".join(self.breadcrumbs)
-
-        def log_event(self, event):
-            self.events.append((event, event_clock()))
-
-        def preparer(self, preparer):
-            if not callable(preparer):
-                raise ValueError(f"{preparer} is not callable")
-            # print(f"((( adding {preparer=}")
-            self.preparers.append(preparer)
-
-        def execute_preparers(self, fn):
-            for preparer in self.preparers:
-                try:
-                    fn = preparer(fn)
-                except ValueError:
-                    pass
-            return fn
-
-
-        def print_log(self):
-            if not self.events:
-                return
-            def format_time(t):
-                seconds = t // 1000000000
-                nanoseconds = t - seconds
-                return f"{seconds:02}.{nanoseconds:09}"
-
-            start_time = previous = self.events[0][1]
-            formatted = []
-            for i, (event, t) in enumerate(self.events):
-                elapsed = t - start_time
-                if i:
-                    delta = elapsed - previous
-                    formatted[-1][-1] = format_time(delta)
-                formatted.append([event, format_time(elapsed), "            "])
-                previous = elapsed
-
-            print()
-            print("[event log]")
-            print(f"  start         elapsed       event")
-            print(f"  ------------  ------------  -------------")
-
-            for event, start, elapsed in formatted:
-                print(f"  {start}  {elapsed}  {event}")
-
-        def __call__(self, args=None):
-            if args is None:
-                args = sys.argv[1:]
-            self.args = args
-            self.argi = argi = PushbackIterator(args)
-
-            appeal = self.appeal
-            if appeal.support_version:
-                if (len(args) == 1) and args[0] in ("-v", "--version"):
-                    return appeal.version()
-                if appeal.commands and (not "version" in appeal.commands):
-                    appeal.command()(appeal.version)
-
-            if appeal.support_help:
-                if (len(args) == 1) and args[0] in ("-h", "--help"):
-                    return appeal.help()
-                if appeal.commands and (not "help" in appeal.commands):
-                    appeal.command()(appeal.help)
-
-            if appeal.appeal_preparer:
-                # print(f"bind appeal.appeal_preparer to {self.appeal=}")
-                self.preparer(appeal.appeal_preparer.bind(self.appeal))
-            if appeal.processor_preparer:
-                # print(f"bind appeal.processor_preparer to {self=}")
-                self.preparer(appeal.processor_preparer.bind(self))
-
-            # print()
-            # for p in self.preparers:
-            #     print("[[]] preparer", p)
-            # print()
-
-            appeal.analyze(self)
-            appeal.parse(self)
-            appeal.convert(self)
-            result = self.result = appeal.execute(self)
-            self.log_event("process complete")
-            if want_prints:
-                self.print_log()
-            return result
-
-        def main(self, args=None):
-            try:
-                sys.exit(self(args=args))
-            except AppealUsageError as e:
-                print("Error:", str(e))
-                self.appeal.usage(usage=True)
-                sys.exit(-1)
-
-
     def _analyze_attribute(self, name):
         if not getattr(self, name):
             return None
@@ -4633,7 +4538,7 @@ class Appeal:
         return result
 
     def processor(self):
-        return self.Processor(self)
+        return Processor(self)
 
     def process(self, args=None):
         processor = self.processor()
@@ -4642,3 +4547,117 @@ class Appeal:
     def main(self, args=None):
         processor = self.processor()
         processor.main(args)
+
+
+class Processor:
+    def __init__(self, appeal):
+        self.events = []
+        self.log_event("process start")
+
+        self.appeal = appeal
+        self.preparers = []
+
+        self.commands = []
+        self.breadcrumbs = []
+        self.result = None
+
+    def push_breadcrumb(self, breadcrumb):
+        self.breadcrumbs.append(breadcrumb)
+
+    def pop_breadcrumb(self):
+        return self.breadcrumbs.pop()
+
+    def format_breadcrumbs(self):
+        return " ".join(self.breadcrumbs)
+
+    def log_event(self, event):
+        self.events.append((event, event_clock()))
+
+    def preparer(self, preparer):
+        if not callable(preparer):
+            raise ValueError(f"{preparer} is not callable")
+        # print(f"((( adding {preparer=}")
+        self.preparers.append(preparer)
+
+    def execute_preparers(self, fn):
+        for preparer in self.preparers:
+            try:
+                fn = preparer(fn)
+            except ValueError:
+                pass
+        return fn
+
+
+    def print_log(self):
+        if not self.events:
+            return
+        def format_time(t):
+            seconds = t // 1000000000
+            nanoseconds = t - seconds
+            return f"{seconds:02}.{nanoseconds:09}"
+
+        start_time = previous = self.events[0][1]
+        formatted = []
+        for i, (event, t) in enumerate(self.events):
+            elapsed = t - start_time
+            if i:
+                delta = elapsed - previous
+                formatted[-1][-1] = format_time(delta)
+            formatted.append([event, format_time(elapsed), "            "])
+            previous = elapsed
+
+        print()
+        print("[event log]")
+        print(f"  start         elapsed       event")
+        print(f"  ------------  ------------  -------------")
+
+        for event, start, elapsed in formatted:
+            print(f"  {start}  {elapsed}  {event}")
+
+    def __call__(self, args=None):
+        if args is None:
+            args = sys.argv[1:]
+        self.args = args
+        self.argi = argi = PushbackIterator(args)
+
+        appeal = self.appeal
+        if appeal.support_version:
+            if (len(args) == 1) and args[0] in ("-v", "--version"):
+                return appeal.version()
+            if appeal.commands and (not "version" in appeal.commands):
+                appeal.command()(appeal.version)
+
+        if appeal.support_help:
+            if (len(args) == 1) and args[0] in ("-h", "--help"):
+                return appeal.help()
+            if appeal.commands and (not "help" in appeal.commands):
+                appeal.command()(appeal.help)
+
+        if appeal.appeal_preparer:
+            # print(f"bind appeal.appeal_preparer to {self.appeal=}")
+            self.preparer(appeal.appeal_preparer.bind(self.appeal))
+        if appeal.processor_preparer:
+            # print(f"bind appeal.processor_preparer to {self=}")
+            self.preparer(appeal.processor_preparer.bind(self))
+
+        # print()
+        # for p in self.preparers:
+        #     print("[[]] preparer", p)
+        # print()
+
+        appeal.analyze(self)
+        appeal.parse(self)
+        appeal.convert(self)
+        result = self.result = appeal.execute(self)
+        self.log_event("process complete")
+        if want_prints:
+            self.print_log()
+        return result
+
+    def main(self, args=None):
+        try:
+            sys.exit(self(args=args))
+        except AppealUsageError as e:
+            print("Error:", str(e))
+            self.appeal.usage(usage=True)
+            sys.exit(-1)

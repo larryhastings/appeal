@@ -2163,6 +2163,22 @@ class ReadmeTests(unittest.TestCase):
             'Classes, Instances, And Preparers',
             0,
             "add f g h",
+            "MyApp init verbose=False\nMyApp add self=<MyApp> a='f' b='g' c='h' self.verbose=False",
+            )
+
+    def test_classes_instances_and_preparers_0_2(self):
+        self.exec_readme(
+            'Classes, Instances, And Preparers',
+            0,
+            "-v add f g h",
+            "MyApp init verbose=True\nMyApp add self=<MyApp> a='f' b='g' c='h' self.verbose=True",
+            )
+
+    def test_classes_instances_and_preparers_1_1(self):
+        self.exec_readme(
+            'Classes, Instances, And Preparers',
+            1,
+            "add f g h",
             "MyApp add self=<MyApp id='dingus'> a='f' b='g' c='h'",
             )
 
