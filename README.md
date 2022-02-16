@@ -1355,14 +1355,15 @@ Appeal--it's *easy.*
 ## Classes, Instances, And Preparers
 
 Maybe you've noticed--all the examples so far have used
-standard Python functions as Appeal commands.  Perhaps you've
-wondered: can you use method calls too?  The answer is, yes
-of course!  But it's slightly more complicated.
+standard Python functions as Appeal commands.  What about
+method calls, can you use those for commands?  The answer is,
+yes of course!  But it's slightly more complicated.
 
 Appeal's whole purpose in life is to call functions by
 pulling data from the command-line.  Whenever it sees a
-parameter, it thinks "okay, I have to supply an argument
-to that.  So if you map an *unbound* method call to a command:
+parameter on a function, it thinks "okay, I'm gonna have to
+supply an argument to that".  So if you map an *unbound*
+method call to a command:
 
 ```Python
 class MyApp:
@@ -1371,14 +1372,14 @@ class MyApp:
         return sum(*operands)
 ```
 
-Appeal would see the `self` parameter and think "aha! I'm gonna
-put a string there!"  So, we need to prevent Appeal from seeing
-that parameter in the first place.
+Appeal would see the `self` parameter and think "aha! I need to
+pass in a string there!"  We need to prevent Appeal from
+seeing that parameter in the first place.
 
-Appeal supports two techniques for mapping bound method calls to
-commands.  The first is straightforward, but a bit inflexible:
-simply create the instance of your class, and call `app.command()()`
-on the bound instances.  Like this:
+There are two major techniques to handle this.  The first
+is straightforward, if a bit inflexible: create the instance
+of your class first, then call `app.command()()` on the
+bound instances.  Like this:
 
 ```Python
 app = appeal.Appeal()
@@ -1391,22 +1392,22 @@ app.command()(o.sum)
 app.main()
 ```
 
-Since Appeal only ever sees the bound method, it doesn't even
-*see* the `self` parameter in the signature.  (The signature
-of a bound method doesn't include `self`.)
+Since you pass in the already-bound method to Appeal, it doesn't
+even *see* the `self` parameter in the signature.  (The signature
+of a bound method doesn't include the `self` parameter.)
 
 This works fine... but maybe it looks a little weird.  We're no
 longer decorating functions (or methods), instead we're calling
 the decorator function directly and passing in the bound method.
 It also restricts us to one instance of `MyApp` per Appeal
-instance, which may be restrictive.
+instance, which might be restrictive.
 
 The other technique uses a little magic to provide a convenient
 and familiar-looking interface.  `Appeal.app_class()` gives you
 two decorators; you use one to decorate your class, and the
 other to decorate methods in the class.  Appeal will instantiate
-your class for you, and your `__init__` method will be used
-as your app's "global command" for global options!
+your class for you, and use your `__init__` method as your app's
+"global command" to handle global options!
 
 ```Python
 import appeal
@@ -1430,20 +1431,16 @@ class MyApp:
 app.main()
 ```
 
-Under the covers, this calls `Appeal.command_method()`
-to create a `CommandMethodPreparer` object.
-First, you decorate the method calls of your class with this
-object.
-You then call the `bind` on that object to pass in the instance
-of that class you want to bind those methods to (though `app_class()`
-takes care of that for you).  `bind()`
+Behind the scenes, this uses a `CommandMethodPreparer` object,
+which you can use directly by calling `Appeal.command_method()`.
+First, you decorate the method calls of your class with this object.
+You then call the `bind` method on that object to pass in the
+instance of that class you want to bind those methods to--though
+`app_class()` takes care of that for you.  `bind()`
 returns a callable you pass in to `Appeal.preparer`, which
-binds the method to that instance so Appeal can call it.
-This function works like a decorator; Appeal passes in a
-function, and the function returns the function that Appeal
-actually calls.
+binds the method to that instance before Appeal calls it.
 
-Here's an example of using `Appeal.command_method()` by hand:
+Here's an example using `Appeal.command_method()` directly:
 
 ```Python
 import appeal
@@ -1469,22 +1466,22 @@ p.preparer(command_method.bind(my_app))
 p.main()
 ```
 
-This is the first time you're seeing the `Processor`
+This is also the first time you're seeing the `Processor`
 object.  All the runtime information for processing
 a command-line lives in the `Processor` object; in
 fact, `Appeal.main` and `Appeal.process` are both
-thin wrappers over the equivalent methods on the
+thin wrappers over their equivalent methods on the
 `Processor` object.  Moving all the runtime information
 into the `Processor` object lets you process multiple
 command-lines with the same Appeal object, even
 simultaneously!
 
-Under the covers, the `command_method` decorator
-wraps the method with a `functools.partial` object,
-passing in a placeholder object for the `self` parameter.
-Then `command_method.bind()` replaces the placeholder for
-the real instance.  For maximum compatibility, it actually
-uses `getattr()` to bind the instance to the method.
+Under the covers, `CommandMethodPreparer` wraps the method
+with a `functools.partial` object, passing in a placeholder
+object for the `self` parameter.  Then `command_method.bind()`
+replaces the placeholder for the real instance.  For maximum
+compatibility, it actually uses `getattr()` to bind the
+instance to the method.
 
 ## Writing Help
 
