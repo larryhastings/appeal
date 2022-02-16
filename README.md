@@ -1356,14 +1356,14 @@ Appeal--it's *easy.*
 
 Maybe you've noticed--all the examples so far have used
 standard Python functions as Appeal commands.  What about
-method calls, can you use those for commands?  The answer is,
-yes of course!  But it's slightly more complicated.
+method calls?  Can you use those for commands?  The answer
+is, yes of course!  But it's slightly more complicated.
 
 Appeal's whole purpose in life is to call functions by
 pulling data from the command-line.  Whenever it sees a
-parameter on a function, it thinks "okay, I'm gonna have to
-supply an argument to that".  So if you map an *unbound*
-method call to a command:
+positional parameter on a function, it thinks "okay, I'm
+gonna have to supply an argument to that".  So if you map
+an *unbound* method call to a command:
 
 ```Python
 class MyApp:
@@ -1372,9 +1372,9 @@ class MyApp:
         return sum(*operands)
 ```
 
-Appeal would see the `self` parameter and think "aha! I need to
-pass in a string there!"  We need to prevent Appeal from
-seeing that parameter in the first place.
+Appeal would see the `self` parameter and think "aha! I
+need to pass a string in there!"  We need to prevent
+Appeal from seeing that parameter in the first place.
 
 There are two major techniques to handle this.  The first
 is straightforward, if a bit inflexible: create the instance
@@ -1431,16 +1431,12 @@ class MyApp:
 app.main()
 ```
 
-Behind the scenes, this uses a `CommandMethodPreparer` object,
-which you can use directly by calling `Appeal.command_method()`.
-First, you decorate the method calls of your class with this object.
-You then call the `bind` method on that object to pass in the
-instance of that class you want to bind those methods to--though
-`app_class()` takes care of that for you.  `bind()`
-returns a callable you pass in to `Appeal.preparer`, which
-binds the method to that instance before Appeal calls it.
-
-Here's an example using `Appeal.command_method()` directly:
+Behind the scenes, this uses a `CommandMethodPreparer` object
+to handle late-binding the method to the object.  Since
+`Appeal.app_class()` is a little inflexible, you may want
+to use these objects directly.  You can create one manually
+by calling `Appeal.command_method()`.  Here's an example showing
+how to use one:
 
 ```Python
 import appeal
@@ -1466,7 +1462,7 @@ p.preparer(command_method.bind(my_app))
 p.main()
 ```
 
-This is also the first time you're seeing the `Processor`
+This is the first time you're seeing the `Processor`
 object.  All the runtime information for processing
 a command-line lives in the `Processor` object; in
 fact, `Appeal.main` and `Appeal.process` are both
@@ -1475,6 +1471,15 @@ thin wrappers over their equivalent methods on the
 into the `Processor` object lets you process multiple
 command-lines with the same Appeal object, even
 simultaneously!
+
+The `CommandMethodPreparer` object is at the core of how Appeal
+handles late-binding of methods to objects.  First,
+you decorate the method calls of your class with this object.
+You then call the `bind` method on that object to pass in the
+instance of that class you want to bind those methods to--though
+`app_class()` takes care of that for you.  `bind()` returns a callable
+you pass in to `Processor.preparer`, which binds the method to that 
+instance before Appeal calls it.
 
 Under the covers, `CommandMethodPreparer` wraps the method
 with a `functools.partial` object, passing in a placeholder
