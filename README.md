@@ -2,7 +2,7 @@
 
 ![## Give your program Appeal!](/resources/images/give.your.program.appeal.png)
 
-##### Copyright 2021 by Larry Hastings
+##### Copyright 2021-2022 by Larry Hastings
 
 
 ## Quickstart
@@ -1453,7 +1453,6 @@ command_method = app.command_method()
 
 class MyApp:
     def __init__(self, id):
-        print(f"MyApp init {id=}")
         self.id = id
 
     def __repr__(self):

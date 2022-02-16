@@ -8,7 +8,7 @@
 license = """
 appeal/argument_grouping.py
 part of the Appeal software package
-Copyright 2021 by Larry Hastings
+Copyright 2021-2022 by Larry Hastings
 All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a
