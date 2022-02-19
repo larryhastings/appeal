@@ -2493,8 +2493,8 @@ class Converter:
         # self.fn = callable
         self.callable = callable
 
-        if not hasattr(self, 'signature'):
-            self.signature = self.get_signature(parameter)
+        if not hasattr(self, '__signature__'):
+            self.__signature__ = self.get_signature(parameter)
 
         self.appeal = appeal
         # self.root = root or self
@@ -2513,8 +2513,8 @@ class Converter:
 
     @classmethod
     def get_signature(cls, parameter):
-        if hasattr(cls, "signature"):
-            return cls.signature
+        if hasattr(cls, "__signature__"):
+            return cls.__signature__
         return inspect.signature(parameter.annotation, follow_wrapped=False)
 
     def reset(self):
@@ -2568,15 +2568,15 @@ class InferredConverter(Converter):
 
     @classmethod
     def get_signature(cls, parameter):
-        if hasattr(cls, "signature"):
-            return cls.signature
+        if hasattr(cls, "__signature__"):
+            return cls.__signature__
         return inspect.signature(type(parameter.default), follow_wrapped=False)
 
 class InferredSequenceConverter(InferredConverter):
     @classmethod
     def get_signature(cls, parameter):
-        if hasattr(cls, "signature"):
-            return cls.signature
+        if hasattr(cls, "__signature__"):
+            return cls.__signature__
         parameters = []
         if not parameter.default:
             width = 0
@@ -2627,31 +2627,31 @@ simple_type_signatures = {}
 
 def parse_bool(bool) -> bool: pass
 class SimpleTypeConverterBool(SimpleTypeConverter):
-    signature = inspect.signature(parse_bool)
+    __signature__ = inspect.signature(parse_bool)
     callable = bool
 simple_type_signatures[bool] = SimpleTypeConverterBool
 
 def parse_complex(complex) -> complex: pass
 class SimpleTypeConverterComplex(SimpleTypeConverter):
-    signature = inspect.signature(parse_complex)
+    __signature__ = inspect.signature(parse_complex)
     callable = complex
 simple_type_signatures[complex] = SimpleTypeConverterComplex
 
 def parse_float(float) -> float: pass
 class SimpleTypeConverterFloat(SimpleTypeConverter):
-    signature = inspect.signature(parse_float)
+    __signature__ = inspect.signature(parse_float)
     callable = float
 simple_type_signatures[float] = SimpleTypeConverterFloat
 
 def parse_int(int) -> int: pass
 class SimpleTypeConverterInt(SimpleTypeConverter):
-    signature = inspect.signature(parse_int)
+    __signature__ = inspect.signature(parse_int)
     callable = int
 simple_type_signatures[int] = SimpleTypeConverterInt
 
 def parse_str(str) -> str: pass
 class SimpleTypeConverterStr(SimpleTypeConverter):
-    signature = inspect.signature(parse_str)
+    __signature__ = inspect.signature(parse_str)
     callable = str
 simple_type_signatures[str] = SimpleTypeConverterStr
 
@@ -2668,15 +2668,15 @@ class InferredOption(Option):
 
     @classmethod
     def get_signature(cls, parameter):
-        if hasattr(cls, "signature"):
-            return cls.signature
+        if hasattr(cls, "__signature__"):
+            return cls.__signature__
         return inspect.signature(type(parameter.default), follow_wrapped=False)
 
 class InferredSequenceOption(InferredOption):
     @classmethod
     def get_signature(cls, parameter):
-        if hasattr(cls, "signature"):
-            return cls.signature
+        if hasattr(cls, "__signature__"):
+            return cls.__signature__
         parameters = []
         if not parameter.default:
             width = 0
@@ -2743,8 +2743,8 @@ class SingleOption(Option):
 
     @classmethod
     def get_signature(cls, parameter):
-        if hasattr(cls, "signature"):
-            return cls.signature
+        if hasattr(cls, "__signature__"):
+            return cls.__signature__
         # we need the signature of cls.option
         # but *without self*
         signature = inspect.signature(cls.option, follow_wrapped=False)
@@ -2798,7 +2798,7 @@ class SingleOption(Option):
 
 def parse_bool_option() -> bool: pass
 class BooleanOptionConverter(SingleOption):
-    signature = inspect.signature(parse_bool_option)
+    __signature__ = inspect.signature(parse_bool_option)
 
     def init(self, default):
         self.value = default
@@ -3368,11 +3368,11 @@ class Appeal:
             #       def get_signature(cls, callable, default):
             #    Naturally, that works on classes and instances.
             #       a = ConverterSubclass.get_signature(callable, default)
-            # 2) A Converter instance must always have a "signature" attribute.
+            # 2) A Converter instance must always have a "__signature__" attribute.
             #       converter = cls(...)
-            #       b = converter.signature
+            #       b = converter.__signature__
             #
-            # (cls.signature may be defined on some Converter subclasses!
+            # (cls.__signature__ may be predefined on some Converter subclasses!
             #  But you can't rely on that.)
 
             self.converter_factories = [
