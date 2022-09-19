@@ -720,6 +720,16 @@ to convert them.
 > annotations.  It expects annotations to be callables,
 > like functions or classes or types.  It should be
 > possible to add limited support in the future.
+>
+> Finally, Appeal uses function calls and related
+> snazzy technology in annotations--but many static
+> type checkers expect annotations to conform strictly
+> to only what is used for "type hints".  So it's
+> possible static type checkers may abort processing
+> in a file with advanced Appeal configuration.
+> It may be best to mix "type hints" and Appeal
+> in the same Python script, and to not run your
+> static type checker on scripts with Appeal code.
 
 
 ## Converter Flexibility
