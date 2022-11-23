@@ -1404,6 +1404,16 @@ class ReadmeTests(unittest.TestCase):
             )
 
 
+    def test_quickstart_0_2(self):
+        with self.assertRaises(appeal.AppealUsageError):
+            self.exec_readme(
+                'Quickstart',
+                0,
+                "hello",
+                "Hello, !",
+                )
+
+
     # 'Quickstart'
     #     [ #1
     #     import appeal

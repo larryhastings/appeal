@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.5"
+__version__ = "0.5.1"
 
 
 # please leave this copyright notice in binary distributions.
@@ -82,84 +82,99 @@ def update_wrapper(wrapped, wrapper):
         delattr(wrapped, '__wrapped__')
     return wrapped
 
-# which PushBackIterator do you want?
 
-if 0:
-    # totally legit high-performance version with racing stripes
-    # (but debugging is annoying)
-    class PushbackIterator:
-        def __init__(self, iterable=None):
-            i = self.iterators = []
-            if iterable is not None:
-                i.append(iter(iterable))
+# copied and pasted in from "big"
+# because I'm too lazy to make appeal depend on big
+# (for now)
+class PushbackIterator:
+    """
+    Wraps any iterator, allowing you to push items back on the iterator.
+    This allows you to "peek" at the next item (or items); you can get the
+    next item, examine it, and then push it back.  If any objects have
+    been pushed onto the iterator, they are yielded first, before attempting
+    to yield from the wrapped iterator.
 
-        def __iter__(self):
-            return self
+    Pass in any iterable to the constructor.  Passing in an iterable of None
+    means the PushbackIterator is created in an exhausted state.
 
-        def __next__(self):
-            if not self.iterators:
-                raise StopIteration
-            i = self.iterators[-1]
-            try:
-                return next(i)
-            except StopIteration:
-                self.iterators.pop()
-                return self.__next__()
+    When the wrapped iterable is exhausted (or if you passed in None to
+    the constructor) you can still call push to add new items, at which
+    point the PushBackIterator can be iterated over again.
+    """
+    def __init__(self, iterable=None):
+        if (iterable != None) and (not hasattr(iterable, '__next__')):
+            iterable = iter(iterable)
+        self.i = iterable
+        self.stack = []
 
-        def next(self, default=None):
-            # like next(self), but safe.
-            try:
-                return next(self)
-            except StopIteration:
-                return default
+    def __iter__(self):
+        return self
 
-        def push(self, o):
-            self.iterators.append(iter((o,)))
+    def push(self, o):
+        """
+        Pushes a value into the iterator's internal stack.
+        When a PushbackIterator is iterated over, and there are
+        any pushed values, the top value on the stack will be popped
+        and yielded.  PushbackIterator only yields from the
+        iterator it wraps when this internal stack is empty.
+        """
+        self.stack.append(o)
 
-        def __bool__(self):
-            if not self.iterators:
-                return False
-            try:
-                o = next(self)
-                self.push(o)
-                return True
-            except StopIteration:
-                return False
+    def __next__(self):
+        if self.stack:
+            return self.stack.pop()
+        if self.i:
+            return next(self.i)
+        raise StopIteration
 
-        def __repr__(self):
-            return f"<{self.__class__.__name__} {len(self.iterators)} iterators>"
+    def next(self, default=None):
+        """
+        Equivalent to next(PushbackIterator),
+        but won't raise StopIteration.
+        If the iterator is exhausted, returns
+        the "default" argument.
+        """
+        if self.stack:
+            return self.stack.pop()
+        if not self.i:
+            return default
+        try:
+            return next(self.i)
+        except StopIteration:
+            self.i = None
+            return default
 
-else:
-    # debug-friendly low-performance version that makes kittens sad
-    class PushbackIterator:
-        def __init__(self, iterable=None):
-            args = ()
-            if iterable is not None:
-                args = (iterable,)
-            self.values = collections.deque(*args)
+    def __bool__(self):
+        if self.stack:
+            return True
+        if not self.i:
+            return False
+        try:
+            o = next(self.i)
+            self.push(o)
+            return True
+        except StopIteration:
+            return False
 
-        def __iter__(self):
-            return self
+    # this is used for debugging,
+    # it doesn't have to be performant
+    @property
+    def values(self):
+        if self.i:
+            values = list(self.i)
+            values.reverse()
+            values.extend(self.stack)
+            # keep the same arrya object for stack
+            # just in case someone naughty has a reference
+            self.stack.clear()
+            self.stack.extend(values)
+            self.i = False
+        values = self.stack.copy()
+        values.reverse()
+        return tuple(values)
 
-        def __next__(self):
-            if not self.values:
-                raise StopIteration
-            return self.values.popleft()
-
-        def next(self, default=None):
-            # like next(self), but safe.
-            if not self.values:
-                return default
-            return self.values.popleft()
-
-        def push(self, o):
-            self.values.appendleft(o)
-
-        def __bool__(self):
-            return bool(self.values)
-
-        def __repr__(self):
-            return f"<{self.__class__.__name__} {self.values}>"
+    def __repr__(self):
+        return f"<{self.__class__.__name__} i={self.i} stack={self.stack}>"
 
 
 
@@ -490,14 +505,15 @@ class ArgumentCounter:
         return self.minimum <= self.count <= self.maximum
 
     def __repr__(self):
-        return f"<ArgumentCounter minimum {self.minimum} <= count {self.count} <= maximum {self.maximum} == {bool(self)}>"
+        return f"<ArgumentCounter optional={self.optional} minimum {self.minimum} <= count {self.count} <= maximum {self.maximum} == {bool(self)}>"
 
     def copy(self):
-        return ArgumentCounter(self.minimum, self.maximum)
+        return ArgumentCounter(self.minimum, self.maximum, self.optional)
 
     def summary(self):
         ok_no = "(ok)" if self.satisfied() else "(no)"
-        return f"[min {self.minimum} <= cur {self.count} <= max {self.maximum} {ok_no}]"
+        optional = "yes" if self.optional else "no"
+        return f"[optional {optional} min {self.minimum} <= cur {self.count} <= max {self.maximum} {ok_no}]"
 
 
 class CharmProgram:
@@ -2422,6 +2438,7 @@ def charm_parse(appeal, program, argi):
         if (not ci.group.optional) or ci.group.count:
             satisfied = False
             ag = ci.group
+
     if not satisfied:
         if not ci.group.satisfied():
             which = "in this argument group"
@@ -2430,7 +2447,8 @@ def charm_parse(appeal, program, argi):
             which = "total"
             ag = ci.total
         if ag.minimum == ag.maximum:
-            middle = f"{ag.minimum} arguments"
+            plural = "" if ag.minimum == 1 else "s"
+            middle = f"{ag.minimum} argument{plural}"
         else:
             middle = f"at least {ag.minimum} arguments but no more than {ag.maximum} arguments"
         message = f"{program.name} requires {middle} {which}."
