@@ -795,7 +795,7 @@ app = appeal.Appeal()
 
 @app.command()
 def fgrep(*, verbose:appeal.counter()=0):
-    print(f"fgrep {verbose=}")
+    print(f"fgrep verbose={verbose!r}")
 
 app.main()
 ```
@@ -831,7 +831,7 @@ app = appeal.Appeal()
 
 @app.command()
 def fgrep(*, pattern:appeal.accumulator=[]):
-    print(f"fgrep {pattern=}")
+    print(f"fgrep pattern={pattern!r}")
 
 app.main()
 ```
@@ -856,7 +856,7 @@ app = appeal.Appeal()
 
 @app.command()
 def fgrep(*, pattern:appeal.accumulator[int]=[]):
-    print(f"fgrep {pattern=}")
+    print(f"fgrep pattern={pattern!r}")
 
 app.main()
 ```
@@ -965,7 +965,7 @@ app = appeal.Appeal()
 
 @app.command()
 def go(direction:appeal.validate('up', 'down', 'left', 'right', 'forward', 'back')):
-    print(f"go {direction=}")
+    print(f"go direction={direction!r}")
 
 app.main()
 ```
@@ -1044,7 +1044,7 @@ app = appeal.Appeal()
 @app.option("direction", "--east",  annotation=lambda: "east")
 @app.option("direction", "--west",  annotation=lambda: "west")
 def go(*, direction='north'):
-    print(f"go {direction=}")
+    print(f"go direction={direction!r}")
 
 app.main()
 ```
@@ -1091,7 +1091,7 @@ def my_converter(i_f: int_float, s: str):
 
 @app.command()
 def recurse(a:str, b:my_converter=[(0, 0), '']):
-    print(f"recurse {a=} {b=}")
+    print(f"recurse a={a!r} b={b!r}")
 
 app.main()
 ```
@@ -1151,7 +1151,7 @@ def my_converter(i_f: int_float, s: str, *, verbose=False):
 
 @app.command()
 def recurse2(a:str, b:my_converter=[(0, 0), '', False]):
-    print(f"recurse2 {a=} {b=}")
+    print(f"recurse2 a={a!r} b={b!r}")
 
 app.main()
 ```
@@ -1247,7 +1247,7 @@ def my_converter(a: int, *, verbose=False):
 
 @app.command()
 def inception(*, option:my_converter=[0, False]):
-    print(f"inception {option=}")
+    print(f"inception option={option!r}")
 
 app.main()
 ```
@@ -1280,7 +1280,7 @@ def my_converter(a: int, *, verbose=False):
 
 @app.command()
 def repetition(*args:my_converter):
-    print(f"repetition {args=}")
+    print(f"repetition args={args!r}")
 
 app.main()
 ```
@@ -1304,11 +1304,11 @@ class Logging:
         self.log_level = log_level
 
     def __repr__(self):
-        return f"<Logging verbose={self.verbose} log_level={self.log_level}>"
+        return f"<Logging verbose={self.verbose!r} log_level={self.log_level}>"
 
 @app.command()
 def mixin(log:Logging):
-    print(f"mixin {log=}")
+    print(f"mixin log={log!r}")
 
 app.main()
 ```
@@ -1428,7 +1428,7 @@ app_class, command_method = app.app_class()
 @app_class()
 class MyApp:
     def __init__(self, *, verbose=False):
-        print(f"MyApp init {verbose=}")
+        print(f"MyApp init verbose={verbose!r}")
         self.verbose = verbose
 
     def __repr__(self):
@@ -1436,7 +1436,7 @@ class MyApp:
 
     @command_method()
     def add(self, a, b, c):
-        print(f"MyApp add {self=} {a=} {b=} {c=} {self.verbose=}")
+        print(f"MyApp add self={self!r} a={a!r} b={b!r} c={c!r} self.verbose={self.verbose!r}")
 
 app.main()
 ```
@@ -1463,7 +1463,7 @@ class MyApp:
 
     @command_method()
     def add(self, a, b, c):
-        print(f"MyApp add {self=} {a=} {b=} {c=}")
+        print(f"MyApp add self={self!r} a={a!r} b={b!r} c={c!r}")
 
 my_app = MyApp("dingus")
 

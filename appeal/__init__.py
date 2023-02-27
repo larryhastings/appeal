@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 
 # please leave this copyright notice in binary distributions.
@@ -55,12 +55,25 @@ import types
 from . import argument_grouping
 from . import text
 
+reversed_dict_values = argument_grouping.reversed_dict_values
+
+
 POSITIONAL_ONLY = inspect.Parameter.POSITIONAL_ONLY
 POSITIONAL_OR_KEYWORD = inspect.Parameter.POSITIONAL_OR_KEYWORD
 VAR_POSITIONAL = inspect.Parameter.VAR_POSITIONAL
 KEYWORD_ONLY = inspect.Parameter.KEYWORD_ONLY
 VAR_KEYWORD = inspect.Parameter.VAR_KEYWORD
 empty = inspect.Parameter.empty
+
+try:
+    # new in 3.7
+    from time import monotonic_ns as event_clock
+except ImportError:
+    from time import perf_counter
+
+    def event_clock():
+        return int(perf_counter() * 1000000000.0)
+
 
 def update_wrapper(wrapped, wrapper):
     """
@@ -291,7 +304,7 @@ def _partial_rebind(partial, placeholder, instance, method):
     counter = 0
     while stack:
         counter += 1
-        # print(f"*** {counter} {stack=}\n*** {partial=}")
+        # print(f"*** {counter} stack={stack}\n*** partial={partial}")
         partial = stack.pop()
         if (   (len(partial.args) == 1)
             and (partial.args[0] == placeholder)
@@ -311,7 +324,7 @@ def _partial_rebind(partial, placeholder, instance, method):
                 # print(f"*** func is now {func}")
                 partial = func
                 continue
-        # print(f"*** {partial.func=} != {func=} == {rebind=}")
+        # print(f"*** partial.func={partial.func} != func={func} == rebind={rebind}")
         if partial.func != func:
             partial = functools.partial(func, *partial.args, **partial.keywords)
             update_wrapper(partial, func)
@@ -1226,7 +1239,7 @@ class CharmCompiler:
     def compile_options(self, parent_callable, key, parameter, options, depth):
         if want_prints:
             indent = "  " * depth
-            print(f"[cc] {indent}compile_options {options=} {key=} {parameter=} {parameter.kind=}")
+            print(f"[cc] {indent}compile_options options={options} key={key} parameter={parameter} parameter.kind={parameter.kind}")
 
         cls = self.appeal.root.map_to_converter(parameter)
 
@@ -1282,13 +1295,13 @@ class CharmCompiler:
 
             if want_prints:
                 indent = "  " * depth
-                print(f"[cc] {indent}compile_options {option=} {program=} callable={parent_callable} {parameter=} {key=} {destination=}")
+                print(f"[cc] {indent}compile_options option={option} program={program} callable={parent_callable} parameter={parameter} key={key} destination={destination}")
             destination.map_option(option, program, parent_callable, parameter, key)
 
     def map_options(self, callable, parameter, signature, key, depth=0):
         if want_prints:
             indent = "  " * depth
-            print(f"[cc] {indent}{callable.__name__} map_options {parameter=} {key=} {signature=}")
+            print(f"[cc] {indent}{callable.__name__} map_options parameter={parameter} key={key} signature={signature}")
         _, kw_parameters, _ = self.appeal.fn_database_lookup(callable)
         mappings = kw_parameters.get(parameter.name, ())
 
@@ -1329,7 +1342,7 @@ class CharmCompiler:
 
         if want_prints:
             indent = "  " * depth
-            print(f"[cc] {indent}compiling '{parameter=}' {depth=}, pgi, {multioption=} {append=}")
+            print(f"[cc] {indent}compiling 'parameter={parameter}' depth={depth}, pgi, multioption={multioption} append={append}")
 
         maps_to_positional = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
         tracked_by_argument_grouping = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
@@ -1345,7 +1358,7 @@ class CharmCompiler:
         signature = cls.get_signature(parameter)
         parameters = signature.parameters
         if want_prints:
-            print(f"[cc] {indent}{cls=} {signature=}")
+            print(f"[cc] {indent}cls={cls} signature={signature}")
 
         if depth == 0:
             # degenerate only applies to depth > 1.
@@ -1353,7 +1366,7 @@ class CharmCompiler:
         else:
             is_degenerate = len(parameters) < 2
         if want_prints:
-            print(f"[cc] {indent}{is_degenerate=}, {len(parameters)=} < 2")
+            print(f"[cc] {indent}is_degenerate={is_degenerate}, len(parameters){len(parameters)} < 2")
 
         if multioption:
             assert not append
@@ -1453,13 +1466,13 @@ class CharmCompiler:
 
             if want_prints:
                 printable_default = "(empty)" if p.default is empty else repr(p.default)
-                print(f"[cc] {indent}{callable.__name__} positional parameter {i}: {p=} {p.kind=!s} annotation={p.annotation.__name__} default={printable_default} {cls=}")
+                print(f"[cc] {indent}{callable.__name__} positional parameter {i}: p={p} p.kind={p.kind!s} annotation={p.annotation.__name__} default={printable_default} cls={cls}")
 
             # only create new groups here if it's an optional group
             # (we pre-create the initial, required group)
             pgi_parameter = next(pgi)
             if want_prints:
-                print(f"[cc] {indent}{pgi_parameter=}")
+                print(f"[cc] {indent}pgi_parameter={pgi_parameter}")
             if pgi_parameter.first_in_group and (not pgi_parameter.in_required_group):
                 if want_prints:
                     print(f"[cc] {indent}{callable.__name__} new argument group optional=True")
@@ -1468,7 +1481,7 @@ class CharmCompiler:
             self.a.load_converter(key=converter_key)
             if cls is SimpleTypeConverterStr: # or (isinstance(callable, type) and issubclass(callable, Option)):
                 # if want_prints:
-                #     print(f"{indent_str}       LEAF {pgi_parameter} {is_degenerate=}")
+                #     print(f"{indent_str}       LEAF {pgi_parameter} is_degenerate={is_degenerate}")
                 # ends_group = pgi_parameter.last_in_group
                 # starts_optional_group = pgi_parameter.first_in_group and not pgi_parameter.in_required_group
                 if want_prints:
@@ -1478,7 +1491,7 @@ class CharmCompiler:
                 self.after_consume_argument()
             else:
                 if want_prints:
-                    print(f"[cc] {indent}{callable.__name__} recurse into {parameter_name} {p=}")
+                    print(f"[cc] {indent}{callable.__name__} recurse into {parameter_name} p={p}")
                 # self.ensure_callables_have_unique_names(callable)
                 append = {'callable': callable, 'parameter': parameter_name, "usage": usage, 'usage_callable': usage_callable, 'usage_parameter': usage_parameter }
                 is_degenerate_subtree = self._compile(depth + 1, p, pgi, usage_callable, usage_parameter, None, append=append)
@@ -1489,7 +1502,7 @@ class CharmCompiler:
                 self.a.jump_to_label(label)
 
         # if want_prints:
-        #     print(f"{indent_str}<< {callable=}")
+        #     print(f"{indent_str}<< callable={callable}")
 
         if append_op and not is_degenerate:
             if want_prints:
@@ -1881,7 +1894,7 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
     last_op = None
     first_argument_in_group = True
     for op in ci:
-        # print(f"{op=}")
+        # print(f"op={op}")
         if ((last_op == opcode.map_option)
             and (op.op != last_op)):
             flush_options()
@@ -1918,8 +1931,8 @@ def charm_usage(program, *, formatter=str):
     option_values = {}
     _charm_usage(program, usage, closing_brackets, formatter, arguments_values, option_values)
     usage.extend(closing_brackets)
-    # print(f"{arguments_values=}")
-    # print(f"{option_values=}")
+    # print(f"arguments_values={arguments_values}")
+    # print(f"option_values={option_values}")
     return "".join(usage).strip(), arguments_values, option_values
 
 
@@ -1956,7 +1969,7 @@ def charm_parse(appeal, program, argi):
         token_to_bucket[options_token] = options_bucket
         bucket_to_token[id(options_bucket)] = options_token
         if want_prints:
-            print(f"##       push_options {options_token=}")
+            print(f"##       push_options options_token={options_token}")
 
     # create our first actual options bucket
     push_options()
@@ -1975,7 +1988,7 @@ def charm_parse(appeal, program, argi):
         options_token = bucket_to_token[id(options_bucket)]
 
         if want_prints:
-            print(f"##       pop_options, now at token {options_token}, popped {options_bucket=}")
+            print(f"##       pop_options, now at token {options_token}, popped options_bucket={options_bucket}")
 
     def pop_options_to_token(token):
         bucket = token_to_bucket.get(token)
@@ -1986,7 +1999,7 @@ def charm_parse(appeal, program, argi):
             pop_count += 1
             pop_options()
         if want_prints:
-            print(f"##     pop_options_to_token {token=} took {pop_count} pops")
+            print(f"##     pop_options_to_token token={token} took {pop_count} pops")
 
     def pop_options_to_base():
         if want_prints:
@@ -2065,7 +2078,7 @@ def charm_parse(appeal, program, argi):
         if converters_are_undoable:
             undo_converters_list.append(parent)
             if want_prints:
-                print(f"##     add_undoable_converter({parent=})")
+                print(f"##     add_undoable_converter(parent={parent})")
 
     def push_undo_converters():
         nonlocal undo_converters_list
@@ -2088,8 +2101,8 @@ def charm_parse(appeal, program, argi):
                     print(f"##")
                     print_spacer = False
                 print(f"##     undo converter")
-                print(f"##         {parent=}")
-                print(f"##         popped {o=}")
+                print(f"##         parent={parent}")
+                print(f"##         popped o={o}")
                 print(f"##         arg_converters={parent.args_converters}")
         undo_converters_list.clear()
 
@@ -2118,7 +2131,7 @@ def charm_parse(appeal, program, argi):
                 _total = ci.total and ci.total.summary()
                 _group = ci.group and ci.group.summary()
                 print(f"##")
-                print(f"## {ip} {converter=} {o=}")
+                print(f"## {ip} converter={converter} o={o}")
                 print(f"## {ip_spacer} total={_total}")
                 print(f"## {ip_spacer} group={_group}")
 
@@ -2131,33 +2144,33 @@ def charm_parse(appeal, program, argi):
                     root = converter
                 if want_prints:
                     print(f"##     create_converter key={op.key} parameter={op.parameter}")
-                    print(f"##         {converter=}")
+                    print(f"##         converter={converter}")
                 continue
 
             if op.op == opcode.load_converter:
                 ci.converter = ci.converters.get(op.key, None)
                 converter = ci.repr_converter(ci.converter)
                 if want_prints:
-                    print(f"##     load_converter {op.key=} {converter=!s}")
+                    print(f"##     load_converter op.key={op.key} converter={converter!s}")
                 continue
 
             if op.op == opcode.load_o:
                 ci.o = ci.converters.get(op.key, None)
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"##     load_o {op.key=} {o=!s}")
+                    print(f"##     load_o op.key={op.key} o={o!s}")
                 continue
 
             if op.op == opcode.load_o_option:
                 ci.option = op.option
                 if want_prints:
-                    print(f"##     load_o_option {op.option=} {o=!s}")
+                    print(f"##     load_o_option op.option={op.option} o={o!s}")
                 continue
 
             if op.op == opcode.map_option:
                 options_bucket[op.option] = op.program
                 if want_prints:
-                    print(f"##     map_option {op.option=} {op.program=} token {options_token}")
+                    print(f"##     map_option op.option={op.option} op.program={op.program} token {options_token}")
                 continue
 
             if op.op == opcode.append_args:
@@ -2165,7 +2178,7 @@ def charm_parse(appeal, program, argi):
                 add_undoable_converter(ci.converter)
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"##     append_args {o=}")
+                    print(f"##     append_args o={o}")
                 continue
 
             if op.op == opcode.store_kwargs:
@@ -2181,7 +2194,7 @@ def charm_parse(appeal, program, argi):
                 ci.converter.kwargs_converters[op.name] = ci.o
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"##     store_kwargs name={op.name} {o=}")
+                    print(f"##     store_kwargs name={op.name} o={o}")
                 continue
 
             if op.op == opcode.consume_argument:
@@ -2215,28 +2228,28 @@ def charm_parse(appeal, program, argi):
                 continue
 
             if op.op == opcode.flush_multioption:
-                assert isinstance(ci.o, MultiOption), f"expected instance of MultiOption but {ci.o=}"
+                assert isinstance(ci.o, MultiOption), f"expected instance of MultiOption but ci.o={ci.o}"
                 ci.o.flush()
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"##     flush_multioption {o=}")
+                    print(f"##     flush_multioption o={o}")
                 continue
 
             if op.op == opcode.jump:
                 if want_prints:
-                    print(f"##     jump {op.address=}")
+                    print(f"##     jump op.address={op.address}")
                 ci.i.jump(op.address)
                 continue
 
             if op.op == opcode.jump_relative:
                 if want_prints:
-                    print(f"##     jump_relative {op.delta=}")
+                    print(f"##     jump_relative op.delta={op.delta}")
                 ci.i.jump_relative(op.delta)
                 continue
 
             if op.op == opcode.branch_on_o:
                 if want_prints:
-                    print(f"##     branch_on_o o={ci.o} {op.address=}")
+                    print(f"##     branch_on_o o={ci.o} op.address={op.address}")
                 if ci.o:
                     ci.i.jump(op.address)
                 continue
@@ -2252,7 +2265,7 @@ def charm_parse(appeal, program, argi):
                     print(f"##     {name} id={op.id} name={op.name!r}")
                 continue
 
-            raise AppealConfigurationError(f"unhandled opcode {op=}")
+            raise AppealConfigurationError(f"unhandled opcode op={op}")
 
         else:
             # we finished the program
@@ -2364,7 +2377,7 @@ def charm_parse(appeal, program, argi):
                 program, maximum_arguments, token = find_option(option)
                 option_stack_tokens.append(token)
                 if want_prints:
-                    print(f"#]     option {denormalize_option(option)} {program=}")
+                    print(f"#]     option {denormalize_option(option)} program={program}")
                 queue.append((option, program, maximum_arguments, split_value, True))
             else:
                 options = collections.deque(a[1:])
@@ -2418,8 +2431,8 @@ def charm_parse(appeal, program, argi):
             # that's because we push each program on the interpreter.  so, LIFO.
             for error_option, program, maximum_arguments, split_value, is_last in reversed(queue):
                 if want_prints:
-                    print(f"#]     executing option {option} {split_value=}")
-                    print(f"#]     call program={program=}")
+                    print(f"#]     executing option {option} split_value={split_value}")
+                    print(f"#]     call program={program}")
 
                 if not is_last:
                     total = program.total
@@ -2564,11 +2577,11 @@ class Converter:
         return f"<{self.__class__.__name__} callable={self.callable.__name__}>"
 
     def convert(self, processor):
-        # print(f"{self=} {self.args_converters=} {self.kwargs_converters=}")
+        # print(f"self={self} self.args_converters={self.args_converters} self.kwargs_converters={self.kwargs_converters}")
         for iterable in (self.args_converters, self.kwargs_converters.values()):
             for converter in iterable:
                 if converter and not isinstance(converter, str):
-                    # print(f"{self=}.convert, {converter=}")
+                    # print(f"self={self}.convert, converter={converter}")
                     converter.convert(processor)
 
         for converter in self.args_converters:
@@ -2584,7 +2597,7 @@ class Converter:
         # print(f"calling {self.callable}(*{self.args}, **{self.kwargs})")
         # return processor.execute_preparers(self.callable)(self.args, self.kwargs)
         rebound = processor.execute_preparers(self.callable)
-        # print(f"\nEXECUTE {self.callable=} {rebound=} {inspect.signature(rebound)=} {self.args=} {self.kwargs=}")
+        # print(f"\nEXECUTE self.callable={self.callable} rebound={rebound} inspect.signature(rebound)={inspect.signature(rebound)} self.args={self.args} self.kwargs={self.kwargs}")
         return rebound(*self.args, **self.kwargs)
 
 
@@ -2863,7 +2876,7 @@ class MultiOption(SingleOption):
 
     def execute(self, processor):
         for args, kwargs in self.multi_args:
-            # print(f"CALLING {self.option=} {args=} {kwargs=}")
+            # print(f"CALLING self.option={self.option} args={args} kwargs={kwargs}")
             self.option(*args, **kwargs)
         return self.render()
 
@@ -3135,9 +3148,9 @@ def inferred_type_to_converter(parameter):
     if (parameter.annotation is not empty) or (parameter.default is empty):
         return None
     inferred_type = type(parameter.default)
-    # print(f"inferred_type_to_converter({parameter=})")
+    # print(f"inferred_type_to_converter(parameter={parameter})")
     cls = simple_type_to_converter(parameter, inferred_type)
-    # print(f"  {inferred_type=} {cls=}")
+    # print(f"  inferred_type={inferred_type} cls={cls}")
     if cls:
         return cls
     if issubclass(inferred_type, SingleOption):
@@ -3183,7 +3196,7 @@ def default_long_option(appeal, callable, parameter_name, annotation, default):
         raise AppealConfigurationError(f"couldn't add default option {option} for {callable} parameter {parameter_name}")
 
 def default_options(appeal, callable, parameter_name, annotation, default):
-    # print(f"default_options({appeal=}, {callable=}, {parameter_name=}, {annotation=}, {default=})")
+    # print(f"default_options(appeal={appeal}, callable={callable}, parameter_name={parameter_name}, annotation={annotation}, default={default})")
     added_an_option = False
     options = [parameter_name_to_short_option(parameter_name)]
     if len(parameter_name) > 1:
@@ -3204,8 +3217,6 @@ def unbound_callable(callable):
     """
     return callable.__func__ if isinstance(callable, types.MethodType) else callable
 
-
-event_clock = time.monotonic_ns
 
 unspecified = object()
 
@@ -3453,7 +3464,7 @@ class Appeal:
         #     appeal = appeal.parent
         # raise KeyError, the lazy way
         x = self.root.fn_database[callable]
-        # print(f"fn_database_lookup({callable=} -> {x}")
+        # print(f"fn_database_lookup(callable={callable} -> {x}")
         return x
 
     def __repr__(self):
@@ -3506,7 +3517,7 @@ class Appeal:
             rebinder = partial_rebind_method if self.bind_method else partial_rebind_positional
             def prepare(fn):
                 try:
-                    # print(f"\nattempting rebind of\n    {fn=}\n    {self.placeholder=}\n    {instance=}\n    {rebinder=}\n")
+                    # print(f"\nattempting rebind of\n    fn={fn}\n    self.placeholder={self.placeholder}\n    instance={instance}\n    rebinder={rebinder}\n")
                     return rebinder(fn, self.placeholder, instance)
                 except ValueError:
                     return fn
@@ -3530,7 +3541,7 @@ class Appeal:
 
         def global_command(self):
             def global_command(fn):
-                # print(f"global_command wrapped {fn=} with partial for {self.placeholder=}")
+                # print(f"global_command wrapped fn={fn} with partial for self.placeholder={self.placeholder}")
                 fn2 = self.wrap(fn)
                 self.appeal.global_command()(fn2)
                 return fn
@@ -3538,7 +3549,7 @@ class Appeal:
 
         def default_command(self):
             def default_command(fn):
-                # print(f"default_command wrapped {fn=} with partial for {self.placeholder=}")
+                # print(f"default_command wrapped fn={fn} with partial for self.placeholder={self.placeholder}")
                 fn2 = self.wrap(fn)
                 self.appeal.default_command()(fn2)
                 return fn
@@ -3548,7 +3559,7 @@ class Appeal:
             rebinder = partial_rebind_method if self.bind_method else partial_rebind_positional
             def prepare(fn):
                 try:
-                    # print(f"\nattempting rebind of\n    {fn=}\n    {self.placeholder=}\n    {instance=}\n    {rebinder=}\n")
+                    # print(f"\nattempting rebind of\n    fn={fn}\n    self.placeholder={self.placeholder}\n    instance={instance}\n    rebinder={rebinder}\n")
                     return rebinder(fn, self.placeholder, instance)
                 except ValueError:
                     return fn
@@ -3576,31 +3587,31 @@ class Appeal:
                 assert isinstance(cls, type)
                 signature = inspect.signature(cls)
                 bind_processor = self.bind_processor()
-                # print(f"<app_class d> 1 {bind_processor=}")
-                # print(f"<app_class d> 2 {bind_processor.placeholder=}")
+                # print(f"<app_class d> 1 bind_processor={bind_processor}")
+                # print(f"<app_class d> 2 bind_processor.placeholder={bind_processor.placeholder}")
 
                 def fn(processor, *args, **kwargs):
-                    # print(f"\n[app_class gc] in global command, {cls=} {processor=}\n")
-                    # print(f"\n[app_class gc] {args=}\n")
-                    # print(f"\n[app_class gc] {kwargs=}\n")
+                    # print(f"\n[app_class gc] in global command, cls={cls} processor={processor}\n")
+                    # print(f"\n[app_class gc] args={args}\n")
+                    # print(f"\n[app_class gc] kwargs={kwargs}\n")
                     o = cls(*args, **kwargs)
-                    # print(f"\n[app_class gc] binding {o=}\n")
+                    # print(f"\n[app_class gc] binding o={o}\n")
                     processor.preparer(command_method.bind(o))
                     return None
-                # print(f"<app_class d> 3 {inspect.signature(fn)=}")
-                # print(f"<app_class d> 4 {inspect.signature(bind_processor)=}")
-                # print(f"    {fn=}")
-                # print(f"    {isinstance(fn, functools.partial)=}")
+                # print(f"<app_class d> 3 inspect.signature(fn)={inspect.signature(fn)}")
+                # print(f"<app_class d> 4 inspect.signature(bind_processor)={inspect.signature(bind_processor)}")
+                # print(f"    fn={fn}")
+                # print(f"    isinstance(fn, functools.partial)={isinstance(fn, functools.partial)}")
                 fn = bind_processor(fn)
 
-                # print(f"<app_class d> 6 {inspect.signature(fn)=}")
-                # print(f"    {fn=}")
-                # print(f"    {isinstance(fn, functools.partial)=}")
+                # print(f"<app_class d> 6 inspect.signature(fn)={inspect.signature(fn)}")
+                # print(f"    fn={fn}")
+                # print(f"    isinstance(fn, functools.partial)={isinstance(fn, functools.partial)}")
                 fn.__signature__ = signature
-                # print(f"<app_class d> 7 {inspect.signature(fn)=}")
+                # print(f"<app_class d> 7 inspect.signature(fn)={inspect.signature(fn)}")
 
                 self.global_command()(fn)
-                # print(f"<app_class d> 8 {self._global=}")
+                # print(f"<app_class d> 8 self._global={self._global}")
                 return cls
             return app_class
 
@@ -3671,10 +3682,10 @@ class Appeal:
 
         parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY, annotation=annotation, default=default)
 
-        # print(f"@option {annotation=} {default=}")
+        # print(f"@option annotation={annotation} default={default}")
         cls = self.root.map_to_converter(parameter)
         if cls is None:
-            raise AppealConfigurationError(f"Appeal.option: could not determine Converter for {annotation=} {default=}")
+            raise AppealConfigurationError(f"Appeal.option: could not determine Converter for annotation={annotation} default={default}")
         annotation_signature = cls.get_signature(parameter)
         # annotation_signature = callable_signature(annotation)
 
@@ -3702,10 +3713,10 @@ class Appeal:
 
 
     def map_to_converter(self, parameter):
-        # print(f"map_to_converter({parameter=})")
+        # print(f"map_to_converter(parameter={parameter})")
         for factory in self.root.converter_factories:
             c = factory(parameter)
-            # print(f"  * {factory=} -> {c=}")
+            # print(f"  * factory={factory} -> c={c}")
             if c:
                 break
         return c
@@ -3782,7 +3793,7 @@ class Appeal:
         mapped_options = collections.defaultdict(two_lists)
 
         for op in ci:
-            # print(f"## {op=}")
+            # print(f"## op={op}")
             if op.op == opcode.create_converter:
                 c = {'parameter': op.parameter, 'parameters': {}, 'options': collections.defaultdict(list)}
                 ci.converters[op.key] = ci.o = c
@@ -3822,7 +3833,7 @@ class Appeal:
 
         positional_parameter_kinds = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
 
-        for c in reversed(ci.converters.values()):
+        for c in reversed_dict_values(ci.converters.values()):
             parameter = c['parameter']
             callable = parameter.annotation
 
@@ -3870,7 +3881,7 @@ class Appeal:
             for current, signature, depth, positional_children, option_children in values:
                 if current in simple_type_signatures:
                     continue
-                print(f"{current=}\n    {depth=}\n    {positional_children=}\n    {option_children=}\n    {signature=}\n")
+                print(f"current={current}\n    depth={depth}\n    positional_children={positional_children}\n    option_children={option_children}\n    signature={signature}\n")
 
         # step 2:
         # process the docstrings of those annotation functions, deepest to shallowest.
@@ -3879,8 +3890,8 @@ class Appeal:
         fn_to_docs = {}
 
         if want_prints:
-            print(f"[] {arguments_values=}")
-            print(f"[] {options_values=}")
+            print(f"[] arguments_values={arguments_values}")
+            print(f"[] options_values={options_values}")
 
         # again! complicated.
         #
@@ -3929,7 +3940,7 @@ class Appeal:
                 continue
 
             # print("_" * 79)
-            # print(f"{callable=} {signature=} {depth=} {positional_children=} {positional_children=}")
+            # print(f"callable={callable} signature={signature} depth={depth} positional_children={positional_children} positional_children={positional_children}")
 
             fn_name = callable.__name__
             prefix = f"{fn_name}."
@@ -4024,7 +4035,7 @@ class Appeal:
                     # processing it a second time in priority 3 below
                     parameters = proxy_dicts.pop(fn_name)
                     for name, value in parameters.items():
-                        # print(f"priority 2 {name=} {value=}")
+                        # print(f"priority 2 name={name} value={value}")
                         if name not in d:
                             if desired == "name":
                                 value = f"{fn_name}.{name}"
@@ -4109,7 +4120,7 @@ class Appeal:
 
             def next(new_state, line=None):
                 nonlocal state
-                # print(f">>>> next state={state.__name__.rpartition('.')[2]} {line=}")
+                # print(f">>>> next state={state.__name__.rpartition('.')[2]} line={line}")
                 state = new_state
                 if line is not None:
                     state(line)
@@ -4255,7 +4266,7 @@ class Appeal:
 
             for line in doc.split("\n"):
                 line = line.rstrip()
-                # print(f">> state={state.__name__.rpartition('.')[2]} {line=}")
+                # print(f">> state={state.__name__.rpartition('.')[2]} line={line}")
                 state(line)
             finish_section()
 
@@ -4286,23 +4297,23 @@ class Appeal:
                         first_section.pop(0)
 
                     # print("processed summary:")
-                    # print(f"   {summary_lines=}")
-                    # print(f"   {first_section=}")
+                    # print(f"   summary_lines={summary_lines}")
+                    # print(f"   first_section={first_section}")
 
                     split_summary = text.fancy_text_split("\n".join(summary_lines), allow_code=False)
 
             if want_prints:
-                print(f"[] {arguments_topic_names=}")
-                print(f"[] {arguments_topic_values=}")
-                print(f"[] {arguments_topic_definitions=}")
-                # print(f"[] {arguments_and_opargs_topic_names=}")
-                # print(f"[] {arguments_and_opargs_topic_values=}")
-                # print(f"[] {arguments_and_opargs_topic_definitions=}")
-                print(f"[] {arguments_desired=}")
-                print(f"[] {options_topic_names=}")
-                print(f"[] {options_topic_values=}")
-                print(f"[] {options_topic_definitions=}")
-                print(f"[] {options_desired=}")
+                print(f"[] arguments_topic_names={arguments_topic_names}")
+                print(f"[] arguments_topic_values={arguments_topic_values}")
+                print(f"[] arguments_topic_definitions={arguments_topic_definitions}")
+                # print(f"[] arguments_and_opargs_topic_names={arguments_and_opargs_topic_names}")
+                # print(f"[] arguments_and_opargs_topic_values={arguments_and_opargs_topic_values}")
+                # print(f"[] arguments_and_opargs_topic_definitions={arguments_and_opargs_topic_definitions}")
+                print(f"[] arguments_desired={arguments_desired}")
+                print(f"[] options_topic_names={options_topic_names}")
+                print(f"[] options_topic_values={options_topic_values}")
+                print(f"[] options_topic_definitions={options_topic_definitions}")
+                print(f"[] options_desired={options_desired}")
 
             fn_to_docs[callable] = (
                 arguments_topic_definitions,
@@ -4330,7 +4341,7 @@ class Appeal:
             return self.usage_str, self.summary_str, self.doc_str
 
         usage_str, split_summary, doc_sections = self.compute_usage(commands=commands, override_doc=override_doc)
-        # print(f"{doc_sections=}")
+        # print(f"doc_sections={doc_sections}")
 
         if split_summary:
             summary_str = text.presplit_textwrap(split_summary)
@@ -4401,7 +4412,7 @@ class Appeal:
             # lines.append('')
 
         doc_str = "\n".join(lines).rstrip()
-        # print(f"render_doctstring returning {usage_str=} {summary_str=} {doc_str=}")
+        # print(f"render_doctstring returning usage_str={usage_str} summary_str={summary_str} doc_str={doc_str}")
 
         self.summary_str = summary_str
         self.doc_str = doc_str
@@ -4417,7 +4428,7 @@ class Appeal:
             self._global = no_op
             docstring = ""
         self.analyze(None)
-        # print(f"FOO-USAGE {self._global=} {self._global_program=}")
+        # print(f"FOO-USAGE self._global={self._global} self._global_program={self._global_program}")
         # usage_str = charm_usage(self._global_program)
         # print(self.name, usage_str)
         # return
@@ -4432,7 +4443,7 @@ class Appeal:
             docstring = "\n".join(docstring).rstrip()
             # self._global_command.docstring = docstring
             # print(f"self._global_command.docstring = {docstring!r}")
-            # print(f"{self.commands=}")
+            # print(f"self.commands={self.commands}")
         usage_str, summary_str, doc_str = self.render_docstring(commands=self.commands, override_doc=docstring)
         if want_prints:
             print(f">> usage from {self}:")
@@ -4605,7 +4616,7 @@ class Processor:
     def preparer(self, preparer):
         if not callable(preparer):
             raise ValueError(f"{preparer} is not callable")
-        # print(f"((( adding {preparer=}")
+        # print(f"((( adding preparer={preparer}")
         self.preparers.append(preparer)
 
     def execute_preparers(self, fn):
@@ -4663,10 +4674,10 @@ class Processor:
                 appeal.command()(appeal.help)
 
         if appeal.appeal_preparer:
-            # print(f"bind appeal.appeal_preparer to {self.appeal=}")
+            # print(f"bind appeal.appeal_preparer to self.appeal={self.appeal}")
             self.preparer(appeal.appeal_preparer.bind(self.appeal))
         if appeal.processor_preparer:
-            # print(f"bind appeal.processor_preparer to {self=}")
+            # print(f"bind appeal.processor_preparer to self={self}")
             self.preparer(appeal.processor_preparer.bind(self))
 
         # print()

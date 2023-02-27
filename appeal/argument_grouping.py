@@ -32,12 +32,26 @@ OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import collections
 import inspect
+import sys
 
 POSITIONAL_ONLY = inspect.Parameter.POSITIONAL_ONLY
 POSITIONAL_OR_KEYWORD = inspect.Parameter.POSITIONAL_OR_KEYWORD
 VAR_POSITIONAL = inspect.Parameter.VAR_POSITIONAL
 
 empty = inspect.Parameter.empty
+
+# in python 3.7 and previous, you couldn't use "reversed"
+# on dict.values.
+
+if (
+        (sys.version_info.major >= 4)
+    or  ((sys.version_info.major == 3) and (sys.version_info.minor >= 8))
+    ):
+    reversed_dict_values = reversed
+else:
+    def reversed_dict_values(d):
+        return reversed(list(d))
+
 
 def parse_str(str) -> str: pass
 def parse_int(int) -> int: pass
@@ -138,6 +152,8 @@ class Parameter:
 
 interesting_kinds = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
 
+
+
 class Function:
     def __init__(self, fn, default=empty, name=None, collapse_degenerate=False, signature=default_signature):
         self.fn = fn
@@ -154,7 +170,7 @@ class Function:
 
         parameter = inspect.Parameter(self.name, POSITIONAL_ONLY, annotation=fn, default=default)
         for name, p in signature(parameter).parameters.items():
-            # print(f"FUNCTION {fn=} {default=} {name=} {p=}")
+            # print(f"FUNCTION fn={fn} default={default} name={name} p={p}")
             if p.kind in interesting_kinds:
                 parameter = Parameter(name, p, collapse_degenerate=collapse_degenerate, signature=signature)
                 self.parameters[name] = parameter
@@ -165,14 +181,14 @@ class Function:
 
     def first_pass(self, parent_optionality=0):
         for p in self.parameters.values():
-            # print(f"first pass {self=} {p=}")
+            # print(f"first pass self={self} p={p}")
             p.optionality = parent_optionality + int(not p.required)
             if p.converter:
                 p.converter.first_pass(parent_optionality=p.optionality)
 
     def second_pass(self, parent_optionality=0, lowest_required_optionality=2**29):
-        for p in reversed(self.parameters.values()):
-            # print(f"second pass {self=} {p=} {parent_optionality=} {lowest_required_optionality=}")
+        for p in reversed_dict_values(self.parameters.values()):
+            # print(f"second pass self={self} p={p} parent_optionality={parent_optionality} lowest_required_optionality={lowest_required_optionality}")
             if p.converter:
                 returned_required_optionality = p.converter.second_pass(p.optionality, lowest_required_optionality)
                 if returned_required_optionality == parent_optionality:
@@ -215,9 +231,9 @@ class Function:
         def finish():
             nonlocal group
             if group:
-                # print(f"  pinching off {group=}")
+                # print(f"  pinching off group={group}")
                 groups.append(group)
-                # print(f"  groups is now {groups=}")
+                # print(f"  groups is now groups={groups}")
                 group = []
 
         last_tuple = None
@@ -233,7 +249,7 @@ class Function:
             # t = (p.optionality, p.required)
             t = p.optionality
             if (last_tuple != t) or (not p.required):
-                # print(f"finishing because {p}, {group=}")
+                # print(f"finishing because {p}, group={group}")
                 finish()
                 last_tuple = t
             group.append((p, fn, i))
@@ -250,7 +266,7 @@ class Function:
                 required = groups.pop(0)
         if not required:
             required = []
-        # print(f"returning ({required=}, {groups=})")
+        # print(f"returning (required={required}, groups={groups})")
         return (required, groups)
 
 
@@ -349,7 +365,7 @@ class ParameterGrouperIterator:
         return self
 
     def __next__(self):
-        # print(f"\n()() pgi.next({self=}) {self.only_leaves=}\n")
+        # print(f"\n()() pgi.next(self={self}) self.only_leaves={self.only_leaves}\n")
         while True:
             if self.var_positional:
                 return self.var_positional
@@ -479,11 +495,11 @@ if __name__ == "__main__":
         try:
             base_command = Function(base, collapse_degenerate=True)
             required, optional = base_command.analyze()
-            # print(f"we got back ({required=}, {optional=})")
+            # print(f"we got back (required={required}, optional={optional})")
             optional2 = [[str(p) for p, fn, i in l if (p.leaf or p.var_positional)] for l in optional]
             optional3 = [o for o in optional2 if o]
             # for p, fn, i in required:
-            #     print(f">> {str(p)=} {p=} {fn=} {i=} {p.leaf=} {p.var_positional=}")
+            #     print(f">> str(p)={str(p)} p={p} fn={fn} i={i} p.leaf={p.leaf} p.var_positional={p.var_positional}")
             stringized = f"required={[str(p) for p, fn, i in required if (p.leaf or p.var_positional)]} optional={optional3}"
             if want_output:
                 print()
@@ -579,7 +595,7 @@ if __name__ == "__main__":
     def int_float(i:int, f:float, *, verbose=False):
         return (i, f, "verbose" if verbose else "silent")
     def base(a="(a default)", s:int_float="(s default)", *args:int_float):
-        print(f"{a=} {s=} {args=}")
+        print(f"a={a} s={s} args={args}")
     test(base,
         "required=[] optional=[['a'], ['i', 'f'], ['args', 'i', 'f']]")
 

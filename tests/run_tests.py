@@ -238,7 +238,7 @@ def jobs(jobs:int=math.inf):
     return jobs
 
 def make(*targets, jobs:jobs=1):
-    print(f"make {jobs=} {targets=}")
+    print(f"make jobs={jobs} targets={targets}")
 
 def three_ints(a:int=111, b:int=222, c:int=333):
     return (a, b, c)
@@ -1693,7 +1693,7 @@ class ReadmeTests(unittest.TestCase):
     #     app = appeal.Appeal()
     #     @app.command()
     #     def fgrep(*, verbose:appeal.counter()=0):
-    #         print(f"fgrep {verbose=}")
+    #         print(f"fgrep verbose={verbose}")
     #     ]
 
     def test_specifying_an_option_more_than_once_0_1(self):
@@ -1750,7 +1750,7 @@ class ReadmeTests(unittest.TestCase):
     #     app = appeal.Appeal()
     #     @app.command()
     #     def fgrep(*, pattern:appeal.accumulator=[]):
-    #         print(f"fgrep {pattern=}")
+    #         print(f"fgrep pattern={pattern}")
     #     ]
 
     def test_specifying_an_option_more_than_once_1_1(self):
@@ -1791,7 +1791,7 @@ class ReadmeTests(unittest.TestCase):
     #     app = appeal.Appeal()
     #     @app.command()
     #     def fgrep(*, pattern:appeal.accumulator[int]=[]):
-    #         print(f"fgrep {pattern=}")
+    #         print(f"fgrep pattern={pattern}")
     #     ]
 
     def test_specifying_an_option_more_than_once_2_1(self):
@@ -1832,7 +1832,7 @@ class ReadmeTests(unittest.TestCase):
     #     app = appeal.Appeal()
     #     @app.command()
     #     def go(direction:appeal.validate('up', 'down', 'left', 'right', 'forward', 'back')):
-    #         print(f"go {direction=}")
+    #         print(f"go direction={direction}")
     #     ]
     def test_data_validation_0_1(self):
         self.exec_readme(
@@ -1893,7 +1893,7 @@ class ReadmeTests(unittest.TestCase):
     #     @app.option("direction", "--east", annotation=lambda: "east")
     #     @app.option("direction", "--west", annotation=lambda: "west")
     #     def go(*, direction='north'):
-    #         print(f"go {direction=}")
+    #         print(f"go direction={direction}")
     #     ]
     def test_multiple_options_for_the_same_parameter_0_1(self):
         self.exec_readme(
@@ -1948,7 +1948,7 @@ class ReadmeTests(unittest.TestCase):
     #
     #     @app.command()
     #     def recurse(a:str, b:my_converter=[(0, 0), '']):
-    #         print(f"recurse {a=} {b=}")
+    #         print(f"recurse a={a} b={b}")
     #
     #     app.main()
     #     ]
@@ -1982,7 +1982,7 @@ class ReadmeTests(unittest.TestCase):
     #
     #   @app.command()
     #   def recurse(a:str, b:my_converter=[(0, 0), '', False]):
-    #       print(f"weird {a=} {b=}")
+    #       print(f"weird a={a} b={b}")
     #
     #   app.main()
 
@@ -2021,7 +2021,7 @@ class ReadmeTests(unittest.TestCase):
     #
     #     @app.command()
     #     def inception(*args:my_converter):
-    #         print(f"inception {args=}")
+    #         print(f"inception args={args}")
     #
     #     app.main()
     #     ]
@@ -2065,7 +2065,7 @@ class ReadmeTests(unittest.TestCase):
     #         return [a, verbose]
     #     @app.command()
     #     def weird(*args:my_converter):
-    #         print(f"weird {args=}")
+    #         print(f"weird args={args}")
     #     ]
     def test_now_witness_the_power_of_this_etc_1_1(self):
         self.exec_readme(
@@ -2106,7 +2106,7 @@ class ReadmeTests(unittest.TestCase):
     #
     #     @app.command()
     #     def mixin(log:Logging):
-    #         print(f"mixin {log=}")
+    #         print(f"mixin log={log}")
     #
     #     app.main()
     #     ]
@@ -2159,7 +2159,7 @@ class ReadmeTests(unittest.TestCase):
     #
     #         @command_method()
     #         def add(self, a, b, c):
-    #             print(f"MyApp add {self=} {a=} {b=} {c=}")
+    #             print(f"MyApp add self={self} a={a} b={b} c={c}")
     #
     #     my_app = MyApp("dingus")
     #

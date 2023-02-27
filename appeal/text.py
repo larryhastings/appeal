@@ -102,7 +102,7 @@ def _test_presplit_textwrap(input, expected, margin=79):
         print("[repr(got)]")
         print(repr(got))
         print()
-    assert got == expected, f"presplit_textwrap test #{test_number} failed!\n{   input=}\n{expected=}\n{     got=}"
+    assert got == expected, f"presplit_textwrap test #{test_number} failed!\n   input={input}\nexpected={expected}\n     got={got}"
 
 def test_presplit_textwrap():
     _test_presplit_textwrap(
@@ -299,7 +299,7 @@ def _test_fancy_text_split(input, expected):
         print("[repr(got)]")
         print(repr(got))
         print()
-    assert got == expected, f"fancy_text_split test #{test_number} failed!\n{   input=}\n{expected=}\n{     got=}"
+    assert got == expected, f"fancy_text_split test #{test_number} failed!\n   input={input}\nexpected={expected}\n     got={got}"
 
 def test_fancy_text_split():
     _test_fancy_text_split(
@@ -489,7 +489,7 @@ def _test_merge_columns(input, expected, **kwargs):
         print("[repr(got)]")
         print(repr(got))
         print()
-    assert got == expected, f"merge_columns test #{test_number} failed!\n{     input=}\n{expected=}\n{     got=}"
+    assert got == expected, f"merge_columns test #{test_number} failed!\n   input={input}\nexpected={expected}\n     got={got}"
 
 def test_merge_columns():
     _test_merge_columns([("1\n2\n3", 5, 5), ("howdy\nhello\nhi, how are you?\ni'm fine.", 5, 40), ("ending\ntext!", 80, 80)],
@@ -522,7 +522,7 @@ def _test_pipeline(columns, expected):
         print("[repr(got)]")
         print(repr(got))
         print()
-    assert got == expected, f"pipeline test #{test_number} failed!\n{     input=}\n{expected=}\n{     got=}"
+    assert got == expected, f"pipeline test #{test_number} failed!\n   input={input}\nexpected={expected}\n     got={got}"
 
 def test_pipeline():
     _test_pipeline(
