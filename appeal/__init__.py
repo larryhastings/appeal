@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 
 # please leave this copyright notice in binary distributions.
@@ -1514,6 +1514,17 @@ class CharmCompiler:
                 continue
             break
 
+        # in Python 3.11, inspect.Parameter won't allow you to use
+        # 'lambda' (or '<lambda>') as a parameter name.  And we aren't
+        # doing that, not really.  It's not a *real* Parameter, we
+        # just use one of those because of the way _compile recurses.
+        # But if we're compiling a lambda  function, we create a
+        # Parameter out of the function's name, which is '<lambda>',
+        # and, well... we gotta use *something*.  (hope this works!)
+        fix_lambda = parameter_name == 'lambda'
+        if fix_lambda:
+            parameter_name = '_____lambda______'
+
         def signature(p):
             cls = self.appeal.map_to_converter(p)
             signature = cls.get_signature(p)
@@ -1521,12 +1532,12 @@ class CharmCompiler:
         pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
         pgi = pg.iter_all()
 
-        # self.initial_a.metadata(self.program_id, self.name)
-        # self.initial_a.set_total()
         kind = KEYWORD_ONLY if is_option else POSITIONAL_ONLY
         if is_option:
             self.option_depth += 1
         parameter = inspect.Parameter(parameter_name, kind, annotation=callable, default=default)
+        if fix_lambda and (getattr(parameter, '_name', '') == parameter_name):
+            parameter._name = 'lambda'
         self._compile(depth, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, store_kwargs=store_kwargs)
         self.final_a.end(self.program.id, self.name)
         self.assemblers.append(self.final_a)
