@@ -2,7 +2,7 @@
 
 ![## Give your program Appeal!](/resources/images/give.your.program.appeal.png)
 
-##### Copyright 2021-2022 by Larry Hastings
+##### Copyright 2021-2023 by Larry Hastings
 
 
 ## Quickstart

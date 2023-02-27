@@ -6,7 +6,7 @@ import operator
 license = """
 appeal/text.py
 part of the Appeal software package
-Copyright 2021-2022 by Larry Hastings
+Copyright 2021-2023 by Larry Hastings
 All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a
