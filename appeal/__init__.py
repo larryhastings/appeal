@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.5.3"
+__version__ = "0.5.5"
 
 
 # please leave this copyright notice in binary distributions.
@@ -51,6 +51,18 @@ import sys
 import textwrap
 import time
 import types
+
+try:
+    from typing import Annotated
+    AnnotatedType = type(Annotated[int, str])
+    del Annotated
+    def dereference_annotated(annotation):
+        if isinstance(annotation, AnnotatedType):
+            return annotation.__metadata__[-1]
+        return annotation
+except ImportError:
+    def dereference_annotated(annotation):
+        return annotation
 
 from . import argument_grouping
 from . import text
@@ -1261,7 +1273,8 @@ class CharmCompiler:
             a.end(name=program_name, id=program.id)
             program.opcodes = a.opcodes
         else:
-            if not is_legal_annotation(parameter.annotation):
+            annotation = dereference_annotated(parameter.annotation)
+            if not is_legal_annotation(annotation):
                 raise AppealConfigurationError(f"{parent_callable.__name__}: parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
 
             # self.ensure_callables_have_unique_names(callable)
@@ -1275,7 +1288,7 @@ class CharmCompiler:
             a.pop_context()
 
             store_kwargs = key, parameter.name
-            program = cc.compile(parameter.annotation, parameter.default, is_option=True, multioption=multioption, depth=depth+1, store_kwargs=store_kwargs)
+            program = cc.compile(annotation, parameter.default, is_option=True, multioption=multioption, depth=depth+1, store_kwargs=store_kwargs)
             assert self.program.converter_key != cc.program.converter_key
             self.program.converter_key = cc.program.converter_key
 
@@ -1308,7 +1321,7 @@ class CharmCompiler:
         if not mappings:
             p = signature.parameters.get(parameter.name)
             assert p
-            annotation = p.annotation
+            annotation = dereference_annotated(p.annotation)
             default = p.default
             default_options = self.appeal.root.default_options
             assert builtins.callable(default_options)
@@ -1348,12 +1361,13 @@ class CharmCompiler:
         tracked_by_argument_grouping = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
 
         # hard-coded, at least for now
-        if parameter.annotation is not empty:
-            cls = parameter.annotation
+        annotation = dereference_annotated(parameter.annotation)
+        if annotation is not empty:
+            cls = annotation
         elif parameter.default is not empty:
             cls = type(parameter.default)
 
-        callable = parameter.annotation
+        callable = annotation
         cls = self.root.map_to_converter(parameter)
         signature = cls.get_signature(parameter)
         parameters = signature.parameters
@@ -1442,8 +1456,9 @@ class CharmCompiler:
             if not p.kind in maps_to_positional:
                 continue
 
-            if not is_legal_annotation(p.annotation):
-                raise AppealConfigurationError(f"{callable.__name__}: parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
+            annotation = dereference_annotated(p.annotation)
+            if not is_legal_annotation(annotation):
+                raise AppealConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
 
             # FIXME it's lame to do this here,
             # you need to rewrite _compile so it
@@ -1466,7 +1481,7 @@ class CharmCompiler:
 
             if want_prints:
                 printable_default = "(empty)" if p.default is empty else repr(p.default)
-                print(f"[cc] {indent}{callable.__name__} positional parameter {i}: p={p} p.kind={p.kind!s} annotation={p.annotation.__name__} default={printable_default} cls={cls}")
+                print(f"[cc] {indent}{callable.__name__} positional parameter {i}: p={p} p.kind={p.kind!s} annotation={annotation.__name__} default={printable_default} cls={cls}")
 
             # only create new groups here if it's an optional group
             # (we pre-create the initial, required group)
@@ -2529,7 +2544,7 @@ class Converter:
     A Converter
     """
     def __init__(self, parameter, appeal):
-        callable = parameter.annotation
+        callable = dereference_annotated(parameter.annotation)
         default = parameter.default
 
         # self.fn = callable
@@ -2557,7 +2572,7 @@ class Converter:
     def get_signature(cls, parameter):
         if hasattr(cls, "__signature__"):
             return cls.__signature__
-        return inspect.signature(parameter.annotation, follow_wrapped=False)
+        return inspect.signature(dereference_annotated(parameter.annotation), follow_wrapped=False)
 
     def reset(self):
         # collections of converters we'll use to compute *args and **kwargs.
@@ -3121,22 +3136,24 @@ def simple_type_to_converter(parameter, callable):
 
 none_and_empty = ((None, empty))
 def unannotated_to_converter(parameter):
-    if (parameter.annotation in none_and_empty) and (parameter.default in none_and_empty):
+    if (dereference_annotated(parameter.annotation) in none_and_empty) and (parameter.default in none_and_empty):
         return SimpleTypeConverterStr
 
 
 def type_to_converter(parameter):
-    if not isinstance(parameter.annotation, type):
+    annotation = dereference_annotated(parameter.annotation)
+    if not isinstance(annotation, type):
         return None
-    cls = simple_type_to_converter(parameter, parameter.annotation)
+    cls = simple_type_to_converter(parameter, annotation)
     if cls:
         return cls
-    if issubclass(parameter.annotation, SingleOption):
-        return parameter.annotation
+    if issubclass(annotation, SingleOption):
+        return annotation
     return None
 
 def callable_to_converter(parameter):
-    if (parameter.annotation is empty) or (not builtins.callable(parameter.annotation)):
+    annotation = dereference_annotated(parameter.annotation)
+    if (annotation is empty) or (not builtins.callable(annotation)):
         return None
     if parameter.kind == KEYWORD_ONLY:
         return Option
@@ -3145,7 +3162,8 @@ def callable_to_converter(parameter):
 illegal_inferred_types = {dict, set, tuple, list}
 
 def inferred_type_to_converter(parameter):
-    if (parameter.annotation is not empty) or (parameter.default is empty):
+    annotation = dereference_annotated(parameter.annotation)
+    if (annotation is not empty) or (parameter.default is empty):
         return None
     inferred_type = type(parameter.default)
     # print(f"inferred_type_to_converter(parameter={parameter})")
@@ -3163,7 +3181,8 @@ def inferred_type_to_converter(parameter):
 
 sequence_types = {tuple, list}
 def sequence_to_converter(parameter):
-    if (parameter.annotation is not empty) or (parameter.default is empty):
+    annotation = dereference_annotated(parameter.annotation)
+    if (annotation is not empty) or (parameter.default is empty):
         return None
     inferred_type = type(parameter.default)
     if inferred_type not in sequence_types:
@@ -3835,14 +3854,14 @@ class Appeal:
 
         for c in reversed_dict_values(ci.converters.values()):
             parameter = c['parameter']
-            callable = parameter.annotation
+            callable = dereference_annotated(parameter.annotation)
 
             positional_children = set()
             option_children = set()
             cls = self.root.map_to_converter(parameter)
             signature = cls.get_signature(parameter)
             for p in signature.parameters.values():
-                annotation = p.annotation
+                annotation = dereference_annotated(p.annotation)
                 cls2 = self.root.map_to_converter(p)
                 if not issubclass(cls2, SimpleTypeConverter):
                     if p.kind in positional_parameter_kinds:

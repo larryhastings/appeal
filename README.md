@@ -717,7 +717,7 @@ to convert them.
 > necessary.
 >
 > Also, Appeal doesn't understand "type hint"
-> annotations.  It expects annotations to be callables,
+> annotations per se.  It expects annotations to be callables,
 > like functions or classes or types.  It should be
 > possible to add limited support in the future.
 >
@@ -730,6 +730,24 @@ to convert them.
 > It may be best to mix "type hints" and Appeal
 > in the same Python script, and to not run your
 > static type checker on scripts with Appeal code.
+>
+> However!  Python 3.9 adds a new feature,
+> `typing.Annotated`, which effectively lets you
+> specify more than one value for an annotation.
+> Appeal supports this, and only examines the *last*
+> entry in an `Annotated` object.  This makes Appeal
+> highly compatible with type hints and static type
+> analysis.
+>
+> For example:
+> ```Python
+> @app.command()
+> def status(type: typing.Annotated[int|str, int_or_str]):
+>     ...
+> ```
+> Appeal would use the converter `int_or_str` and ignore the
+> rest, but static type analysis tools would use `int|str`
+> and ignore the rest.  Perfect!
 
 
 ## Converter Flexibility
