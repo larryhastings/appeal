@@ -1718,12 +1718,12 @@ def charm_print(program, indent=''):
         program = programs.popleft()
         width = 2
         padding = " " * width
-        indent2 = indent + f" {padding}|   "
+        indent2 = indent + f"{padding}|   "
         print(program)
         for i, op in enumerate(program):
             suffix = ""
             printable_op = str(op.op).rpartition(".")[2]
-            print(f"{indent}[{i:0{width}}] {printable_op}{suffix}")
+            print(f"{indent}{i:0{width}}| {printable_op}{suffix}")
             # for slot in op.__class__.__slots__:
             for slot in dir(op):
                 if slot.startswith("_") or slot in ("copy", "op"):
@@ -1973,6 +1973,9 @@ def charm_parse(appeal, program, argi):
     options_bucket = None
     options_token = None
 
+    if want_prints:
+        ip_spacer = '    '
+
     def push_options():
         nonlocal options_bucket
         nonlocal options_token
@@ -1984,12 +1987,7 @@ def charm_parse(appeal, program, argi):
         token_to_bucket[options_token] = options_bucket
         bucket_to_token[id(options_bucket)] = options_token
         if want_prints:
-            print(f"##       push_options options_token={options_token}")
-
-    # create our first actual options bucket
-    push_options()
-    # ... but remove the useless None in the stack
-    options_stack.clear()
+            print(f"## {ip_spacer} push_options options_token={options_token}")
 
     def pop_options():
         nonlocal options_bucket
@@ -2003,7 +2001,7 @@ def charm_parse(appeal, program, argi):
         options_token = bucket_to_token[id(options_bucket)]
 
         if want_prints:
-            print(f"##       pop_options, now at token {options_token}, popped options_bucket={options_bucket}")
+            print(f"## {ip_spacer} pop_options, now at token {options_token}, popped options_bucket={options_bucket}")
 
     def pop_options_to_token(token):
         bucket = token_to_bucket.get(token)
@@ -2014,11 +2012,11 @@ def charm_parse(appeal, program, argi):
             pop_count += 1
             pop_options()
         if want_prints:
-            print(f"##     pop_options_to_token token={token} took {pop_count} pops")
+            print(f"## {ip_spacer} pop_options_to_token token={token} took {pop_count} pops")
 
     def pop_options_to_base():
         if want_prints:
-            print(f"##     pop_options_to_base, popping {len(options_stack)} times")
+            print(f"## {ip_spacer} pop_options_to_base, popping {len(options_stack)} times")
         for _ in range(len(options_stack)):
             pop_options()
 
@@ -2080,20 +2078,20 @@ def charm_parse(appeal, program, argi):
         converters_are_undoable = True
         undo_converters_list.clear()
         if want_prints:
-            print(f"##     reset_undo_converters()")
+            print(f"## {ip_spacer} reset_undo_converters()")
 
     def forget_undo_converters():
         nonlocal converters_are_undoable
         undo_converters_list.clear()
         converters_are_undoable = False
         if want_prints:
-            print(f"##     forget_undo_converters()")
+            print(f"## {ip_spacer} forget_undo_converters()")
 
     def add_undoable_converter(parent):
         if converters_are_undoable:
             undo_converters_list.append(parent)
             if want_prints:
-                print(f"##     add_undoable_converter(parent={parent})")
+                print(f"## {ip_spacer} add_undoable_converter(parent={parent})")
 
     def push_undo_converters():
         nonlocal undo_converters_list
@@ -2115,20 +2113,31 @@ def charm_parse(appeal, program, argi):
                 if print_spacer:
                     print(f"##")
                     print_spacer = False
-                print(f"##     undo converter")
-                print(f"##         parent={parent}")
-                print(f"##         popped o={o}")
-                print(f"##         arg_converters={parent.args_converters}")
+                print(f"## {ip_spacer} undo converter")
+                print(f"## {ip_spacer}     parent={parent}")
+                print(f"## {ip_spacer}     popped o={o}")
+                print(f"## {ip_spacer}     arg_converters={parent.args_converters}")
         undo_converters_list.clear()
 
-    first_print_string = ""
+    if want_prints:
+        charm_separator_line = f"############################################################"
+        print(charm_separator_line)
+        print("##")
+        print('## charm_parse start')
+        print('##')
+        print('## create initial options bucket')
+
+    # create our first actual options bucket
+    push_options()
+    # ... but remove the useless None in the stack
+    options_stack.clear()
+
     waiting_op = None
     prev_op = None
     while ci or argi:
         if want_prints:
-            print(first_print_string)
-            first_print_string = "##"
-            print(f"############################################################")
+            print('##')
+            print(charm_separator_line)
             print(f"## cmdline {list(argi.values)}")
 
         # first, run ci until we either
@@ -2147,8 +2156,8 @@ def charm_parse(appeal, program, argi):
                 _group = ci.group and ci.group.summary()
                 print(f"##")
                 print(f"## {ip} converter={converter} o={o}")
-                print(f"## {ip_spacer} total={_total}")
-                print(f"## {ip_spacer} group={_group}")
+                print(f"## {ip_spacer} - total={_total}")
+                print(f"## {ip_spacer} - group={_group}")
 
             if op.op == opcode.create_converter:
                 r = None if op.parameter.kind == KEYWORD_ONLY else root
@@ -2158,34 +2167,34 @@ def charm_parse(appeal, program, argi):
                 if not root:
                     root = converter
                 if want_prints:
-                    print(f"##     create_converter key={op.key} parameter={op.parameter}")
-                    print(f"##         converter={converter}")
+                    print(f"## {ip_spacer} create_converter key={op.key} parameter={op.parameter}")
+                    print(f"## {ip_spacer}   converter={converter}")
                 continue
 
             if op.op == opcode.load_converter:
                 ci.converter = ci.converters.get(op.key, None)
                 converter = ci.repr_converter(ci.converter)
                 if want_prints:
-                    print(f"##     load_converter op.key={op.key} converter={converter!s}")
+                    print(f"## {ip_spacer} load_converter op.key={op.key} converter={converter!s}")
                 continue
 
             if op.op == opcode.load_o:
                 ci.o = ci.converters.get(op.key, None)
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"##     load_o op.key={op.key} o={o!s}")
+                    print(f"## {ip_spacer} load_o op.key={op.key} o={o!s}")
                 continue
 
             if op.op == opcode.load_o_option:
                 ci.option = op.option
                 if want_prints:
-                    print(f"##     load_o_option op.option={op.option} o={o!s}")
+                    print(f"## {ip_spacer} load_o_option op.option={op.option} o={o!s}")
                 continue
 
             if op.op == opcode.map_option:
                 options_bucket[op.option] = op.program
                 if want_prints:
-                    print(f"##     map_option op.option={op.option} op.program={op.program} token {options_token}")
+                    print(f"## {ip_spacer} map_option op.option={op.option} op.program={op.program} token {options_token}")
                 continue
 
             if op.op == opcode.append_args:
@@ -2193,7 +2202,7 @@ def charm_parse(appeal, program, argi):
                 add_undoable_converter(ci.converter)
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"##     append_args o={o}")
+                    print(f"## {ip_spacer} append_args o={o}")
                 continue
 
             if op.op == opcode.store_kwargs:
@@ -2209,15 +2218,15 @@ def charm_parse(appeal, program, argi):
                 ci.converter.kwargs_converters[op.name] = ci.o
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"##     store_kwargs name={op.name} o={o}")
+                    print(f"## {ip_spacer} store_kwargs name={op.name} o={o}")
                 continue
 
             if op.op == opcode.consume_argument:
                 if want_prints:
-                    print(f"##     consume_argument is_oparg={op.is_oparg}")
+                    print(f"## {ip_spacer} consume_argument is_oparg={op.is_oparg}")
                 if not argi:
                     if want_prints:
-                        print(f"##     no more arguments, aborting program")
+                        print(f"## {ip_spacer}     no more arguments, aborting program")
                     ci.abort()
                 break
 
@@ -2225,21 +2234,21 @@ def charm_parse(appeal, program, argi):
                 ci.push_context()
                 push_undo_converters()
                 if want_prints:
-                    print(f"##     push_context")
+                    print(f"## {ip_spacer} push_context")
                 continue
 
             if op.op == opcode.pop_context:
                 pop_undo_converters()
                 ci.pop_context()
                 if want_prints:
-                    print(f"##     pop_context")
+                    print(f"## {ip_spacer} pop_context")
                 continue
 
             if op.op == opcode.set_group:
                 ci.group = op.group.copy()
                 reset_undo_converters()
                 if want_prints:
-                    print(f"##     set_group {ci.group.summary()}")
+                    print(f"## {ip_spacer} set_group {ci.group.summary()}")
                 continue
 
             if op.op == opcode.flush_multioption:
@@ -2247,37 +2256,37 @@ def charm_parse(appeal, program, argi):
                 ci.o.flush()
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"##     flush_multioption o={o}")
+                    print(f"## {ip_spacer} flush_multioption o={o}")
                 continue
 
             if op.op == opcode.jump:
                 if want_prints:
-                    print(f"##     jump op.address={op.address}")
+                    print(f"## {ip_spacer} jump op.address={op.address}")
                 ci.i.jump(op.address)
                 continue
 
             if op.op == opcode.jump_relative:
                 if want_prints:
-                    print(f"##     jump_relative op.delta={op.delta}")
+                    print(f"## {ip_spacer} jump_relative op.delta={op.delta}")
                 ci.i.jump_relative(op.delta)
                 continue
 
             if op.op == opcode.branch_on_o:
                 if want_prints:
-                    print(f"##     branch_on_o o={ci.o} op.address={op.address}")
+                    print(f"## {ip_spacer} branch_on_o o={ci.o} op.address={op.address}")
                 if ci.o:
                     ci.i.jump(op.address)
                 continue
 
             if op.op == opcode.comment:
                 if want_prints:
-                    print(f"##     comment {op.comment!r}")
+                    print(f"## {ip_spacer} comment {op.comment!r}")
                 continue
 
             if op.op == opcode.end:
                 if want_prints:
                     name = str(op.op).partition(".")[2]
-                    print(f"##     {name} id={op.id} name={op.name!r}")
+                    print(f"## {ip_spacer} {name} id={op.id} name={op.name!r}")
                 continue
 
             raise AppealConfigurationError(f"unhandled opcode op={op}")
@@ -2325,7 +2334,7 @@ def charm_parse(appeal, program, argi):
 
         for a in argi:
             if want_prints:
-                print("#]")
+                print("#[]")
 
             is_oparg = op and (op.op == opcode.consume_argument) and op.is_oparg
             # if this is true, we're consuming a top-level command-line argument.
@@ -2340,13 +2349,13 @@ def charm_parse(appeal, program, argi):
             if want_prints:
                 # print_op = "consume_argument" if op else None
                 print_op = op
-                print(f"#] process argument {a!r} {list(argi.values)}")
-                print(f"#] op={print_op}")
+                print(f"#[]  process argument {a!r} {list(argi.values)}")
+                print(f"#[]  op={print_op}")
 
             if is_positional_argument:
                 if not op:
                     if want_prints:
-                        print(f"#]     positional argument we can't handle.  exit.")
+                        print(f"#[]  positional argument we can't handle.  exit.")
                     argi.push(a)
                     return ci.converters[0]
 
@@ -2359,7 +2368,7 @@ def charm_parse(appeal, program, argi):
                 if not is_oparg:
                     pop_options_to_base()
                 if want_prints:
-                    print(f"#]     positional argument.  o={ci.o!r}")
+                    print(f"#[]  positional argument.  o={ci.o!r}")
                 # return to the interpreter
                 break
 
@@ -2382,7 +2391,7 @@ def charm_parse(appeal, program, argi):
                 if a == "--":
                     appeal.root.force_positional = True
                     if want_prints:
-                        print(f"#]     '--', force_positional=True")
+                        print(f"#[]  '--', force_positional=True")
                     continue
 
                 option, equals, _split_value = a.partition("=")
@@ -2392,7 +2401,7 @@ def charm_parse(appeal, program, argi):
                 program, maximum_arguments, token = find_option(option)
                 option_stack_tokens.append(token)
                 if want_prints:
-                    print(f"#]     option {denormalize_option(option)} program={program}")
+                    print(f"#[]  option {denormalize_option(option)} program={program}")
                 queue.append((option, program, maximum_arguments, split_value, True))
             else:
                 options = collections.deque(a[1:])
@@ -2409,7 +2418,7 @@ def charm_parse(appeal, program, argi):
                     # if it takes no arguments, proceed to the next option
                     if not maximum_arguments:
                         if want_prints:
-                            print(f"#]     option {denormalize_option(option)}")
+                            print(f"#[]  option {denormalize_option(option)}")
                         queue.append([denormalize_option(option), program, maximum_arguments, split_value, False])
                         continue
                     # this eats arguments.  if there are more characters waiting,
@@ -2421,7 +2430,7 @@ def charm_parse(appeal, program, argi):
                         if not short_option_concatenated_oparg:
                             raise AppealUsageError(f"'-{option}{split_value}' is not allowed, use '-{option} {split_value}'")
                     if want_prints:
-                        print(f"#]     option {denormalize_option(option)}")
+                        print(f"#[]  option {denormalize_option(option)}")
                     queue.append([denormalize_option(option), program, maximum_arguments, split_value, False])
 
                 # mark the last entry in the queue as last
@@ -2446,8 +2455,8 @@ def charm_parse(appeal, program, argi):
             # that's because we push each program on the interpreter.  so, LIFO.
             for error_option, program, maximum_arguments, split_value, is_last in reversed(queue):
                 if want_prints:
-                    print(f"#]     executing option {option} split_value={split_value}")
-                    print(f"#]     call program={program}")
+                    print(f"#[]  executing option {option} split_value={split_value}")
+                    print(f"#[]  call program={program}")
 
                 if not is_last:
                     total = program.total
@@ -2462,7 +2471,7 @@ def charm_parse(appeal, program, argi):
                             raise AppealUsageError(f"{error_option} given a single argument but it requires multiple arguments, you must separate the arguments with spaces")
                     argi.push(split_value)
                     if want_prints:
-                        print(f"#]     pushing split value {split_value!r} on argi")
+                        print(f"#[]  pushing split value {split_value!r} on argi")
 
                 ci.option = error_option
                 ci.call(program)
@@ -2497,12 +2506,12 @@ def charm_parse(appeal, program, argi):
     if want_prints:
         print(f"##")
         print(f"## ending parse.")
-        finished_state = "not finished" if ci else "finished"
-        print(f"##   program was {finished_state}.")
+        finished_state = "did not finish" if ci else "finished"
+        print(f"##      program {finished_state}.")
         if argi:
-            print(f"##   remaining cmdline {list(argi.values)}")
+            print(f"##      remaining cmdline: {list(argi.values)}")
         else:
-            print(f"##   cmdline was consumed.")
+            print(f"##      cmdline was completely consumed.")
         print(f"############################################################")
         print()
 
