@@ -4506,9 +4506,7 @@ class Appeal:
 
     def help(self, *command):
         """
-        Print help on a thingy.
-
-        Prints lots and lots of help.
+        Print usage documentation on a specific command.
         """
         commands = " ".join(command)
         appeal = self
