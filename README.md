@@ -80,6 +80,9 @@ you're already halfway to understanding Appeal!
 Appeal has only one dependency,
 [my **big** library.](https://github.com/larryhastings/big)
 
+Appeal is currently only supported for POSIX platforms
+(UNIX, Linux, BSD, OS X, etc).  It might work on Windows
+but this has not yet been tested.
 
 ### A New And Appealing Approach
 
