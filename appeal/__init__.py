@@ -35,6 +35,7 @@ want_prints = 0
 
 
 from abc import abstractmethod, ABCMeta
+import big.all as big
 import builtins
 import collections
 import enum
@@ -2722,10 +2723,10 @@ class SimpleTypeConverterStr(SimpleTypeConverter):
 simple_type_signatures[str] = SimpleTypeConverterStr
 
 
-class Option(Converter):
+class BaseOption(Converter):
     pass
 
-class InferredOption(Option):
+class InferredOption(BaseOption):
     def __init__(self, parameter, appeal):
         if not parameter.default:
             raise AppealConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
@@ -2797,7 +2798,7 @@ def strip_self_from_signature(signature):
     return inspect.Signature(parameters.values(), return_annotation=return_annotation)
 
 
-class SingleOption(Option):
+class Option(BaseOption):
     def __init__(self, parameter, appeal):
         # the callable passed in is ignored
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=self.option, default=parameter.default)
@@ -2862,8 +2863,12 @@ class SingleOption(Option):
         pass
 
 
+# the old name, now deprecated
+SingleOption = Option
+
+
 def parse_bool_option() -> bool: pass
-class BooleanOptionConverter(SingleOption):
+class BooleanOptionConverter(Option):
     __signature__ = inspect.signature(parse_bool_option)
 
     def init(self, default):
@@ -2875,8 +2880,7 @@ class BooleanOptionConverter(SingleOption):
     def render(self):
         return self.value
 
-
-class MultiOption(SingleOption):
+class MultiOption(Option):
     def __init__(self, parameter, appeal):
         self.multi_converters = []
         self.multi_args = []
@@ -3030,22 +3034,14 @@ def split(*separators, strip=False):
     If you don't supply any separators, splits on
     any whitespace.
 
-    If strip is True, also calls strip() on the
-    strings after splitting.
+    If strip is True, also strips the separators
+    from the beginning and end of the string.
     """
-    if not separators:
-        def split(str):
-            return str.split()
-        return split
-
     if not all((s and isinstance(s, str)) for s in separators):
         raise AppealConfigurationError("split(): every separator must be a non-empty string")
 
     def split(str):
-        values = text.multisplit(str, separators)
-        if strip:
-            values = [s.strip() for s in values]
-        return values
+        return list(big.multisplit(str, separators, strip=strip))
     return split
 
 
@@ -3165,7 +3161,7 @@ def callable_to_converter(parameter):
     if (annotation is empty) or (not builtins.callable(annotation)):
         return None
     if parameter.kind == KEYWORD_ONLY:
-        return Option
+        return BaseOption
     return Converter
 
 illegal_inferred_types = {dict, set, tuple, list}

@@ -61,14 +61,14 @@ if __name__ == "__main__":
 ## Overview
 
 Appeal is a command-line argument processing library for
-Python, like `argparse`, `optparse`, `getopt`, `click`,
-`docopt`, and `Typer`.  But Appeal takes a refreshing new
-approach.
+Python, like `argparse`, `optparse`, `getopt`,
+`docopt`, `Typer`, and `click`.  But Appeal takes a
+refreshing new approach.
 
 Other libraries have complicated, cumbersome interfaces
 that force you to repeat yourself over and over.
 Appeal leverages Python's rich function call interface,
-which makes defining your command-line interface effortless.
+making it effortless to define your command-line interface.
 You write Python functions, and Appeal translates them into
 command-line options and arguments.
 
@@ -76,6 +76,10 @@ Appeal provides amazing power and flexibility--but it's
 also intuitive, because it mirrors Python itself.
 If you understand how to write Python functions,
 you're already halfway to understanding Appeal!
+
+Appeal has only one dependency,
+[my **big** library.](https://github.com/larryhastings/big)
+
 
 ### A New And Appealing Approach
 
@@ -708,46 +712,31 @@ to convert them.
 > **An important note about annotations**
 >
 > If you use static type analysis in your project,
-> your static type analyzer may not appreciate you
-> using normal Python functions as annotations.
-> Depending on the behavior of your static type analyzer,
-> you may need to decorate your Appeal command functions
-> and converters with `@typing.no_type_check()`.  If you
-> only ever use types and classes this shouldn't be
+> your static type analyzer may not enjoy analyzing Python
+> code using Appeal.  Static type analyzers are designed
+> to understand "type hints", a means of specifying static
+> type information introduced in Python 3.5 with the
+> `typing` module.  But Appeal doesn't use type hints,
+> and there are some ways Appeal uses annotations that
+> static type analyzers may not like.
+>
+> Fortunately, there are ways to get static type analyzers
+> to work alongside Appeal.
+>
+> First, you can decorate your Appeal command functions
+> and converters with `@typing.no_type_check()`.  This should
+> only be necessary if you use functions as annotations;
+> if you only ever use types and classes, this shouldn't be
 > necessary.
 >
-> Also, Appeal doesn't understand "type hint"
-> annotations per se.  It expects annotations to be callables,
-> like functions or classes or types.  It should be
-> possible to add limited support in the future.
->
-> Finally, Appeal uses function calls and related
-> snazzy technology in annotations--but many static
-> type checkers expect annotations to conform strictly
-> to only what is used for "type hints".  So it's
-> possible static type checkers may abort processing
-> in a file with advanced Appeal configuration.
-> It may be best to mix "type hints" and Appeal
-> in the same Python script, and to not run your
-> static type checker on scripts with Appeal code.
->
-> However!  Python 3.9 adds a new feature,
-> `typing.Annotated`, which effectively lets you
-> specify more than one value for an annotation.
-> Appeal supports this, and only examines the *last*
-> entry in an `Annotated` object.  This makes Appeal
-> highly compatible with type hints and static type
-> analysis.
->
-> For example:
-> ```Python
-> @app.command()
-> def status(type: typing.Annotated[int|str, int_or_str]):
->     ...
-> ```
-> Appeal would use the converter `int_or_str` and ignore the
-> rest, but static type analysis tools would use `int|str`
-> and ignore the rest.  Perfect!
+> Second, if you're using Python 3.9 or newer, you can use
+> `typing.Annotated` with your annotations.  `typing.Annotated`
+> allows you to specify an ordered list of values, and static
+> type hints only ever use the *first* value.  Appeal also
+> handles `typing.Annotated`, but Appeal only ever uses the
+> *last* value.  This makes it easy--you can have both types
+> of annotations, side by side, and both static type checkers
+> and Appeal are perfectly happy.
 
 
 ## Converter Flexibility
@@ -899,7 +888,7 @@ converter classes with custom behavior. `MultiOption` subclasses
 can override these three methods:
 
 ```Python
-class Option:
+class MultiOption:
 
     def init(self, default):
         ...
@@ -960,9 +949,21 @@ by your `render()` method.
 `MultiOption` is a subclass of a general
 `Option` class.  `Option` behaves identically
 to `MultiOption`, except it only permits
-specifying the option once on the command-line.
-(Which means it will only your `option()`
-method once.)
+specifying the option once on the command-line,
+which means it will only your `option()`
+method once.
+You usually don't need to bother with making subclasses
+of `Option`--it's usually better to just use a class
+directly, like our `class IntAndFloat` example.
+The only feature you get by subclassing `Option` is,
+you get the default value for the parameter passed in
+to your constructor.
+
+(The downside of subclassing `Option` and `MultiOption`
+is that it makes exporting your Appeal API as an automation
+API a little less convenient for the user, because your
+users will have to construct these objects and feed
+values into them by calling the `option` method.)
 
 
 ## Data Validation
@@ -1961,3 +1962,38 @@ Restrictions on Appeal command functions:
   for any keyword-only parameter to a converter or command function.
 * The converter for a *var_positional* (`*args`) parameter
   *must* require at least one positional argument.
+
+
+## Changelog
+
+**0.5.5**
+
+* Add support for `typing.Annotated`, new in Python 3.9.
+* Add dependency to
+  [my **big** library.](https://github.com/larryhastings/big)
+  This gives Appeal a much better implementation of `multisplit`,
+  and I plan to switch to the **big** word wrapper and columnizer
+  functions, which are a... "big" improvement over what's in
+  Appeal right now.
+* Rename `SingleOption` to just `Option`.  (The name
+  `SingleOption` is now deprecated, but I'll leave it
+  as a redundant name for `Option`... for now.)
+
+**0.5.3**
+
+* Fix compatibility back to Python 3.6.
+
+**0.5.2**
+
+* Fix compatibility with Python 3.11.  Python's `inspect.Parameter` object
+  no longer allows a `name` that happens to be a keyword, which was a minor
+  inconvenience (Appeal used to use `lambda` here sometimes).
+
+**0.5.1**
+
+* Fixed regression, issue #5.  If you didn't supply enough required
+  parameters, you'd get a `TypeError` instead of a proper usage error.
+
+**0.5**
+
+* Initial release!

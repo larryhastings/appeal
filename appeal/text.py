@@ -443,33 +443,33 @@ def merge_columns(*blobs, column_spacing=1, extra_lines_after_too_long=0):
     return text.rstrip()
 
 
-def multisplit(s, separators):
-    """
-    Like str.split(), but separators is an iterable
-    of strings to separate on.  (separators can be a
-    string, in which case multisplit separates on each
-    character.)
+# def multisplit(s, separators):
+#     """
+#     Like str.split(), but separators is an iterable
+#     of strings to separate on.  (separators can be a
+#     string, in which case multisplit separates on each
+#     character.)
 
-    multsplit('ab:cd,ef', ':,') => ["ab", "cd", "ef"]
-    """
-    if not s or not separators:
-        return [s]
-    if len(separators) == 1:
-        return s.split(separators[0])
-    splits = []
-    while s:
-        candidates = []
-        for separator in separators:
-            split, found, trailing = s.partition(separator)
-            if found:
-                candidates.append((len(split), split, trailing))
-        if not candidates:
-            break
-        candidates.sort()
-        _, fragment, s = candidates[0]
-        splits.append(fragment)
-    splits.append(s)
-    return splits
+#     multsplit('ab:cd,ef', ':,') => ["ab", "cd", "ef"]
+#     """
+#     if not s or not separators:
+#         return [s]
+#     if len(separators) == 1:
+#         return s.split(separators[0])
+#     splits = []
+#     while s:
+#         candidates = []
+#         for separator in separators:
+#             split, found, trailing = s.partition(separator)
+#             if found:
+#                 candidates.append((len(split), split, trailing))
+#         if not candidates:
+#             break
+#         candidates.sort()
+#         _, fragment, s = candidates[0]
+#         splits.append(fragment)
+#     splits.append(s)
+#     return splits
 
 
 def _test_merge_columns(input, expected, **kwargs):

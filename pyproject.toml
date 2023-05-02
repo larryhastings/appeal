@@ -14,3 +14,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3 :: Only",
     ]
+dependencies = [
+    "big >= 0.7.1",
+]
