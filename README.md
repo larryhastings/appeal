@@ -1966,6 +1966,11 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
+**0.5.6**
+
+* Fix formatting for usage when you have a
+  global command *and* subcommands.
+
 **0.5.5**
 
 * Add support for `typing.Annotated`, new in Python 3.9.

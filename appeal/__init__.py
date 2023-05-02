@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.5.5"
+__version__ = "0.5.6"
 
 
 # please leave this copyright notice in binary distributions.
@@ -3769,6 +3769,8 @@ class Appeal:
         usage_str, arguments_values, options_values = charm_usage(self._global_program, formatter=formatter)
 
         if commands:
+            if usage_str and (not usage_str[-1].isspace()):
+                usage_str += ' '
             usage_str += formatter("command")
 
         # {"{command_name}" : "help string"}
