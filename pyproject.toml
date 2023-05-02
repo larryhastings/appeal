@@ -2,18 +2,25 @@
 requires = ["flit"]
 build-backend = "flit.buildapi"
 
-[tool.flit.metadata]
-module = "appeal"
-author = "Larry Hastings"
-author-email = "larry@hastings.org"
-home-page = "https://github.com/larryhastings/appeal/"
+[project]
+name = "appeal"
+authors = [
+    {name = "Larry Hastings", email = "larry@hastings.org"},
+    ]
+readme = "README.md"
 requires-python = ">=3.6"
-description-file = "README.md"
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3 :: Only",
     ]
+dynamic = [
+    'version',
+    'description',
+    ]
 dependencies = [
     "big >= 0.7.1",
 ]
+
+[project.urls]
+Source = "https://github.com/larryhastings/appeal/"
