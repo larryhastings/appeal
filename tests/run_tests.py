@@ -158,6 +158,9 @@ def pool(s, *, define:appeal.mapping={}):
 def snooker(s, *, define:appeal.mapping[int,str]={}):
     return (snooker, s, define)
 
+def skittles(s, *, define:appeal.mapping[int,str,float]={}):
+    return (skittles, s, define)
+
 def go(direction:appeal.validate("north", "south", "east", "west")):
     return (go, f"go {direction} young man!")
 
@@ -517,6 +520,14 @@ class SmokeTests(unittest.TestCase):
         self.assert_process(
             'snooker -d 1 e -d 2 f "part of the body" -d 3 g',
             (snooker, "part of the body", {1: 'e', 2: 'f', 3: 'g'}),
+            )
+
+
+    def test_skittles_1(self):
+        command(skittles)
+        self.assert_process(
+            'skittles -d 1 e 3.3 -d 2 f 4.4 "part of the body" -d 3 g 5.5',
+            (skittles, "part of the body", {1: ('e', 3.3), 2: ('f', 4.4), 3: ('g', 5.5)}),
             )
 
 

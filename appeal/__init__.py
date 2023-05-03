@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.5.6"
+__version__ = "0.5.7"
 
 
 # please leave this copyright notice in binary distributions.
@@ -2935,29 +2935,50 @@ def counter(*, max=None, step=1):
 class AccumulatorMeta(ABCMeta):
     def __getitem__(cls, t):
         if not isinstance(t, (tuple, list)):
-            t = (t,)
+            return cls.__getitem_single__(t)
+        return cls.__getitem_iterable__(t)
+
+
+    def __getitem_single__(cls, t):
+        class accumulator(cls):
+            __name__ = f'{cls.__name__}[{t.__name__}]'
+
+            def option(self, arg:t):
+                self.values.append(arg)
+        return accumulator
+
+    def __getitem_iterable__(cls, t):
+        iterable_type = type(t)
         t_names = "_".join(ti.__name__ for ti in t)
-        name = f"{cls.__name__}_{t_names}"
-        parameters = ", ".join(f"p{i}:{ti.__name__}" for i, ti in enumerate(t))
-        if len(t) == 1:
-            arguments = "p0"
-        else:
-            arguments = "(" + ", ".join(f"p{i}" for i in range(len(t))) + ")"
-        types = "(" + ", ".join(ti.__name__ for ti in t) + ")"
-        text = f"""
-class {name}(cls):
-    __name__ = '{cls.__name__}[{t_names}]'
 
-    def option(self, {parameters}):
-        # print("accumulator meta got", {arguments})
-        self.values.append({arguments})
+        class accumulator(cls):
+            __name__ = f'{cls.__name__}[{t_names}]'
 
-    __types__ = {types}
-"""
-        globals = {'cls': cls, 't': t}
-        # print("TEXT", text)
-        exec(text, globals)
-        return globals[name]
+            def option(self, *args):
+                if type(args) != iterable_type:
+                    args = iterable_type(args)
+                self.values.append(args)
+
+        parameters = []
+        padding = math.ceil(math.log10(len(t)))
+        for i, value in enumerate(t):
+            p = inspect.Parameter(
+                name = f'arg{i:0{padding}}',
+                default = inspect.Parameter.empty,
+                annotation = value,
+                kind = inspect.Parameter.POSITIONAL_ONLY,
+                )
+            parameters.append(p)
+
+        signature = inspect.signature(accumulator.option)
+        updated_signature = signature.replace(
+            parameters=parameters,
+            return_annotation=inspect.Signature.empty,
+            )
+
+        accumulator.__signature__ = updated_signature
+
+        return accumulator
 
     def __repr__(cls):
         return f'<{cls.__name__}>'
@@ -2980,34 +3001,61 @@ class MappingMeta(ABCMeta):
     def __getitem__(cls, t):
         if not ((isinstance(t, (tuple, list))) and (len(t) >= 2)):
             raise AppealConfigurationError("MappingMeta[] must have at least two types")
-        t_names = "_".join(ti.__name__ for ti in t)
-        name = f"{cls.__name__}_{t_names}"
-        key = "key"
-        parameters0 = f"key:{t[0].__name__}, "
         if len(t) == 2:
-            parameters = parameters0 + f"value:{t[1].__name__}"
-            value = "value"
-        else:
-            parameters = parameters0 + ", ".join(f"value{i}:{ti.__name__}" for i, ti in enumerate(t[1:], 1))
-            value = "(" + ", ".join(f"value{i}" for i in range(1, len(t))) + ")"
-        types = "(" + ", ".join(ti.__name__ for ti in t) + ")"
-        text = f"""
-class {name}(cls):
-    __name__ = '{cls.__name__}[{t_names}]'
+            return cls.__getitem_key_single__(t[0], t[1])
+        return cls.__getitem_key_iterable__(t[0], t[1:])
 
-    def option(self, {parameters}):
-        # print("mapping meta got", {key}, "=", {value})
-        self.dict[{key}] = {value}
+    def __getitem_key_single__(cls, k, v):
+        class accumulator(cls):
+            __name__ = f'{cls.__name__}[{k.__name__}_{v.__name__}]'
 
-    __types__ = {types}
-"""
-        globals = {'cls': cls, 't': t}
-        # print("TEXT", text)
-        exec(text, globals)
-        return globals[name]
+            def option(self, key:k, value:v):
+                if key in self.dict:
+                    raise AppealUsageError("defined {key} more than once")
+                self.dict[key] = value
+        return accumulator
 
-    def __repr__(cls):
-        return f'<{cls.__name__}>'
+    def __getitem_key_iterable__(cls, key, values):
+        iterable_type = type(values)
+        values_names = "_".join(ti.__name__ for ti in values)
+
+        class accumulator(cls):
+            __name__ = f'{cls.__name__}[{key.__name__}_{values_names}]'
+
+            def option(self, key, *values):
+                if key in self.dict:
+                    raise AppealUsageError("defined {key} more than once")
+                if type(values) != iterable_type:
+                    values = iterable_type(values)
+                self.dict[key] = values
+
+        parameters = [
+            inspect.Parameter(
+                name = 'key',
+                default = inspect.Parameter.empty,
+                annotation = key,
+                kind = inspect.Parameter.POSITIONAL_ONLY,
+                )]
+
+        padding = math.ceil(math.log10(len(values)))
+        for i, value in enumerate(values):
+            p = inspect.Parameter(
+                name = f'value{i:0{padding}}',
+                default = inspect.Parameter.empty,
+                annotation = value,
+                kind = inspect.Parameter.POSITIONAL_ONLY,
+                )
+            parameters.append(p)
+
+        signature = inspect.signature(accumulator.option)
+        updated_signature = signature.replace(
+            parameters=parameters,
+            return_annotation=inspect.Signature.empty,
+            )
+
+        accumulator.__signature__ = updated_signature
+
+        return accumulator
 
 
 class mapping(MultiOption, metaclass=MappingMeta):
@@ -3016,10 +3064,10 @@ class mapping(MultiOption, metaclass=MappingMeta):
         if default is not empty:
             self.dict.update(dict(default))
 
-    def option(self, k:str, v:str):
-        if k in self.dict:
-            raise AppealUsageError("defined {k} more than once")
-        self.dict[k] = v
+    def option(self, key:str, value:str):
+        if key in self.dict:
+            raise AppealUsageError("defined {key} more than once")
+        self.dict[key] = value
 
     def render(self):
         return self.dict

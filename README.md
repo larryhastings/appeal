@@ -1969,6 +1969,15 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
+**0.5.7**
+
+* Rewrite the technology behind `accumulator[...]` and
+  `mapping[...]`.  It previously used `exec()`, which was
+  limiting; for example, you couldn't use your own types
+  or converters.  The new implementation should be much
+  more robust; it now manually defines an explicit signature
+  for the `option()` method of the subclass it creates.
+
 **0.5.6**
 
 * Fix formatting for usage when you have a
