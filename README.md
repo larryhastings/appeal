@@ -1,6 +1,6 @@
-![## Appeal](/resources/images/appeal.logo.png)
+![## Appeal](https://raw.githubusercontent.com/larryhastings/appeal/master/resources/images/appeal.logo.png)
 
-![## Give your program Appeal!](/resources/images/give.your.program.appeal.png)
+![## Give your program Appeal!](https://raw.githubusercontent.com/larryhastings/appeal/master/resources/images/give.your.program.appeal.png)
 
 ##### Copyright 2021-2023 by Larry Hastings
 
