@@ -1662,6 +1662,8 @@ def charm_print(program, indent=''):
 
 
 class CharmProgramIterator:
+    __slots__ = ['program', 'opcodes', 'length', 'ip']
+
     def __init__(self, program):
         self.program = program
         self.opcodes = program.opcodes
@@ -1689,6 +1691,8 @@ class CharmProgramIterator:
 
 
 class CharmStackEntry:
+    __slots__ = ['i', 'program', 'context_count']
+
     def __init__(self, i, program, context_count=0):
         self.i = i
         self.program = program
@@ -1699,6 +1703,8 @@ class CharmStackEntry:
 
 
 class CharmContextStackEntry:
+    __slots__ = ['converter', 'group', 'o', 'option', 'total']
+
     def __init__(self, converter, group, o, option, total):
         self.converter = converter
         self.group = group
