@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.5.7"
+__version__ = "0.5.8"
 
 
 # please leave this copyright notice in binary distributions.
@@ -1257,9 +1257,11 @@ class CharmCompiler:
         cls = self.appeal.root.map_to_converter(parameter)
 
         assert options
-        strings = [f"{parent_callable.__name__}"]
-        strings.extend(denormalize_option(o) for o in options)
-        program_name = ", ".join(strings)
+        name = parent_callable.__name__
+        option_names = [denormalize_option(o) for o in options]
+        assert option_names
+        option_names = " | ".join(option_names)
+        program_name = f"{name} {option_names}"
         if cls is SimpleTypeConverterStr:
             if want_prints:
                 print(f"[cc] {indent}(hand-coded str option)")
@@ -1777,6 +1779,28 @@ class CharmProgramIterator:
 
 
 
+class CharmStackEntry:
+    def __init__(self, i, program, context_count=0):
+        self.i = i
+        self.program = program
+        self.context_count = context_count
+
+    def __repr__(self):
+        return f"<CharmStackEntry i={self.i} program={self.program.name!r} context_count={self.context_count}>"
+
+
+class CharmContextStackEntry:
+    def __init__(self, converter, group, o, option, total):
+        self.converter = converter
+        self.group = group
+        self.o = o
+        self.option = option
+        self.total = total
+
+    def __repr__(self):
+        return f"<CharmContextStackEntry converter={self.converter} group={self.group} o={self.o} option={self.option} total={self.total}>"
+
+
 class CharmInterpreter:
     def __init__(self, program, *, name=''):
         self.name = name
@@ -1792,6 +1816,7 @@ class CharmInterpreter:
         self.total = None
         self.group = None
         self.converters = {}
+        self.program = program
 
         self.op = None
 
@@ -1838,7 +1863,7 @@ class CharmInterpreter:
                 continue
 
     def __bool__(self):
-        return bool(self.i) or any(bool(i) for i in self.stack)
+        return bool(self.i) or any(bool(cse.i) for cse in self.stack)
 
     def rewind(self):
         if self.i is None:
@@ -1846,28 +1871,35 @@ class CharmInterpreter:
         self.i.jump_relative(-1)
 
     def call(self, program):
-        self.stack.append([self.i, 0])
+        self.stack.append(CharmStackEntry(self.i, self.program))
+        self.program = program
         self.i = CharmProgramIterator(program)
 
     def push_context(self):
-        context = [self.converter, self.o, self.option, self.total, self.group]
+        context = CharmContextStackEntry(self.converter, self.group, self.o, self.option, self.total)
         self.context_stack.append(context)
         if self.stack:
-            self.stack[-1][-1] += 1
+            self.stack[-1].context_count += 1
 
     def _pop_context(self):
         context = self.context_stack.pop()
-        self.converter, self.o, self.option, self.total, self.group = context
+        self.converter = context.converter
+        self.group = context.group
+        self.o = context.o
+        self.option = context.option
+        self.total = context.total
 
     def pop_context(self):
         self._pop_context()
         if self.stack:
-            self.stack[-1][-1] -= 1
+            self.stack[-1].context_count -= 1
 
     def finish(self):
         if self.stack:
-            self.i, context_pops = self.stack.pop()
-            for i in range(context_pops):
+            cse = self.stack.pop()
+            self.i = cse.i
+            self.program = cse.program
+            for i in range(cse.context_count):
                 self._pop_context()
         else:
             self.i = None
@@ -2500,6 +2532,7 @@ def charm_parse(appeal, program, argi):
             middle = f"{ag.minimum} argument{plural}"
         else:
             middle = f"at least {ag.minimum} arguments but no more than {ag.maximum} arguments"
+        program = ci.program
         message = f"{program.name} requires {middle} {which}."
 
         raise AppealUsageError(message)

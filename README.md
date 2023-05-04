@@ -1969,6 +1969,22 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
+**0.5.8**
+
+* Fixed up the "name" of the program for options.  We used to take
+  the name of the command, add all the option strings, and join it
+  together with commas, as in `'command, -o, --option'`.  Now it
+  looks like `'command -o | --option'`.
+* Fixed presentation bug: if you didn't have enough positional
+  arguments for your command function, but you ever invoked an
+  option on the command-line, the usage text would contain the
+  name of the last option invoked (aka the last Charm program run).
+  Added a regression test for this.
+* Cleaned up implementation a little: instead of using mystery
+  lists on the `CharmInterpreter` stack and context_stack, I now
+  use instances of bespoke `CharmStackEntry` and
+  `CharmContextStackEntry` classes.
+
 **0.5.7**
 
 * Rewrite the technology behind `accumulator[...]` and
@@ -1977,6 +1993,10 @@ Restrictions on Appeal command functions:
   or converters.  The new implementation should be much
   more robust; it now manually defines an explicit signature
   for the `option()` method of the subclass it creates.
+* This fixed a regression, where you couldn't use a locally-defined
+  class (e.g. `IntFloat`) as one of the types in the square
+  brackets for `accumulator` and `mapping`.  Added a test
+  for this.
 
 **0.5.6**
 

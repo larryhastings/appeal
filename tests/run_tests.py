@@ -308,6 +308,18 @@ def five_a(*, d:five_d=None, e=False, f=False):
 def five_level_stack(*, a:five_a=None, b=False, c=False):
     return (five_level_stack, a, b, c)
 
+
+class IntFloat:
+    def __init__(self, integer:int, real:float):
+        self.i = integer
+        self.f = real
+
+    def __repr__(self):
+        return f"<IntFloat i={self.i!r} f={self.f!r}>"
+
+def str_i_f(value, i_f:IntFloat=None, *, option=None, verbose=False):
+    return (str_i_f, value, i_f, option, verbose)
+
 class SmokeTests(unittest.TestCase):
     def setUp(self):
         global app
@@ -328,8 +340,14 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(process(shlex.split(cmdline)), result)
 
     def assert_process_raises(self, cmdline, exception):
+        e = None
         with self.assertRaises(exception):
-            process(shlex.split(cmdline))
+            try:
+                process(shlex.split(cmdline))
+            except exception as e2:
+                e = e2
+                raise e2
+        return e
 
     def tearDown(self):
         global app
@@ -1257,6 +1275,69 @@ class SmokeTests(unittest.TestCase):
             "five_level_stack -a -d -g -j -m -behknp",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, True, False, False), True, False), True, False), True, False), True, False), True, False),
             )
+
+    def test_str_i_f_1(self):
+        command(str_i_f)
+        e = self.assert_process_raises(
+            "str_i_f abc 1",
+            appeal.AppealUsageError,
+            )
+        self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
+
+        # regression test:
+        # when printing usage, we used to print the name of the last program
+        # we'd called, regardless of whether or not it was currently running.
+        # so this error used to read
+        #   str_i_f, -v, --verbose requires 2 arguments in this argument group.
+        e = self.assert_process_raises(
+            "str_i_f abc 1 --verbose",
+            appeal.AppealUsageError,
+            )
+        self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
+
+        e = self.assert_process_raises(
+            "str_i_f abc 1 --option x",
+            appeal.AppealUsageError,
+            )
+        self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
+
+        e = self.assert_process_raises(
+            "str_i_f abc 1 --option",
+            appeal.AppealUsageError,
+            )
+        self.assertEqual(str(e), "str_i_f -o | --option requires 1 argument in this argument group.")
+
+
+    def test_app_class(self):
+        app = appeal.Appeal()
+        app_class, command_method = app.app_class()
+
+        instances = []
+        @app_class()
+        class MyApp:
+            def __init__(self, *, verbose=False):
+                self.verbose = verbose
+                self.pattern = None
+                self.filename = None
+                self.context = None
+                instances.append(self)
+
+            @command_method()
+            def fgrep(self, pattern, filename, *, context=0):
+                self.pattern = pattern
+                self.filename = filename
+                self.context = context
+
+            def dump(self):
+                return self.verbose, self.pattern, self.filename, self.context
+
+        result = app.process(shlex.split("-v fgrep patt -c 33 file"))
+        self.assertEqual(result, None)
+        self.assertEqual(len(instances), 1)
+        instance = instances.pop()
+        self.assertIsInstance(instance, MyApp)
+        self.assertEqual(instance.dump(), (True, 'patt', 'file', 33))
+
 
 
 ##
