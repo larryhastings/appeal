@@ -494,67 +494,53 @@ class opcode(enum.Enum):
 
 
 class CharmInstruction:
-    op = opcode.invalid
+    __slots__ = ['op']
 
     def copy(self):
         kwargs = {attr: getattr(self, attr) for attr in dir(self) if not (attr.startswith("_") or (attr in ("copy", "op"))) }
         return self.__class__(**kwargs)
 
-class CharmInstructionNoArgBase(CharmInstruction):
-    # __slots__ = []
-    def __repr__(self):
-        return f"<{str(self.op).partition('.')[2]}>"
 
-class CharmInstructionAddressBase(CharmInstruction):
-    # __slots__ = ['address']
-
-    def __init__(self, address):
-        self.address = address
-
-    def __repr__(self):
-        return f"<{str(self.op).partition('.')[2]} address={self.address}>"
-
-class CharmInstructionKeyBase(CharmInstruction):
-    # __slots__ = ['key']
-
-    def __init__(self, key):
-        self.key = key
-
-    def __repr__(self):
-        return f"<{str(self.op).partition('.')[2]} key={self.key}>"
-
-class CharmInstructionLabelBase(CharmInstruction):
-    # __slots__ = ['label']
-
-    def __init__(self, label):
-        self.label = label
-
-    def __repr__(self):
-        return f"<{str(self.op).partition('.')[2]} label={self.label!r}>"
 
 class CharmInstructionComment(CharmInstruction):
-    # __slots__ = ['comment']
-    op = opcode.comment
+    __slots__ = ['comment']
 
     def __init__(self, comment):
+        self.op = opcode.comment
         self.comment = comment
 
     def __repr__(self):
         return f"<comment {self.comment!r}>"
 
-class CharmInstructionNoOp(CharmInstructionNoArgBase):
-    op = opcode.no_op
 
-class CharmInstructionJump(CharmInstructionAddressBase):
+class CharmInstructionNoOp(CharmInstruction): # CharmInstructionNoArgBase
+
+    def __init__(self):
+        self.op = opcode.no_op
+
+    def __repr__(self):
+        return f"<no-op>"
+
+
+class CharmInstructionJump(CharmInstruction): # CharmInstructionAddressBase
     """
     jump <address>
 
     Sets the 'ip' register to <address>.
     <address> is an integer.
     """
-    op = opcode.jump
 
-class CharmInstructionBranchOnO(CharmInstructionAddressBase):
+    __slots__ = ['address']
+
+    def __init__(self, address):
+        self.op = opcode.jump
+        self.address = address
+
+    def __repr__(self):
+        return f"<jump address={self.address}>"
+
+
+class CharmInstructionBranchOnO(CharmInstruction): # CharmInstructionAddressBase
     """
     branch_on_o <address>
 
@@ -562,7 +548,18 @@ class CharmInstructionBranchOnO(CharmInstructionAddressBase):
     sets the 'ip' register to <address>.
     <address> is an integer.
     """
-    op = opcode.branch_on_o
+
+    __slots__ = ['address']
+
+    def __init__(self, address):
+        self.op = opcode.branch_on_o
+        self.address = address
+
+    def __repr__(self):
+        return f"<branch_on_o address={self.address}>"
+
+
+label_id_counter = 0
 
 class CharmInstructionLabel(CharmInstruction):
     """
@@ -578,24 +575,24 @@ class CharmInstructionLabel(CharmInstruction):
     label and *_to_label are both pseudo-instructions.
     They're removed by a pass in the peephole optimizer.
     """
-    op = opcode.label
-    # __slots__ = ['id', 'name']
+    __slots__ = ['id', 'label']
 
-    label_id_counter = 0
-
-    def __init__(self, name=''):
-        CharmInstructionLabel.label_id_counter += 1
-        self.id = CharmInstructionLabel.label_id_counter
-        self.name = name
+    def __init__(self, label):
+        global label_id_counter
+        self.op = opcode.label
+        label_id_counter += 1
+        self.id = label_id_counter
+        self.label = label
 
     def __repr__(self):
-        print_name = f" name={self.name!r}" if self.name else ""
-        return f"<label id={self.id}{print_name}>"
+        opcode = str(self.op).rpartition('.')[2]
+        label = f" label={self.label!r}" if self.label else ""
+        return f"<{opcode} id={self.id}{label}>"
 
     def __hash__(self):
         return id(CharmInstructionLabel) ^ self.id
 
-class CharmInstructionJumpToLabel(CharmInstructionLabelBase):
+class CharmInstructionJumpToLabel(CharmInstruction): # CharmInstructionLabelBase
     """
     jump_to_label <label>
 
@@ -606,9 +603,19 @@ class CharmInstructionJumpToLabel(CharmInstructionLabelBase):
     label and *_to_label are both pseudo-instructions.
     They're removed by a pass in the peephole optimizer.
     """
-    op = opcode.jump_to_label
 
-class CharmInstructionBranchOnOToLabel(CharmInstructionLabelBase):
+    __slots__ = ['label']
+
+    def __init__(self, label):
+        self.op = opcode.jump_to_label
+        self.label = label
+
+    def __repr__(self):
+        label = f" label={self.label!r}" if self.label else ""
+        return f"<jump-to-label {label}>"
+
+
+class CharmInstructionBranchOnOToLabel(CharmInstruction):
     """
     branch_on_o_to_label <label>
 
@@ -620,7 +627,17 @@ class CharmInstructionBranchOnOToLabel(CharmInstructionLabelBase):
     label and *_to_label are both pseudo-instructions.
     They're removed by a pass in the peephole optimizer.
     """
-    op = opcode.branch_on_o_to_label
+
+    __slots__ = ['label']
+
+    def __init__(self, label):
+        self.op = opcode.branch_on_o_to_label
+        self.label = label
+
+    def __repr__(self):
+        label = f" label={self.label!r}" if self.label else ""
+        return f"<branch-on-o-to-label {label}>"
+
 
 class CharmInstructionCreateConverter(CharmInstruction):
     """
@@ -632,33 +649,49 @@ class CharmInstructionCreateConverter(CharmInstruction):
     Stores the resulting converter object
     in 'converters[key]' and in the 'o' register.
     """
-    op = opcode.create_converter
-    # __slots__ = ['parameter', 'key']
+    __slots__ = ['parameter', 'key']
 
     def __init__(self, parameter, key):
+        self.op = opcode.create_converter
         self.parameter = parameter
         self.key = key
 
     def __repr__(self):
         return f"<create_converter parameter={parameter!r} key={self.key}>"
 
-class CharmInstructionLoadConverter(CharmInstructionKeyBase):
+class CharmInstructionLoadConverter(CharmInstruction): # CharmInstructionKeyBase
     """
     load_converter <key>
 
     Loads a Converter object from 'converters[key]' and
     stores a reference in the 'converter' register.
     """
-    op = opcode.load_converter
 
-class CharmInstructionLoadO(CharmInstructionKeyBase):
+    __slots__ = ['key']
+
+    def __init__(self, key):
+        self.op = opcode.load_converter
+        self.key = key
+
+    def __repr__(self):
+        return f"<load_converter key={self.key}>"
+
+
+class CharmInstructionLoadO(CharmInstruction): # CharmInstructionKeyBase
     """
     load_o <key>
 
     Loads a Converter object from 'converters[key]' and
     stores a reference in the 'o' register.
     """
-    op = opcode.load_o
+    __slots__ = ['key']
+
+    def __init__(self, key):
+        self.op = opcode.load_o
+        self.key = key
+
+    def __repr__(self):
+        return f"<load_converter key={self.key}>"
 
 class CharmInstructionAppendArgs(CharmInstruction):
     """
@@ -672,9 +705,11 @@ class CharmInstructionAppendArgs(CharmInstruction):
     the name of the parameter.  These are all used in
     generating usage information and documentation.
     """
-    op = opcode.append_args
+
+    __slots__ = ['callable', 'parameter', 'usage', 'usage_callable', 'usage_parameter']
 
     def __init__(self, callable, parameter, usage, usage_callable, usage_parameter):
+        self.op = opcode.append_args
         self.callable = callable
         self.parameter = parameter
         self.usage = usage
@@ -694,25 +729,30 @@ class CharmInstructionStoreKwargs(CharmInstruction):
 
     <name> is a string.
     """
-    op = opcode.store_kwargs
-    # __slots__ = ['name']
+
+    __slots__ = ['name']
 
     def __init__(self, name):
+        self.op = opcode.store_kwargs
         self.name = name
 
     def __repr__(self):
         return f"<store_kwargs name={self.name}>"
 
-class CharmInstructionPushContext(CharmInstructionNoArgBase):
+class CharmInstructionPushContext(CharmInstruction): # CharmInstructionNoArgBase
     """
     push_context
 
     Pushes the current 'converter', 'group', 'o', 'option',
     and 'total' registers on the stack.
     """
-    op = opcode.push_context
+    def __init__(self):
+        self.op = opcode.push_context
 
-class CharmInstructionPopContext(CharmInstructionNoArgBase):
+    def __repr__(self):
+        return f"<push_context>"
+
+class CharmInstructionPopContext(CharmInstruction): # CharmInstructionNoArgBase
     """
     pop_context
 
@@ -720,11 +760,15 @@ class CharmInstructionPopContext(CharmInstructionNoArgBase):
     the previous values of the 'converter', 'group',
     'o', 'option', and 'total' registers.
     """
-    op = opcode.pop_context
+    def __init__(self):
+        self.op = opcode.pop_context
+
+    def __repr__(self):
+        return f"<pop_context>"
 
 class CharmInstructionMapOption(CharmInstruction):
     """
-    map_option <option> <program>
+    map_option <option> <program> <callable> <parameter> <key>
 
     Maps the option <option> to the program <program>.
 
@@ -738,10 +782,10 @@ class CharmInstructionMapOption(CharmInstruction):
     parameter on that converter, that this option
     maps to.
     """
-    op = opcode.map_option
-    # __slots__ = ['option', 'program']
+    __slots__ = ['option', 'program', 'callable', 'parameter', 'key']
 
     def __init__(self, option, program, callable, parameter, key):
+        self.op = opcode.map_option
         self.option = option
         self.program = program
         self.callable = callable
@@ -774,38 +818,44 @@ class CharmInstructionConsumeArgument(CharmInstruction):
           and then consume that argument to satisfy this
           instruction.
     """
-    op = opcode.consume_argument
-    # __slots__ = ['is_oparg']
+    __slots__ = ['is_oparg']
 
     def __init__(self, is_oparg):
+        self.op = opcode.consume_argument
         self.is_oparg = is_oparg
 
     def __repr__(self):
         return f"<consume_argument is_oparg={self.is_oparg}>"
 
-class CharmInstructionFlushMultioption(CharmInstructionNoArgBase):
+class CharmInstructionFlushMultioption(CharmInstruction): # CharmInstructionNoArgBase
     """
     flush_multioption
 
     Calls the flush() method on the object stored in
     the 'o' register.
     """
-    op = opcode.flush_multioption
+
+    def __init__(self):
+        self.op = opcode.flush_multioption
+
+    def __repr__(self):
+        return f"<flush_multioption>"
 
 
 class CharmInstructionSetGroup(CharmInstruction):
     """
-    set_group <minimum> <maximum>
+    set_group <minimum> <maximum> <optional> <repeating>
 
     Indicates that the program has entered a new argument
     group, and specifies the minimum and maximum arguments
     accepted by that group.  These numbers are stored as
     an ArgumentCount object in the 'group' register.
     """
-    op = opcode.set_group
-    # __slots__ = ['group', 'optional', 'repeating']
+
+    __slots__ = ['group', 'optional', 'repeating']
 
     def __init__(self, minimum, maximum, optional, repeating):
+        self.op = opcode.set_group
         self.group = ArgumentCounter(minimum, maximum, optional)
         self.optional = optional
         self.repeating = repeating
@@ -821,14 +871,16 @@ class CharmInstructionEnd(CharmInstruction):
     to provide some context when reading the trace from
     a running interpreter.
     """
-    op = opcode.end
+
+    __slots__ = ['id', 'name']
 
     def __init__(self, id, name):
+        self.op = opcode.end
         self.id = id
         self.name = name
 
     def __repr__(self):
-        return f"<{str(self.op).partition('.')[2]} id={self.id} name={self.name!r}>"
+        return f"<end id={self.id} name={self.name!r}>"
 
 
 class CharmAssembler:
@@ -4579,6 +4631,7 @@ class Processor:
         self.log_event("process complete")
         if want_prints:
             self.print_log()
+        self.print_log()
         return result
 
     def main(self, args=None):
