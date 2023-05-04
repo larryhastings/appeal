@@ -4631,7 +4631,6 @@ class Processor:
         self.log_event("process complete")
         if want_prints:
             self.print_log()
-        self.print_log()
         return result
 
     def main(self, args=None):
