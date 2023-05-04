@@ -389,84 +389,6 @@ def partial_rebind_positional(partial, placeholder, instance):
     """
     return _partial_rebind(partial, placeholder, instance, False)
 
-def partial_replace_map(partial, map):
-    """
-    Replaces curried values in a functools.partial()
-    object.  The map should be of the form
-        {old: new}
-    where "old" is a curried value in partial,
-    which will be replaced with "new".
-
-    Returns a new partial object with:
-        * all positional values matching "old"
-          replaced with "new", and
-        * all keyword-only values whose value
-          matches "old" replaced with "new".
-
-    "old" values that don't appear as a curried
-    value in partial are ignored and harmless.
-    """
-    func = partial.func
-    if isinstance(func, functools.partial):
-        func = partial_replace_map(func, map)
-    new_args = []
-    for value in partial.args:
-        new_args.append(map.get(value, value))
-    new_kwargs = {}
-    for key, value in partial.keywords.items():
-        new_kwargs[key] = map.get(value, value)
-    func2 = functools.partial(func, *new_args, **new_kwargs)
-    update_wrapper(func2, func)
-    return func2
-
-
-def partial_replace(partial, **kwargs):
-    """
-    Keyword-argument convience wrapper function
-    for partial_replace_map().
-    """
-    return partial_replace_map(partial, kwargs)
-
-def partial_replace_map_self(partial, map):
-    """
-    Does the same thing as partial_replace_map(),
-    with one exception: the first positional value
-    curried by the partial object is treated like
-    a "self" object, and the curried function is
-    assumed to be an unbound method.  For maximum
-    compatibility, and *only* in this case,
-    partial_replace_map_self will call
-    getattr() on this "self" object to create a
-    bound method version of fn by looking it up
-    *by name*.
-    """
-    func = partial.func
-    args = partial.args
-    kwargs = partial.keywords
-    if isinstance(func, functools.partial):
-        func = partial_replace_map_self(func, map)
-    elif args:
-        args = list(args)
-        self = args.pop(0)
-        self = map.get(self, self)
-        # print(f"Handled a self {self!r}")
-        name = func.__name__
-        assert hasattr(self, name)
-        func = getattr(self, name)
-        if not (args or kwargs):
-            return func
-    new_args = []
-    for value in args:
-        new_args.append(map.get(value, value))
-    new_kwargs = {}
-    for key, value in kwargs.items():
-        new_kwargs[key] = map.get(value, value)
-    func2 = functools.partial(func, *new_args, **new_kwargs)
-    update_wrapper(func2, func)
-    return func2
-
-def no_op_prepare(fn):
-    return fn
 
 ##
 ## charm
@@ -588,7 +510,6 @@ print('class opcode(enum.Enum):')
 print_enum('''
     invalid
     jump
-    jump_relative
     branch_on_o
     call
     create_converter
@@ -637,23 +558,21 @@ print()
 class opcode(enum.Enum):
     invalid = 0
     jump = 1
-    jump_relative = 2
-    branch_on_o = 3
-    call = 4
-    create_converter = 5
-    load_converter = 6
-    load_o = 7
-    load_o_context = 8
-    load_o_option = 9
-    append_args = 10
-    store_kwargs = 11
-    map_option = 12
-    consume_argument = 13
-    flush_multioption = 14
-    set_group = 15
-    push_context = 16
-    pop_context = 17
-    end = 18
+    branch_on_o = 2
+    call = 3
+    create_converter = 4
+    load_converter = 5
+    load_o = 6
+    load_o_option = 7
+    append_args = 8
+    store_kwargs = 9
+    map_option = 10
+    consume_argument = 11
+    flush_multioption = 12
+    set_group = 13
+    push_context = 14
+    pop_context = 15
+    end = 16
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
@@ -719,22 +638,6 @@ class CharmInstructionComment(CharmInstruction):
 
 class CharmInstructionNoOp(CharmInstructionNoArgBase):
     op = opcode.no_op
-
-class CharmInstructionJumpRelative(CharmInstruction):
-    """
-    jump_relative <offset>
-
-    Adds <offset> to the 'ip' register.
-    <offset> is an integer, and may be negative.
-    """
-    op = opcode.jump_relative
-    # __slots__ = ['offset']
-
-    def __init__(self, offset):
-        self.offset = offset
-
-    def __repr__(self):
-        return f"<jump_relative offset={self.offset}>"
 
 class CharmInstructionJump(CharmInstructionAddressBase):
     """
@@ -913,8 +816,8 @@ class CharmInstructionPushContext(CharmInstructionNoArgBase):
     """
     push_context
 
-    Pushes the current 'converter', 'total', 'option', and 'group'
-    registers on the stack.
+    Pushes the current 'converter', 'group', 'o', 'option',
+    and 'total' registers on the stack.
     """
     op = opcode.push_context
 
@@ -923,8 +826,8 @@ class CharmInstructionPopContext(CharmInstructionNoArgBase):
     pop_context
 
     Pops the top value from the stack, restoring
-    the previous values of the 'converter', 'total',
-    and 'group' registers.
+    the previous values of the 'converter', 'group',
+    'o', 'option', and 'total' registers.
     """
     op = opcode.pop_context
 
@@ -978,8 +881,7 @@ class CharmInstructionConsumeArgument(CharmInstruction):
           an option, nor is consumed by any options that
           you might have encountered while processing,
           and then consume that argument to satisfy this
-          instruction.  (Also, is_oparg being False has some
-          effect on the "option stack".)
+          instruction.
     """
     op = opcode.consume_argument
     # __slots__ = ['is_oparg']
@@ -1241,13 +1143,6 @@ class CharmCompiler:
     def after_consume_argument(self):
         self.flush_argument_group_options()
         self.new_consume_argument_assemblers()
-
-    # def ensure_callables_have_unique_names(self, callable):
-    #     assert hasattr(callable, '__name__'), "{callable} has no __name__ attribute, how do we track it?"
-    #     name = callable.__name__
-    #     existing = self.name_to_callable.get(name)
-    #     if existing and (existing != callable):
-    #         raise AppealConfigurationError("multiple annotation functions with the same name {name!r}: {callable} and {existing}")
 
     def compile_options(self, parent_callable, key, parameter, options, depth):
         if want_prints:
@@ -1549,7 +1444,7 @@ class CharmCompiler:
         # 'lambda' (or '<lambda>') as a parameter name.  And we aren't
         # doing that, not really.  It's not a *real* Parameter, we
         # just use one of those because of the way _compile recurses.
-        # But if we're compiling a lambda  function, we create a
+        # But if we're compiling a lambda function, we create a
         # Parameter out of the function's name, which is '<lambda>',
         # and, well... we gotta use *something*.  (hope this works!)
         fix_lambda = parameter_name == 'lambda'
@@ -1589,8 +1484,8 @@ class CharmCompiler:
         * Computes total and group min/max values.
         * Convert label/jump_to_label pseudo-ops into
           absolute jump ops.
-        * Simple peephole optimizer to remove redundant
-          load_* ops.
+        * Simple peephole optimizations to remove redundant
+          load_* ops and jump-to-jumps.
         """
 
         program = self.program.opcodes
@@ -1676,9 +1571,14 @@ class CharmCompiler:
             if op.op == opcode.consume_argument:
                 o = '(string value)'
             if op.op == opcode.push_context:
-                stack.append((converter, o, option, total, group))
+                stack.append(CharmContextStackEntry(converter, group, o, option, total))
             if op.op == opcode.pop_context:
-                converter, o, option, total, group = stack.pop()
+                context = stack.pop()
+                converter = context.converter
+                group = context.group
+                o = context.o
+                option = context.option
+                total = context.total
 
             i += 1
 
@@ -1690,12 +1590,21 @@ class CharmCompiler:
         }
         for i in jump_fixups:
             op = p[i]
-            new_instruction_cls = opcode_map.get(op.op)
-            assert new_instruction_cls
+            new_instruction_cls = opcode_map[op.op]
             address = labels.get(op.label)
             if address is None:
                 raise AppealConfigurationError(f"unknown label {op.label}")
             p[i] = new_instruction_cls(address)
+
+        # and *now* do a jump-to-jump peephole optimization
+        # (I don't know if Appeal can actually generate jump-to-jumps)
+        for i in jump_fixups:
+            op = p[i]
+            while True:
+                op2 = p[op.address]
+                if op2.op != opcode.jump:
+                    break
+                op.address = op2.address
 
         return p
 
@@ -2298,12 +2207,6 @@ def charm_parse(appeal, program, argi):
                 ci.i.jump(op.address)
                 continue
 
-            if op.op == opcode.jump_relative:
-                if want_prints:
-                    print(f"## {ip_spacer} jump_relative op.delta={op.delta}")
-                ci.i.jump_relative(op.delta)
-                continue
-
             if op.op == opcode.branch_on_o:
                 if want_prints:
                     print(f"## {ip_spacer} branch_on_o o={ci.o} op.address={op.address}")
@@ -2422,6 +2325,11 @@ def charm_parse(appeal, program, argi):
 
             if a.startswith("--"):
                 if a == "--":
+                    # we shouldn't be able to reach this twice.
+                    # if the user specifies -- twice on the command-line,
+                    # the first time turns of option processing, which means
+                    # it should be impossible to get here.
+                    assert not appeal.root.force_positional
                     appeal.root.force_positional = True
                     if want_prints:
                         print(f"#[]  '--', force_positional=True")

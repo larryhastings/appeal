@@ -1969,6 +1969,14 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
+**next version** *(under development)*
+
+* Remove unused code (`partial_replace*`, `jump_relative`
+  instruction).
+* Add peephole optimizer step for jump-to-jump optimization.
+  Unnecessary, as  I don't think Appeal's compiler can generate
+  code with jumps-to-jumps (yet).
+
 **0.5.8**
 
 * Fixed up the "name" of the program for options.  We used to take
