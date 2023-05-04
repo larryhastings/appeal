@@ -36,6 +36,7 @@ want_prints = 0
 
 from abc import abstractmethod, ABCMeta
 import big.all as big
+from big.itertools import PushbackIterator
 import builtins
 import collections
 import enum
@@ -107,101 +108,6 @@ def update_wrapper(wrapped, wrapper):
     if hasattr(wrapped, '__wrapped__'):
         delattr(wrapped, '__wrapped__')
     return wrapped
-
-
-# copied and pasted in from "big"
-# because I'm too lazy to make appeal depend on big
-# (for now)
-class PushbackIterator:
-    """
-    Wraps any iterator, allowing you to push items back on the iterator.
-    This allows you to "peek" at the next item (or items); you can get the
-    next item, examine it, and then push it back.  If any objects have
-    been pushed onto the iterator, they are yielded first, before attempting
-    to yield from the wrapped iterator.
-
-    Pass in any iterable to the constructor.  Passing in an iterable of None
-    means the PushbackIterator is created in an exhausted state.
-
-    When the wrapped iterable is exhausted (or if you passed in None to
-    the constructor) you can still call push to add new items, at which
-    point the PushBackIterator can be iterated over again.
-    """
-    def __init__(self, iterable=None):
-        if (iterable != None) and (not hasattr(iterable, '__next__')):
-            iterable = iter(iterable)
-        self.i = iterable
-        self.stack = []
-
-    def __iter__(self):
-        return self
-
-    def push(self, o):
-        """
-        Pushes a value into the iterator's internal stack.
-        When a PushbackIterator is iterated over, and there are
-        any pushed values, the top value on the stack will be popped
-        and yielded.  PushbackIterator only yields from the
-        iterator it wraps when this internal stack is empty.
-        """
-        self.stack.append(o)
-
-    def __next__(self):
-        if self.stack:
-            return self.stack.pop()
-        if self.i:
-            return next(self.i)
-        raise StopIteration
-
-    def next(self, default=None):
-        """
-        Equivalent to next(PushbackIterator),
-        but won't raise StopIteration.
-        If the iterator is exhausted, returns
-        the "default" argument.
-        """
-        if self.stack:
-            return self.stack.pop()
-        if not self.i:
-            return default
-        try:
-            return next(self.i)
-        except StopIteration:
-            self.i = None
-            return default
-
-    def __bool__(self):
-        if self.stack:
-            return True
-        if not self.i:
-            return False
-        try:
-            o = next(self.i)
-            self.push(o)
-            return True
-        except StopIteration:
-            return False
-
-    # this is used for debugging,
-    # it doesn't have to be performant
-    @property
-    def values(self):
-        if self.i:
-            values = list(self.i)
-            values.reverse()
-            values.extend(self.stack)
-            # keep the same arrya object for stack
-            # just in case someone naughty has a reference
-            self.stack.clear()
-            self.stack.extend(values)
-            self.i = False
-        values = self.stack.copy()
-        values.reverse()
-        return tuple(values)
-
-    def __repr__(self):
-        return f"<{self.__class__.__name__} i={self.i} stack={self.stack}>"
-
 
 
 
@@ -293,6 +199,8 @@ class Preparer:
 #    def my_command(a:appeal.split()):
 #        ...
 #
+# this just adds a field we can check for, and if we find
+# it we throw a helpful exception so the user can fix it.
 def must_be_instance(callable):
     callable.__appeal_must_be_instance__ = True
     return callable
@@ -4698,11 +4606,6 @@ class Processor:
         if appeal.processor_preparer:
             # print(f"bind appeal.processor_preparer to self={self}")
             self.preparer(appeal.processor_preparer.bind(self))
-
-        # print()
-        # for p in self.preparers:
-        #     print("[[]] preparer", p)
-        # print()
 
         appeal.analyze(self)
         appeal.parse(self)
