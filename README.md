@@ -1969,13 +1969,30 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
-**next version** *(under development)*
+**0.5.9**
 
-* Remove unused code (`partial_replace*`, `jump_relative`
-  instruction).
+* Improved the error message generated when you have a
+  required parameter after a `VAR_POSITIONAL` parameter.
+  (This command-line can never succeed, because the
+  `VAR_POSITIONAL` consumes all remaining arguments on
+  the command-line, which means the subsequent required
+  parameter can never be satisfied.)  Fixes #6.
+* Changed README to use absolute instead of relative links
+  for images, which means images should now render properly
+  on the Appeal page at PyPI.  Thanks for the PR, Hugo!
+* Switched a bunch of internal classes to use Python "slots".
+  Hopefully a tiny memory and speed optimization.
+* Remove unused / unneeded stuff:
+    * unused `partial_replace*` functions
+    * unused Charm bytecode instructions `jump_relative` and `load_o_option`
+    * unneeded CharmInterpreter register `option` (only used in one error
+      message, obviated by instead using the program name directly)
+* Now that Appeal depends on [**big**](https://github.com/larryhastings/big)
+  anyway, switch to
+  [**big**'s `PushbackIterator`.](https://github.com/larryhastings/big#pushbackiteratoriterablenone).
 * Add peephole optimizer step for jump-to-jump optimization.
-  Unnecessary, as  I don't think Appeal's compiler can generate
-  code with jumps-to-jumps (yet).
+  Honestly this was probably unnecessary, as I don't think Appeal's
+  compiler can even *generate* code with jumps-to-jumps (yet).
 
 **0.5.8**
 

@@ -220,10 +220,22 @@ class Function:
                 #   def foo(a, b, c, d)
                 # if we were returning 'c', we'd return the tuple
                 #     (breadcrumb, Parameter("c", inspect.Parameter(...)), foo, 2)
-                yield (breadcrumb, p, fn, i)
+                if breadcrumb:
+                    child_breadcrumb = f"{breadcrumb}, "
+                else:
+                    child_breadcrumb = ""
+                if p.var_positional:
+                    star = "*"
+                else:
+                    star = ""
+                child_breadcrumb = child_breadcrumb + f"argument {star}{name}"
+
+                yield (child_breadcrumb, p, fn, i)
+
                 # if p.converter and (not p.var_positional):
                 if p.converter:
-                    child_breadcrumb = f"{breadcrumb}.{name}" if breadcrumb else name
+                    name = getattr(p.converter.fn, '__name__', str(p.converter.fn))
+                    child_breadcrumb = child_breadcrumb + f", converter {name}()"
                     yield from argument_generator(p.converter, child_breadcrumb)
 
         groups = []
@@ -237,15 +249,14 @@ class Function:
                 group = []
 
         last_tuple = None
-        found_var_positional = None
+        var_positional_breadcrumb = None
         under_var_positional = {}
 
-        for b_p_fn_i in argument_generator(self, self.fn.__name__):
+        for b_p_fn_i in argument_generator(self, f'{self.fn.__name__}()'):
             breadcrumb, p, fn, i = b_p_fn_i
-            if found_var_positional:
-                current_breadcrumb = f"{breadcrumb}.{p}"
-                if p.required and (not current_breadcrumb.startswith(found_var_positional)):
-                    raise ValueError(f'Required parameter "{breadcrumb}.{p}" found after VAR_POSITIONAL parameter "{found_var_positional}"')
+            if var_positional_breadcrumb:
+                if p.required and (not breadcrumb.startswith(var_positional_breadcrumb)):
+                    raise ValueError(f'This command-line can never be satisfied.  "{breadcrumb}" is a required parameter, but it can never get an argument, because it comes after VAR_POSITIONAL parameter "{var_positional_breadcrumb}" which already consumed all remaining command-line arguments.')
             # t = (p.optionality, p.required)
             t = p.optionality
             if (last_tuple != t) or (not p.required):
@@ -255,7 +266,7 @@ class Function:
             group.append((p, fn, i))
             # once we hit the first var_positional parameter, we are donezo!
             if p.var_positional:
-                found_var_positional = f"{breadcrumb}.{p.name}."
+                var_positional_breadcrumb = breadcrumb
 
         finish()
         required = None
