@@ -1267,7 +1267,7 @@ class CharmCompiler:
         kw_parameters_unseen = set(kw_parameters) - kw_parameters_seen
         if kw_parameters_unseen:
             if not var_keyword:
-                raise AppealConfigurationError(f"{usage_callable}: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={parameters_unseen}")
+                raise AppealConfigurationError(f"{usage_callable}: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
             for parameter_name in kw_parameters_unseen:
                 parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
                 self.map_options(callable, parameter, signature, converter_key, depth=depth)
@@ -2019,7 +2019,7 @@ def charm_parse(appeal, program, argi):
         if want_prints:
             print('##')
             print(charm_separator_line)
-            print(f"## cmdline {list(argi.values)}")
+            print(f"## cmdline {list(reversed(argi.stack))}")
 
         # first, run ci until we either
         #    * finish the program, or
@@ -2217,7 +2217,7 @@ def charm_parse(appeal, program, argi):
             if want_prints:
                 # print_op = "consume_argument" if op else None
                 print_op = op
-                print(f"#[]  process argument {a!r} {list(argi.values)}")
+                print(f"#[]  process argument {a!r} {list(reversed(argi.stack))}")
                 print(f"#[]  op={print_op}")
 
             if is_positional_argument:
@@ -2382,7 +2382,7 @@ def charm_parse(appeal, program, argi):
         finished_state = "did not finish" if ci else "finished"
         print(f"##      program {finished_state}.")
         if argi:
-            print(f"##      remaining cmdline: {list(argi.values)}")
+            print(f"##      remaining cmdline: {list(reversed(argi.stack))}")
         else:
             print(f"##      cmdline was completely consumed.")
         print(f"############################################################")
@@ -4603,6 +4603,10 @@ class Processor:
             args = sys.argv[1:]
         self.args = args
         self.argi = argi = PushbackIterator(args)
+
+        if want_prints:
+            argi.stack.extend(reversed(args))
+            argi.i = None
 
         appeal = self.appeal
         if appeal.support_version:
