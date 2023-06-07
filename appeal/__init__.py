@@ -35,6 +35,7 @@ want_prints = 0
 
 
 from abc import abstractmethod, ABCMeta
+import base64
 import big.all as big
 from big.itertools import PushbackIterator
 import builtins
@@ -349,27 +350,43 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##    count = how many arguments we've consumed
 ##    minimum = the minimum "arguments" needed
 ##    maximum = the maximum "arguments" permissible
+##    optional = flag, is this an optional group?
+##    laden = flag, has anything
 
-class ArgumentCounter:
-    def __init__(self, minimum=0, maximum=0, optional=True):
+def ArgumentGroupIDIterator():
+    i = 1
+    while True:
+        yield base64.b32hexencode(i.to_bytes(5, 'big')).decode('ascii').lower().lstrip('0').rjust(3, '0')
+        i += 1
+
+class ArgumentGroup:
+    next_serial_number = ArgumentGroupIDIterator()
+
+    def __init__(self, minimum=0, maximum=0, *, id=None, optional=True):
         self.minimum = minimum
         self.maximum = maximum
-        self.count = 0
         self.optional = optional
+        if id is None:
+            id = next(ArgumentGroup.next_serial_number)
+        self.id = id
+        self.count = 0
+        self.laden = False
 
     def satisfied(self):
         return self.minimum <= self.count <= self.maximum
 
     def __repr__(self):
-        return f"<ArgumentCounter optional={self.optional} minimum {self.minimum} <= count {self.count} <= maximum {self.maximum} == {bool(self)}>"
+        return f"<ArgumentGroup {self.id} optional={self.optional} laden={self.laden} minimum {self.minimum} <= count {self.count} <= maximum {self.maximum} == {bool(self)}>"
 
     def copy(self):
-        return ArgumentCounter(self.minimum, self.maximum, self.optional)
+        # don't copy count or laden values
+        return ArgumentGroup(self.minimum, self.maximum, optional=self.optional, id=self.id)
 
     def summary(self):
-        ok_no = "(ok)" if self.satisfied() else "(no)"
+        ok_no = "ok" if self.satisfied() else "no"
         optional = "yes" if self.optional else "no"
-        return f"[optional {optional} min {self.minimum} <= cur {self.count} <= max {self.maximum} {ok_no}]"
+        laden = "yes" if self.laden else "no"
+        return f"[{self.id} {ok_no} | optional {optional} | laden {laden} | min {self.minimum} <= cur {self.count} <= max {self.maximum}]"
 
 
 class CharmProgram:
@@ -384,7 +401,7 @@ class CharmProgram:
 
         self.opcodes = []
 
-        self.total = ArgumentCounter(minimum, maximum, False)
+        self.total = ArgumentGroup(minimum, maximum, optional=False)
         self.converter_key = 0
 
     def __repr__(self):
@@ -768,7 +785,7 @@ class CharmInstructionPopContext(CharmInstruction): # CharmInstructionNoArgBase
 
 class CharmInstructionMapOption(CharmInstruction):
     """
-    map_option <option> <program> <callable> <parameter> <key>
+    map_option <option> <program> <callable> <parameter> <key> <group>
 
     Maps the option <option> to the program <program>.
 
@@ -781,19 +798,22 @@ class CharmInstructionMapOption(CharmInstruction):
     for the converter, and <parameter> is the
     parameter on that converter, that this option
     maps to.
-    """
-    __slots__ = ['option', 'program', 'callable', 'parameter', 'key']
 
-    def __init__(self, option, program, callable, parameter, key):
+    <group> is the id of the ArgumentGroup this is mapped in.
+    """
+    __slots__ = ['option', 'program', 'callable', 'parameter', 'key', 'group']
+
+    def __init__(self, option, program, callable, parameter, key, group):
         self.op = opcode.map_option
         self.option = option
         self.program = program
         self.callable = callable
         self.parameter = parameter
         self.key = key
+        self.group = group
 
     def __repr__(self):
-        return f"<map_option option={self.option!r} program={self.program} key={self.key} parameter={self.parameter} key={self.key}>"
+        return f"<map_option option={self.option!r} program={self.program} key={self.key} parameter={self.parameter} key={self.key} group={self.group}>"
 
 class CharmInstructionConsumeArgument(CharmInstruction):
     """
@@ -844,7 +864,7 @@ class CharmInstructionFlushMultioption(CharmInstruction): # CharmInstructionNoAr
 
 class CharmInstructionSetGroup(CharmInstruction):
     """
-    set_group <minimum> <maximum> <optional> <repeating>
+    set_group <id> <minimum> <maximum> <optional> <repeating>
 
     Indicates that the program has entered a new argument
     group, and specifies the minimum and maximum arguments
@@ -852,16 +872,17 @@ class CharmInstructionSetGroup(CharmInstruction):
     an ArgumentCount object in the 'group' register.
     """
 
-    __slots__ = ['group', 'optional', 'repeating']
+    __slots__ = ['group', 'id', 'optional', 'repeating']
 
-    def __init__(self, minimum, maximum, optional, repeating):
+    def __init__(self, id, minimum, maximum, optional, repeating):
         self.op = opcode.set_group
-        self.group = ArgumentCounter(minimum, maximum, optional)
+        self.group = ArgumentGroup(minimum, maximum, optional=optional, id=id)
+        self.id = id
         self.optional = optional
         self.repeating = repeating
 
     def __repr__(self):
-        return f"<set_group group={self.group.summary()} optional={self.optional} repeating={self.repeating}>"
+        return f"<set_group id={self.id} group={self.group.summary()} optional={self.optional} repeating={self.repeating}>"
 
 class CharmInstructionEnd(CharmInstruction):
     """
@@ -960,13 +981,14 @@ class CharmAssembler:
         op = CharmInstructionPopContext()
         return self.append(op)
 
-    def map_option(self, option, program, callable, parameter, key):
+    def map_option(self, option, program, callable, parameter, key, group):
         op = CharmInstructionMapOption(
             option = option,
             program = program,
             callable = callable,
             parameter = parameter,
             key = key,
+            group = group,
             )
         return self.append(op)
 
@@ -984,8 +1006,8 @@ class CharmAssembler:
         op = CharmInstructionBranchOnOToLabel(label=label)
         return self.append(op)
 
-    def set_group(self, minimum=0, maximum=0, optional=True, repeating=False):
-        op = CharmInstructionSetGroup(minimum=minimum, maximum=maximum, optional=optional, repeating=repeating)
+    def set_group(self, id=None, minimum=0, maximum=0, optional=True, repeating=False):
+        op = CharmInstructionSetGroup(id=id, minimum=minimum, maximum=maximum, optional=optional, repeating=repeating)
         return self.append(op)
 
     def end(self, id, name):
@@ -1004,9 +1026,6 @@ class CharmCompiler:
 
         self.root = appeal.root
 
-        self.total = ArgumentCounter()
-        self.group = ArgumentCounter()
-
         self.initial_a = CharmAssembler(self)
         self.final_a = CharmAssembler(self)
 
@@ -1017,14 +1036,14 @@ class CharmCompiler:
         self.option_depth = 0
 
         # options defined in the current argument group
+        self.argument_group_id = ArgumentGroupIDIterator()
         self.argument_group_options = set()
-        self.argument_group_counter = 0
 
         # options defined since the last consume_argument
         self.consume_argument_options = set()
         self.consume_argument_counter = 0
 
-        self.new_argument_group_assemblers(optional=False)
+        self.group = self.new_argument_group_assemblers(optional=False)
         self.after_consume_argument()
 
         self.name_to_callable = {}
@@ -1052,18 +1071,18 @@ class CharmCompiler:
 
         self.argument_group_options.clear()
 
+        group_id = next(self.argument_group_id)
+
         self.converters_a = a = CharmAssembler(self)
-        a.comment(f"{self.program.name} argument group {self.argument_group_counter} converters")
+        a.comment(f"{self.program.name} argument group {group_id} converters")
         self.assemblers.append(a)
 
         self.argument_group_options_a = a = CharmAssembler(self)
         assert not self.waiting_argument_group_options
         self.waiting_argument_group_options = a
-        a.comment(f"{self.program.name} argument group {self.argument_group_counter} options")
+        a.comment(f"{self.program.name} argument group {group_id} options")
 
-        self.argument_group_counter += 1
-
-        return self.converters_a.set_group(optional=optional)
+        return self.converters_a.set_group(id=group_id, optional=optional)
 
     def new_argument_group(self, *, optional):
         return_value = self.new_argument_group_assemblers(optional=optional)
@@ -1081,7 +1100,7 @@ class CharmCompiler:
         self.flush_argument_group_options()
         self.new_consume_argument_assemblers()
 
-    def compile_options(self, parent_callable, key, parameter, options, depth):
+    def compile_options(self, parent_callable, key, parameter, options, depth, group_id):
         if want_prints:
             indent = "  " * depth
             print(f"[cc] {indent}compile_options options={options} key={key} parameter={parameter} parameter.kind={parameter.kind}")
@@ -1100,7 +1119,7 @@ class CharmCompiler:
             program = CharmProgram(name=program_name, minimum=1, maximum=1)
             a = CharmAssembler(self)
             a.push_context()
-            a.set_group(1, 1, optional=False)
+            a.set_group(next(self.argument_group_id), 1, 1, optional=False)
             a.load_converter(key)
             a.consume_argument(is_oparg=True)
             a.store_kwargs(parameter.name)
@@ -1144,9 +1163,9 @@ class CharmCompiler:
             if want_prints:
                 indent = "  " * depth
                 print(f"[cc] {indent}compile_options option={option} program={program} callable={parent_callable} parameter={parameter} key={key} destination={destination}")
-            destination.map_option(option, program, parent_callable, parameter, key)
+            destination.map_option(option, program, parent_callable, parameter, key, group_id)
 
-    def map_options(self, callable, parameter, signature, key, depth=0):
+    def map_options(self, callable, parameter, signature, key, depth=0, group_id=None):
         if want_prints:
             indent = "  " * depth
             print(f"[cc] {indent}{callable.__name__} map_options parameter={parameter} key={key} signature={signature}")
@@ -1180,7 +1199,7 @@ class CharmCompiler:
 
         for parameter_index, options in parameter_index_to_options.items():
             parameter = parameters[parameter_index]
-            self.compile_options(callable, key, parameter, options, depth)
+            self.compile_options(callable, key, parameter, options, depth, group_id)
 
 
     def _compile(self, depth, parameter, pgi, usage_callable, usage_parameter, multioption=False, append=None, store_kwargs=None):
@@ -1255,7 +1274,7 @@ class CharmCompiler:
                 if p.default == empty:
                     raise AppealConfigurationError(f"{usage_callable}: keyword-only argument {parameter_name} doesn't have a default value")
                 kw_parameters_seen.add(parameter_name)
-                self.map_options(callable, p, signature, converter_key, depth=depth)
+                self.map_options(callable, p, signature, converter_key, depth=depth, group_id=self.group.id)
                 continue
             if p.kind == VAR_KEYWORD:
                 var_keyword = parameter_name
@@ -1270,7 +1289,7 @@ class CharmCompiler:
                 raise AppealConfigurationError(f"{usage_callable}: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
             for parameter_name in kw_parameters_unseen:
                 parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
-                self.map_options(callable, parameter, signature, converter_key, depth=depth)
+                self.map_options(callable, parameter, signature, converter_key, depth=depth, group_id=self.group.id)
 
         group = None
 
@@ -1326,7 +1345,8 @@ class CharmCompiler:
             if pgi_parameter.first_in_group and (not pgi_parameter.in_required_group):
                 if want_prints:
                     print(f"[cc] {indent}{callable.__name__} new argument group optional=True")
-                group = self.new_argument_group(optional=True)
+                group = self.group = self.new_argument_group(optional=True)
+                self.after_consume_argument()
 
             self.a.load_converter(key=converter_key)
             if cls is SimpleTypeConverterStr: # or (isinstance(callable, type) and issubclass(callable, Option)):
@@ -1338,7 +1358,6 @@ class CharmCompiler:
                     print(f"[cc] {indent}{parameter} consume_argument and append")
                 self.a.consume_argument(is_oparg=bool(self.option_depth))
                 op = self.a.append_args(callable=callable, parameter=p, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
-                self.after_consume_argument()
             else:
                 if want_prints:
                     print(f"[cc] {indent}{callable.__name__} recurse into {parameter_name} p={p}")
@@ -1564,7 +1583,7 @@ def charm_print(program, indent=''):
         else:
             print_divider = True
         program = programs.popleft()
-        width = 2
+        width = math.floor(math.log10(len(program))) + 1
         padding = " " * width
         indent2 = indent + f"{padding}|   "
         print(program)
@@ -1588,7 +1607,7 @@ def charm_print(program, indent=''):
                     value = value.__name__ if value is not None else value
                 elif value == empty:
                     value = "(empty)"
-                elif isinstance(value, ArgumentCounter):
+                elif isinstance(value, ArgumentGroup):
                     value = value.summary()
                 else:
                     value = repr(value)
@@ -1851,6 +1870,9 @@ def charm_parse(appeal, program, argi):
     options_stack = []
     options_bucket = {}
 
+    groups = []
+    id_to_group = {}
+
     options_bucket = None
     options_token = None
 
@@ -1868,7 +1890,7 @@ def charm_parse(appeal, program, argi):
         token_to_bucket[options_token] = options_bucket
         bucket_to_token[id(options_bucket)] = options_token
         if want_prints:
-            print(f"## {ip_spacer} push_options options_token={options_token}")
+            print(f"#[] {ip_spacer} push_options options_token={options_token}")
 
     def pop_options():
         nonlocal options_bucket
@@ -1893,7 +1915,7 @@ def charm_parse(appeal, program, argi):
             pop_count += 1
             pop_options()
         if want_prints:
-            print(f"## {ip_spacer} pop_options_to_token token={token} took {pop_count} pops")
+            print(f"#[] {ip_spacer} pop_options_to_token token={token} took {pop_count} pops")
 
     def pop_options_to_base():
         if want_prints:
@@ -1906,16 +1928,17 @@ def charm_parse(appeal, program, argi):
         bucket = options_bucket
         bucket_iter = reversed(options_stack)
         while True:
-            program = bucket.get(option, None)
-            if program is not None:
+            t = bucket.get(option, None)
+            if t is not None:
                 break
             try:
                 bucket = next(bucket_iter)
             except StopIteration:
                 raise AppealUsageError(f"unknown option {denormalize_option(option)}") from None
 
+        program, group_id = t
         token = bucket_to_token[id(bucket)]
-        return program, program.total.maximum, token
+        return program, group_id, program.total.maximum, token
 
     ##
     ## It can be hard to tell in advance whether or not
@@ -2067,9 +2090,9 @@ def charm_parse(appeal, program, argi):
                 continue
 
             if op.op == opcode.map_option:
-                options_bucket[op.option] = op.program
+                options_bucket[op.option] = (op.program, op.group)
                 if want_prints:
-                    print(f"## {ip_spacer} map_option op.option={op.option} op.program={op.program} token {options_token}")
+                    print(f"## {ip_spacer} map_option op.option={op.option} op.program={op.program} op.group={op.group} token {options_token}")
                 continue
 
             if op.op == opcode.append_args:
@@ -2119,10 +2142,13 @@ def charm_parse(appeal, program, argi):
                 continue
 
             if op.op == opcode.set_group:
-                ci.group = op.group.copy()
+                group = op.group.copy()
+                ci.group = group
+                groups.append(group)
+                id_to_group[group.id] = group
                 reset_undo_converters()
                 if want_prints:
-                    print(f"## {ip_spacer} set_group {ci.group.summary()}")
+                    print(f"## {ip_spacer} set_group {group.summary()}")
                 continue
 
             if op.op == opcode.flush_multioption:
@@ -2231,12 +2257,13 @@ def charm_parse(appeal, program, argi):
                 forget_undo_converters()
                 if ci.group:
                     ci.group.count += 1
+                    ci.group.laden = True
                 if ci.total:
                     ci.total.count += 1
                 if not is_oparg:
                     pop_options_to_base()
                 if want_prints:
-                    print(f"#[]  positional argument.  o={ci.o!r}")
+                    print(f"#[]  positional argument.  o={ci.o!r} ci.group={ci.group.summary()}")
                 # return to the interpreter
                 break
 
@@ -2271,11 +2298,11 @@ def charm_parse(appeal, program, argi):
                 if equals:
                     split_value = _split_value
 
-                program, maximum_arguments, token = find_option(option)
+                program, group_id, maximum_arguments, token = find_option(option)
                 option_stack_tokens.append(token)
                 if want_prints:
                     print(f"#[]  option {denormalize_option(option)} program={program}")
-                queue.append((option, program, maximum_arguments, split_value, True))
+                queue.append((option, program, group_id, maximum_arguments, split_value, True))
             else:
                 options = collections.deque(a[1:])
 
@@ -2286,13 +2313,13 @@ def charm_parse(appeal, program, argi):
                         options.popleft()
                         split_value = "".join(options)
                         options = ()
-                    program, maximum_arguments, token = find_option(option)
+                    program, group_id, maximum_arguments, token = find_option(option)
                     option_stack_tokens.append(token)
                     # if it takes no arguments, proceed to the next option
                     if not maximum_arguments:
                         if want_prints:
                             print(f"#[]  option {denormalize_option(option)}")
-                        queue.append([denormalize_option(option), program, maximum_arguments, split_value, False])
+                        queue.append([denormalize_option(option), program, group_id, maximum_arguments, split_value, False])
                         continue
                     # this eats arguments.  if there are more characters waiting,
                     # they must be the split value.
@@ -2304,7 +2331,7 @@ def charm_parse(appeal, program, argi):
                             raise AppealUsageError(f"'-{option}{split_value}' is not allowed, use '-{option} {split_value}'")
                     if want_prints:
                         print(f"#[]  option {denormalize_option(option)}")
-                    queue.append([denormalize_option(option), program, maximum_arguments, split_value, False])
+                    queue.append([denormalize_option(option), program, group_id, maximum_arguments, split_value, False])
 
                 # mark the last entry in the queue as last
                 queue[-1][-1] = True
@@ -2326,9 +2353,13 @@ def charm_parse(appeal, program, argi):
 
             # process options in reverse here!
             # that's because we push each program on the interpreter.  so, LIFO.
-            for error_option, program, maximum_arguments, split_value, is_last in reversed(queue):
+            for error_option, program, group_id, maximum_arguments, split_value, is_last in reversed(queue):
+                # mark argument group as having had stuff done in it
+                laden_group = id_to_group[group_id]
+                laden_group.laden = True
+
                 if want_prints:
-                    print(f"#[]  executing option {option} split_value={split_value}")
+                    print(f"#[]  executing option {option} split_value={split_value} group={laden_group.summary()}")
                     print(f"#[]  call program={program}")
 
                 if not is_last:

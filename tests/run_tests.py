@@ -409,7 +409,7 @@ class SmokeTests(unittest.TestCase):
         self.bind_rip()
 
         self.assert_process(
-            'rip abc 1 2 -v',
+            'rip abc -v 1 2',
             (rip,
                 'abc',
                 (int_float_verbose, 1, 2.0, 'verbose'),
@@ -472,11 +472,10 @@ class SmokeTests(unittest.TestCase):
                 )
             )
 
-
     def test_rip_7(self):
         self.bind_rip()
         self.assert_process(
-            'rip scooby 1 -v 2 3 4 --verbose 5 6 -v',
+            'rip scooby -v 1 2  --verbose 3 4 --verbose 5 6',
             (rip,
                 'scooby',
                 (int_float_verbose, 1, 2.0, 'verbose'),
