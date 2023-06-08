@@ -1118,42 +1118,42 @@ class SmokeTests(unittest.TestCase):
             (options_stack, 'abc', False, False, (nested_option, False, False, (inner_option, False, False)))
             )
 
-    def test_options_stack_2(self):
+    def test_options_stack_3(self):
         command(options_stack)
         self.assert_process(
             'options_stack --option --nested -eca',
             (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False)))
             )
 
-    def test_options_stack_3(self):
+    def test_options_stack_4(self):
         command(options_stack)
         self.assert_process(
             'options_stack --option --nested -ace',
             (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False)))
             )
 
-    def test_options_stack_4(self):
+    def test_options_stack_5(self):
         command(options_stack)
         self.assert_process(
             'options_stack --option --nested -ace -b',
             (options_stack, 'abc', True, True, (nested_option, True, False, (inner_option, True, False)))
             )
 
-    def test_options_stack_5(self):
+    def test_options_stack_6(self):
         command(options_stack)
         self.assert_process_raises(
             'options_stack --option --nested -ace -bdf',
             appeal.AppealUsageError,
             )
 
-    def test_options_stack_6(self):
+    def test_options_stack_7(self):
         command(options_stack)
         self.assert_process_raises(
             'options_stack --option --nested -a -e',
             appeal.AppealUsageError,
             )
 
-    def test_options_stack_7(self):
+    def test_options_stack_8(self):
         command(options_stack)
         self.assert_process_raises(
             'options_stack --option --nested -a -c',

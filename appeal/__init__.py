@@ -31,7 +31,7 @@ OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
 want_prints = 1
-# want_prints = 0
+want_prints = 0
 
 
 from abc import abstractmethod, ABCMeta
@@ -1159,7 +1159,7 @@ class CharmCompiler:
             # self.ensure_callables_have_unique_names(callable)
             multioption = issubclass(cls, MultiOption)
 
-            cc = CharmCompiler(self.appeal, name=program_name, converter_key_prefix=key + "-", argument_group_prefix=group_id + "-")
+            cc = CharmCompiler(self.appeal, name=program_name, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-")
             a = cc.initial_a
             a.push_context()
 
