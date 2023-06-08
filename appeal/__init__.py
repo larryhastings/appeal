@@ -31,7 +31,7 @@ OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
 want_prints = 1
-want_prints = 0
+# want_prints = 0
 
 
 from abc import abstractmethod, ABCMeta
@@ -315,8 +315,17 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##     (sadly, there's one, due to "option" on create_converter)
 ##
 ## the interpreter has registers:
+##    program
+##        the program currently being run.
 ##    ip
 ##        the instruction pointer.  an integer, indexes into "program".
+##    converters
+##        a dict mapping converter "keys" to converters.
+##        a converter "key" is any hashable; conceptually a
+##        converter key represents a specific instance of a
+##        converter being used in the annotation tree.
+##        (if you have two parameters annotated with int_float,
+##        these two instances get different converter keys.)
 ##    converter
 ##        a reference to a converter (or None).
 ##        the current converter context.
@@ -353,14 +362,15 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##    optional = flag, is this an optional group?
 ##    laden = flag, has anything
 
-def ArgumentGroupIDIterator():
+def serial_number_generator(prefix=''):
     i = 1
     while True:
-        yield base64.b32hexencode(i.to_bytes(5, 'big')).decode('ascii').lower().lstrip('0').rjust(3, '0')
+        # yield prefix + base64.b32hexencode(i.to_bytes(5, 'big')).decode('ascii').lower().lstrip('0').rjust(3, '0')
+        yield prefix + str(i)
         i += 1
 
 class ArgumentGroup:
-    next_serial_number = ArgumentGroupIDIterator()
+    next_serial_number = serial_number_generator("ag-")
 
     def __init__(self, minimum=0, maximum=0, *, id=None, optional=True):
         self.minimum = minimum
@@ -402,7 +412,6 @@ class CharmProgram:
         self.opcodes = []
 
         self.total = ArgumentGroup(minimum, maximum, optional=False)
-        self.converter_key = 0
 
     def __repr__(self):
         s = f" {self.name!r}" if self.name else ""
@@ -464,7 +473,7 @@ print_enum('''
     label
     jump_to_label
     branch_on_o_to_label
-''', i=100)
+''', i=200)
 
 print()
 
@@ -793,11 +802,14 @@ class CharmInstructionMapOption(CharmInstruction):
     on the command-line, you may simply 'push' the new
     program on your current CharmInterpreter.
 
-    <key> and <parameter> are used in generating
-    usage information.  <key> is the converter key
-    for the converter, and <parameter> is the
-    parameter on that converter, that this option
-    maps to.
+    <callable>, <parameter>, and <key> are used in
+    generating usage information.  <key> is the
+    converter key for the converter, <parameter>
+    is the parameter accepted by that converter
+    which this option fills, and <callable> is the
+    function that accepts <parameter>.  (The value
+    returned by this program becomes the argument for
+    <parameter> when calling <callable>.)
 
     <group> is the id of the ArgumentGroup this is mapped in.
     """
@@ -817,18 +829,18 @@ class CharmInstructionMapOption(CharmInstruction):
 
 class CharmInstructionConsumeArgument(CharmInstruction):
     """
-    consume_argument <is_oparg>
+    consume_argument <is_oparg> <required>
 
     Consumes an argument from the command-line,
     and stores it in the 'o' register.
 
     <is_oparg> is a boolean flag:
-        * If <is_oparg> is True, you are consuming an oparg.
+        * If <is_oparg> is True, you're consuming an oparg.
           You should consume the next command-line argument
           no matter what it is--even if it starts with a
           dash, which would normally indicate a command-line
           option.
-        * If <is_oparg> is False, you are consuming a top-level
+        * If <is_oparg> is False, you're consuming a top-level
           command-line positional argument.  You should process
           command-line arguments normally, including
           processing options.  Continue processing until
@@ -837,15 +849,25 @@ class CharmInstructionConsumeArgument(CharmInstruction):
           you might have encountered while processing,
           and then consume that argument to satisfy this
           instruction.
-    """
-    __slots__ = ['is_oparg']
 
-    def __init__(self, is_oparg):
+    <required> is also a boolean flag:
+        * If <required> is True, this argument is required.
+          If there's no string to fill it from the
+          command-line, you should raise a usage exception.
+        * If <required> is False, this argument isn't required.
+          If there's no string to fill it from the
+          command-line, that's fine, you should consider
+          processing a success and exit.
+    """
+    __slots__ = ['required', 'is_oparg']
+
+    def __init__(self, required, is_oparg):
         self.op = opcode.consume_argument
+        self.required = required
         self.is_oparg = is_oparg
 
     def __repr__(self):
-        return f"<consume_argument is_oparg={self.is_oparg}>"
+        return f"<consume_argument required={self.required} is_oparg={self.is_oparg}>"
 
 class CharmInstructionFlushMultioption(CharmInstruction): # CharmInstructionNoArgBase
     """
@@ -937,8 +959,7 @@ class CharmAssembler:
         return self.append(op)
 
     def create_converter(self, parameter):
-        key = self.compiler.program.converter_key
-        self.compiler.program.converter_key += 1
+        key = next(self.compiler.next_converter_key)
         op = CharmInstructionCreateConverter(
             parameter=parameter,
             key=key,
@@ -992,8 +1013,9 @@ class CharmAssembler:
             )
         return self.append(op)
 
-    def consume_argument(self, is_oparg=False):
+    def consume_argument(self, required=False, is_oparg=False):
         op = CharmInstructionConsumeArgument(
+            required=required,
             is_oparg=is_oparg,
             )
         return self.append(op)
@@ -1017,12 +1039,13 @@ class CharmAssembler:
 
 
 class CharmCompiler:
-    def __init__(self, appeal, *, name=None, converter_key=0):
+    def __init__(self, appeal, *, name=None, converter_key_prefix=None, argument_group_prefix=None):
         self.appeal = appeal
         self.name = name
 
         self.program = CharmProgram(name)
-        self.program.converter_key = converter_key
+
+        self.next_converter_key = serial_number_generator(converter_key_prefix or 'c-')
 
         self.root = appeal.root
 
@@ -1036,7 +1059,7 @@ class CharmCompiler:
         self.option_depth = 0
 
         # options defined in the current argument group
-        self.argument_group_id = ArgumentGroupIDIterator()
+        self.argument_group_id = serial_number_generator(argument_group_prefix or "ag-")
         self.argument_group_options = set()
 
         # options defined since the last consume_argument
@@ -1114,6 +1137,8 @@ class CharmCompiler:
         option_names = " | ".join(option_names)
         program_name = f"{name} {option_names}"
         if cls is SimpleTypeConverterStr:
+            # hand-coded program to handle this option that takes
+            # a single required str argument.
             if want_prints:
                 print(f"[cc] {indent}(hand-coded str option)")
             program = CharmProgram(name=program_name, minimum=1, maximum=1)
@@ -1121,7 +1146,7 @@ class CharmCompiler:
             a.push_context()
             a.set_group(next(self.argument_group_id), 1, 1, optional=False)
             a.load_converter(key)
-            a.consume_argument(is_oparg=True)
+            a.consume_argument(required=True, is_oparg=True)
             a.add_to_kwargs(parameter.name)
             a.pop_context()
             a.end(name=program_name, id=program.id)
@@ -1134,7 +1159,7 @@ class CharmCompiler:
             # self.ensure_callables_have_unique_names(callable)
             multioption = issubclass(cls, MultiOption)
 
-            cc = CharmCompiler(self.appeal, name=program_name, converter_key=self.program.converter_key)
+            cc = CharmCompiler(self.appeal, name=program_name, converter_key_prefix=key + "-", argument_group_prefix=group_id + "-")
             a = cc.initial_a
             a.push_context()
 
@@ -1143,8 +1168,8 @@ class CharmCompiler:
 
             add_to_kwargs = key, parameter.name
             program = cc.compile(annotation, parameter.default, is_option=True, multioption=multioption, depth=depth+1, add_to_kwargs=add_to_kwargs)
-            assert self.program.converter_key != cc.program.converter_key
-            self.program.converter_key = cc.program.converter_key
+            # assert self.program.converter_key != cc.program.converter_key
+            # self.program.converter_key = cc.program.converter_key
 
         for option in options:
             # option doesn't have to be unique in this argument group,
@@ -1356,7 +1381,7 @@ class CharmCompiler:
                 # starts_optional_group = pgi_parameter.first_in_group and not pgi_parameter.in_required_group
                 if want_prints:
                     print(f"[cc] {indent}{parameter} consume_argument and append")
-                self.a.consume_argument(is_oparg=bool(self.option_depth))
+                self.a.consume_argument(required=pgi_parameter.required, is_oparg=bool(self.option_depth))
                 op = self.a.append_to_args(callable=callable, parameter=p, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
             else:
                 if want_prints:
@@ -1591,8 +1616,8 @@ def charm_print(program, indent=''):
             suffix = ""
             printable_op = str(op.op).rpartition(".")[2]
             print(f"{indent}{i:0{width}}| {printable_op}{suffix}")
-            # for slot in op.__class__.__slots__:
-            for slot in dir(op):
+            for slot in op.__class__.__slots__:
+            # for slot in dir(op):
                 if slot.startswith("_") or slot in ("copy", "op"):
                     continue
                 value = getattr(op, slot, None)
@@ -1646,10 +1671,10 @@ class CharmProgramIterator:
 
 
 class CharmStackEntry:
-    __slots__ = ['i', 'program', 'context_count']
+    __slots__ = ['ip', 'program', 'context_count']
 
-    def __init__(self, i, program, context_count=0):
-        self.i = i
+    def __init__(self, ip, program, context_count=0):
+        self.ip = ip
         self.program = program
         self.context_count = context_count
 
@@ -1671,6 +1696,14 @@ class CharmContextStackEntry:
 
 
 class CharmInterpreter:
+    """
+    A bare-bones interpreter for Charm programs.
+    Doesn't actually interpret anything;
+    it just provides the registers and the iterator
+    and some utility functions like jump, push, and pop.
+    Actually interpreting the instructions is up to
+    the user.
+    """
     def __init__(self, program, *, name=''):
         self.name = name
         self.stack = []
@@ -1679,23 +1712,26 @@ class CharmInterpreter:
         assert program
 
         # registers
-        self.converter = None
-        self.o = None
-        self.total = None
-        self.group = None
-        self.converters = {}
+
+        # shh, don't tell anybody,
+        # the ip register technically lives *inside* the iterator.
+        self.ip = CharmProgramIterator(program)
+
         self.program = program
 
-        self.op = None
+        self.converters = {}
+        self.converter = None
+        self.o = None
 
-        # ip register actually lives inside the iterator
-        self.i = CharmProgramIterator(program)
+        self.total = None
+        self.group = None
+
 
     def repr_ip(self):
         ip = "--"
-        if self.i:
-            width = math.floor(math.log10(len(self.i.program)) + 1)
-            ip = f"{self.i.ip:0{width}}"
+        if self.ip:
+            width = math.floor(math.log10(len(self.ip.program)) + 1)
+            ip = f"{self.ip.ip:0{width}}"
         return ip
 
     def __repr__(self):
@@ -1719,10 +1755,10 @@ class CharmInterpreter:
 
     def __next__(self):
         while True:
-            if not (self.i or self.stack):
+            if not (self.ip or self.stack):
                 raise StopIteration
             try:
-                op = self.i.__next__()
+                op = self.ip.__next__()
                 if 0:
                     print("()>", op)
                 return op
@@ -1731,17 +1767,17 @@ class CharmInterpreter:
                 continue
 
     def __bool__(self):
-        return bool(self.i) or any(bool(cse.i) for cse in self.stack)
+        return bool(self.ip) or any(bool(cse.ip) for cse in self.stack)
 
     def rewind(self):
-        if self.i is None:
+        if self.ip is None:
             raise StopIteration
-        self.i.jump_relative(-1)
+        self.ip.jump_relative(-1)
 
     def call(self, program):
-        self.stack.append(CharmStackEntry(self.i, self.program))
+        self.stack.append(CharmStackEntry(self.ip, self.program))
         self.program = program
-        self.i = CharmProgramIterator(program)
+        self.ip = CharmProgramIterator(program)
 
     def push_context(self):
         context = CharmContextStackEntry(self.converter, self.group, self.o, self.total)
@@ -1764,15 +1800,15 @@ class CharmInterpreter:
     def finish(self):
         if self.stack:
             cse = self.stack.pop()
-            self.i = cse.i
+            self.ip = cse.ip
             self.program = cse.program
             for i in range(cse.context_count):
                 self._pop_context()
         else:
-            self.i = None
+            self.ip = None
 
     def abort(self):
-        self.i = None
+        self.ip = None
         self.stack.clear()
         self.context_stack.clear()
 
@@ -1876,6 +1912,8 @@ def charm_parse(appeal, program, argi):
     options_bucket = None
     options_token = None
 
+    first_converter_key = None
+
     if want_prints:
         ip_spacer = '    '
 
@@ -1918,9 +1956,11 @@ def charm_parse(appeal, program, argi):
             print(f"#[] {ip_spacer} pop_options_to_token token={token} took {pop_count} pops")
 
     def pop_options_to_base():
+        pops = len(options_stack)
         if want_prints:
-            print(f"## {ip_spacer} pop_options_to_base, popping {len(options_stack)} times")
-        for _ in range(len(options_stack)):
+            if pops:
+                print(f"## {ip_spacer} pop_options_to_base: popping {len(options_stack)} stacked buckets")
+        for _ in range(pops):
             pop_options()
 
     def find_option(option):
@@ -1979,17 +2019,19 @@ def charm_parse(appeal, program, argi):
 
     def reset_undo_converters():
         nonlocal converters_are_undoable
+        if want_prints:
+            if undo_converters_list:
+                print(f"## {ip_spacer} reset_undo_converters: forgetting {len(undo_converters_list)} converters")
         converters_are_undoable = True
         undo_converters_list.clear()
-        if want_prints:
-            print(f"## {ip_spacer} reset_undo_converters()")
 
     def forget_undo_converters():
         nonlocal converters_are_undoable
+        if want_prints:
+            if undo_converters_list:
+                print(f"## {ip_spacer} forget_undo_converters: forgetting {len(undo_converters_list)} converters")
         undo_converters_list.clear()
         converters_are_undoable = False
-        if want_prints:
-            print(f"## {ip_spacer} forget_undo_converters()")
 
     def add_undoable_converter(parent):
         if converters_are_undoable:
@@ -2038,6 +2080,9 @@ def charm_parse(appeal, program, argi):
 
     waiting_op = None
     prev_op = None
+
+    last_details = None
+
     while ci or argi:
         if want_prints:
             print('##')
@@ -2060,14 +2105,20 @@ def charm_parse(appeal, program, argi):
                 _group = ci.group and ci.group.summary()
                 print(f"##")
                 print(f"## {ip} converter={converter} o={o}")
-                print(f"## {ip_spacer} - total={_total}")
-                print(f"## {ip_spacer} - group={_group}")
+                details = (f"## {ip_spacer} - total={_total}", f"## {ip_spacer} - group={_group}")
+                if last_details != details:
+                    last_details = details
+                    for line in details:
+                        print(line)
+
 
             if op.op == opcode.create_converter:
                 r = None if op.parameter.kind == KEYWORD_ONLY else root
                 cls = appeal.map_to_converter(op.parameter)
                 converter = cls(op.parameter, appeal)
                 ci.converters[op.key] = ci.o = converter
+                if first_converter_key is None:
+                    first_converter_key = op.key
                 if not root:
                     root = converter
                 if want_prints:
@@ -2120,7 +2171,7 @@ def charm_parse(appeal, program, argi):
 
             if op.op == opcode.consume_argument:
                 if want_prints:
-                    print(f"## {ip_spacer} consume_argument is_oparg={op.is_oparg}")
+                    print(f"## {ip_spacer} consume_argument required={op.required} is_oparg={op.is_oparg}")
                 if not argi:
                     if want_prints:
                         print(f"## {ip_spacer}     no more arguments, aborting program")
@@ -2131,14 +2182,14 @@ def charm_parse(appeal, program, argi):
                 ci.push_context()
                 push_undo_converters()
                 if want_prints:
-                    print(f"## {ip_spacer} push_context")
+                    print(f"## {ip_spacer} push_context, now {len(undo_converters_stack)} deep")
                 continue
 
             if op.op == opcode.pop_context:
                 pop_undo_converters()
                 ci.pop_context()
                 if want_prints:
-                    print(f"## {ip_spacer} pop_context")
+                    print(f"## {ip_spacer} pop_context, now {len(undo_converters_stack)} deep")
                 continue
 
             if op.op == opcode.set_group:
@@ -2162,14 +2213,14 @@ def charm_parse(appeal, program, argi):
             if op.op == opcode.jump:
                 if want_prints:
                     print(f"## {ip_spacer} jump op.address={op.address}")
-                ci.i.jump(op.address)
+                ci.ip.jump(op.address)
                 continue
 
             if op.op == opcode.branch_on_o:
                 if want_prints:
                     print(f"## {ip_spacer} branch_on_o o={ci.o} op.address={op.address}")
                 if ci.o:
-                    ci.i.jump(op.address)
+                    ci.ip.jump(op.address)
                 continue
 
             if op.op == opcode.comment:
@@ -2251,19 +2302,20 @@ def charm_parse(appeal, program, argi):
                     if want_prints:
                         print(f"#[]  positional argument we can't handle.  exit.")
                     argi.push(a)
-                    return ci.converters[0]
+                    assert first_converter_key
+                    return ci.converters[first_converter_key]
 
                 ci.o = a
-                forget_undo_converters()
                 if ci.group:
                     ci.group.count += 1
                     ci.group.laden = True
                 if ci.total:
                     ci.total.count += 1
-                if not is_oparg:
-                    pop_options_to_base()
                 if want_prints:
                     print(f"#[]  positional argument.  o={ci.o!r} ci.group={ci.group.summary()}")
+                forget_undo_converters()
+                if not is_oparg:
+                    pop_options_to_base()
                 # return to the interpreter
                 break
 
@@ -2419,7 +2471,8 @@ def charm_parse(appeal, program, argi):
         print(f"############################################################")
         print()
 
-    return ci.converters[0]
+    assert first_converter_key
+    return ci.converters[first_converter_key]
 
 
 class SpecialSection:
