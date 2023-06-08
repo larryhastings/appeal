@@ -440,8 +440,8 @@ print_enum('''
     create_converter
     load_converter
     load_o
-    append_args
-    store_kwargs
+    append_to_args
+    add_to_kwargs
     map_option
     consume_argument
     flush_multioption
@@ -487,8 +487,8 @@ class opcode(enum.Enum):
     create_converter = 4
     load_converter = 5
     load_o = 6
-    append_args = 7
-    store_kwargs = 8
+    append_to_args = 7
+    add_to_kwargs = 8
     map_option = 9
     consume_argument = 10
     flush_multioption = 11
@@ -710,9 +710,9 @@ class CharmInstructionLoadO(CharmInstruction): # CharmInstructionKeyBase
     def __repr__(self):
         return f"<load_converter key={self.key}>"
 
-class CharmInstructionAppendArgs(CharmInstruction):
+class CharmInstructionAppendToArgs(CharmInstruction):
     """
-    append_args <parameter> <usage>
+    append_to_args <parameter> <usage>
 
     Takes a reference to the value in the 'o' register
     and appends it to 'converter.args'.
@@ -726,7 +726,7 @@ class CharmInstructionAppendArgs(CharmInstruction):
     __slots__ = ['callable', 'parameter', 'usage', 'usage_callable', 'usage_parameter']
 
     def __init__(self, callable, parameter, usage, usage_callable, usage_parameter):
-        self.op = opcode.append_args
+        self.op = opcode.append_to_args
         self.callable = callable
         self.parameter = parameter
         self.usage = usage
@@ -734,11 +734,11 @@ class CharmInstructionAppendArgs(CharmInstruction):
         self.usage_parameter = usage_parameter
 
     def __repr__(self):
-        return f"<append_args callable={self.callable} parameter={self.parameter} usage={self.usage} usage_callable={self.usage_callable} usage_parameter={self.usage_parameter}>"
+        return f"<append_to_args callable={self.callable} parameter={self.parameter} usage={self.usage} usage_callable={self.usage_callable} usage_parameter={self.usage_parameter}>"
 
-class CharmInstructionStoreKwargs(CharmInstruction):
+class CharmInstructionAddToKwargs(CharmInstruction):
     """
-    store_kwargs <name>
+    add_to_kwargs <name>
 
     Takes a reference to the object currently in
     the 'o' register and stores it in 'converter.kwargs[<name>]'.
@@ -750,11 +750,11 @@ class CharmInstructionStoreKwargs(CharmInstruction):
     __slots__ = ['name']
 
     def __init__(self, name):
-        self.op = opcode.store_kwargs
+        self.op = opcode.add_to_kwargs
         self.name = name
 
     def __repr__(self):
-        return f"<store_kwargs name={self.name}>"
+        return f"<add_to_kwargs name={self.name}>"
 
 class CharmInstructionPushContext(CharmInstruction): # CharmInstructionNoArgBase
     """
@@ -957,8 +957,8 @@ class CharmAssembler:
             )
         return self.append(op)
 
-    def append_args(self, callable, parameter, usage, usage_callable, usage_parameter):
-        op = CharmInstructionAppendArgs(
+    def append_to_args(self, callable, parameter, usage, usage_callable, usage_parameter):
+        op = CharmInstructionAppendToArgs(
             callable = callable,
             parameter = parameter,
             usage = usage,
@@ -967,8 +967,8 @@ class CharmAssembler:
             )
         return self.append(op)
 
-    def store_kwargs(self, name):
-        op = CharmInstructionStoreKwargs(
+    def add_to_kwargs(self, name):
+        op = CharmInstructionAddToKwargs(
             name=name,
             )
         return self.append(op)
@@ -1122,7 +1122,7 @@ class CharmCompiler:
             a.set_group(next(self.argument_group_id), 1, 1, optional=False)
             a.load_converter(key)
             a.consume_argument(is_oparg=True)
-            a.store_kwargs(parameter.name)
+            a.add_to_kwargs(parameter.name)
             a.pop_context()
             a.end(name=program_name, id=program.id)
             program.opcodes = a.opcodes
@@ -1141,8 +1141,8 @@ class CharmCompiler:
             a = cc.final_a
             a.pop_context()
 
-            store_kwargs = key, parameter.name
-            program = cc.compile(annotation, parameter.default, is_option=True, multioption=multioption, depth=depth+1, store_kwargs=store_kwargs)
+            add_to_kwargs = key, parameter.name
+            program = cc.compile(annotation, parameter.default, is_option=True, multioption=multioption, depth=depth+1, add_to_kwargs=add_to_kwargs)
             assert self.program.converter_key != cc.program.converter_key
             self.program.converter_key = cc.program.converter_key
 
@@ -1202,7 +1202,7 @@ class CharmCompiler:
             self.compile_options(callable, key, parameter, options, depth, group_id)
 
 
-    def _compile(self, depth, parameter, pgi, usage_callable, usage_parameter, multioption=False, append=None, store_kwargs=None):
+    def _compile(self, depth, parameter, pgi, usage_callable, usage_parameter, multioption=False, append=None, add_to_kwargs=None):
         """
         returns is_degenerate, a boolean, True if this entire subtree is "degenerate".
         """
@@ -1250,12 +1250,12 @@ class CharmCompiler:
         append_op = None
         if append:
             self.a.load_o(key=converter_key)
-            append_op = self.a.append_args(**append)
-        elif store_kwargs:
-            parent_key, parameter_name = store_kwargs
+            append_op = self.a.append_to_args(**append)
+        elif add_to_kwargs:
+            parent_key, parameter_name = add_to_kwargs
             self.a.load_converter(key=parent_key)
             self.a.load_o(key=converter_key)
-            self.a.store_kwargs(name=parameter_name)
+            self.a.add_to_kwargs(name=parameter_name)
 
         if multioption:
             load_o_op.key = converter_key
@@ -1357,7 +1357,7 @@ class CharmCompiler:
                 if want_prints:
                     print(f"[cc] {indent}{parameter} consume_argument and append")
                 self.a.consume_argument(is_oparg=bool(self.option_depth))
-                op = self.a.append_args(callable=callable, parameter=p, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
+                op = self.a.append_to_args(callable=callable, parameter=p, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
             else:
                 if want_prints:
                     print(f"[cc] {indent}{callable.__name__} recurse into {parameter_name} p={p}")
@@ -1381,7 +1381,7 @@ class CharmCompiler:
         return is_degenerate
 
 
-    def compile(self, callable, default, is_option=False, multioption=None, store_kwargs=None, depth=0):
+    def compile(self, callable, default, is_option=False, multioption=None, add_to_kwargs=None, depth=0):
         if self.name is None:
             self.name = callable.__name__
             self.program.name = self.name
@@ -1420,7 +1420,7 @@ class CharmCompiler:
         parameter = inspect.Parameter(parameter_name, kind, annotation=callable, default=default)
         if fix_lambda and (getattr(parameter, '_name', '') == parameter_name):
             parameter._name = 'lambda'
-        self._compile(depth, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, store_kwargs=store_kwargs)
+        self._compile(depth, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, add_to_kwargs=add_to_kwargs)
         self.final_a.end(self.program.id, self.name)
         self.assemblers.append(self.final_a)
 
@@ -1823,8 +1823,8 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
                 if op.repeating:
                     closing_brackets.append("... ")
             first_argument_in_group = True
-        elif op.op == opcode.append_args:
-            # append_args can only be after one of those two opcodes!
+        elif op.op == opcode.append_to_args:
+            # append_to_args can only be after one of those two opcodes!
             # if last_op.op in (opcode.consume_argument, opcode.load_o):
                 if op.usage:
                     if first_argument_in_group:
@@ -2095,15 +2095,15 @@ def charm_parse(appeal, program, argi):
                     print(f"## {ip_spacer} map_option op.option={op.option} op.program={op.program} op.group={op.group} token {options_token}")
                 continue
 
-            if op.op == opcode.append_args:
+            if op.op == opcode.append_to_args:
                 ci.converter.args_converters.append(ci.o)
                 add_undoable_converter(ci.converter)
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"## {ip_spacer} append_args o={o}")
+                    print(f"## {ip_spacer} append_to_args o={o}")
                 continue
 
-            if op.op == opcode.store_kwargs:
+            if op.op == opcode.add_to_kwargs:
                 converter = ci.o
                 if op.name in ci.converter.kwargs_converters:
                     existing = ci.converter.kwargs_converters[op.name]
@@ -2115,7 +2115,7 @@ def charm_parse(appeal, program, argi):
                 ci.converter.kwargs_converters[op.name] = ci.o
                 if want_prints:
                     o = ci.repr_converter(ci.o)
-                    print(f"## {ip_spacer} store_kwargs name={op.name} o={o}")
+                    print(f"## {ip_spacer} add_to_kwargs name={op.name} o={o}")
                 continue
 
             if op.op == opcode.consume_argument:
@@ -3780,7 +3780,7 @@ class Appeal:
                 ci.converter = ci.converters[op.key]
                 continue
 
-            if (op.op == opcode.append_args) and last_op and (last_op.op == opcode.consume_argument):
+            if (op.op == opcode.append_to_args) and last_op and (last_op.op == opcode.consume_argument):
                 ci.converter['parameters'][op.parameter] = op.usage
                 continue
 
