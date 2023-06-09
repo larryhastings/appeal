@@ -1969,6 +1969,41 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
+**0.6**
+
+Rewrote options handling.  Appeal's options semantics are now much
+stricter and more regular, but most of what changed was about obscure
+boundary conditions.  You probably won't even notice the change.
+
+* Appeal now handles multiple short options smashed together
+  (e.g. `-ace`) *identically* to them being specified separately
+  (e.g. `-a -c -e`).  This caused an observable change in behavior
+  with respect to when child options got unmapped.
+
+  - Appeal only permits using child options in a limited context:
+    it must be after the parent option is executed, it
+    must be after the parent option has consumed all its required
+    *or optional* opargs, and it must be before any top-level
+    positional argument or option mapped before the parent option
+    was executed.  But Appeal was lax about enforcing these rules
+    when using multiple short options smashed together (e.g. `-ace`);
+    it would handle all the options and *then* unmap child options
+    as needed.  Appeal now enforces these rules here too.
+    (The old behavior seems to have been
+    intentional on my part--what was I thinking?!)
+
+* The usage message raised for an unknown option is now *much*
+  better.  If the option is defined anywhere in the program
+  being run, it prints a different message telling you it
+  can't be used here, but also tells you where it can be used.
+  For example, if you use option `-x`, but that's a child
+  option mapped by `--parent`, the message would say
+  `-x can't be used here, it must be used immediately after --parent`.
+
+* `short_option_concatenated_oparg` is now more strictly
+  enforced: it's only permitted for short options that have
+  *exactly one* **optional** oparg, as specified by POSIX.
+
 **0.5.9**
 
 * Improved the error message generated when you have a

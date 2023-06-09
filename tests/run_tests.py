@@ -1127,16 +1127,18 @@ class SmokeTests(unittest.TestCase):
 
     def test_options_stack_4(self):
         command(options_stack)
-        self.assert_process(
+        self.assert_process_raises(
             'options_stack --option --nested -ace',
-            (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False)))
+            # (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False)))
+            appeal.AppealUsageError,
             )
 
     def test_options_stack_5(self):
         command(options_stack)
-        self.assert_process(
+        self.assert_process_raises(
             'options_stack --option --nested -ace -b',
-            (options_stack, 'abc', True, True, (nested_option, True, False, (inner_option, True, False)))
+            # (options_stack, 'abc', True, True, (nested_option, True, False, (inner_option, True, False)))
+            appeal.AppealUsageError,
             )
 
     def test_options_stack_6(self):
@@ -1270,9 +1272,10 @@ class SmokeTests(unittest.TestCase):
     def test_five_level_stack_16(self):
         command(five_level_stack)
         self.maxDiff=None
-        self.assert_process(
+        self.assert_process_raises(
             "five_level_stack -a -d -g -j -m -behknp",
-            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, True, False, False), True, False), True, False), True, False), True, False), True, False),
+            # (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, True, False, False), True, False), True, False), True, False), True, False), True, False),
+            appeal.AppealUsageError,
             )
 
     def test_str_i_f_1(self):
@@ -1897,7 +1900,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Specifying An Option More Than Once',
             2,
-            "fgrep -p8",
+            "fgrep -p=8",
             "fgrep pattern=[8]",
             )
 
@@ -1913,7 +1916,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Specifying An Option More Than Once',
             2,
-            "fgrep --pattern 2 -p 4 --pattern=6 -p=8 -p10",
+            "fgrep --pattern 2 -p 4 --pattern=6 -p=8 -p 10",
             "fgrep pattern=[2, 4, 6, 8, 10]",
             )
 
@@ -2136,7 +2139,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Options that map other options',
             0,
-            "inception -o1965 -v",
+            "inception -o=1965 -v",
             "inception option=[1965, True]",
             )
 
@@ -2221,7 +2224,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Positional parameters that only consume options',
             0,
-            "mixin -ldidactic  --verbose",
+            "mixin -l didactic  --verbose",
             "mixin log=<Logging verbose=True log_level=didactic>",
             )
 
@@ -2229,7 +2232,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Positional parameters that only consume options',
             0,
-            "mixin -lelective",
+            "mixin -l=elective",
             "mixin log=<Logging verbose=False log_level=elective>",
             )
 

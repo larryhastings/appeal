@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.5.9"
+__version__ = "0.6"
 
 
 # please leave this copyright notice in binary distributions.
@@ -88,6 +88,20 @@ except ImportError:
 
     def event_clock():
         return int(perf_counter() * 1000000000.0)
+
+# new in 3.8
+shlex_join = getattr(shlex, 'join', None)
+if not shlex_join:
+    # note: this doesn't have to be bullet-proof,
+    # we only use it for debug print statements.
+    def shlex_join(split_command):
+        quoted = []
+        for s in split_command:
+            fields = s.split()
+            if len(fields) > 1:
+                s = repr(s)
+            quoted.append(s)
+        return " ".join(quoted)
 
 
 def update_wrapper(wrapped, wrapper):
@@ -362,22 +376,47 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##    optional = flag, is this an optional group?
 ##    laden = flag, has anything
 
-def serial_number_generator(prefix=''):
+def serial_number_generator(*, prefix='', width=0, tuple=False):
+    """
+    Flexible serial number generator.
+    """
+
     i = 1
+    # yield prefix + base64.b32hexencode(i.to_bytes(5, 'big')).decode('ascii').lower().lstrip('0').rjust(3, '0')
+
+    if tuple:
+        # if prefix isn't a conventional iterable
+        if not isinstance(prefix, (builtins.tuple, list)):
+            while True:
+                # yield 2-tuple
+                yield (prefix, i)
+                i += 1
+        # yield n-tuple starting with prefix and appending i
+        prefix = list(prefix)
+        prefix.append(0)
+        while True:
+            prefix[-1] = i
+            yield tuple(prefix)
+            i += 1
+
+    if width:
+        while True:
+            yield f"{prefix}{i:0{width}}"
+            i += 1
+
     while True:
-        # yield prefix + base64.b32hexencode(i.to_bytes(5, 'big')).decode('ascii').lower().lstrip('0').rjust(3, '0')
-        yield prefix + str(i)
+        yield f"{prefix}{i}"
         i += 1
 
 class ArgumentGroup:
-    next_serial_number = serial_number_generator("ag-")
+    next_serial_number = serial_number_generator(prefix="ag-").__next__
 
     def __init__(self, minimum=0, maximum=0, *, id=None, optional=True):
         self.minimum = minimum
         self.maximum = maximum
         self.optional = optional
         if id is None:
-            id = next(ArgumentGroup.next_serial_number)
+            id = ArgumentGroup.next_serial_number()
         self.id = id
         self.count = 0
         self.laden = False
@@ -403,13 +442,18 @@ class CharmProgram:
 
     id_counter = 1
 
-    def __init__(self, name=None, minimum=0, maximum=0):
+    def __init__(self, name=None, minimum=0, maximum=0, *, option=None):
         self.name = name
+        self.option = option
 
         self.id = CharmProgram.id_counter
         CharmProgram.id_counter += 1
 
         self.opcodes = []
+
+        # maps option to its parent option (if any)
+        # used for usage
+        self.options = {}
 
         self.total = ArgumentGroup(minimum, maximum, optional=False)
 
@@ -959,7 +1003,7 @@ class CharmAssembler:
         return self.append(op)
 
     def create_converter(self, parameter):
-        key = next(self.compiler.next_converter_key)
+        key = self.compiler.next_converter_key()
         op = CharmInstructionCreateConverter(
             parameter=parameter,
             key=key,
@@ -1039,13 +1083,13 @@ class CharmAssembler:
 
 
 class CharmCompiler:
-    def __init__(self, appeal, *, name=None, converter_key_prefix=None, argument_group_prefix=None):
+    def __init__(self, appeal, *, name=None, converter_key_prefix=None, argument_group_prefix=None, option=None):
         self.appeal = appeal
         self.name = name
 
-        self.program = CharmProgram(name)
+        self.program = CharmProgram(name, option=option)
 
-        self.next_converter_key = serial_number_generator(converter_key_prefix or 'c-')
+        self.next_converter_key = serial_number_generator(prefix=converter_key_prefix or 'c-').__next__
 
         self.root = appeal.root
 
@@ -1059,7 +1103,7 @@ class CharmCompiler:
         self.option_depth = 0
 
         # options defined in the current argument group
-        self.argument_group_id = serial_number_generator(argument_group_prefix or "ag-")
+        self.next_argument_group_id = serial_number_generator(prefix=argument_group_prefix or "ag-").__next__
         self.argument_group_options = set()
 
         # options defined since the last consume_argument
@@ -1094,7 +1138,7 @@ class CharmCompiler:
 
         self.argument_group_options.clear()
 
-        group_id = next(self.argument_group_id)
+        group_id = self.next_argument_group_id()
 
         self.converters_a = a = CharmAssembler(self)
         a.comment(f"{self.program.name} argument group {group_id} converters")
@@ -1131,6 +1175,8 @@ class CharmCompiler:
         cls = self.appeal.root.map_to_converter(parameter)
 
         assert options
+
+        self.program.options.update({o: self.program.option for o in options})
         name = parent_callable.__name__
         option_names = [denormalize_option(o) for o in options]
         assert option_names
@@ -1141,10 +1187,10 @@ class CharmCompiler:
             # a single required str argument.
             if want_prints:
                 print(f"[cc] {indent}(hand-coded str option)")
-            program = CharmProgram(name=program_name, minimum=1, maximum=1)
+            program = CharmProgram(name=program_name, minimum=1, maximum=1, option=option_names)
             a = CharmAssembler(self)
             a.push_context()
-            a.set_group(next(self.argument_group_id), 1, 1, optional=False)
+            a.set_group(self.next_argument_group_id(), 1, 1, optional=False)
             a.load_converter(key)
             a.consume_argument(required=True, is_oparg=True)
             a.add_to_kwargs(parameter.name)
@@ -1156,10 +1202,9 @@ class CharmCompiler:
             if not is_legal_annotation(annotation):
                 raise AppealConfigurationError(f"{parent_callable.__name__}: parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
 
-            # self.ensure_callables_have_unique_names(callable)
             multioption = issubclass(cls, MultiOption)
 
-            cc = CharmCompiler(self.appeal, name=program_name, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-")
+            cc = CharmCompiler(self.appeal, name=program_name, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-", option=option_names)
             a = cc.initial_a
             a.push_context()
 
@@ -1168,8 +1213,8 @@ class CharmCompiler:
 
             add_to_kwargs = key, parameter.name
             program = cc.compile(annotation, parameter.default, is_option=True, multioption=multioption, depth=depth+1, add_to_kwargs=add_to_kwargs)
-            # assert self.program.converter_key != cc.program.converter_key
-            # self.program.converter_key = cc.program.converter_key
+            program.option = option_names
+            self.program.options.update(program.options)
 
         for option in options:
             # option doesn't have to be unique in this argument group,
@@ -1386,7 +1431,6 @@ class CharmCompiler:
             else:
                 if want_prints:
                     print(f"[cc] {indent}{callable.__name__} recurse into {parameter_name} p={p}")
-                # self.ensure_callables_have_unique_names(callable)
                 append = {'callable': callable, 'parameter': parameter_name, "usage": usage, 'usage_callable': usage_callable, 'usage_parameter': usage_parameter }
                 is_degenerate_subtree = self._compile(depth + 1, p, pgi, usage_callable, usage_parameter, None, append=append)
                 is_degenerate = is_degenerate and is_degenerate_subtree
@@ -1552,13 +1596,14 @@ class CharmCompiler:
             if op.op == opcode.consume_argument:
                 o = '(string value)'
             if op.op == opcode.push_context:
-                stack.append(CharmContextStackEntry(converter, group, o, total))
+                # stack.append(CharmContextStackEntry(converter, group, o, total))
+                stack.append(CharmContextStackEntry(converter, group, o))
             if op.op == opcode.pop_context:
                 context = stack.pop()
                 converter = context.converter
                 group = context.group
                 o = context.o
-                total = context.total
+                # total = context.total
 
             i += 1
 
@@ -1650,6 +1695,12 @@ class CharmProgramIterator:
         self.length = len(program)
         self.ip = 0
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__} program={self.program} ip={self.ip}>"
+
+    def __repr__(self):
+        return f"[{self.program}:{self.ip}]"
+
     def __next__(self):
         if not bool(self):
             raise StopIteration
@@ -1667,10 +1718,11 @@ class CharmProgramIterator:
 
     def jump_relative(self, delta):
         self.ip += delta
+        if not self:
+            raise RuntimeError(f"Jumped outside current program, ip={self.ip}, len(program)={self.length}")
 
 
-
-class CharmStackEntry:
+class CharmProgramStackEntry:
     __slots__ = ['ip', 'program', 'context_count']
 
     def __init__(self, ip, program, context_count=0):
@@ -1679,23 +1731,22 @@ class CharmStackEntry:
         self.context_count = context_count
 
     def __repr__(self):
-        return f"<CharmStackEntry i={self.i} program={self.program.name!r} context_count={self.context_count}>"
+        return f"<CharmProgramStackEntry i={self.i} program={self.program.name!r} context_count={self.context_count}>"
 
 
 class CharmContextStackEntry:
-    __slots__ = ['converter', 'group', 'o', 'total']
+    __slots__ = ['converter', 'group', 'o']
 
-    def __init__(self, converter, group, o, total):
+    def __init__(self, converter, group, o):
         self.converter = converter
         self.group = group
         self.o = o
-        self.total = total
 
     def __repr__(self):
-        return f"<CharmContextStackEntry converter={self.converter} group={self.group} o={self.o} total={self.total}>"
+        return f"<CharmContextStackEntry converter={self.converter} o={self.o} group={self.group.summary() if self.group else 'None'}>"
 
 
-class CharmInterpreter:
+class CharmBaseInterpreter:
     """
     A bare-bones interpreter for Charm programs.
     Doesn't actually interpret anything;
@@ -1706,7 +1757,7 @@ class CharmInterpreter:
     """
     def __init__(self, program, *, name=''):
         self.name = name
-        self.stack = []
+        self.call_stack = []
         self.context_stack = []
 
         assert program
@@ -1723,24 +1774,26 @@ class CharmInterpreter:
         self.converter = None
         self.o = None
 
-        self.total = None
         self.group = None
 
+    def repr_ip(self, ip=None):
+        s = "--"
 
-    def repr_ip(self):
-        ip = "--"
-        if self.ip:
-            width = math.floor(math.log10(len(self.ip.program)) + 1)
-            ip = f"{self.ip.ip:0{width}}"
-        return ip
+        if self.ip is not None:
+            if ip is None:
+                ip = self.ip.ip
+            length = len(self.ip.program)
+            if 0 <= ip < length:
+                width = math.floor(math.log10(length) + 1)
+                s = f"{ip:0{width}}"
+        return s
 
     def __repr__(self):
         ip = self.repr_ip()
-        total = self.total and self.total.summary()
         group = self.group and self.group.summary()
         converter = self.repr_converter(self.converter)
         o = self.repr_converter(self.o)
-        return f"<CharmInterpreter [{ip}] converter={converter!s} o={o!s} group={group!s} total={total!s}>"
+        return f"<{self.__class__.__name__} [{ip}] converter={converter!s} o={o!s} group={group!s} total={total!s}>"
 
     def repr_converter(self, converter):
         if self.converters:
@@ -1755,67 +1808,76 @@ class CharmInterpreter:
 
     def __next__(self):
         while True:
-            if not (self.ip or self.stack):
+            if not (self.ip or self.call_stack):
                 raise StopIteration
             try:
+                ip = self.ip.ip
                 op = self.ip.__next__()
-                if 0:
-                    print("()>", op)
-                return op
+                return ip, op
             except StopIteration as e:
                 self.finish()
                 continue
 
     def __bool__(self):
-        return bool(self.ip) or any(bool(cse.ip) for cse in self.stack)
+        return bool(self.ip) or any(bool(cse.ip) for cse in self.call_stack)
 
-    def rewind(self):
+    def rewind_one_instruction(self):
         if self.ip is None:
             raise StopIteration
         self.ip.jump_relative(-1)
 
     def call(self, program):
-        self.stack.append(CharmStackEntry(self.ip, self.program))
+        self.call_stack.append(CharmProgramStackEntry(self.ip, self.program))
         self.program = program
         self.ip = CharmProgramIterator(program)
 
-    def push_context(self):
-        context = CharmContextStackEntry(self.converter, self.group, self.o, self.total)
-        self.context_stack.append(context)
-        if self.stack:
-            self.stack[-1].context_count += 1
-
-    def _pop_context(self):
-        context = self.context_stack.pop()
-        self.converter = context.converter
-        self.group = context.group
-        self.o = context.o
-        self.total = context.total
-
-    def pop_context(self):
-        self._pop_context()
-        if self.stack:
-            self.stack[-1].context_count -= 1
-
     def finish(self):
-        if self.stack:
-            cse = self.stack.pop()
+        if self.call_stack:
+            cse = self.call_stack.pop()
             self.ip = cse.ip
             self.program = cse.program
             for i in range(cse.context_count):
-                self._pop_context()
+                self.pop_context()
         else:
             self.ip = None
 
+
+    # load/store context is extensible.
+    # you can subclass from it and add your own stuff to the array.
+    # just be sure to append / pop in the right order.
+    def store_context(self, array):
+        context = CharmContextStackEntry(self.converter, self.group, self.o)
+        array.append(context)
+
+    def load_context(self, array):
+        context = array.pop()
+        self.converter = context.converter
+        self.group = context.group
+        self.o = context.o
+
+    def push_context(self):
+        array = []
+        self.store_context(array)
+        self.context_stack.append(array)
+        if self.call_stack:
+            self.call_stack[-1].context_count += 1
+
+    def pop_context(self):
+        array = self.context_stack.pop()
+        self.load_context(array)
+        if self.call_stack:
+            self.call_stack[-1].context_count -= 1
+
+
     def abort(self):
         self.ip = None
-        self.stack.clear()
+        self.call_stack.clear()
         self.context_stack.clear()
 
 
 
 def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, option_values):
-    ci = CharmInterpreter(program)
+    ci = CharmBaseInterpreter(program)
     program_id_to_option = collections.defaultdict(list)
 
     def add_option(op):
@@ -1844,7 +1906,7 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
 
     last_op = None
     first_argument_in_group = True
-    for op in ci:
+    for ip, op in ci:
         # print(f"op={op}")
         if ((last_op == opcode.map_option)
             and (op.op != last_op)):
@@ -1888,98 +1950,20 @@ def charm_usage(program, *, formatter=str):
 
 
 
-def charm_parse(appeal, program, argi):
-    (
-    option_space_oparg,
 
-    short_option_equals_oparg,
-    short_option_concatenated_oparg,
-    ) = appeal.root.option_parsing_semantics
+class CharmInterpreter(CharmBaseInterpreter):
+    def __init__(self, processor, program, *, name=''):
+        super().__init__(program, name=name)
+        self.processor = processor
+        self.program = program
 
-    ci = CharmInterpreter(program)
-    root = None
+        self.appeal = processor.appeal
+        self.argi = processor.argi
 
-    token_to_bucket = {}
-    bucket_to_token = {}
+        self.init_undoable_converters()
+        self.init_options()
 
-    next_options_token = 0
-    options_stack = []
-    options_bucket = {}
-
-    groups = []
-    id_to_group = {}
-
-    options_bucket = None
-    options_token = None
-
-    first_converter_key = None
-
-    if want_prints:
-        ip_spacer = '    '
-
-    def push_options():
-        nonlocal options_bucket
-        nonlocal options_token
-        nonlocal next_options_token
-        options_stack.append(options_bucket)
-        options_bucket = {}
-        options_token = next_options_token
-        next_options_token += 1
-        token_to_bucket[options_token] = options_bucket
-        bucket_to_token[id(options_bucket)] = options_token
-        if want_prints:
-            print(f"#[] {ip_spacer} push_options options_token={options_token}")
-
-    def pop_options():
-        nonlocal options_bucket
-        nonlocal options_token
-
-        token = bucket_to_token[id(options_bucket)]
-        del bucket_to_token[id(options_bucket)]
-        del token_to_bucket[token]
-
-        options_bucket = options_stack.pop()
-        options_token = bucket_to_token[id(options_bucket)]
-
-        if want_prints:
-            print(f"## {ip_spacer} pop_options, now at token {options_token}, popped options_bucket={options_bucket}")
-
-    def pop_options_to_token(token):
-        bucket = token_to_bucket.get(token)
-        if bucket is None:
-            return
-        pop_count = 0
-        while options_bucket != bucket:
-            pop_count += 1
-            pop_options()
-        if want_prints:
-            print(f"#[] {ip_spacer} pop_options_to_token token={token} took {pop_count} pops")
-
-    def pop_options_to_base():
-        pops = len(options_stack)
-        if want_prints:
-            if pops:
-                print(f"## {ip_spacer} pop_options_to_base: popping {len(options_stack)} stacked buckets")
-        for _ in range(pops):
-            pop_options()
-
-    def find_option(option):
-        depth = 0
-        bucket = options_bucket
-        bucket_iter = reversed(options_stack)
-        while True:
-            t = bucket.get(option, None)
-            if t is not None:
-                break
-            try:
-                bucket = next(bucket_iter)
-            except StopIteration:
-                raise AppealUsageError(f"unknown option {denormalize_option(option)}") from None
-
-        program, group_id = t
-        token = bucket_to_token[id(bucket)]
-        return program, group_id, program.total.maximum, token
-
+    ## "undoable converters"
     ##
     ## It can be hard to tell in advance whether or not
     ## we have positional parameters waiting.  For example:
@@ -2009,470 +1993,1294 @@ def charm_parse(appeal, program, argi):
     ## for each one,
     ##     parent_converter.arg_converters.pop()
     ##
+    ## However, once we've consumed
+    ##
     ## Note, however, that we need to push/pop the undo
     ## converters state when we push/pop the context
     ## (when we start/finish parsing an option).
 
-    converters_are_undoable = True
-    undo_converters_list = []
-    undo_converters_stack = []
+    def init_undoable_converters(self):
+        self.undoable_converters = []
+        self.reset_undoable_converters()
 
-    def reset_undo_converters():
-        nonlocal converters_are_undoable
+    def reset_undoable_converters(self):
         if want_prints:
-            if undo_converters_list:
-                print(f"## {ip_spacer} reset_undo_converters: forgetting {len(undo_converters_list)} converters")
-        converters_are_undoable = True
-        undo_converters_list.clear()
+            if self.undoable_converters:
+                print(f"## {self.ip_spacer} reset_undoable_converters: forgetting {len(self.undoable_converters)} converters, converters are undoable")
+        self.converters_are_undoable = True
+        self.undoable_converters.clear()
 
-    def forget_undo_converters():
-        nonlocal converters_are_undoable
+    def forget_undoable_converters(self):
         if want_prints:
-            if undo_converters_list:
-                print(f"## {ip_spacer} forget_undo_converters: forgetting {len(undo_converters_list)} converters")
-        undo_converters_list.clear()
-        converters_are_undoable = False
+            if self.undoable_converters:
+                print(f"## {self.ip_spacer} forget_undoable_converters: forgetting {len(self.undoable_converters)} converters, converters are not undoable")
+        self.undoable_converters.clear()
+        self.converters_are_undoable = False
 
-    def add_undoable_converter(parent):
-        if converters_are_undoable:
-            undo_converters_list.append(parent)
+    def add_undoable_converter(self, parent):
+        if self.converters_are_undoable:
+            self.undoable_converters.append(parent)
             if want_prints:
-                print(f"## {ip_spacer} add_undoable_converter(parent={parent})")
+                print(f"## {self.ip_spacer} add_undoable_converter(parent={parent})")
 
-    def push_undo_converters():
-        nonlocal undo_converters_list
-        nonlocal converters_are_undoable
-        undo_converters_stack.append((undo_converters_list, converters_are_undoable))
-        undo_converters_list = []
-        converters_are_undoable = True
-
-    def pop_undo_converters():
-        nonlocal undo_converters_list
-        nonlocal converters_are_undoable
-        undo_converters_list, converters_are_undoable = undo_converters_stack.pop()
-
-    def undo_converters():
-        print_spacer=True
-        for parent in reversed(undo_converters_list):
-            o = parent.args_converters.pop()
+    def undo_undoable_converters(self):
+        if want_prints:
+            print_spacer = True
+            ip_spacer = self.ip_spacer
+        for parent in reversed(self.undoable_converters):
+            converter = parent.args_converters.pop()
             if want_prints:
                 if print_spacer:
                     print(f"##")
                     print_spacer = False
+
                 print(f"## {ip_spacer} undo converter")
                 print(f"## {ip_spacer}     parent={parent}")
-                print(f"## {ip_spacer}     popped o={o}")
+                print(f"## {ip_spacer}     converter={converter}")
                 print(f"## {ip_spacer}     arg_converters={parent.args_converters}")
-        undo_converters_list.clear()
+        self.undoable_converters.clear()
 
-    if want_prints:
-        charm_separator_line = f"############################################################"
-        print(charm_separator_line)
-        print("##")
-        print('## charm_parse start')
-        print('##')
-        print('## create initial options bucket')
+    def store_context(self, array):
+        super().store_context(array)
+        context = (self.converters_are_undoable, self.undoable_converters)
+        array.append(context)
+        self.reset_undoable_converters()
 
-    # create our first actual options bucket
-    push_options()
-    # ... but remove the useless None in the stack
-    options_stack.clear()
+    def load_context(self, array):
+        context = array.pop()
+        self.converters_are_undoable, self.undoable_converters = context
+        super().load_context(array)
 
-    waiting_op = None
-    prev_op = None
-
-    last_details = None
-
-    while ci or argi:
+    def finish(self):
+        program = self.program
+        super().finish()
         if want_prints:
-            print('##')
+            if program != self.program:
+                print(f"##")
+                print(f"## finished {program}")
+
+
+    ##
+    ## "options"
+    ##
+    ## Options in Appeal can be hierarchical.
+    ## One option can map in child options.
+    ## These child options have a limited lifespan.
+    ##
+    ## Example:
+    ##
+    ##     def color_option(color, *, brightness=0, hue=0): ...
+    ##     def position_option(x, y, z, *, polar=False): ...
+    ##
+    ##     @app.command()
+    ##     def frobnicate(a, b, c, *, color:color_option=Color('BLUE'), position:position_option=Position(0, 0, 0)): ...
+    ##
+    ## If you then run the command-line
+    ##
+    ##     % python3 myscript frobnicate A --color   ...
+    ##                                             ^
+    ##                                             |
+    ##      +--------------------------------------+
+    ##      |
+    ## At this point. we've run the Charm program associated
+    ## with "--color", which has mapped in two new options,
+    ## "--brightness" (and probably "-b") and "--hue" (and maybe "-h").
+    ##
+    ## The moment Appeal encounters another positional argument to
+    ## frobnicate ("b"), or the option "--position", those two
+    ## options are *unmapped*.
+    ##
+    ## We manage this with a stack of options dicts.
+    ##
+    ##  self.options is the options dict at the top of the stack.
+    ##  self.options_stack is a stack of the remaining options dicts,
+    ##     with the bottom of the stack at self.options_stack[0].
+    ##
+    def init_options(self):
+        self.options_stack = []
+        self.options_token_to_dict = {}
+        self.options_id_to_token = {}
+        # we want to sort tokens, so, let's not paint ourselves into a corner
+        # with a width or something
+        self.next_options_token = serial_number_generator(prefix="options", tuple=True).__next__
+        self.reset_options()
+
+    def reset_options(self):
+        self.options = options = {}
+        self.options_token = token = self.next_options_token()
+        self.options_token_to_dict[token] = options
+        self.options_id_to_token[id(options)] = token
+        return token
+
+    def push_options(self):
+        self.options_stack.append((self.options, self.options_token))
+        self.reset_options()
+
+        if want_prints:
+            print(f"#[] {self.ip_spacer} push_options token={self.options_token}")
+
+    def pop_options(self):
+        options_id = id(self.options)
+        token = self.options_id_to_token[options_id]
+        del self.options_id_to_token[options_id]
+        del self.options_token_to_dict[token]
+
+        options, token = self.options_stack.pop()
+        self.options = options
+        self.options_token = token
+
+        if want_prints:
+            options = [denormalize_option(option) for option in options]
+            options.sort(key=lambda s: s.lstrip('-'))
+            options = "{" + " ".join(options) + "}"
+            print(f"#[] {self.ip_spacer} pop_options: popped to token {token}, options={options}")
+
+    def pop_options_until_token(self, token):
+        if self.options_token == token:
+            if want_prints:
+                print(f"#[] {self.ip_spacer} pop_options_until_token: token={token} is current token.  popped 0 times.")
+            return
+        options_to_stop_at = self.options_token_to_dict.get(token)
+        if not options_to_stop_at:
+            raise ValueError(f"pop_options_until_token: specified non-existent options token={token}")
+        if want_prints:
+            print(f"#[] {self.ip_spacer} pop_options_until_token: popping until we find options with token={token}")
+
+        count = 0
+        while self.options_stack and (self.options != options_to_stop_at):
+            count += 1
+            self.pop_options()
+
+        if self.options != options_to_stop_at:
+            raise ValueError(f"pop_options_until_token: couldn't find options with token={token}")
+
+        if want_prints:
+            print(f"#[] {self.ip_spacer} pop_options_until_token: popped {count} times.")
+
+    def empty_options_stack(self):
+        if want_prints:
+            print(f"#[] {self.ip_spacer} empty_options_stack: emptying the options stack")
+
+        count = len(self.options_stack)
+        for _ in range(count):
+            self.pop_options()
+
+        if want_prints:
+            print(f"#[] {self.ip_spacer} empty_options_stack: popped {count} times.")
+
+    def find_option(self, option):
+        depth = 0
+        options = self.options
+        token = self.options_token
+        i = reversed(self.options_stack)
+        while True:
+            t = options.get(option, None)
+            if t is not None:
+                break
+            try:
+                options, token = next(i)
+            except StopIteration:
+                parent_options = self.program.options.get(option)
+                if parent_options:
+                    parent_options = parent_options.replace("|", "or")
+                    message = f"{denormalize_option(option)} can't be used here, it must be used immediately after {parent_options}"
+                else:
+                    message = f"unknown option {denormalize_option(option)}"
+                raise AppealUsageError(message) from None
+
+        program, group_id = t
+        total = program.total
+        return program, group_id, total.minimum, total.maximum, token
+
+    def __call__(self):
+        (
+        option_space_oparg,
+
+        short_option_equals_oparg,
+        short_option_concatenated_oparg,
+        ) = self.appeal.root.option_parsing_semantics
+
+        argi = self.argi
+
+        groups = []
+        id_to_group = {}
+
+        root_converter = None
+        root_converter_key = None
+
+        force_positional = self.appeal.root.force_positional
+
+        if want_prints:
+            self.ip_spacer = '    '
+
+        if want_prints:
+            charm_separator_line = f"############################################################"
             print(charm_separator_line)
-            print(f"## cmdline {list(reversed(argi.stack))}")
+            print("##")
+            print('## CharmInterpreter start')
+            print("##")
+            all_options = list(self.program.options)
+            all_options.sort(key=lambda s: s.lstrip('-'))
+            all_options = " ".join(all_options)
+            print(f"## all options supported: {all_options}")
 
-        # first, run ci until we either
-        #    * finish the program, or
-        #    * must consume a command-line argument
-        for op in ci:
-            prev_op = waiting_op
-            waiting_op = op
+        waiting_op = None
+        prev_op = None
 
+        while self or argi:
             if want_prints:
-                ip = f"[{ci.repr_ip()}]"
-                ip_spacer = " " * len(ip)
-                converter = ci.repr_converter(ci.converter)
-                o = ci.repr_converter(ci.o)
-                _total = ci.total and ci.total.summary()
-                _group = ci.group and ci.group.summary()
+                print('##')
+                print(charm_separator_line)
+                print(f"## command-line: {shlex_join(list(reversed(argi.stack)))}")
+
+            # The main interpreter loop.
+            #
+            # This loop has two "parts".
+            #
+            # In the first part, we iterate over bytecodes until either
+            #    * we finish the program, or
+            #    * we must consume a command-line argument
+            #      (we encounter a "consume_argument" bytecode).
+            # If we finish the program, obviously, we're done.
+            # If we must consume a command-line argument, we proceed
+            # to the second "part".
+            #
+            # In the second part, we consume a command-line argument.
+            # If it's an option, we process the option, and loop.
+            # If it's not an option, we consume it as normal and continue.
+
+            # First "part" of the loop: iterate over bytecodes.
+            if want_prints:
                 print(f"##")
-                print(f"## {ip} converter={converter} o={o}")
-                details = (f"## {ip_spacer} - total={_total}", f"## {ip_spacer} - group={_group}")
-                if last_details != details:
-                    last_details = details
-                    for line in details:
-                        print(line)
+                print(f"## loop part one: execute program {self.program}")
+                program_printed = self.program
 
+            for ip, op in self:
+                prev_op = waiting_op
+                waiting_op = op
 
-            if op.op == opcode.create_converter:
-                r = None if op.parameter.kind == KEYWORD_ONLY else root
-                cls = appeal.map_to_converter(op.parameter)
-                converter = cls(op.parameter, appeal)
-                ci.converters[op.key] = ci.o = converter
-                if first_converter_key is None:
-                    first_converter_key = op.key
-                if not root:
-                    root = converter
                 if want_prints:
-                    print(f"## {ip_spacer} create_converter key={op.key} parameter={op.parameter}")
-                    print(f"## {ip_spacer}   converter={converter}")
-                continue
+                    if program_printed != self.program:
+                        print(f"##")
+                        print(f"## now running program {self.program}")
+                        program_printed = self.program
 
-            if op.op == opcode.load_converter:
-                ci.converter = ci.converters.get(op.key, None)
-                converter = ci.repr_converter(ci.converter)
-                if want_prints:
-                    print(f"## {ip_spacer} load_converter op.key={op.key} converter={converter!s}")
-                continue
+                    ip = f"[{self.repr_ip(ip)}]"
+                    self.ip_spacer = " " * len(ip)
+                    converter = self.repr_converter(self.converter)
+                    o = self.repr_converter(self.o)
+                    _ = self.group and self.group.summary()
+                    print(f"##")
+                    print(f"## {ip} converter={converter} o={o} group={_}")
 
-            if op.op == opcode.load_o:
-                ci.o = ci.converters.get(op.key, None)
-                if want_prints:
-                    o = ci.repr_converter(ci.o)
-                    print(f"## {ip_spacer} load_o op.key={op.key} o={o!s}")
-                continue
-
-            if op.op == opcode.map_option:
-                options_bucket[op.option] = (op.program, op.group)
-                if want_prints:
-                    print(f"## {ip_spacer} map_option op.option={op.option} op.program={op.program} op.group={op.group} token {options_token}")
-                continue
-
-            if op.op == opcode.append_to_args:
-                ci.converter.args_converters.append(ci.o)
-                add_undoable_converter(ci.converter)
-                if want_prints:
-                    o = ci.repr_converter(ci.o)
-                    print(f"## {ip_spacer} append_to_args o={o}")
-                continue
-
-            if op.op == opcode.add_to_kwargs:
-                converter = ci.o
-                if op.name in ci.converter.kwargs_converters:
-                    existing = ci.converter.kwargs_converters[op.name]
-                    if not ((existing == converter) and isinstance(existing, MultiOption)):
-                        raise AppealUsageError(f"{program.name} specified more than once.")
-                    # we're setting the kwarg to the value it's already set to,
-                    # and it's a multioption, so this is fine.
+                if op.op == opcode.create_converter:
+                    # r = None if op.parameter.kind == KEYWORD_ONLY else root_converter
+                    cls = self.appeal.map_to_converter(op.parameter)
+                    converter = cls(op.parameter, self.appeal)
+                    self.converters[op.key] = self.o = converter
+                    if not root_converter:
+                        root_converter = converter
+                        root_converter_key = op.key
+                    if want_prints:
+                        print(f"## {self.ip_spacer} create_converter -- cls={cls.__name__} parameter={op.parameter.name} key={op.key}")
                     continue
-                ci.converter.kwargs_converters[op.name] = ci.o
-                if want_prints:
-                    o = ci.repr_converter(ci.o)
-                    print(f"## {ip_spacer} add_to_kwargs name={op.name} o={o}")
-                continue
 
-            if op.op == opcode.consume_argument:
-                if want_prints:
-                    print(f"## {ip_spacer} consume_argument required={op.required} is_oparg={op.is_oparg}")
-                if not argi:
+                if op.op == opcode.load_converter:
+                    self.converter = self.converters.get(op.key, None)
                     if want_prints:
-                        print(f"## {ip_spacer}     no more arguments, aborting program")
-                    ci.abort()
-                break
+                        print(f"## {self.ip_spacer} load_converter -- key={op.key}")
+                    continue
 
-            if op.op == opcode.push_context:
-                ci.push_context()
-                push_undo_converters()
-                if want_prints:
-                    print(f"## {ip_spacer} push_context, now {len(undo_converters_stack)} deep")
-                continue
-
-            if op.op == opcode.pop_context:
-                pop_undo_converters()
-                ci.pop_context()
-                if want_prints:
-                    print(f"## {ip_spacer} pop_context, now {len(undo_converters_stack)} deep")
-                continue
-
-            if op.op == opcode.set_group:
-                group = op.group.copy()
-                ci.group = group
-                groups.append(group)
-                id_to_group[group.id] = group
-                reset_undo_converters()
-                if want_prints:
-                    print(f"## {ip_spacer} set_group {group.summary()}")
-                continue
-
-            if op.op == opcode.flush_multioption:
-                assert isinstance(ci.o, MultiOption), f"expected instance of MultiOption but ci.o={ci.o}"
-                ci.o.flush()
-                if want_prints:
-                    o = ci.repr_converter(ci.o)
-                    print(f"## {ip_spacer} flush_multioption o={o}")
-                continue
-
-            if op.op == opcode.jump:
-                if want_prints:
-                    print(f"## {ip_spacer} jump op.address={op.address}")
-                ci.ip.jump(op.address)
-                continue
-
-            if op.op == opcode.branch_on_o:
-                if want_prints:
-                    print(f"## {ip_spacer} branch_on_o o={ci.o} op.address={op.address}")
-                if ci.o:
-                    ci.ip.jump(op.address)
-                continue
-
-            if op.op == opcode.comment:
-                if want_prints:
-                    print(f"## {ip_spacer} comment {op.comment!r}")
-                continue
-
-            if op.op == opcode.end:
-                if want_prints:
-                    name = str(op.op).partition(".")[2]
-                    print(f"## {ip_spacer} {name} id={op.id} name={op.name!r}")
-                continue
-
-            raise AppealConfigurationError(f"unhandled opcode op={op}")
-
-        else:
-            # we finished the program
-            if want_prints:
-                print(f"##")
-                print(f"## program finished.")
-                print(f"##")
-            op = None
-            forget_undo_converters()
-
-        assert (op == None) or (op.op == opcode.consume_argument)
-
-        # it's time to consume arguments.
-        # we've either paused or finished the program.
-        #   if we've paused, it's because the program wants us
-        #     to consume an argument.  in that case op
-        #     will be a 'consume_argument' op.
-        #   if we've finished the program, op will be None.
-        #
-        # technically this is a for loop over argi, but
-        # we usually only consume one argument at a time.
-        #
-        # for a in argi:
-        #    * if a is an option (or options),
-        #      push that program (programs) and resume
-        #      the charm interpreter.
-        #    * if a is the special value '--', remember
-        #      that all subsequent command-line arguments
-        #      can no longer be options, and continue to
-        #      the next a in argi.  (this is the only case
-        #      in which we'll consume more than one argument
-        #      in this loop.)
-        #    * else a is a positional argument.
-        #      * if op is consume_argument, consume it and
-        #        resume the charm interpreter.
-        #      * else, hmm, we have a positional argument
-        #        we don't know what to do with.  the program
-        #        is done, and we don't have a consume_argument
-        #        to give it to.  so push it back onto argi
-        #        and exit.  (hopefully the argument is the
-        #        name of a command/subcomand.)
-
-        for a in argi:
-            if want_prints:
-                print("#[]")
-
-            is_oparg = op and (op.op == opcode.consume_argument) and op.is_oparg
-            # if this is true, we're consuming a top-level command-line argument.
-            # if this is false, we're processing an oparg.
-            # what's the difference? opargs can't be options.
-            is_positional_argument = (
-                appeal.root.force_positional
-                or ((not a.startswith("-")) or (a == "-"))
-                or is_oparg
-                )
-
-            if want_prints:
-                # print_op = "consume_argument" if op else None
-                print_op = op
-                print(f"#[]  process argument {a!r} {list(reversed(argi.stack))}")
-                print(f"#[]  op={print_op}")
-
-            if is_positional_argument:
-                if not op:
+                if op.op == opcode.load_o:
+                    self.o = self.converters.get(op.key, None)
                     if want_prints:
-                        print(f"#[]  positional argument we can't handle.  exit.")
-                    argi.push(a)
-                    assert first_converter_key
-                    return ci.converters[first_converter_key]
+                        print(f"## {self.ip_spacer} load_o -- key={op.key}")
+                    continue
 
-                ci.o = a
-                if ci.group:
-                    ci.group.count += 1
-                    ci.group.laden = True
-                if ci.total:
-                    ci.total.count += 1
+                if op.op == opcode.map_option:
+                    self.options[op.option] = (op.program, op.group)
+                    if want_prints:
+                        print(f"## {self.ip_spacer} map_option -- token {self.options_token} op [option={op.option} program={op.program} group={op.group}]")
+                    continue
+
+                if op.op == opcode.append_to_args:
+                    o = self.o
+                    converter = self.converter
+                    converter.args_converters.append(o)
+                    self.add_undoable_converter(converter)
+                    if want_prints:
+                        print(f"## {self.ip_spacer} append_to_args")
+                    continue
+
+                if op.op == opcode.add_to_kwargs:
+                    name = op.name
+                    converter = self.converter
+                    o = self.o
+
+                    existing = converter.kwargs_converters.get(name)
+                    if existing:
+                        if not ((existing == o) and isinstance(existing, MultiOption)):
+                            raise AppealUsageError(f"{program.name} specified more than once.")
+                        # we're setting the kwarg to the value it's already set to,
+                        # and it's a multioption.  it's fine, we just ignore it.
+                        continue
+
+                    converter.kwargs_converters[name] = o
+                    if want_prints:
+                        print(f"## {self.ip_spacer} add_to_kwargs -- name={op.name}")
+                    continue
+
+                if op.op == opcode.consume_argument:
+                    if want_prints:
+                        print(f"## {self.ip_spacer} consume_argument -- required={op.required} is_oparg={op.is_oparg}")
+                    if not argi:
+                        if want_prints:
+                            print(f"## {self.ip_spacer} -- no more arguments, aborting program.")
+                        self.abort()
+                    # proceed to second part of interpreter loop
+                    break
+
+                if op.op == opcode.push_context:
+                    self.push_context()
+                    if want_prints:
+                        print(f"## {self.ip_spacer} push_context -- now {len(self.context_stack)} deep")
+                    continue
+
+                if op.op == opcode.pop_context:
+                    self.pop_context()
+                    if want_prints:
+                        print(f"## {self.ip_spacer} pop_context -- now {len(self.context_stack)} deep")
+                    continue
+
+                if op.op == opcode.set_group:
+                    self.group = group = op.group.copy()
+                    groups.append(group)
+                    id_to_group[group.id] = group
+                    self.reset_undoable_converters()
+                    if want_prints:
+                        print(f"## {self.ip_spacer} set_group -- group={group.summary()}")
+                    continue
+
+                if op.op == opcode.flush_multioption:
+                    assert isinstance(self.o, MultiOption), f"expected o to contain instance of MultiOption but o={self.o}"
+                    self.o.flush()
+                    if want_prints:
+                        _ = self.repr_converter(self.o)
+                        print(f"## {self.ip_spacer} flush_multioption -- o={_}")
+                    continue
+
+                if op.op == opcode.jump:
+                    if want_prints:
+                        print(f"## {self.ip_spacer} jump -- op.address={op.address}")
+                    self.ip.jump(op.address)
+                    continue
+
+                if op.op == opcode.branch_on_o:
+                    if want_prints:
+                        branch = "yes" if self.o else "no"
+                        print(f"## {self.ip_spacer} branch_on_o -- branch? {branch} address={op.address}")
+                    if self.o:
+                        self.ip.jump(op.address)
+                    continue
+
+                if op.op == opcode.comment:
+                    if want_prints:
+                        print(f"## {self.ip_spacer} comment -- {op.comment!r}")
+                    continue
+
+                if op.op == opcode.end:
+                    if want_prints:
+                        print(f"## {self.ip_spacer} end -- id={op.id} name={op.name!r}")
+                    continue
+
+                raise AppealConfigurationError(f"unhandled opcode op={op}")
+
+            else:
+                # we finished the program
                 if want_prints:
-                    print(f"#[]  positional argument.  o={ci.o!r} ci.group={ci.group.summary()}")
-                forget_undo_converters()
-                if not is_oparg:
-                    pop_options_to_base()
-                # return to the interpreter
-                break
+                    print(f"##")
+                    print(f"## finished.")
+                    print(f"##")
+                op = None
+                self.forget_undoable_converters()
 
-            # it's an option!  or "--".
 
-            if not option_space_oparg:
-                raise AppealConfigurationError("oops, option_space_oparg must currently be True")
+            # Second "part" of the loop: consume a command-line argument.
+            #
+            # We've either paused or finished the program.
+            #   If we've paused, it's because the program wants us
+            #     to consume an argument.  In that case op
+            #     will be a 'consume_argument' op.
+            #   If we've finished the program, op will be None.
+            assert (op == None) or (op.op == opcode.consume_argument), f"op={op}, expected either None or consume_argument"
 
-            queue = []
-            option_stack_tokens = []
+            # Technically we loop over argi, but in practice
+            # we usually only consume one argument at a time.
+            #
+            # for a in argi:
+            #    * if a is an option (or options),
+            #      push that program (programs) and resume
+            #      the charm interpreter.
+            #    * if a is the special value '--', remember
+            #      that all subsequent command-line arguments
+            #      can no longer be options, and continue to
+            #      the next a in argi.  (this is the only case
+            #      in which we'll consume more than one argument
+            #      in this loop.)
+            #    * else a is a positional argument.
+            #      * if op is consume_argument, consume it and
+            #        resume the charm interpreter.
+            #      * else, hmm, we have a positional argument
+            #        we don't know what to do with.  the program
+            #        is done, and we don't have a consume_argument
+            #        to give it to.  so push it back onto argi
+            #        and exit.  (hopefully the argument is the
+            #        name of a command/subcomand.)
 
-            # split_value is the value we "split" from the option string.
-            #  --option=X
-            #  -o=X
-            #  -oX
-            # it's set to X if the user specifies an X, otherwise it's None.
-            split_value = None
+            if want_prints:
+                print(f"#[] ")
+                print(f"#[] loop part 2: consume argument(s): op={op} cmdline: {shlex_join(list(reversed(argi.stack)))}")
 
-            if a.startswith("--"):
+            for a in argi:
+                if want_prints:
+                    print(f"#[] ")
+                    print(f"#[] argument: {a!r}  remaining: {shlex_join(list(reversed(argi.stack)))}")
+                    print(f"#[]")
+
+                # Is this command-line argument a "positional argument", or an "option"?
+                # In this context, a "positional argument" can be either a conventional
+                # positional argument on the command-line, or an "oparg".
+
+                # If force_positional is true, we encountered "--" on the command-line.
+                # This forces Appeal to ignore dashes and process all subsequent
+                # arguments as positional arguments.
+
+                # If the argument doesn't start with a dash,
+                # it can't be an option, therefore it must be a positional argument.
+                doesnt_start_with_a_dash = not a.startswith("-")
+
+                # If the argument is a single dash, it isn't an option,
+                # it's a positional argument.  This is an old UNIX idiom;
+                # if you were expecting a filename and you got "-", you should
+                # use the appropriate stdio file (stdin/stdout) there.
+                is_a_single_dash = a == "-"
+
+                # If we're consuming opargs, we ignore leading dashes,
+                # and all arguments are forced to be opargs
+                # until we've consume all the opargs we need.
+                is_oparg = op and (op.op == opcode.consume_argument) and op.is_oparg
+
+                is_positional_argument = (
+                    force_positional
+                    or doesnt_start_with_a_dash
+                    or is_a_single_dash
+                    or is_oparg
+                    )
+
+                if is_positional_argument:
+                    if not op:
+                        if want_prints:
+                            print(f"#[]  positional argument we don't want.")
+                            print(f"#[]  maybe somebody else will consume it.")
+                            print(f"#[]  exit.")
+                        argi.push(a)
+                        assert root_converter_key
+                        return self.converters[root_converter_key]
+
+                    # set register "o" to our string and return to running bytecodes.
+                    self.o = a
+                    if self.group:
+                        self.group.count += 1
+                        self.group.laden = True
+                    if want_prints:
+                        print(f"#[]  positional argument:  o={self.o!r} group={self.group.summary()}")
+                    self.forget_undoable_converters()
+                    if not is_oparg:
+                        self.empty_options_stack()
+                    break
+
+                if not option_space_oparg:
+                    raise AppealConfigurationError("oops, currently the only supported value of option_space_oparg is True")
+
                 if a == "--":
                     # we shouldn't be able to reach this twice.
                     # if the user specifies -- twice on the command-line,
                     # the first time turns of option processing, which means
                     # it should be impossible to get here.
-                    assert not appeal.root.force_positional
-                    appeal.root.force_positional = True
+                    assert not force_positional
+                    force_positional = self.appeal.root.force_positional = True
                     if want_prints:
                         print(f"#[]  '--', force_positional=True")
                     continue
 
-                option, equals, _split_value = a.partition("=")
-                if equals:
-                    split_value = _split_value
+                # it's an option!
+                double_dash = a.startswith("--")
+                pushed_remainder = False
 
-                program, group_id, maximum_arguments, token = find_option(option)
-                option_stack_tokens.append(token)
-                if want_prints:
-                    print(f"#[]  option {denormalize_option(option)} program={program}")
-                queue.append((option, program, group_id, maximum_arguments, split_value, True))
-            else:
-                options = collections.deque(a[1:])
+                # split_value is the value we "split" from the option string.
+                # In these example, split_value is 'X':
+                #     --option=X
+                #     -o=X
+                # and, if o takes exactly one optional argument,
+                # and short_option_concatenated_oparg is true:
+                #     -oX
+                # If none of these syntaxes (syntices?) is used,
+                # split_value is None.
+                #
+                # Literally we handle it by splitting it off,
+                # then pushing it *back* onto argi, so the option
+                # program can consume it.  Thus we actually transform
+                # all the above examples into
+                #     -o X
+                #
+                # Note: split_value can be an empty string!
+                #     -f=
+                # So, simply checking truthiness is insufficient.
+                # You *must* check "if split_value is None".
+                split_value = None
 
-                while options:
-                    option = options.popleft()
-                    equals = short_option_equals_oparg and options and (options[0] == '=')
+                try_to_split_value = double_dash or short_option_equals_oparg
+                if try_to_split_value:
+                    a, equals, _split_value = a.partition("=")
                     if equals:
-                        options.popleft()
-                        split_value = "".join(options)
-                        options = ()
-                    program, group_id, maximum_arguments, token = find_option(option)
-                    option_stack_tokens.append(token)
-                    # if it takes no arguments, proceed to the next option
-                    if not maximum_arguments:
-                        if want_prints:
-                            print(f"#[]  option {denormalize_option(option)}")
-                        queue.append([denormalize_option(option), program, group_id, maximum_arguments, split_value, False])
-                        continue
-                    # this eats arguments.  if there are more characters waiting,
-                    # they must be the split value.
-                    if options:
-                        assert not split_value
-                        split_value = "".join(options)
-                        options = ()
-                        if not short_option_concatenated_oparg:
-                            raise AppealUsageError(f"'-{option}{split_value}' is not allowed, use '-{option} {split_value}'")
-                    if want_prints:
-                        print(f"#[]  option {denormalize_option(option)}")
-                    queue.append([denormalize_option(option), program, group_id, maximum_arguments, split_value, False])
+                        split_value = _split_value
+                else:
+                    split_value = None
 
-                # mark the last entry in the queue as last
-                queue[-1][-1] = True
+                if double_dash:
+                    option = a
+                    program, group_id, minimum_arguments, maximum_arguments, token = self.find_option(option)
+                else:
+                    ## In Appeal,
+                    ##      % python3 myscript foo -abcde
+                    ## must be EXACTLY EQUIVALENT TO
+                    ##      % python3 myscript foo -a -b -c -d -e
+                    ##
+                    ## The best way to handle this is to transform the former
+                    ## into the latter.  Every time we encounter a single-dash
+                    ## option, consume just the first letter, and if the rest
+                    ## is more options, reconstruct the remaining short options
+                    ## and push it onto the argi pushback iterator.  For example,
+                    ## if -a is an option that accepts no opargs, we transform
+                    ##      % python3 myscript foo -abcde
+                    ## into
+                    ##      % python3 myscript foo -a -bcde
+                    ## and then handle "-a".
+                    ##
+                    ## What about options that take opargs?  Except for
+                    ## the special case of short_option_concatenated_oparg,
+                    ## options that take opargs have to be the last short option.
 
-            assert queue and option_stack_tokens
+                    # strip off this short option by itself:
+                    option = a[1]
+                    program, group_id, minimum_arguments, maximum_arguments, token = self.find_option(option)
 
-            # we have options to run.
-            # so the existing consume_argument op will have to wait.
-            if op:
-                ci.rewind()
-                op = None
+                    # handle the remainder.
+                    remainder = a[2:]
+                    if remainder:
+                        if maximum_arguments == 0:
+                            # more short options.  push them back onto argi.
+                            pushed_remainder = True
+                            remainder = "-" + remainder
+                            argi.push(remainder)
+                            if want_prints:
+                                print(f"#[] isolating '-{option}', pushing remainder '{remainder}' back onto argi")
+                        elif maximum_arguments >= 2:
+                            if minimum_arguments == maximum_arguments:
+                                number_of_arguments = maximum_arguments
+                            else:
+                                number_of_arguments = f"{minimum_arguments} to {maximum_arguments}"
+                            raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} takes {number_of_arguments} arguments, it must be last")
+                        # in the remaining cases, we know maximum_arguments is 1
+                        elif short_option_concatenated_oparg and (minimum_arguments == 0):
+                            # Support short_option_concatenated_oparg.
+                            #
+                            # If a short option takes *exactly* one *optional*
+                            # oparg, you can smash the option and the oparg together.
+                            # For example, if short option "-f" takes exactly one
+                            # optional oparg, and you want to supplythe oparg "guava",
+                            # you can do
+                            #    -f=guava
+                            #    -f guava
+                            # and in ONLY THIS CASE
+                            #    -fguava
+                            #
+                            # Technically POSIX doesn't allow us to support this:
+                            #    -f guava
+                            #
+                            # On the other hand, there's a *long list* of things
+                            # POSIX doesn't allow us to support:
+                            #
+                            #    * short options with '=' (split_value, e.g. '-f=guava')
+                            #    * long options
+                            #    * subcommands
+                            #    * options that take multiple opargs
+                            #
+                            # So, clearly, exact POSIX compliance is not of
+                            # paramount importance to Appeal.
+                            #
+                            # Get with the times, you musty old fogeys!
 
-            # pop to the *lowest* bucket!
-            option_stack_tokens.sort()
-            pop_options_to_token(option_stack_tokens[0])
+                            if split_value is not None:
+                                raise AppealUsageError(f"-{option}{remainder}={split_value} isn't allowed, -{option} must be last because it takes an argument")
+                            split_value = remainder
+                        else:
+                            assert minimum_arguments == maximum_arguments == 1
+                            raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} must be last because it takes an argument")
 
-            # and now push on a new bucket.
-            push_options()
-
-            # process options in reverse here!
-            # that's because we push each program on the interpreter.  so, LIFO.
-            for error_option, program, group_id, maximum_arguments, split_value, is_last in reversed(queue):
-                # mark argument group as having had stuff done in it
+                # mark argument group as having had stuff done in it.
                 laden_group = id_to_group[group_id]
                 laden_group.laden = True
 
+                denormalized_option = denormalize_option(option)
                 if want_prints:
-                    print(f"#[]  executing option {option} split_value={split_value} group={laden_group.summary()}")
-                    print(f"#[]  call program={program}")
+                    print(f"#[] option {denormalized_option} program={program} group={laden_group.summary()}")
 
-                if not is_last:
-                    total = program.total
-                    assert maximum_arguments == 0
+                # we have an option to run.
+                # the existing consume_argument op will have to wait.
+                if op:
+                    assert op.op == opcode.consume_argument
+                    self.rewind_one_instruction()
+                    op = None
+
+                # throw away child options mapped below our option's sibling,
+                self.pop_options_until_token(token)
+
+                # and push a fresh options dict.
+                self.push_options()
 
                 if split_value is not None:
-                    assert is_last
                     if maximum_arguments != 1:
                         if maximum_arguments == 0:
-                            raise AppealUsageError(f"{error_option} doesn't take an argument")
+                            raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} doesn't take an argument")
                         if maximum_arguments >= 2:
-                            raise AppealUsageError(f"{error_option} given a single argument but it requires multiple arguments, you must separate the arguments with spaces")
+                            raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} takes multiple arguments")
                     argi.push(split_value)
                     if want_prints:
-                        print(f"#[]  pushing split value {split_value!r} on argi")
+                        print(f"#[]     pushing split value {split_value!r} back onto argi")
 
-                ci.call(program)
-            break
+                if want_prints:
+                    print(f"#[]     call program={program}")
 
-    undo_converters()
-    satisfied = True
-    if ci.total and not ci.total.satisfied():
-        satisfied = False
-        ag = ci.total
-    if ci.group and not ci.group.satisfied():
-        if (not ci.group.optional) or ci.group.count:
-            satisfied = False
-            ag = ci.group
+                self.call(program)
+                break
 
-    if not satisfied:
-        if not ci.group.satisfied():
-            which = "in this argument group"
-            ag = ci.group
-        else:
-            which = "total"
-            ag = ci.total
-        if ag.minimum == ag.maximum:
-            plural = "" if ag.minimum == 1 else "s"
-            middle = f"{ag.minimum} argument{plural}"
-        else:
-            middle = f"at least {ag.minimum} arguments but no more than {ag.maximum} arguments"
-        program = ci.program
-        message = f"{program.name} requires {middle} {which}."
+        self.undo_undoable_converters()
+        satisfied = True
+        ag = self.group
+        if ag and (not ag.satisfied()) and ((not ag.optional) or ag.count):
+            if ag.minimum == ag.maximum:
+                plural = "" if ag.minimum == 1 else "s"
+                middle = f"{ag.minimum} argument{plural}"
+            else:
+                middle = f"at least {ag.minimum} arguments but no more than {ag.maximum} arguments"
+            program = self.program
+            message = f"{program.name} requires {middle} in this argument group."
+            raise AppealUsageError(message)
 
-        raise AppealUsageError(message)
+        if want_prints:
+            print(f"##")
+            print(f"## ending parse.")
+            finished_state = "did not finish" if self else "finished"
+            print(f"##      program {finished_state}.")
+            if argi:
+                print(f"##      remaining cmdline: {list(reversed(argi.stack))}")
+            else:
+                print(f"##      cmdline was completely consumed.")
+            print(f"############################################################")
+            print()
 
-    if want_prints:
-        print(f"##")
-        print(f"## ending parse.")
-        finished_state = "did not finish" if ci else "finished"
-        print(f"##      program {finished_state}.")
-        if argi:
-            print(f"##      remaining cmdline: {list(reversed(argi.stack))}")
-        else:
-            print(f"##      cmdline was completely consumed.")
-        print(f"############################################################")
-        print()
+        assert root_converter_key
+        return self.converters[root_converter_key]
 
-    assert first_converter_key
-    return ci.converters[first_converter_key]
+
+
+
+# def charm_parse(appeal, program, argi):
+#     (
+#     option_space_oparg,
+
+#     short_option_equals_oparg,
+#     short_option_concatenated_oparg,
+#     ) = appeal.root.option_parsing_semantics
+
+#     ci = CharmBaseInterpreter(program)
+#     root = None
+
+#     token_to_bucket = {}
+#     bucket_to_token = {}
+
+#     next_options_token = 0
+#     options_stack = []
+#     options_bucket = {}
+
+#     groups = []
+#     id_to_group = {}
+
+#     options_bucket = None
+#     options_token = None
+
+#     first_converter_key = None
+
+#     if want_prints:
+#         ip_spacer = '    '
+
+#     def push_options():
+#         nonlocal options_bucket
+#         nonlocal options_token
+#         nonlocal next_options_token
+#         options_stack.append(options_bucket)
+#         options_bucket = {}
+#         options_token = next_options_token
+#         next_options_token += 1
+#         token_to_bucket[options_token] = options_bucket
+#         bucket_to_token[id(options_bucket)] = options_token
+#         if want_prints:
+#             print(f"#[] {ip_spacer} push_options options_token={options_token}")
+
+#     def pop_options():
+#         nonlocal options_bucket
+#         nonlocal options_token
+
+#         token = bucket_to_token[id(options_bucket)]
+#         del bucket_to_token[id(options_bucket)]
+#         del token_to_bucket[token]
+
+#         options_bucket = options_stack.pop()
+#         options_token = bucket_to_token[id(options_bucket)]
+
+#         if want_prints:
+#             print(f"## {ip_spacer} pop_options, now at token {options_token}, popped options_bucket={options_bucket}")
+
+#     def pop_options_to_token(token):
+#         bucket = token_to_bucket.get(token)
+#         if bucket is None:
+#             return
+#         pop_count = 0
+#         while options_bucket != bucket:
+#             pop_count += 1
+#             pop_options()
+#         if want_prints:
+#             print(f"#[] {ip_spacer} pop_options_to_token token={token} took {pop_count} pops")
+
+#     def pop_options_to_base():
+#         pops = len(options_stack)
+#         if want_prints:
+#             if pops:
+#                 print(f"## {ip_spacer} pop_options_to_base: popping {len(options_stack)} stacked buckets")
+#         for _ in range(pops):
+#             pop_options()
+
+#     def find_option(option):
+#         depth = 0
+#         bucket = options_bucket
+#         bucket_iter = reversed(options_stack)
+#         while True:
+#             t = bucket.get(option, None)
+#             if t is not None:
+#                 break
+#             try:
+#                 bucket = next(bucket_iter)
+#             except StopIteration:
+#                 raise AppealUsageError(f"unknown option {denormalize_option(option)}") from None
+
+#         program, group_id = t
+#         token = bucket_to_token[id(bucket)]
+#         return program, group_id, program.total.minimum, program.total.maximum, token
+
+#     ##
+#     ## It can be hard to tell in advance whether or not
+#     ## we have positional parameters waiting.  For example:
+#     ##   * the first actual positional argument is optional
+#     ##   * it's nested three levels deep in the annotation tree
+#     ##   * we have command-line arguments waiting in argi but
+#     ##     they're all options
+#     ## In this scenario, the easiest thing is to just run the
+#     ## program, create the converters, then discover we never
+#     ## consumed any positional arguments and just remove &
+#     ## destroy the converters.  This "undo" functionality
+#     ## does exactly that: you write down all the positional
+#     ## converters you create, and if you don't consume a
+#     ## positional argument, you undo them.
+#     ##
+#     ## Observe that:
+#     ##   * we're only talking about optional groups, and
+#     ##   * optional groups are only created if we consume arguments, and
+#     ##   * we don't create options in an optional group until
+#     ##     after we've consumed the first argument that ensures
+#     ##     we've really entered that group.
+#     ##
+#     ## This means we only need to undo the creation of
+#     ## positional converters.  And those are only ever
+#     ## appended to args_converters.  So the undo stack
+#     ## is easy: just note each parent converter, and
+#     ## for each one,
+#     ##     parent_converter.arg_converters.pop()
+#     ##
+#     ## Note, however, that we need to push/pop the undo
+#     ## converters state when we push/pop the context
+#     ## (when we start/finish parsing an option).
+
+#     converters_are_undoable = True
+#     undo_converters_list = []
+#     undo_converters_stack = []
+
+#     def reset_undo_converters():
+#         nonlocal converters_are_undoable
+#         if want_prints:
+#             if undo_converters_list:
+#                 print(f"## {ip_spacer} reset_undo_converters: forgetting {len(undo_converters_list)} converters")
+#         converters_are_undoable = True
+#         undo_converters_list.clear()
+
+#     def forget_undo_converters():
+#         nonlocal converters_are_undoable
+#         if want_prints:
+#             if undo_converters_list:
+#                 print(f"## {ip_spacer} forget_undo_converters: forgetting {len(undo_converters_list)} converters")
+#         undo_converters_list.clear()
+#         converters_are_undoable = False
+
+#     def add_undoable_converter(parent):
+#         if converters_are_undoable:
+#             undo_converters_list.append(parent)
+#             if want_prints:
+#                 print(f"## {ip_spacer} add_undoable_converter(parent={parent})")
+
+#     def push_undo_converters():
+#         nonlocal undo_converters_list
+#         nonlocal converters_are_undoable
+#         undo_converters_stack.append((undo_converters_list, converters_are_undoable))
+#         undo_converters_list = []
+#         converters_are_undoable = True
+
+#     def pop_undo_converters():
+#         nonlocal undo_converters_list
+#         nonlocal converters_are_undoable
+#         undo_converters_list, converters_are_undoable = undo_converters_stack.pop()
+
+#     def undo_converters():
+#         print_spacer=True
+#         for parent in reversed(undo_converters_list):
+#             o = parent.args_converters.pop()
+#             if want_prints:
+#                 if print_spacer:
+#                     print(f"##")
+#                     print_spacer = False
+#                 print(f"## {ip_spacer} undo converter")
+#                 print(f"## {ip_spacer}     parent={parent}")
+#                 print(f"## {ip_spacer}     popped o={o}")
+#                 print(f"## {ip_spacer}     arg_converters={parent.args_converters}")
+#         undo_converters_list.clear()
+
+#     if want_prints:
+#         charm_separator_line = f"############################################################"
+#         print(charm_separator_line)
+#         print("##")
+#         print('## charm_parse start')
+#         print('##')
+#         print('## create initial options bucket')
+
+#     # create our first actual options bucket
+#     push_options()
+#     # ... but remove the useless None in the stack
+#     options_stack.clear()
+
+#     waiting_op = None
+#     prev_op = None
+
+#     last_details = None
+
+#     while ci or argi:
+#         if want_prints:
+#             print('##')
+#             print(charm_separator_line)
+#             print(f"## cmdline {list(reversed(argi.stack))}")
+
+#         # first, run ci until we either
+#         #    * finish the program, or
+#         #    * must consume a command-line argument
+#         for op in ci:
+#             prev_op = waiting_op
+#             waiting_op = op
+
+#             if want_prints:
+#                 ip = f"[{ci.repr_ip()}]"
+#                 ip_spacer = " " * len(ip)
+#                 converter = ci.repr_converter(ci.converter)
+#                 o = ci.repr_converter(ci.o)
+#                 _total = ci.total and ci.total.summary()
+#                 _group = ci.group and ci.group.summary()
+#                 print(f"##")
+#                 print(f"## {ip} converter={converter} o={o}")
+#                 details = (f"## {ip_spacer} - total={_total}", f"## {ip_spacer} - group={_group}")
+#                 if last_details != details:
+#                     last_details = details
+#                     for line in details:
+#                         print(line)
+
+
+#             if op.op == opcode.create_converter:
+#                 r = None if op.parameter.kind == KEYWORD_ONLY else root
+#                 cls = appeal.map_to_converter(op.parameter)
+#                 converter = cls(op.parameter, appeal)
+#                 ci.converters[op.key] = ci.o = converter
+#                 if first_converter_key is None:
+#                     first_converter_key = op.key
+#                 if not root:
+#                     root = converter
+#                 if want_prints:
+#                     print(f"## {ip_spacer} create_converter key={op.key} parameter={op.parameter}")
+#                     print(f"## {ip_spacer}   converter={converter}")
+#                 continue
+
+#             if op.op == opcode.load_converter:
+#                 ci.converter = ci.converters.get(op.key, None)
+#                 converter = ci.repr_converter(ci.converter)
+#                 if want_prints:
+#                     print(f"## {ip_spacer} load_converter op.key={op.key} converter={converter!s}")
+#                 continue
+
+#             if op.op == opcode.load_o:
+#                 ci.o = ci.converters.get(op.key, None)
+#                 if want_prints:
+#                     o = ci.repr_converter(ci.o)
+#                     print(f"## {ip_spacer} load_o op.key={op.key} o={o!s}")
+#                 continue
+
+#             if op.op == opcode.map_option:
+#                 options_bucket[op.option] = (op.program, op.group)
+#                 if want_prints:
+#                     print(f"## {ip_spacer} map_option op.option={op.option} op.program={op.program} op.group={op.group} token {options_token}")
+#                 continue
+
+#             if op.op == opcode.append_to_args:
+#                 ci.converter.args_converters.append(ci.o)
+#                 add_undoable_converter(ci.converter)
+#                 if want_prints:
+#                     o = ci.repr_converter(ci.o)
+#                     print(f"## {ip_spacer} append_to_args o={o}")
+#                 continue
+
+#             if op.op == opcode.add_to_kwargs:
+#                 converter = ci.o
+#                 if op.name in ci.converter.kwargs_converters:
+#                     existing = ci.converter.kwargs_converters[op.name]
+#                     if not ((existing == converter) and isinstance(existing, MultiOption)):
+#                         raise AppealUsageError(f"{program.name} specified more than once.")
+#                     # we're setting the kwarg to the value it's already set to,
+#                     # and it's a multioption, so this is fine.
+#                     continue
+#                 ci.converter.kwargs_converters[op.name] = ci.o
+#                 if want_prints:
+#                     o = ci.repr_converter(ci.o)
+#                     print(f"## {ip_spacer} add_to_kwargs name={op.name} o={o}")
+#                 continue
+
+#             if op.op == opcode.consume_argument:
+#                 if want_prints:
+#                     print(f"## {ip_spacer} consume_argument required={op.required} is_oparg={op.is_oparg}")
+#                 if not argi:
+#                     if want_prints:
+#                         print(f"## {ip_spacer}     no more arguments, aborting program")
+#                     ci.abort()
+#                 break
+
+#             if op.op == opcode.push_context:
+#                 ci.push_context()
+#                 push_undo_converters()
+#                 if want_prints:
+#                     print(f"## {ip_spacer} push_context, now {len(undo_converters_stack)} deep")
+#                 continue
+
+#             if op.op == opcode.pop_context:
+#                 pop_undo_converters()
+#                 ci.pop_context()
+#                 if want_prints:
+#                     print(f"## {ip_spacer} pop_context, now {len(undo_converters_stack)} deep")
+#                 continue
+
+#             if op.op == opcode.set_group:
+#                 group = op.group.copy()
+#                 ci.group = group
+#                 groups.append(group)
+#                 id_to_group[group.id] = group
+#                 reset_undo_converters()
+#                 if want_prints:
+#                     print(f"## {ip_spacer} set_group {group.summary()}")
+#                 continue
+
+#             if op.op == opcode.flush_multioption:
+#                 assert isinstance(ci.o, MultiOption), f"expected instance of MultiOption but ci.o={ci.o}"
+#                 ci.o.flush()
+#                 if want_prints:
+#                     o = ci.repr_converter(ci.o)
+#                     print(f"## {ip_spacer} flush_multioption o={o}")
+#                 continue
+
+#             if op.op == opcode.jump:
+#                 if want_prints:
+#                     print(f"## {ip_spacer} jump op.address={op.address}")
+#                 ci.ip.jump(op.address)
+#                 continue
+
+#             if op.op == opcode.branch_on_o:
+#                 if want_prints:
+#                     print(f"## {ip_spacer} branch_on_o o={ci.o} op.address={op.address}")
+#                 if ci.o:
+#                     ci.ip.jump(op.address)
+#                 continue
+
+#             if op.op == opcode.comment:
+#                 if want_prints:
+#                     print(f"## {ip_spacer} comment {op.comment!r}")
+#                 continue
+
+#             if op.op == opcode.end:
+#                 if want_prints:
+#                     name = str(op.op).partition(".")[2]
+#                     print(f"## {ip_spacer} {name} id={op.id} name={op.name!r}")
+#                 continue
+
+#             raise AppealConfigurationError(f"unhandled opcode op={op}")
+
+#         else:
+#             # we finished the program
+#             if want_prints:
+#                 print(f"##")
+#                 print(f"## program finished.")
+#                 print(f"##")
+#             op = None
+#             forget_undo_converters()
+
+#         assert (op == None) or (op.op == opcode.consume_argument)
+
+#         # it's time to consume arguments.
+#         # we've either paused or finished the program.
+#         #   if we've paused, it's because the program wants us
+#         #     to consume an argument.  in that case op
+#         #     will be a 'consume_argument' op.
+#         #   if we've finished the program, op will be None.
+#         #
+#         # technically this is a for loop over argi, but
+#         # we usually only consume one argument at a time.
+#         #
+#         # for a in argi:
+#         #    * if a is an option (or options),
+#         #      push that program (programs) and resume
+#         #      the charm interpreter.
+#         #    * if a is the special value '--', remember
+#         #      that all subsequent command-line arguments
+#         #      can no longer be options, and continue to
+#         #      the next a in argi.  (this is the only case
+#         #      in which we'll consume more than one argument
+#         #      in this loop.)
+#         #    * else a is a positional argument.
+#         #      * if op is consume_argument, consume it and
+#         #        resume the charm interpreter.
+#         #      * else, hmm, we have a positional argument
+#         #        we don't know what to do with.  the program
+#         #        is done, and we don't have a consume_argument
+#         #        to give it to.  so push it back onto argi
+#         #        and exit.  (hopefully the argument is the
+#         #        name of a command/subcomand.)
+
+#         for a in argi:
+#             if want_prints:
+#                 print("#[]")
+
+#             is_oparg = op and (op.op == opcode.consume_argument) and op.is_oparg
+#             # if this is true, we're consuming a top-level command-line argument.
+#             # if this is false, we're processing an oparg.
+#             # what's the difference? opargs can't be options.
+#             is_positional_argument = (
+#                 appeal.root.force_positional
+#                 or ((not a.startswith("-")) or (a == "-"))
+#                 or is_oparg
+#                 )
+
+#             if want_prints:
+#                 # print_op = "consume_argument" if op else None
+#                 print_op = op
+#                 print(f"#[]  process argument {a!r} {list(reversed(argi.stack))}")
+#                 print(f"#[]  op={print_op}")
+
+#             if is_positional_argument:
+#                 if not op:
+#                     if want_prints:
+#                         print(f"#[]  positional argument we can't handle.  exit.")
+#                     argi.push(a)
+#                     assert first_converter_key
+#                     return ci.converters[first_converter_key]
+
+#                 ci.o = a
+#                 if ci.group:
+#                     ci.group.count += 1
+#                     ci.group.laden = True
+#                 if ci.total:
+#                     ci.total.count += 1
+#                 if want_prints:
+#                     print(f"#[]  positional argument.  o={ci.o!r} ci.group={ci.group.summary()}")
+#                 forget_undo_converters()
+#                 if not is_oparg:
+#                     pop_options_to_base()
+#                 # return to the interpreter
+#                 break
+
+#             # it's an option!  or "--".
+
+#             if not option_space_oparg:
+#                 raise AppealConfigurationError("oops, option_space_oparg must currently be True")
+
+#             queue = []
+#             option_stack_tokens = []
+
+#             # split_value is the value we "split" from the option string.
+#             #  --option=X
+#             #  -o=X
+#             #  -oX
+#             # it's set to X if the user specifies an X, otherwise it's None.
+#             split_value = None
+
+#             if a.startswith("--"):
+#                 if a == "--":
+#                     # we shouldn't be able to reach this twice.
+#                     # if the user specifies -- twice on the command-line,
+#                     # the first time turns of option processing, which means
+#                     # it should be impossible to get here.
+#                     assert not appeal.root.force_positional
+#                     appeal.root.force_positional = True
+#                     if want_prints:
+#                         print(f"#[]  '--', force_positional=True")
+#                     continue
+
+#                 option, equals, _split_value = a.partition("=")
+#                 if equals:
+#                     split_value = _split_value
+
+#                 program, group_id, maximum_arguments, token = find_option(option)
+#                 option_stack_tokens.append(token)
+#                 if want_prints:
+#                     print(f"#[]  option {denormalize_option(option)} program={program}")
+#                 queue.append((option, program, group_id, maximum_arguments, split_value, True))
+#             else:
+#                 options = collections.deque(a[1:])
+
+#                 while options:
+#                     option = options.popleft()
+#                     equals = short_option_equals_oparg and options and (options[0] == '=')
+#                     if equals:
+#                         options.popleft()
+#                         split_value = "".join(options)
+#                         options = ()
+#                     program, group_id, maximum_arguments, token = find_option(option)
+#                     option_stack_tokens.append(token)
+#                     # if it takes no arguments, proceed to the next option
+#                     if not maximum_arguments:
+#                         if want_prints:
+#                             print(f"#[]  option {denormalize_option(option)}")
+#                         queue.append([denormalize_option(option), program, group_id, maximum_arguments, split_value, False])
+#                         continue
+#                     # this eats arguments.  if there are more characters waiting,
+#                     # they must be the split value.
+#                     if options:
+#                         assert not split_value
+#                         split_value = "".join(options)
+#                         options = ()
+#                         if not short_option_concatenated_oparg:
+#                             raise AppealUsageError(f"'-{option}{split_value}' is not allowed, use '-{option} {split_value}'")
+#                     if want_prints:
+#                         print(f"#[]  option {denormalize_option(option)}")
+#                     queue.append([denormalize_option(option), program, group_id, maximum_arguments, split_value, False])
+
+#                 # mark the last entry in the queue as last
+#                 queue[-1][-1] = True
+
+#             assert queue and option_stack_tokens
+
+#             # we have options to run.
+#             # so the existing consume_argument op will have to wait.
+#             if op:
+#                 ci.rewind_one_instruction()
+#                 op = None
+
+#             # pop to the *lowest* bucket!
+#             option_stack_tokens.sort()
+#             pop_options_to_token(option_stack_tokens[0])
+
+#             # and now push on a new bucket.
+#             push_options()
+
+#             # process options in reverse here!
+#             # that's because we push each program on the interpreter.  so, LIFO.
+#             for error_option, program, group_id, maximum_arguments, split_value, is_last in reversed(queue):
+#                 # mark argument group as having had stuff done in it
+#                 laden_group = id_to_group[group_id]
+#                 laden_group.laden = True
+
+#                 if want_prints:
+#                     print(f"#[]  executing option {option} split_value={split_value} group={laden_group.summary()}")
+#                     print(f"#[]  call program={program}")
+
+#                 if not is_last:
+#                     total = program.total
+#                     assert maximum_arguments == 0
+
+#                 if split_value is not None:
+#                     assert is_last
+#                     if maximum_arguments != 1:
+#                         if maximum_arguments == 0:
+#                             raise AppealUsageError(f"{error_option} doesn't take an argument")
+#                         if maximum_arguments >= 2:
+#                             raise AppealUsageError(f"{error_option} given a single argument but it requires multiple arguments, you must separate the arguments with spaces")
+#                     argi.push(split_value)
+#                     if want_prints:
+#                         print(f"#[]  pushing split value {split_value!r} on argi")
+
+#                 ci.call(program)
+#             break
+
+#     undo_converters()
+#     satisfied = True
+#     if ci.total and not ci.total.satisfied():
+#         satisfied = False
+#         ag = ci.total
+#     if ci.group and not ci.group.satisfied():
+#         if (not ci.group.optional) or ci.group.count:
+#             satisfied = False
+#             ag = ci.group
+
+#     if not satisfied:
+#         if not ci.group.satisfied():
+#             which = "in this argument group"
+#             ag = ci.group
+#         else:
+#             which = "total"
+#             ag = ci.total
+#         if ag.minimum == ag.maximum:
+#             plural = "" if ag.minimum == 1 else "s"
+#             middle = f"{ag.minimum} argument{plural}"
+#         else:
+#             middle = f"at least {ag.minimum} arguments but no more than {ag.maximum} arguments"
+#         program = ci.program
+#         message = f"{program.name} requires {middle} {which}."
+
+#         raise AppealUsageError(message)
+
+#     if want_prints:
+#         print(f"##")
+#         print(f"## ending parse.")
+#         finished_state = "did not finish" if ci else "finished"
+#         print(f"##      program {finished_state}.")
+#         if argi:
+#             print(f"##      remaining cmdline: {list(reversed(argi.stack))}")
+#         else:
+#             print(f"##      cmdline was completely consumed.")
+#         print(f"############################################################")
+#         print()
+
+#     assert first_converter_key
+#     return ci.converters[first_converter_key]
 
 
 class SpecialSection:
@@ -3265,7 +4073,7 @@ class Appeal:
         option_space_oparg = True,              # '--long OPARG' and '-s OPARG'
 
         short_option_equals_oparg = True,       # -s=OPARG
-        short_option_concatenated_oparg = True, # -sOPARG
+        short_option_concatenated_oparg = True, # -sOPARG, only supported if -s takes *exactly* one *optional* oparg
 
         positional_argument_usage_format = "{name}",
 
@@ -3813,7 +4621,7 @@ class Appeal:
         # option_children = set()
 
         # info = [self.callable, signature, 0, positional_children, option_children]
-        ci = CharmInterpreter(self._global_program, name=fn_name)
+        ci = CharmBaseInterpreter(self._global_program, name=fn_name)
 
         last_op = None
         option_depth = 0
@@ -3822,8 +4630,8 @@ class Appeal:
         two_lists = lambda: ([], [])
         mapped_options = collections.defaultdict(two_lists)
 
-        for op in ci:
-            # print(f"## op={op}")
+        for ip, op in ci:
+            # print(f"## [{ip:>3}] op={op}")
             if op.op == opcode.create_converter:
                 c = {'parameter': op.parameter, 'parameters': {}, 'options': collections.defaultdict(list)}
                 ci.converters[op.key] = ci.o = c
@@ -4548,7 +5356,9 @@ class Appeal:
             return None
         if want_prints:
             charm_print(program)
-        converter = charm_parse(self, program, processor.argi)
+        # converter = charm_parse(self, program, processor.argi)
+        interpreter = CharmInterpreter(processor, program)
+        converter = interpreter()
         processor.commands.append(converter)
         return converter
 
@@ -4623,8 +5433,9 @@ class Processor:
         self.log_event("process start")
 
         self.appeal = appeal
-        self.preparers = []
 
+        self.argi = None
+        self.preparers = []
         self.commands = []
         self.breadcrumbs = []
         self.result = None
