@@ -280,6 +280,7 @@ def undo(a:nested_outer=0):
 def hey_argparse_watch_this(*, i:int=None, f:float=None, c:complex=None):
     return (hey_argparse_watch_this, i, f, c)
 
+
 def inner_option(*, e=False, f=False):
     return (inner_option, e, f)
 
@@ -307,6 +308,17 @@ def five_a(*, d:five_d=None, e=False, f=False):
 
 def five_level_stack(*, a:five_a=None, b=False, c=False):
     return (five_level_stack, a, b, c)
+
+
+def multiple_groups_child(child_a, child_b, child_c=None, *, flag=False, color:int_float_verbose=(0, 0.0, False)):
+    return (multiple_groups_child, child_a, child_b, child_c, flag, color)
+
+def multiple_groups(a,
+    b:multiple_groups_child=(multiple_groups_child, None, None, None, False, (0, 0.0, False)),
+    c:multiple_groups_child=(multiple_groups_child, None, None, None, False, (0, 0.0, False)),
+    d='',
+    ):
+    return (multiple_groups, a, b, c, d)
 
 
 class IntFloat:
@@ -339,7 +351,7 @@ class SmokeTests(unittest.TestCase):
     def assert_process(self, cmdline, result):
         self.assertEqual(process(shlex.split(cmdline)), result)
 
-    def assert_process_raises(self, cmdline, exception):
+    def assert_process_raises(self, cmdline, exception, text=None):
         e = None
         with self.assertRaises(exception):
             try:
@@ -347,6 +359,8 @@ class SmokeTests(unittest.TestCase):
             except exception as e2:
                 e = e2
                 raise e2
+        if text:
+            self.assertIn(text, str(e))
         return e
 
     def tearDown(self):
@@ -1162,6 +1176,14 @@ class SmokeTests(unittest.TestCase):
             appeal.AppealUsageError,
             )
 
+    def test_options_stack_9(self):
+        command(options_stack)
+        self.assert_process_raises(
+            'options_stack --option --nested -a -c',
+            appeal.AppealUsageError,
+            )
+
+
     def test_five_level_stack_1(self):
         command(five_level_stack)
         self.assert_process(
@@ -1277,6 +1299,145 @@ class SmokeTests(unittest.TestCase):
             # (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, True, False, False), True, False), True, False), True, False), True, False), True, False),
             appeal.AppealUsageError,
             )
+
+
+
+# def multiple_groups_child(child_a, child_b, child_c=None, *, flag=False, color:int_float_verbose=(0, 0.0, False)):
+#     return (multiple_groups_child, child_a, child_b, child_c, flag, color)
+
+# def multiple_groups(a, b:multiple_groups_child=(multiple_groups_child, None, None, None, False, (0, 0.0, False)), c:multiple_groups_child=(multiple_groups_child, None, None, None, False, (0, 0.0, False)), d=''):
+#     return (mixed, a, b, c, d)
+
+    def test_mixed_groups_1(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups abc",
+            (multiple_groups,
+                'abc',
+                (multiple_groups_child, None, None, None, False, (0, 0.0, False)),
+                (multiple_groups_child, None, None, None, False, (0, 0.0, False)),
+                ''
+                ),
+            )
+
+    def test_mixed_groups_2(self):
+        command(multiple_groups)
+        self.assert_process_raises(
+            "multiple_groups abc def",
+            appeal.AppealUsageError,
+            )
+
+    def test_mixed_groups_3(self):
+        command(multiple_groups)
+        self.assert_process_raises(
+            "multiple_groups abc -v",
+            appeal.AppealUsageError,
+            )
+
+    def test_mixed_groups_4(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups a ba bb bc ca cb cc",
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', False, (0, 0.0, False)),
+                ''
+                ),
+            )
+
+    def test_mixed_groups_5(self):
+        command(multiple_groups)
+        self.assert_process_raises(
+            "multiple_groups -f a ba bb bc ca cb cc",
+            appeal.AppealUsageError,
+            )
+
+    def test_mixed_groups_6(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups a -f ba bb bc ca cb cc",
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', True, (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', False, (0, 0.0, False)),
+                ''
+                ),
+            )
+
+    def test_mixed_groups_7(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups a ba -f bb bc ca cb cc",
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', True, (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', False, (0, 0.0, False)),
+                ''
+                ),
+            )
+
+    def test_mixed_groups_8(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups a ba bb -f bc ca cb cc",
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', True, (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', False, (0, 0.0, False)),
+                ''
+                ),
+            )
+
+    def test_mixed_groups_9(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups a ba bb bc -f ca cb cc",
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', True, (0, 0.0, False)),
+                ''
+                ),
+            )
+
+    def test_mixed_groups_10(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups a ba bb bc ca -f cb cc",
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', True, (0, 0.0, False)),
+                ''
+                ),
+            )
+
+    def test_mixed_groups_11(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups a ba bb bc ca cb -f cc",
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', True, (0, 0.0, False)),
+                ''
+                ),
+            )
+
+    # the stuff in the final group sticks around forever
+    def test_mixed_groups_12(self):
+        command(multiple_groups)
+        self.assert_process(
+            "multiple_groups a ba bb bc ca cb cc -f",
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', True, (0, 0.0, False)),
+                ''
+                ),
+            )
+
 
     def test_str_i_f_1(self):
         command(str_i_f)

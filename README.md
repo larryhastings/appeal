@@ -1891,6 +1891,20 @@ things POSIX allows, and allows some things POSIX disallows.
   options and positional arguments in any order.  In fact,
   "subcommands" require permitting options after positional arguments
   for anything beyond the simplest possible subcommand support.
+* POSIX requires that, if an option (short option) has a single
+  *optional* argument (oparg), its argument must be concatenated
+  to the option.  For example, if `-f` takes an optional argument,
+  and you want to specify the argument `guava`, you *must* write
+  this as `-fguava`, no other spelling is permissible.  While Appeal
+  supports this spelling, it also supports `-f=guava` and `-f guava`.
+  More importantly, if you specify `-f` on your command-line (and
+  not `-f=<something>` or `-f<something>`), Appeal *will* consume the
+  next argument on the command-line as an oparg, which is what POSIX
+  definitely does *not* want.  I feel Appeal's consistency is
+  more important than supporting this syntactic hack.  Note that
+  the oparg is still optional, so if `-f` is the last thing
+  on your command-line, that will achieve this "option with
+  default value" behavior.
 
 
 ## Additional Subtle Features And Behaviors
@@ -1925,7 +1939,7 @@ things POSIX allows, and allows some things POSIX disallows.
   that haven't gotten any explicitly defined options.
   But if you then define one of those options, Appeal will
   throw an error at you.
-* Almost any callable can be a converter.  But not every
+* Almost any callable can be a converter--but not *every*
   function.  There are two limitations.  First, as already
   mentioned, in order for a function to be a legal converter,
   every keyword-only parameter must have a default value.
@@ -1975,10 +1989,16 @@ Rewrote options handling.  Appeal's options semantics are now much
 stricter and more regular, but most of what changed was about obscure
 boundary conditions.  You probably won't even notice the change.
 
+* The big change: Appeal now early-maps options.  (See issue #3.)
+  In short: when options are only defined in an optional group,
+  they get provisionally mapped (made available) *before* the first
+  argument in that group.  Using that option enters the group just
+  like specifying the first argument in that group.
+
 * Appeal now handles multiple short options smashed together
   (e.g. `-ace`) *identically* to them being specified separately
   (e.g. `-a -c -e`).  This caused an observable change in behavior
-  with respect to when child options got unmapped.
+  regarding when child options get unmapped.
 
   - Appeal only permits using child options in a limited context:
     it must be after the parent option is executed, it
@@ -1988,9 +2008,9 @@ boundary conditions.  You probably won't even notice the change.
     was executed.  But Appeal was lax about enforcing these rules
     when using multiple short options smashed together (e.g. `-ace`);
     it would handle all the options and *then* unmap child options
-    as needed.  Appeal now enforces these rules here too.
-    (The old behavior seems to have been
-    intentional on my part--what was I thinking?!)
+    as needed.  The good news: Appeal now enforces these rules here
+    too.  (The old behavior seems to have been *intentional* on my
+    part--what was I *thinking?!)*
 
 * The usage message raised for an unknown option is now *much*
   better.  If the option is defined anywhere in the program
