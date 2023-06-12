@@ -320,6 +320,9 @@ def multiple_groups(a,
     ):
     return (multiple_groups, a, b, c, d)
 
+def simple_defaults(a: int=0, b: str=''):
+    return (simple_defaults, a, b)
+
 
 class IntFloat:
     def __init__(self, integer:int, real:float):
@@ -331,6 +334,17 @@ class IntFloat:
 
 def str_i_f(value, i_f:IntFloat=None, *, option=None, verbose=False):
     return (str_i_f, value, i_f, option, verbose)
+
+
+def earlier_int_float2(i2:int, f2:float, *, flag=False):
+    return (earlier_int_float2, i2, f2, flag)
+
+def earlier_int_float1(i1:int, f1:float, *, verbose=False):
+    return (earlier_int_float1, i1, f1, verbose)
+
+def earlier(a, b:earlier_int_float1, c:earlier_int_float2=(earlier_int_float2, 0, 0.0, False)):
+    return (earlier, a, b, c)
+
 
 class SmokeTests(unittest.TestCase):
     def setUp(self):
@@ -398,6 +412,41 @@ class SmokeTests(unittest.TestCase):
         command(test)
         self.assert_process_raises(
             "test -g gloopy abc def -i 1 3.0 -v 336",
+            appeal.AppealUsageError,
+            )
+
+    def test_simple_defaults_1(self):
+        command(simple_defaults)
+        self.assert_process(
+            "simple_defaults",
+            (simple_defaults, 0, ''),
+            )
+
+    def test_simple_defaults_2(self):
+        command(simple_defaults)
+        self.assert_process(
+            "simple_defaults 5",
+            (simple_defaults, 5, ''),
+            )
+
+    def test_simple_defaults_3(self):
+        command(simple_defaults)
+        self.assert_process(
+            "simple_defaults 33 abc",
+            (simple_defaults, 33, 'abc'),
+            )
+
+    def test_simple_defaults_4(self):
+        command(simple_defaults)
+        self.assert_process_raises(
+            "simple_defaults 3.14159",
+            appeal.AppealUsageError,
+            )
+
+    def test_simple_defaults_5(self):
+        command(simple_defaults)
+        self.assert_process_raises(
+            "simple_defaults 33 abc xxx",
             appeal.AppealUsageError,
             )
 
@@ -1500,6 +1549,22 @@ class SmokeTests(unittest.TestCase):
         instance = instances.pop()
         self.assertIsInstance(instance, MyApp)
         self.assertEqual(instance.dump(), (True, 'patt', 'file', 33))
+
+
+    def test_regression_raised_an_error_earlier_huh(self):
+        # there's a usage error:
+        # AppealUsageError(f"no argument supplied for {self}, we should have raised an error earlier huh.")
+        # this test used to trip it.
+        # (before I rewrote undo converters to tie directly to argument groups)
+        command(earlier)
+        self.assert_process(
+            "earlier a  1  2.3 -v",
+            (earlier,
+                'a',
+                (earlier_int_float1, 1, 2.3, True),
+                (earlier_int_float2, 0, 0.0, False),
+                ),
+            )
 
 
 

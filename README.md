@@ -1993,7 +1993,10 @@ boundary conditions.  You probably won't even notice the change.
   In short: when options are only defined in an optional group,
   they get provisionally mapped (made available) *before* the first
   argument in that group.  Using that option enters the group just
-  like specifying the first argument in that group.
+  like specifying the first argument in that group.  You'll see
+  the difference in usage; an optional group that mapped an option
+  used to look like `[a [-v|--verbose] b c]` but now looks like
+  `[[-v|--verbose] a b c]`.
 
 * Appeal now handles multiple short options smashed together
   (e.g. `-ace`) *identically* to them being specified separately
@@ -2012,7 +2015,7 @@ boundary conditions.  You probably won't even notice the change.
     too.  (The old behavior seems to have been *intentional* on my
     part--what was I *thinking?!)*
 
-* The usage message raised for an unknown option is now *much*
+* The usage message raised for an unknown option is now much
   better.  If the option is defined anywhere in the program
   being run, it prints a different message telling you it
   can't be used here, but also tells you where it can be used.
