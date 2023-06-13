@@ -2261,7 +2261,7 @@ class CharmInterpreter(CharmBaseInterpreter):
         # The second part of the __call__ loop consumes *cmdline arguments.*
         self.cmdline_prefix = "####"
 
-        self.init_options()
+        self.options = self.Options()
 
 
     ## "undoable converters"
@@ -2457,104 +2457,114 @@ class CharmInterpreter(CharmBaseInterpreter):
     ## callable or not, those different mappings would get different options
     ## tokens.
     ##
-    def init_options(self):
-        self.options_stack = []
-        self.options_token_to_dict = {}
-        self.options_id_to_token = {}
-        # we want to sort tokens, so, let's not paint ourselves into a corner
-        # with a width or something
-        self.next_options_token = serial_number_generator(prefix="options", tuple=True).__next__
-        self.reset_options()
 
-    def reset_options(self):
-        self.options = options = {}
-        self.options_token = token = self.next_options_token()
-        self.options_token_to_dict[token] = options
-        self.options_id_to_token[id(options)] = token
-        return token
+    @big.BoundInnerClass
+    class Options:
 
-    def push_options(self):
-        self.options_stack.append((self.options, self.options_token))
-        self.reset_options()
+        def __init__(self, interpreter):
+            self.interpreter = interpreter
+            self.options_stack = []
+            self.options_token_to_dict = {}
+            self.options_id_to_token = {}
+            # we want to sort tokens, so, let's not paint ourselves into a corner
+            # with a width or something
+            self.next_options_token = serial_number_generator(prefix="options", tuple=True).__next__
+            self.reset()
 
-        if want_prints:
-            print(f"{self.cmdline_prefix} {self.ip_spacer} push_options token={self.options_token}")
+        def reset(self):
+            self.options = options = {}
+            self.options_token = token = self.next_options_token()
+            self.options_token_to_dict[token] = options
+            self.options_id_to_token[id(options)] = token
+            return token
 
-    def pop_options(self):
-        options_id = id(self.options)
-        token = self.options_id_to_token[options_id]
-        del self.options_id_to_token[options_id]
-        del self.options_token_to_dict[token]
+        def push(self):
+            self.options_stack.append((self.options, self.options_token))
+            token = self.reset()
 
-        options, token = self.options_stack.pop()
-        self.options = options
-        self.options_token = token
-
-        if want_prints:
-            options = [denormalize_option(option) for option in options]
-            options.sort(key=lambda s: s.lstrip('-'))
-            options = "{" + " ".join(options) + "}"
-            print(f"{self.cmdline_prefix} {self.ip_spacer} pop_options: popped to token {token}, options={options}")
-
-    def pop_options_until_token(self, token):
-        if self.options_token == token:
             if want_prints:
-                print(f"{self.cmdline_prefix} {self.ip_spacer} pop_options_until_token: token={token} is current token.  popped 0 times.")
-            return
-        options_to_stop_at = self.options_token_to_dict.get(token)
-        if not options_to_stop_at:
-            raise ValueError(f"pop_options_until_token: specified non-existent options token={token}")
+                print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.push token={token}")
 
-        count = 0
-        while self.options_stack and (self.options != options_to_stop_at):
-            count += 1
-            self.pop_options()
+        def pop(self):
+            options_id = id(self.options)
+            token = self.options_id_to_token[options_id]
+            del self.options_id_to_token[options_id]
+            del self.options_token_to_dict[token]
 
-        if self.options != options_to_stop_at:
-            raise ValueError(f"pop_options_until_token: couldn't find options with token={token}")
+            options, token = self.options_stack.pop()
+            self.options = options
+            self.options_token = token
 
-        if want_prints:
-            print(f"{self.cmdline_prefix} {self.ip_spacer} pop_options_until_token: token={token}, popped {count} times.")
+            if want_prints:
+                options = [denormalize_option(option) for option in options]
+                options.sort(key=lambda s: s.lstrip('-'))
+                options = "{" + " ".join(options) + "}"
+                print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop: popped to token {token}, options={options}")
 
-    def empty_options_stack(self):
-        """
-        Note that we're only emptying self.options_stack.
-        self.options is the top of the stack, and we aren't
-        blowing that away.  So when we empty self.options_stack,
-        there's still one options dict left, which was at the
-        bottom of the stack; this is the bottom options dict,
-        where all the permanently-mapped options live.
-        """
-        count = len(self.options_stack)
-        for _ in range(count):
-            self.pop_options()
+        def pop_until_token(self, token):
+            if self.options_token == token:
+                if want_prints:
+                    print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_token: token={token} is current token.  popped 0 times.")
+                return
+            options_to_stop_at = self.options_token_to_dict.get(token)
+            if not options_to_stop_at:
+                raise ValueError(f"Options.pop_until_token: specified non-existent options token={token}")
 
-        if want_prints:
-            print(f"{self.cmdline_prefix} empty_options_stack: popped {count} times.")
+            count = 0
+            while self.options_stack and (self.options != options_to_stop_at):
+                count += 1
+                self.pop()
 
-    def find_option(self, option):
-        depth = 0
-        options = self.options
-        token = self.options_token
-        i = reversed(self.options_stack)
-        while True:
-            t = options.get(option, None)
-            if t is not None:
-                break
-            try:
-                options, token = next(i)
-            except StopIteration:
-                parent_options = self.program.options.get(option)
-                if parent_options:
-                    parent_options = parent_options.replace("|", "or")
-                    message = f"{denormalize_option(option)} can't be used here, it must be used immediately after {parent_options}"
-                else:
-                    message = f"unknown option {denormalize_option(option)}"
-                raise AppealUsageError(message) from None
+            if self.options != options_to_stop_at:
+                raise ValueError(f"Options.pop_until_token: couldn't find options with token={token}")
 
-        program, group_id = t
-        total = program.total
-        return program, group_id, total.minimum, total.maximum, token
+            if want_prints:
+                print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_token: token={token}, popped {count} times.")
+
+        def unmap_all_child_options(self):
+            """
+            This unmaps all the *child* options.
+
+            Note that we're only emptying self.options_stack.
+            self.options is the top of the stack, and we aren't
+            blowing that away.  So when we empty self.options_stack,
+            there's still one options dict left, which was at the
+            bottom of the stack; this is the bottom options dict,
+            where all the permanently-mapped options live.
+            """
+            count = len(self.options_stack)
+            for _ in range(count):
+                self.pop()
+
+            if want_prints:
+                print(f"{self.interpreter.cmdline_prefix} Options.unmap_all_child_options: popped {count} times.")
+
+        def __getitem__(self, option):
+            depth = 0
+            options = self.options
+            token = self.options_token
+            i = reversed(self.options_stack)
+            while True:
+                t = options.get(option, None)
+                if t is not None:
+                    break
+                try:
+                    options, token = next(i)
+                except StopIteration:
+                    parent_options = self.interpreter.program.options.get(option)
+                    if parent_options:
+                        parent_options = parent_options.replace("|", "or")
+                        message = f"{denormalize_option(option)} can't be used here, it must be used immediately after {parent_options}"
+                    else:
+                        message = f"unknown option {denormalize_option(option)}"
+                    raise AppealUsageError(message) from None
+
+            program, group_id = t
+            total = program.total
+            return program, group_id, total.minimum, total.maximum, token
+
+        def __setitem__(self, option, value):
+            self.options[option] = value
 
     def __call__(self):
         (
@@ -2692,8 +2702,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     converter = cls(op.parameter, self.appeal, is_command=op.is_command)
                     old_o = self.o
                     self.converters[op.key] = self.o = converter
-                    if op.is_command:
-                        assert not command_converter
+                    if op.is_command and (not command_converter):
                         command_converter = converter
                         self.command_converter_key = op.key
 
@@ -2921,7 +2930,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                         self.group.laden = True
 
                     if not is_oparg:
-                        self.empty_options_stack()
+                        self.options.unmap_all_child_options()
 
                     if want_prints:
                         print(f"{self.cmdline_prefix}")
@@ -2980,7 +2989,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                 if double_dash:
                     option = a
-                    program, group_id, minimum_arguments, maximum_arguments, token = self.find_option(option)
+                    program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
                 else:
                     ## In Appeal,
                     ##      % python3 myscript foo -abcde
@@ -3004,7 +3013,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                     # strip off this short option by itself:
                     option = a[1]
-                    program, group_id, minimum_arguments, maximum_arguments, token = self.find_option(option)
+                    program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
 
                     # handle the remainder.
                     remainder = a[2:]
@@ -3078,11 +3087,11 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.rewind_one_instruction()
                     op = None
 
-                # throw away child options mapped below our option's sibling,
-                self.pop_options_until_token(token)
+                # throw away child options mapped below our option's sibling.
+                self.options.pop_until_token(token)
 
                 # and push a fresh options dict.
-                self.push_options()
+                self.options.push()
 
                 if split_value is not None:
                     if maximum_arguments != 1:
@@ -3495,12 +3504,12 @@ class BooleanOptionConverter(Option):
         return self.value
 
 class MultiOption(Option):
-    def __init__(self, parameter, appeal):
+    def __init__(self, parameter, appeal, *, is_command=False):
         self.multi_converters = []
         self.multi_args = []
         # the callable passed in is ignored
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=self.option, default=parameter.default)
-        super().__init__(p2, appeal)
+        super().__init__(p2, appeal, is_command=is_command)
 
     def flush(self):
         self.multi_converters.append((self.args_converters, self.kwargs_converters))
