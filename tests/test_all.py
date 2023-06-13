@@ -1778,7 +1778,7 @@ class ReadmeTests(unittest.TestCase):
         self.exec_readme(
             'Quickstart',
             1,
-            "fgrep xy" f"zzy '{appeal_dir}/tests/run_tests.py'",
+            "fgrep xy" f"zzy '{appeal_dir}/tests/test_all.py'",
             # xyzzy!
             "# xyz" "zy!",
             )

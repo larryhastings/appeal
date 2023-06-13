@@ -454,14 +454,13 @@ class ArgumentGroup:
 
 class CharmProgram:
 
-    id_counter = 1
+    next_id = serial_number_generator(prefix="program-").__next__
 
     def __init__(self, name=None, minimum=0, maximum=0, *, option=None):
         self.name = name
         self.option = option
 
-        self.id = CharmProgram.id_counter
-        CharmProgram.id_counter += 1
+        self.id = CharmProgram.next_id()
 
         self.opcodes = []
 
@@ -983,6 +982,17 @@ class CharmInstructionEnd(CharmInstruction):
 
 
 class CharmAssembler:
+    """
+    Compiles CharmInstruction objects into a list.
+    Has a function call for every instruction; calling
+    the function appends one of those instructions.
+
+    You can also append a CharmAssembler.  That
+    indeed appends the assembler at that point in
+    the stream of instructions, and any instructions
+    you append to *that* assembler will appear at
+    that spot in the final instruction stream.
+    """
     def __init__(self, id=None):
         self.id = id
 
@@ -1036,7 +1046,6 @@ class CharmAssembler:
 
         raise IndexError(f"CharmAssembler index out of range")
 
-
     def __iter__(self):
         for o in self.contents:
             assert isinstance(o, (list, CharmAssembler))
@@ -1046,7 +1055,6 @@ class CharmAssembler:
                 continue
 
             yield from o
-
 
     def no_op(self):
         op = CharmInstructionNoOp()
@@ -1104,14 +1112,6 @@ class CharmAssembler:
             name=name,
             )
         return self._append_instruction(op)
-
-    # def push_context(self):
-    #     op = CharmInstructionPushContext()
-    #     return self._append_instruction(op)
-
-    # def pop_context(self):
-    #     op = CharmInstructionPopContext()
-    #     return self._append_instruction(op)
 
     def map_option(self, option, program, callable, parameter, key, group):
         op = CharmInstructionMapOption(
@@ -1383,12 +1383,10 @@ class CharmCompiler:
                 print(f"[cc] {indent}hand-coded program for simple str")
             program = CharmProgram(name=program_name, minimum=1, maximum=1, option=option_names)
             a = CharmAssembler(self)
-            # a.push_context()
             a.set_group(self.next_argument_group_id(), 1, 1, optional=False)
             a.load_converter(key)
             a.consume_argument(required=True, is_oparg=True)
             a.add_to_kwargs(parameter.name)
-            # a.pop_context()
             a.end(name=program_name, id=program.id)
             program.opcodes = a.opcodes
         else:
@@ -1402,8 +1400,6 @@ class CharmCompiler:
                 print(f"[cc] {indent}<< recurse on option >>")
 
             cc = CharmCompiler(self.appeal, name=program_name, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-", option=option_names, indent=indent)
-            # cc.initial_a.push_context()
-            # cc.final_a.pop_context()
 
             add_to_kwargs = key, parameter.name
             program = cc(annotation, parameter.default, is_option=True, multioption=multioption, add_to_kwargs=add_to_kwargs)
@@ -1570,9 +1566,6 @@ class CharmCompiler:
         kw_parameters_seen = set()
         _, kw_parameters, positionals = self.appeal.fn_database_lookup(callable)
 
-        if want_prints:
-            print(f"[cc] {indent}automatically map keyword-only parameters to options")
-
         # we need to delay mapping options sometimes.
         #
         # if depth=0, we're in the command function (or the root option function).
@@ -1580,59 +1573,42 @@ class CharmCompiler:
         #
         # if depth>0, we're in a child annotation function. all options go into
         # the same group as the first argument (if any)
-        options_queue = []
-
-        def queue_options(callable, parameter, signature, key, depth, indent, group_id):
-            if want_prints:
-                print(f"[cc] {indent}  queueing options for {parameter}")
-            options_queue.append((callable, parameter, signature, key, depth, indent, group_id))
-
-        def flush_options():
-            if not options_queue:
+        mapped_options = False
+        def map_options():
+            nonlocal mapped_options
+            if mapped_options:
                 return
-
+            mapped_options = True
             if want_prints:
-                print(f"[cc]")
-                print(f"[cc] {indent}flushing {len(options_queue)} options:")
+                print(f"[cc] {indent}automatically map keyword-only parameters to options")
 
-            names = []
-            for args in options_queue:
-                names.extend(self.map_options(*args))
-            options_queue.clear()
+            for i, (parameter_name, p) in enumerate(parameters.items()):
+                if p.kind == KEYWORD_ONLY:
+                    if p.default == empty:
+                        raise AppealConfigurationError(f"{usage_callable}: keyword-only argument {parameter_name} doesn't have a default value")
+                    kw_parameters_seen.add(parameter_name)
+                    self.map_options(callable, p, signature, converter_key, depth, indent, self.group.id)
+                    continue
+                if p.kind == VAR_KEYWORD:
+                    var_keyword = parameter_name
+                    continue
 
+            # step 2: populate **kwargs-only options
+            # (options created with appeal.option(), where the parameter_name doesn't
+            #  appear in the function, so the output goes into **kwargs)
             if want_prints:
-                print(f"[cc]")
-                print(f"[cc] {indent}flushed options: {names}")
+                print(f"[cc] {indent}map user-defined options")
 
-            return names
+            kw_parameters_unseen = set(kw_parameters) - kw_parameters_seen
+            if kw_parameters_unseen:
+                if not var_keyword:
+                    raise AppealConfigurationError(f"{usage_callable}: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
+                for parameter_name in kw_parameters_unseen:
+                    parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
+                    self.map_options(callable, parameter, signature, converter_key, depth, indent, self.group.id)
 
-        for i, (parameter_name, p) in enumerate(parameters.items()):
-            if p.kind == KEYWORD_ONLY:
-                if p.default == empty:
-                    raise AppealConfigurationError(f"{usage_callable}: keyword-only argument {parameter_name} doesn't have a default value")
-                kw_parameters_seen.add(parameter_name)
-                queue_options(callable, p, signature, converter_key, depth, indent, self.group.id)
-                continue
-            if p.kind == VAR_KEYWORD:
-                var_keyword = parameter_name
-                continue
-
-        # step 2: populate **kwargs-only options
-        # (options created with appeal.option(), where the parameter_name doesn't
-        #  appear in the function, so the output goes into **kwargs)
-        if want_prints:
-            print(f"[cc] {indent}map user-defined options")
-
-        kw_parameters_unseen = set(kw_parameters) - kw_parameters_seen
-        if kw_parameters_unseen:
-            if not var_keyword:
-                raise AppealConfigurationError(f"{usage_callable}: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
-            for parameter_name in kw_parameters_unseen:
-                parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
-                queue_options(callable, parameter, signature, converter_key, depth, indent, self.group.id)
-
-        if (not depth) and options_queue:
-            flush_options()
+        if not depth:
+            map_options()
 
         group = None
 
@@ -1653,6 +1629,7 @@ class CharmCompiler:
             print(f"[cc] {indent}compile positional parameters")
             print(f"[cc]")
             indent += "    "
+
         for i, (parameter_name, p) in enumerate(parameters.items()):
             if not p.kind in maps_to_positional:
                 continue
@@ -1697,15 +1674,10 @@ class CharmCompiler:
             if pgi_parameter.first_in_group and (not pgi_parameter.in_required_group):
                 group = self.group = self.new_argument_group(optional=True, indent=indent + "    ")
 
-            if options_queue:
-                flush_options()
+            map_options()
 
             self.body_a.load_converter(key=converter_key)
-            if cls is SimpleTypeConverterStr: # or (isinstance(callable, type) and issubclass(callable, Option)):
-                # if want_prints:
-                #     print(f"{indent_str}       LEAF {pgi_parameter} is_degenerate={is_degenerate}")
-                # ends_group = pgi_parameter.last_in_group
-                # starts_optional_group = pgi_parameter.first_in_group and not pgi_parameter.in_required_group
+            if cls is SimpleTypeConverterStr:
                 if want_prints:
                     print(f"[cc] {indent}    simple str converter, consume_argument and append.")
                 self.body_a.consume_argument(required=pgi_parameter.required, is_oparg=bool(self.option_depth))
@@ -1726,10 +1698,7 @@ class CharmCompiler:
             if want_prints:
                 print(f"[cc]")
 
-        flush_options()
-
-        # if want_prints:
-        #     print(f"{indent_str}<< callable={callable}")
+        map_options()
 
         if append_op and not is_degenerate:
             if want_prints:
@@ -1817,7 +1786,6 @@ class CharmCompiler:
 
         self.final_a.end(self.program.id, self.name)
         self.root_a.append(self.final_a)
-
 
         p = self.program.opcodes
         for opcodes in self.root_a:
@@ -3144,7 +3112,7 @@ class CharmInterpreter(CharmBaseInterpreter):
         satisfied = True
         ag = self.group
         assert ag
-        # print("FINAL AG", ag, ag.satisfied(), ag.optional, ag.count)
+
         if not ag.satisfied():
             if ag.minimum == ag.maximum:
                 plural = "" if ag.minimum == 1 else "s"
@@ -3164,8 +3132,6 @@ class CharmInterpreter(CharmBaseInterpreter):
                 print(f"{self.opcodes_prefix}      remaining cmdline: {list(reversed(argi.stack))}")
             else:
                 print(f"{self.opcodes_prefix}      cmdline was completely consumed.")
-
-        # self.remove_uncallable_converters()
 
         if want_prints:
             print(charm_separator_line)
@@ -3227,13 +3193,13 @@ class Converter:
     def reset(self):
         # collections of converters we'll use to compute *args and **kwargs.
         # contains either raw strings or Converter
-        # objects which we'll call.  these are the
-        # output of parse() and the input of convert().
+        # objects which we'll call.
+        #
+        # these are the output of parse(), and the input of convert().
         self.args_converters = []
         self.kwargs_converters = {}
 
-        # the output of convert(), and the input
-        # for execute().
+        # these are the output of convert(), and the input for execute().
         self.args = []
         self.kwargs = {}
 
@@ -3260,10 +3226,7 @@ class Converter:
             raise AppealUsageError(f"invalid value something something {converter=}, {dir(converter)=} {converter.args=}")
 
     def execute(self, processor):
-        # print(f"calling {self.callable}(*{self.args}, **{self.kwargs})")
-        # return processor.execute_preparers(self.callable)(self.args, self.kwargs)
         executor = processor.execute_preparers(self.callable)
-        # print(f"\nEXECUTE self.callable={self.callable} execute={execute} inspect.signature(execute)={inspect.signature(execute)} self.args={self.args} self.kwargs={self.kwargs}")
         return executor(*self.args, **self.kwargs)
 
 
@@ -3477,18 +3440,17 @@ class Option(BaseOption):
     # init() is optional.
 
     # init() is called at initialization time.
-    # This is a convenience; you can overload __init__
+    # This is a convenience; you can also overload __init__
     # if you like.  But that means staying in sync with
-    # the parameters to __init__ and those aren't
-    # settled yet.
+    # the parameters to __init__ and still change sometimes.
     def init(self, default):
         pass
 
     # option() is called every time your option is specified
     # on the command-line.  For an Option, this will be exactly
-    # one time.  For a MultiOption, this will be one or more
-    # times.  (If your option is never specified on the
-    # command-line, your Option subclass will never be created.)
+    # one time.  For a MultiOption, this will be one or more times.
+    # (Appeal will never construct your Option object unless
+    # it's going to call your option method at least once.)
     #
     # option() can take parameters, and these are translated
     # to command-line positional parameters or options in the
@@ -3501,6 +3463,9 @@ class Option(BaseOption):
     #     specified.
     #   * You may (and are encouraged to!) specify annotations for
     #     the parameters to option().
+    #   * If your option method only has *optional* parameters,
+    #     it's possible Appeal will call it with zero arguments.
+    #     (This is how you implement "make -j" for example.)
     @abstractmethod
     def option(self):
         pass
@@ -5378,7 +5343,6 @@ class Processor:
             except ValueError:
                 pass
         return fn
-
 
     def print_log(self):
         if not self.events:
