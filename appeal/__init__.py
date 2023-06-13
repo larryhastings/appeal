@@ -2430,32 +2430,37 @@ class CharmInterpreter(CharmBaseInterpreter):
     ##     @app.command()
     ##     def frobnicate(a, b, c, *, color:color_option=Color('BLUE'), position:position_option=Position(0, 0, 0)): ...
     ##
-    ## If you then run the command-line
+    ## If you then run this command-line:
     ##
-    ##     % python3 myscript frobnicate A --color   ...
-    ##                                             ^
-    ##                                             |
-    ##      +--------------------------------------+
+    ##     % python3 myscript frobnicate A --color red ...
+    ##                                                 ^
+    ##                                                 |
+    ##      +------------------------------------------+
     ##      |
-    ## At this point. we've run the Charm program associated
-    ## with "--color", which has mapped in two new options,
+    ## At THIS point. we've run the Charm program associated
+    ## with "--color".  It's mapped in two new options,
     ## "--brightness" (and probably "-b") and "--hue" (and maybe "-h").
+    ## These are "child options"; they're children of "--color".
     ##
-    ## The moment Appeal encounters another positional argument to
-    ## frobnicate ("b"), or the option "--position", those two
-    ## options are *unmapped*.
+    ## If the next thing on the command-line is "--brightness"
+    ## or "--hue", we handle that option.  But if the next thing
+    ## is a positional argument to frobnicate (which will be
+    ## the argument supplied to parameter "b"), or the option
+    ## "--position", those two child options are *unmapped*.
     ##
-    ## We manage this with a stack of options dicts.
+    ## We manage these options lifetimes with a *stack* of options dicts.
     ##
     ##  self.options is the options dict at the top of the stack.
-    ##  self.options_stack is a stack of the remaining options dicts,
+    ##  self.stack is a stack of the remaining options dicts,
     ##     with the bottom of the stack at self.options_stack[0].
     ##
-    ## An "options token" represents the mapping of a particular option
-    ## to a particular converter *at a specific spot in the annotations tree*.
-    ## If an option is mapped multiple times, whether it's to the same
-    ## callable or not, those different mappings would get different options
-    ## tokens.
+    ## An "options token" represents a particular options dict in
+    ## the stack.  Each entry in the stack gets a token.  We then
+    ## store the toke on the option.  This is how we unmap the
+    ## children of a sibling's option; when the user executes an
+    ## option on the command-line, we pop the options stack until
+    ## the options dict mapped to that token is at the top of the
+    ## stack.
     ##
 
     @big.BoundInnerClass
@@ -2463,23 +2468,45 @@ class CharmInterpreter(CharmBaseInterpreter):
 
         def __init__(self, interpreter):
             self.interpreter = interpreter
-            self.options_stack = []
-            self.options_token_to_dict = {}
-            self.options_id_to_token = {}
-            # we want to sort tokens, so, let's not paint ourselves into a corner
-            # with a width or something
-            self.next_options_token = serial_number_generator(prefix="options", tuple=True).__next__
+            self.stack = []
+            self.token_to_dict = {}
+            self.dict_id_to_token = {}
+
+            # We want to sort options tokens.
+            # But serial_number_generator(tuple=True) is ugly and verbose.
+            # This seems nicer.
+
+            class OptionsToken:
+                def __init__(self, i):
+                    self.i = i
+                    self.repr = f"<options-{self.i}>"
+                def __repr__(self):
+                    return self.repr
+                def __lt__(self, other):
+                    return self.i < other.i
+                def __eq__(self, other):
+                    return self.i == other.i
+                def __hash__(self):
+                    return self.i
+
+            def token_generator():
+                i = 1
+                while True:
+                    yield OptionsToken(i)
+                    i += 1
+
+            self.next_token = token_generator().__next__
             self.reset()
 
         def reset(self):
-            self.options = options = {}
-            self.options_token = token = self.next_options_token()
-            self.options_token_to_dict[token] = options
-            self.options_id_to_token[id(options)] = token
+            options = {}
+            token = self.next_token()
+            self.options = self.token_to_dict[token] = options
+            self.token = self.dict_id_to_token[id(options)] = token
             return token
 
         def push(self):
-            self.options_stack.append((self.options, self.options_token))
+            self.stack.append((self.options, self.token))
             token = self.reset()
 
             if want_prints:
@@ -2487,13 +2514,13 @@ class CharmInterpreter(CharmBaseInterpreter):
 
         def pop(self):
             options_id = id(self.options)
-            token = self.options_id_to_token[options_id]
-            del self.options_id_to_token[options_id]
-            del self.options_token_to_dict[token]
+            token = self.dict_id_to_token[options_id]
+            del self.dict_id_to_token[options_id]
+            del self.token_to_dict[token]
 
-            options, token = self.options_stack.pop()
+            options, token = self.stack.pop()
             self.options = options
-            self.options_token = token
+            self.token = token
 
             if want_prints:
                 options = [denormalize_option(option) for option in options]
@@ -2502,16 +2529,16 @@ class CharmInterpreter(CharmBaseInterpreter):
                 print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop: popped to token {token}, options={options}")
 
         def pop_until_token(self, token):
-            if self.options_token == token:
+            if self.token == token:
                 if want_prints:
                     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_token: token={token} is current token.  popped 0 times.")
                 return
-            options_to_stop_at = self.options_token_to_dict.get(token)
+            options_to_stop_at = self.token_to_dict.get(token)
             if not options_to_stop_at:
                 raise ValueError(f"Options.pop_until_token: specified non-existent options token={token}")
 
             count = 0
-            while self.options_stack and (self.options != options_to_stop_at):
+            while self.stack and (self.options != options_to_stop_at):
                 count += 1
                 self.pop()
 
@@ -2525,14 +2552,14 @@ class CharmInterpreter(CharmBaseInterpreter):
             """
             This unmaps all the *child* options.
 
-            Note that we're only emptying self.options_stack.
+            Note that we're only emptying the stack.
             self.options is the top of the stack, and we aren't
-            blowing that away.  So when we empty self.options_stack,
+            blowing that away.  So when we empty self.stack,
             there's still one options dict left, which was at the
             bottom of the stack; this is the bottom options dict,
             where all the permanently-mapped options live.
             """
-            count = len(self.options_stack)
+            count = len(self.stack)
             for _ in range(count):
                 self.pop()
 
@@ -2542,8 +2569,8 @@ class CharmInterpreter(CharmBaseInterpreter):
         def __getitem__(self, option):
             depth = 0
             options = self.options
-            token = self.options_token
-            i = reversed(self.options_stack)
+            token = self.token
+            i = reversed(self.stack)
             while True:
                 t = options.get(option, None)
                 if t is not None:
@@ -2734,7 +2761,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                 if op.op == opcode.map_option:
                     self.options[op.option] = (op.program, op.group)
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} map_option | '{denormalize_option(op.option)}' -> {op.program} | token {self.options_token}")
+                        print(f"{self.opcodes_prefix} {prefix} map_option | '{denormalize_option(op.option)}' -> {op.program} | token {self.options.token}")
                         print_changed_registers()
                     continue
 
