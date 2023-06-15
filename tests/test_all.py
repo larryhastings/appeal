@@ -346,7 +346,12 @@ def earlier(a, b:earlier_int_float1, c:earlier_int_float2=(earlier_int_float2, 0
     return (earlier, a, b, c)
 
 
-class SmokeTests(unittest.TestCase):
+class AppealTestsBase(unittest.TestCase):
+    maxDiff = None
+
+
+class SmokeTests(AppealTestsBase):
+
     def setUp(self):
         global app
         global command
@@ -1110,8 +1115,8 @@ class SmokeTests(unittest.TestCase):
     def test_undo_2(self):
         command(undo)
         self.assert_process(
-            'undo 3',
-            (undo, 3),
+            'undo 2',
+            (undo, 2),
             )
 
     def test_hey_argparse_watch_this_1(self):
@@ -1672,7 +1677,7 @@ if "-v" in sys.argv:
             print("    ]")
 
 
-class ReadmeTests(unittest.TestCase):
+class ReadmeTests(AppealTestsBase):
 
     def exec_readme(self, section, index, cmdline, expected):
         global app
@@ -2403,7 +2408,7 @@ class ReadmeTests(unittest.TestCase):
             "repetition args=([0, False],)",
             )
 
-    def test_now_witness_the_power_of_this_etc_1_2(self):
+    def test_now_witness_the_power_of_this_etc_1_3(self):
         self.exec_readme(
             "Multiple options that aren't MultiOptions",
             0,
