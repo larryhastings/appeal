@@ -1560,7 +1560,8 @@ class SmokeTests(AppealTestsBase):
         # there's a usage error:
         # AppealUsageError(f"no argument supplied for {self}, we should have raised an error earlier huh.")
         # this test used to trip it.
-        # (before I rewrote undo converters to tie directly to argument groups)
+        # (before I rewrote undoable converters to tie directly to argument groups)
+        # (which was before I rewrote it two more times and renamed them to "discretionary" converter)
         command(earlier)
         self.assert_process(
             "earlier a  1  2.3 -v",
@@ -1569,6 +1570,70 @@ class SmokeTests(AppealTestsBase):
                 (earlier_int_float1, 1, 2.3, True),
                 (earlier_int_float2, 0, 0.0, False),
                 ),
+            )
+
+    def test_discretionary_converter_torture_test_1(self):
+        def first_child(*, verbose=False):
+            return (first_child, verbose)
+
+        def enfant_terrible(*, flag=0):
+            return (enfant_terrible, flag)
+
+        def parent(first_child: first_child=(first_child, False), enfant_terrible:enfant_terrible=(enfant_terrible, 0)):
+            return (parent, first_child, enfant_terrible)
+
+        @command
+        def grandparent(parent:parent=(parent, (first_child, False), (enfant_terrible, 0))):
+            return (grandparent, parent)
+
+        self.assert_process(
+            "grandparent --flag 3",
+            (grandparent,
+                (parent,
+                    (first_child, False),
+                    (enfant_terrible, 3),
+                    ),
+                ),
+            )
+
+    def test_custom_option(self):
+        class MyOption(appeal.Option):
+            def init(self, default):
+                self.value = default
+
+            def option(self, value:int=0):
+                self.value = value
+
+            def render(self):
+                return self.value
+
+        @command
+        def c(a, b, *, option:MyOption=0):
+            return (c, a, b, option)
+
+        self.assert_process(
+            "c aa bb",
+            (c, 'aa', 'bb', 0)
+            )
+
+        self.assert_process(
+            "c aa bb -o",
+            (c, 'aa', 'bb', 0)
+            )
+
+        self.assert_process(
+            "c aa bb -o 33",
+            (c, 'aa', 'bb', 33)
+            )
+
+        self.assert_process(
+            "c  xx -o 44 yy",
+            (c, 'xx', 'yy', 44)
+            )
+
+        self.assert_process(
+            "c  -o 55 xx yy",
+            (c, 'xx', 'yy', 55)
             )
 
 

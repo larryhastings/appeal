@@ -422,13 +422,6 @@ class ArgumentGroup:
         # a flag you should set when you trigger
         # an option in this group
         self.laden = False
-        # this is a list of all the converters we executed
-        # append_to_args on.  these converters had a positional
-        # converter appended to them.  if the argument group
-        # is undoable--if it's satisfied and not laden--we
-        # can undo the converters by popping from args for
-        # all these converters (in reverse).
-        self.parent_converters = []
 
     def satisfied(self):
         if self.optional and (not (self.laden or self.count)):
@@ -442,7 +435,6 @@ class ArgumentGroup:
         o = ArgumentGroup(self.minimum, self.maximum, optional=self.optional, id=self.id)
         o.count = self.count
         o.laden = self.laden
-        o.parent_converters = self.parent_converters.copy()
         return o
 
     def summary(self):
@@ -786,19 +778,19 @@ class CharmInstructionAppendToArgs(CharmInstruction):
     generating usage information and documentation.
     """
 
-    __slots__ = ['callable', 'parameter', 'undoable', 'usage', 'usage_callable', 'usage_parameter']
+    __slots__ = ['callable', 'parameter', 'discretionary', 'usage', 'usage_callable', 'usage_parameter']
 
-    def __init__(self, callable, parameter, undoable, usage, usage_callable, usage_parameter):
+    def __init__(self, callable, parameter, discretionary, usage, usage_callable, usage_parameter):
         self.op = opcode.append_to_args
         self.callable = callable
         self.parameter = parameter
-        self.undoable = undoable
+        self.discretionary = discretionary
         self.usage = usage
         self.usage_callable = usage_callable
         self.usage_parameter = usage_parameter
 
     def __repr__(self):
-        return f"<append_to_args callable={self.callable} parameter={self.parameter} undoable={self.undoable} usage={self.usage} usage_callable={self.usage_callable} usage_parameter={self.usage_parameter}>"
+        return f"<append_to_args callable={self.callable} parameter={self.parameter} discretionary={self.discretionary} usage={self.usage} usage_callable={self.usage_callable} usage_parameter={self.usage_parameter}>"
 
 class CharmInstructionAddToKwargs(CharmInstruction):
     """
@@ -1096,11 +1088,11 @@ class CharmAssembler:
             )
         return self._append_instruction(op)
 
-    def append_to_args(self, callable, parameter, undoable, usage, usage_callable, usage_parameter):
+    def append_to_args(self, callable, parameter, discretionary, usage, usage_callable, usage_parameter):
         op = CharmInstructionAppendToArgs(
             callable = callable,
             parameter = parameter,
-            undoable = undoable,
+            discretionary = discretionary,
             usage = usage,
             usage_callable = usage_callable,
             usage_parameter = usage_parameter,
@@ -1341,7 +1333,7 @@ class CharmCompiler:
         a.comment(f"{self.program.name} argument group {group_id} duplicate options")
         self.body_a.append(a)
 
-    def is_converter_undoable(self, parameter, converter_class):
+    def is_converter_discretionary(self, parameter, converter_class):
         optional = (
             # *args and **kwargs are not required
             (parameter.kind in (VAR_POSITIONAL, VAR_KEYWORD))
@@ -1350,10 +1342,8 @@ class CharmCompiler:
             (parameter.default is not empty)
             )
 
-        # you can only undo actual Converter objects
+        # only actual Converter objects can be discretionary
         is_converter = issubclass(converter_class, Converter)
-
-        # print(f"^v^v^v^v^v^v^v is converter undoable? {is_converter and optional} | {parameter=} {optional=} | {converter_class=} {is_converter=}")
 
         return is_converter and optional
 
@@ -1681,13 +1671,13 @@ class CharmCompiler:
                 if want_prints:
                     print(f"[cc] {indent}    simple str converter, consume_argument and append.")
                 self.body_a.consume_argument(required=pgi_parameter.required, is_oparg=bool(self.option_depth))
-                op = self.body_a.append_to_args(callable=callable, parameter=parameter_name, undoable=False, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
+                op = self.body_a.append_to_args(callable=callable, parameter=parameter_name, discretionary=False, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
                 self.reset_duplicate_options_a()
             else:
                 if want_prints:
                     print(f"[cc] {indent}    << recurse on parameter >>")
-                undoable = self.is_converter_undoable(p, cls)
-                append = {'callable': callable, 'parameter': parameter_name, "undoable": undoable, "usage": usage, 'usage_callable': usage_callable, 'usage_parameter': usage_parameter }
+                discretionary = self.is_converter_discretionary(p, cls)
+                append = {'callable': callable, 'parameter': parameter_name, "discretionary": discretionary, "usage": usage, 'usage_callable': usage_callable, 'usage_parameter': usage_parameter }
                 is_degenerate_subtree = self.compile_parameter(depth + 1, indent + "    ", p, pgi, usage_callable, usage_parameter, None, append=append, is_command=False)
                 is_degenerate = is_degenerate and is_degenerate_subtree
 
@@ -2038,8 +2028,6 @@ class CharmBaseInterpreter:
         self.converters = {}
         self.groups = []
 
-        self.converter_queue = collections.deque()
-
 
     def repr_ip(self, ip=None):
         s = "--"
@@ -2070,7 +2058,7 @@ class CharmBaseInterpreter:
 
     @big.BoundInnerClass
     class CharmProgramStackEntry:
-        # __slots__ = ['interpreter', 'ip', 'program', 'converter', 'o', 'group', 'groups', 'converter_queue']
+        __slots__ = ['interpreter', 'ip', 'program', 'converter', 'o', 'group', 'groups']
 
         def __init__(self, interpreter):
             self.interpreter = interpreter
@@ -2080,7 +2068,6 @@ class CharmBaseInterpreter:
             self.o = interpreter.o
             self.group = interpreter.group
             self.groups = interpreter.groups
-            self.converter_queue = interpreter.converter_queue
 
         def restore(self):
             interpreter = self.interpreter
@@ -2090,10 +2077,9 @@ class CharmBaseInterpreter:
             interpreter.o = self.o
             interpreter.group = self.group
             interpreter.groups = self.groups
-            interpreter.converter_queue = self.converter_queue
 
         def __repr__(self):
-            return f"<CharmProgramStackEntry ip={self.ip} program={self.program.name!r} converter={self.converter} o={self.o} group={self.group.summary() if self.group else 'None'} groups=[{len(self.groups)} groups converter_queue={self.converter_queue}]>"
+            return f"<CharmProgramStackEntry ip={self.ip} program={self.program.name!r} converter={self.converter} o={self.o} group={self.group.summary() if self.group else 'None'} groups=[{len(self.groups)}]>"
 
 
     def __iter__(self):
@@ -2129,7 +2115,6 @@ class CharmBaseInterpreter:
         self.ip = CharmProgramIterator(program)
         self.groups = []
         self.converter = self.o = self.group = None
-        self.converter_queue = collections.deque()
 
     def finish(self):
         if self.call_stack:
@@ -2243,189 +2228,6 @@ class CharmInterpreter(CharmBaseInterpreter):
 
         self.options = self.Options()
 
-
-    ## "flushing" a converter
-    ##
-    ## An "optional group" means there's a converter,
-    ## but we don't know in advance whether or not we're
-    ## actually gonna call it.  As a matter of fact, it
-    ## can be hard to tell in advance whether or not
-    ## we have positional parameters waiting.
-    ##
-    ## For example:
-    ##   * the first actual positional argument is optional
-    ##   * it's nested three levels deep in the annotation tree
-    ##   * we have command-line arguments waiting in argi but
-    ##     the next argument is an option, and we don't know
-    ##     how many opargs it wants to consume until we run it
-    ##
-    ## Or:
-    ##   * all the parameters to the converter are optional
-    ##   * the converter maps an option
-    ##   * sometime in the deep future the user invokes
-    ##     that option on the command-line
-    ##
-    ## Observe that:
-    ##   * First, we're only talking about optional groups,
-    ##     so this only applies to converters that get appended
-    ##     to args.
-    ##       * Converters that handle options get set in kwargs,
-    ##         so there's no mystery about whether or not they're
-    ##         getting used.  Appeal correctly creates those
-    ##         only on demand.
-    ##   * Second, optional groups only become required once we
-    ##     consume an argument in that group, or invoke one of
-    ##     the options mapped in that group.
-    ##
-    ## But, the way Appeal works internally, it makes things
-    ## a lot smoother to pre-allocate a converter and throw
-    ## it away if we don't need it, than to somehow lazy-create
-    ## the converters only at the moment we need them.
-    ##
-    ## Here's what Appeal does.  In a nutshell, converters
-    ## for optional groups don't get appended to args right away.
-    ## Instead they're queued in a "converter queue".  Then, at
-    ## the moment that an arg from the command-line gets appended
-    ## to that converter, or one of the options it maps gets
-    ## invoked, we "flush" the converter out of the queue,
-    ## appending it to the args of its parent.
-    ##
-    ## Three complexities arise from this:
-    ##    * If there is a converter queued in front of you in
-    ##      the queue going to the same parent, you need to flush
-    ##      it first, so that the parent gets its positional
-    ##      arguments in the right order.  So, when we want to
-    ##      flush a particular converter, we flush all the entries
-    ##      in the queue before it, too.
-    ##    * An optional argument group can have an entire tree
-    ##      of converters underneath it, themselves variously
-    ##      optional or required.  So, when a converter has been,
-    ##      queued, it also tells its children "I've been queued".
-    ##      If one of these children gets a positional argument
-    ##      that is a string, or gets one of its options invoked,
-    ##      it will flush its *parent*.
-    ##    * The converter queue is pushd and popped off the stack
-    ##      by a "call" instruction.  But the program for an option
-    ##      creates the converter then sets it in its parent's
-    ##      kwargs.  If its parent is queued, we want to flush it
-    ##      at that point.  But we're in a call, which means the
-    ##      parent's converter queue has been pushed on the stack.
-    ##      So we side-step this: instead of flushing the *current*
-    ##      converter queue, each queued converter keeps a reference
-    ##      to the queue it's queued in.
-    ##
-    ## So here's how it works.
-    ##
-    ## We create a converter_queue in the Interpreter.  This is
-    ## pushed and popped when we make a function call.
-    ##
-    ## Entries in the queue are a 2-tuple: there's a reference
-    ## to the "parent" (the Converter that has the args_converters
-    ## list we're gonna append to), and the "child" (the
-    ## Converter we're gonna append to parent.args_converters).
-    ## Flushing an entry in the queue means executing
-    ##
-    ##     parent.args_converters.append(child)
-    ##
-    ## We flush when:
-    ##    * we append a str to args
-    ##    * we execute an option (which writes it to kwargs)
-    ##
-    ## (We *don't* flush when we append an non-undoable
-    ## Converter to someone's args somewhere.  These don't
-    ## affect the optionality of Converters.  Either we're
-    ## appending a Converter to a queued Converter, in which
-    ## case they can be committed or thrown away at the same
-    ## time, or we're appending a Converter to a flushed
-    ## Converter, in which case we're doing the right thing.)
-    ##
-    ## When we flush, we don't necessarily flush the entire
-    ## queue.  Instead, if we're writing an argument (either
-    ## positional or keyword) to a converter, and that
-    ## converter is sitting in the queue as a "converter" in
-    ## one of the 2-tuples, we flush from the front of the
-    ## queue until we've flushed *that converter,* such that
-    ## that converter is the last thing flushed.  (The queue
-    ## is a FIFO, probably a collections.deque.)
-    ##
-    ## So:
-    ##     * Create a flag on Converter called "queued",
-    ##       initialized to False.  If True, the converter
-    ##       is waiting in the queue.
-    ##     * When append_to_args operates on a Converter,
-    ##       and that converter is hypothetically "undoable",
-    ##       append_to_args sets its "queued" flag and adds
-    ##       a 2-tuple to the queue containing the registers
-    ##           (converter, o)
-    ##     * When a converter is queued, and it wants to
-    ##       append a child converter to itself, it tells
-    ##       the child "Your parent has been queued".
-    ##       This can happen multiple times, so your parent
-    ##       might already have been flushed by the time you
-    ##       get around to flushing it, which means flushing
-    ##       an already-flushed parent should be a harmless
-    ##       no-op.
-    ##     * When append_to_args appends a string, or when
-    ##       or add_to_kwargs sets anything, and the Converter
-    ##       where this argument is being written is queued
-    ##       (or its parent is queued), flush the queue until
-    ##       this Converter (or this Converter's queued parent)
-    ##       is flushed.
-    ##     * Throw away the remaining queue and its contents
-    ##       at the end of processing.
-    ##
-    ## One final note.  When I was testing this code against the
-    ## test suite, I was quite surprised to see the same converter
-    ## queued and flushed multiple times.  I investigated, and
-    ## found it wasn't actually the *same* converter, but it had
-    ## the same name and was going in the same place.  It was a
-    ## converter for *args, and the test case looped five times.
-    ## So it actually was five identical but different converters,
-    ## going so far as to use the same converter key.
-    ## (It might be nice to be able to tell them apart in the log.)
-
-    def flush_converter(self, converter):
-        original_converter = converter
-        if not converter.queued:
-            return
-
-        converters = [converter]
-        i = 1
-
-        while converters:
-            i += 1
-            parents = []
-            for converter in converters:
-                converter_queue = converter.queued
-                assert converter.queued
-
-                while True:
-                    if not converter_queue:
-                        raise RuntimeError(f"exhausted converter_queue, but never found queued converter {self.repr_converter(converter)}")
-                    parent, child = converter_queue.popleft()
-                    parent.args_converters.append(child)
-
-                    assert child.queued is not None
-                    child.queued = None
-                    assert child.queued_parent is None
-
-                    if parent.queued:
-                        parents.append(parent)
-
-                    if child == converter:
-                        break
-            converters = parents
-
-    def flush_converters(self, converter):
-        # if a converter is queued, we never set queued_parent on it.
-        assert not (converter.queued and converter.queued_parent)
-        if converter.queued:
-            self.flush_converter(converter)
-        if converter.queued_parent:
-            self.flush_converter(converter.queued_parent)
-            converter.queued_parent = None
-
-        # print("done with FLUSH", self.repr_converter(original_converter))
 
 
     # overloaded from CharmBasicInterpreter.
@@ -2792,26 +2594,12 @@ class CharmInterpreter(CharmBaseInterpreter):
                 if op.op == opcode.append_to_args:
                     o = self.o
                     converter = self.converter
-                    if op.undoable:
-                        # print(f"QUEUE parent={self.repr_converter(converter)} converter={self.repr_converter(o)}")
-                        self.converter_queue.append((converter, o))
-                        assert o.queued is None
-                        o.queued = self.converter_queue
-                        flush = False
-                    else:
-                        converter.args_converters.append(o)
-                        if isinstance(o, str):
-                            self.flush_converters(converter)
-                        else:
-                            assert o.queued_parent is None
-                            if converter.queued:
-                                o.queued_parent = converter
-                            elif converter.queued_parent:
-                                o.queued_parent = converter.queued_parent
+                    # either queue or append o as indicated
+                    (converter.queue_converter if op.discretionary else converter.append_converter)(o)
 
                     if want_prints:
-                        undoable = "yes" if op.undoable else "no"
-                        print(f"{self.opcodes_prefix} {prefix} append_to_args | parameter {op.parameter} | undoable? {undoable}")
+                        discretionary = "yes" if op.discretionary else "no"
+                        print(f"{self.opcodes_prefix} {prefix} append_to_args | parameter {op.parameter} | discretionary? {discretionary}")
                         print_changed_registers()
                     continue
 
@@ -2828,8 +2616,8 @@ class CharmInterpreter(CharmBaseInterpreter):
                         # and it's a multioption.  it's fine, we just ignore it.
                         continue
 
+                    converter.unqueue()
                     converter.kwargs_converters[name] = o
-                    self.flush_converters(converter)
                     if want_prints:
                         print(f"{self.opcodes_prefix} {prefix} add_to_kwargs | name {op.name}")
                         print_changed_registers()
@@ -3225,8 +3013,6 @@ class Converter:
         self.appeal = appeal
         self.is_command = is_command
 
-        self.string_parameters = []
-
         callable = dereference_annotated(parameter.annotation)
         default = parameter.default
 
@@ -3239,8 +3025,6 @@ class Converter:
         # self.root = root or self
         self.default = default
         self.name = parameter.name
-
-        self.queued = self.queued_parent = None
 
         # output of analyze().  input of parse() and usage().
         # self.program = None
@@ -3263,17 +3047,228 @@ class Converter:
         return inspect.signature(dereference_annotated(parameter.annotation), follow_wrapped=False)
 
     def reset(self):
-        # collections of converters we'll use to compute *args and **kwargs.
-        # contains either raw strings or Converter
-        # objects which we'll call.
+        """
+        Called to reset the mutable state of a converter.
+
+        Note that MultiOption is a subclass of Converter,
+        and calls reset() each time it's invoked.
+        """
+
+        # names of parameters that we filled with strings
+        # from the command-line.  if this converter throws
+        # a ValueError or TypeError when executed, and it's
+        # an interior node in the annotations tree, we'll know
+        # exactly which command-line argument failed to convert
+        # and can display more pertinent usage information.
+        self.string_parameters = []
+
+        # queued and args_queue are used to manage converters
+        # that might not actually be needed.  some converters
+        # are created proactively but are never actually used.
+        # Appeal used to queue them, then remove them; queueing
+        # them and not flushing them is easier.
         #
-        # these are the output of parse(), and the input of convert().
+        # queued is a flag.  if queued is not None, it points to our
+        #     parent converter, and it represents a request to notify
+        #     the parent when you get a cmdline argument added to
+        #     you--either positional or keyword-only.
+        # args_queue is a list of child converters that are waiting to be
+        #     flushed into our args_converters.
+        #
+        # Note that self.queued may be set to our parent even when we
+        # *aren't* in our parent's args_queue.  Our converter might be
+        # a required argument to our parent, but our parent is optional and
+        # has been queued.  (Or our parent's parent, etc.  It's a tree.)
+        self.queued = None
+        self.args_queue = collections.deque()
+
+        # collections of converters we'll use to compute *args and **kwargs.
+        # contains either raw strings or Converter objects which we'll call.
+        #
+        # these are the output of parse(), specifically the CharmInterpreter,
+        # and the input of convert().
         self.args_converters = []
         self.kwargs_converters = {}
 
         # these are the output of convert(), and the input for execute().
         self.args = []
         self.kwargs = {}
+
+
+    ## "discretionary" converters, and queueing and unqueueing
+    ##
+    ## If a group is "optional", that means there's at least
+    ## one parameter with a default value.  If that parameter
+    ## has a converter, we don't know in advance whether or not
+    ## we're actually gonna call it.  We'll only call it if we
+    ## fill one of its parameters with a positional argument,
+    ## and we can't really predict in advance whether or not
+    ## that's gonna happen.
+    ##
+    ## For example:
+    ##   * the first actual positional argument is optional
+    ##   * it's nested three levels deep in the annotation tree
+    ##   * we have command-line arguments waiting in argi but
+    ##     the next argument is an option, and we don't know
+    ##     how many opargs it wants to consume until we run it
+    ##
+    ## Or:
+    ##   * all the parameters to the converter are optional
+    ##   * the converter maps an option
+    ##   * sometime in the deep future the user invokes
+    ##     that option on the command-line
+    ##
+    ## So... when should we create the converter?  The best
+    ## possible time would be "just-in-time", at the moment
+    ## we know we need it and no sooner.  But, the way Appeal
+    ## works internally, it makes things a lot smoother to
+    ## just pre-allocate a converter, then eventually throw it
+    ## away if we don't need it.
+    ##
+    ## Observe that:
+    ##   * First, we're only talking about optional groups.
+    ##     So this only applies to converters that get appended
+    ##     to args.
+    ##       * Converters that handle options get set in kwargs,
+    ##         so there's no mystery about whether or not they're
+    ##         getting used.  Appeal already creates *those*
+    ##         only on demand.
+    ##   * Second, optional groups only become required once we
+    ##     consume an argument in that group, or invoke one of
+    ##     the options mapped in that group.
+    ##
+    ## Here's what Appeal does.  In a nutshell, converters mapped
+    ## in optional groups get created early, but they don't get
+    ## appended to their parent's args_converters right away.
+    ## These converters that we might not need are called
+    ## "discretionary" converters.  Converters that aren't
+    ## discretionary are "mandatory" converters.  A "discretionary"
+    ## converter becomes mandatory at the moment it (or a
+    ## converter below it in the annotations tree) gets a string
+    ## argument from the command-line appended to it, or the user
+    ## invokes an option that maps to one of its (or one of
+    ## its children's) options.
+    ##
+    ## When the CharmInterpreter creates a mandatory converter
+    ## for a positional argument, that converter is immediately
+    ## queued in its parent converter's args_converters list.
+    ## But discretionary converters get "queued", which means
+    ## it goes to a different place: the parent converter's other
+    ## list, args_queue.
+    ##
+    ## At the moment that a discretionary converter becomes
+    ## mandatory--a string from the command-line gets appended
+    ## to that converter, or one of the options it maps gets
+    ## invoked--we "unqueue" that queued converter, moving it
+    ## from its parent's args_queue list to its parent's
+    ## args_converters list.
+    ##
+    ## Two complexities arise from this:
+    ##     * If there's a converter B queued in front of
+    ##       converter A in same parent, and B becomes mandatory,
+    ##       A becomes mandatory too.  And you need to flush
+    ##       it first, so that the parent gets its positional
+    ##       arguments in the right order.  So, when we want to
+    ##       flush a particular converter, we flush all the entries
+    ##       in the queue before it too.
+    ##     * An optional argument group can have an entire tree
+    ##       of converters underneath it, themselves variously
+    ##       optional or required.  So, when a converter has been
+    ##       queued, and it gets a child converter appended to it
+    ##       (or queued to it) it also tells its children "Tell me
+    ##       when I need to unqueue".  If one of these children
+    ##       gets a positional argument that is a string, or gets
+    ##       one of its options invoked, it'll tell its *parent*
+    ##       to unqueue.
+    ##
+    ## Internally, we only use one field in the child converter
+    ## for all this: "queued".
+    ##     * If "queued" is None, the converter is mandatory,
+    ##       and all its parents are mandatory.
+    ##     * If "queued" is not None, either the converter
+    ##       is optional, or one of its parents is optional,
+    ##       and "queued" points to its parent.
+    ##
+    ## -----
+    ##
+    ## One final note.  When I was testing this code against the
+    ## test suite, I was quite surprised to see the same converter
+    ## queued and flushed multiple times.  I investigated, and
+    ## found it wasn't actually the *same* converter, but it had
+    ## the same name and was going in the same place.  It was a
+    ## converter for *args, and the test case looped five times.
+    ## So it actually was five identical but different converters,
+    ## going so far as to use the same converter key.
+    ## (It might be nice to be able to tell them apart in the log.)
+
+    def append_converter(self, o):
+        """
+        Append o directly to our args_converters list.
+
+        If o is a string, also unqueue ourselves
+        (and recursively all our parents too).
+
+        If o is not a string, and we or one of our parents
+        is discretionary, ask o to notify us if it gets
+        a string positional argument appended to it,
+        or if one of its options is invoked.
+        """
+        # print(f">> {self=} appended to {parent=}\n")
+        self.args_converters.append(o)
+
+        if isinstance(o, str):
+            self.unqueue()
+        else:
+            assert not o.queued
+            # ask
+            if self.queued:
+                o.queued = self
+
+    def queue_converter(self, o):
+        """
+        Append o to our args_queue list.
+        o must be a discretionary Converter object.
+        """
+        # print(f">> {self=} queued for {parent=}\n")
+        assert not o.queued
+        o.queued = self
+        self.args_queue.append(o)
+
+    def unqueue(self, converter=None):
+        """
+        Unqueue ourselves from our parent.
+
+        Also tells our parent to unqueue itself,
+        recursively back up to the root of this
+        discretionary converter subtree.
+
+        Also, if converter is not None,
+        and converter is in our args_queue,
+        converter is a discretionary converter
+        in our args_queue, and we flush the
+        args_queue until converter is unqueued
+        (aka flushed).  If converter isn't in
+        args_queue, args_queue doesn't change.
+        """
+        if self.queued:
+            self.queued.unqueue(self)
+            self.queued = None
+
+        if not converter:
+            return
+
+        try:
+            # if converter isn't in args_queue, this will throw ValueError
+            self.args_queue.index(converter)
+
+            while True:
+                child = self.args_queue.popleft()
+                self.args_converters.append(child)
+                child.queued = None
+                if child == converter:
+                    break
+        except ValueError:
+            pass
 
     def convert(self, processor):
         # print(f"self={self} self.args_converters={self.args_converters} self.kwargs_converters={self.kwargs_converters}")
@@ -3349,8 +3344,8 @@ class SimpleTypeConverter(Converter):
 
         self.value = None
 
-        self.queued = self.queued_parent = None
-
+        self.queued = None
+        self.args_queue = collections.deque()
         self.args_converters = []
         # don't set kwargs_converters, let it esplody!
 
