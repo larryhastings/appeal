@@ -55,6 +55,8 @@ import textwrap
 import time
 import types
 
+from collections import defaultdict
+
 try:
     from typing import Annotated
     AnnotatedType = type(Annotated[int, str])
@@ -411,14 +413,12 @@ def serial_number_generator(*, prefix='', width=0, tuple=False):
 class ArgumentGroup:
     next_serial_number = serial_number_generator(prefix="ag-").__next__
 
-    def __init__(self, minimum=0, maximum=0, *, id=None, optional=True):
-        self.minimum = minimum
-        self.maximum = maximum
-        self.optional = optional
+    def __init__(self, *, id=None, optional=True):
         if id is None:
             id = ArgumentGroup.next_serial_number()
         self.id = id
-        self.count = 0
+        self.optional = optional
+        self.minimum = self.maximum = self.count = 0
         # a flag you should set when you trigger
         # an option in this group
         self.laden = False
@@ -432,7 +432,9 @@ class ArgumentGroup:
         return f"<ArgumentGroup {self.id} optional={self.optional} laden={self.laden} minimum {self.minimum} <= count {self.count} <= maximum {self.maximum} == {bool(self)}>"
 
     def copy(self):
-        o = ArgumentGroup(self.minimum, self.maximum, optional=self.optional, id=self.id)
+        o = ArgumentGroup(id=self.id, optional=self.optional)
+        o.minimum = self.minimum
+        o.maximum = self.maximum
         o.count = self.count
         o.laden = self.laden
         return o
@@ -442,38 +444,6 @@ class ArgumentGroup:
         optional = "yes" if self.optional else "no "
         laden = "yes" if self.laden else "no "
         return f"['{self.id}' satisfied {satisfied} | optional {optional} | laden {laden} | min {self.minimum} <= cur {self.count} <= max {self.maximum}]"
-
-
-class CharmProgram:
-
-    next_id = serial_number_generator(prefix="program-").__next__
-
-    def __init__(self, name=None, minimum=0, maximum=0, *, option=None):
-        self.name = name
-        self.option = option
-
-        self.id = CharmProgram.next_id()
-
-        self.opcodes = []
-
-        # maps option to its parent option (if any)
-        # used for usage
-        self.options = {}
-
-        self.total = ArgumentGroup(minimum, maximum, optional=False)
-
-    def __repr__(self):
-        s = f" {self.name!r}" if self.name else ""
-        return f"<CharmProgram {self.id:02}{s}>"
-
-    def __len__(self):
-        return len(self.opcodes)
-
-    def __iter__(self):
-        return iter(self.opcodes)
-
-    def __getitem__(self, index):
-        return self.opcodes[index]
 
 
 
@@ -943,9 +913,9 @@ class CharmInstructionSetGroup(CharmInstruction):
 
     __slots__ = ['group', 'id', 'optional', 'repeating']
 
-    def __init__(self, id, minimum, maximum, optional, repeating):
+    def __init__(self, id, optional, repeating):
         self.op = opcode.set_group
-        self.group = ArgumentGroup(minimum, maximum, optional=optional, id=id)
+        self.group = ArgumentGroup(optional=optional, id=id)
         self.id = id
         self.optional = optional
         self.repeating = repeating
@@ -962,9 +932,9 @@ class CharmInstructionEnd(CharmInstruction):
     a running interpreter.
     """
 
-    __slots__ = ['id', 'name']
+    __slots__ = ['name', 'id']
 
-    def __init__(self, id, name):
+    def __init__(self, name, *, id=None):
         self.op = opcode.end
         self.id = id
         self.name = name
@@ -973,100 +943,121 @@ class CharmInstructionEnd(CharmInstruction):
         return f"<end id={self.id} name={self.name!r}>"
 
 
+class CharmProgram:
+
+    next_id = serial_number_generator(prefix="program-").__next__
+
+    def __init__(self, name, *, option_names=None):
+        self.name = name
+        self.option_names = option_names
+
+        self.id = CharmProgram.next_id()
+
+        self.opcodes = []
+
+        # maps option to its parent option (if any)
+        # used for usage
+        self.options = None
+
+        self.total = ArgumentGroup(optional=False)
+
+    def __repr__(self):
+        s = f" {self.name!r}" if self.name else ""
+        return f"<CharmProgram {self.id}{s} minimum={self.total.minimum} maximum={self.total.maximum}>"
+
+    def __len__(self):
+        return len(self.opcodes)
+
+    def __iter__(self):
+        return iter(self.opcodes)
+
+    def __getitem__(self, index):
+        return self.opcodes[index]
+
+
 class CharmAssembler:
     """
-    Compiles CharmInstruction objects into a list.
+    Assembles CharmInstruction objects into a CharmProgram.
     Has a function call for every instruction; calling
     the function appends one of those instructions.
+    When you're done assembling, call finalize(), and
+    it will return the finished program.
 
     You can also append a CharmAssembler.  That
     indeed appends the assembler at that point in
-    the stream of instructions, and any instructions
-    you append to *that* assembler will appear at
-    that spot in the final instruction stream.
+    the stream of instructions, and when it finalizes,
+    it flattens all the CharmAssemblers inline.
+    Every CharmAssembler you appended will be replaced
+    with the instructions appended to it, recursively.
     """
-    def __init__(self, id=None):
-        self.id = id
 
+    next_id = serial_number_generator(prefix="asm-").__next__
+
+    def __init__(self, name=None, *, option_names=None):
+        self.name = name
+        self.option_names = option_names
+        self.id = CharmAssembler.next_id()
         self.clear()
 
-    def __repr__(self):
-        return f"<CharmAssembler '{self.id}'>"
+    def clear(self):
+        self.opcodes = opcodes = []
+        self.contents = [opcodes]
+        self._append_opcode = opcodes.append
 
-    def _append_instruction(self, o):
-        self.opcodes.append(o)
-        return o
+        self.option_to_child_options = defaultdict(set)
+        self.option_to_parent_options = defaultdict(set)
+
+    def __repr__(self):
+        name = f"name={self.name} " if self.name else ""
+        return f"<CharmAssembler {name}id={self.id}>"
 
     def append(self, o):
         if isinstance(o, CharmAssembler):
-            if not self.opcodes:
-                assert self.contents[-1] == self.opcodes
-                self.contents.pop()
+            if not len(self.opcodes):
+                opcodes = self.contents.pop()
             else:
-                self.opcodes = []
+                self.opcodes = opcodes = []
+                self._append_opcode = opcodes.append
             self.contents.append(o)
-            self.contents.append(self.opcodes)
+            self.contents.append(opcodes)
             return o
         if isinstance(o, CharmInstruction):
-            self.opcodes.append(o)
+            self._append_opcode(o)
             return o
         raise TypeError('o must be CharmAssembler or CharmInstruction')
-
-    def clear(self):
-        self.opcodes = []
-        self.contents = [self.opcodes]
 
     def __len__(self):
         return sum(len(o) for o in self.contents)
 
     def __bool__(self):
-        for o in self.contents:
-            if o:
-                return True
-        return False
+        return any(self.contents)
 
-    def __getitem__(self, index):
-        if not isinstance(index, int):
-            raise TypeError(f"CharmAssembler indices must be integers, not {type(index).__name__}")
-
-        for l in self:
-            length = len(l)
-            if index >= length:
-                index -= length
-                continue
-            return l[index]
-
-        raise IndexError(f"CharmAssembler index out of range")
-
-    def __iter__(self):
-        for o in self.contents:
-            assert isinstance(o, (list, CharmAssembler))
-            if isinstance(o, list):
-                if o:
-                    yield o
-                continue
-
-            yield from o
+    # opcodes
 
     def no_op(self):
         op = CharmInstructionNoOp()
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def comment(self, comment):
         op = CharmInstructionComment(comment)
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def label(self, name):
         op = CharmInstructionLabel(name)
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def jump_to_label(self, label):
         op = CharmInstructionJumpToLabel(label)
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def call(self, program):
         op = CharmInstructionCall(program)
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def create_converter(self, parameter, key, is_command):
         op = CharmInstructionCreateConverter(
@@ -1074,19 +1065,22 @@ class CharmAssembler:
             key=key,
             is_command=is_command,
             )
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def load_converter(self, key):
         op = CharmInstructionLoadConverter(
             key=key,
             )
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def load_o(self, key):
         op = CharmInstructionLoadO(
             key=key,
             )
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def append_to_args(self, callable, parameter, discretionary, usage, usage_callable, usage_parameter):
         op = CharmInstructionAppendToArgs(
@@ -1097,15 +1091,23 @@ class CharmAssembler:
             usage_callable = usage_callable,
             usage_parameter = usage_parameter,
             )
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def add_to_kwargs(self, name):
         op = CharmInstructionAddToKwargs(
             name=name,
             )
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def map_option(self, option, program, callable, parameter, key, group):
+        self.option_to_child_options[option].update(program.option_to_child_options)
+
+        self.option_to_parent_options.update(program.option_to_parent_options)
+        for child_option in program.option_to_child_options:
+            self.option_to_parent_options[child_option].add(option)
+
         op = CharmInstructionMapOption(
             option = option,
             program = program,
@@ -1114,46 +1116,183 @@ class CharmAssembler:
             key = key,
             group = group,
             )
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def consume_argument(self, required=False, is_oparg=False):
         op = CharmInstructionConsumeArgument(
             required=required,
             is_oparg=is_oparg,
             )
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def flush_multioption(self):
         op = CharmInstructionFlushMultioption()
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
     def branch_on_o_to_label(self, label):
         op = CharmInstructionBranchOnOToLabel(label=label)
-        return self._append_instruction(op)
+        self._append_opcode(op)
+        return op
 
-    def set_group(self, id=None, minimum=0, maximum=0, optional=True, repeating=False):
-        op = CharmInstructionSetGroup(id=id, minimum=minimum, maximum=maximum, optional=optional, repeating=repeating)
-        return self._append_instruction(op)
+    def set_group(self, id=None, optional=True, repeating=False):
+        op = CharmInstructionSetGroup(id=id, optional=optional, repeating=repeating)
+        self._append_opcode(op)
+        return op
 
-    def end(self, id, name):
-        op = CharmInstructionEnd(id=id, name=name)
-        return self._append_instruction(op)
+    def lists(self):
+        for o in self.contents:
+            if isinstance(o, list):
+                yield o
+                continue
+            yield from o.lists()
 
 
+    def __getitem__(self, index):
+        if not isinstance(index, int):
+            raise TypeError(f"CharmAssembler indices must be integers, not {type(index).__name__}")
+
+        for l in self.lists():
+            length = len(l)
+            if index >= length:
+                index -= length
+                continue
+            return l[index]
+
+        raise IndexError(f"CharmAssembler index out of range")
+
+    def assemble(self):
+        opcodes = []
+        for sublist in self.lists():
+            opcodes.extend(sublist)
+
+        labels = {}
+        fixups = []
+
+        total = ArgumentGroup()
+        group = None
+        optional = False
+
+        converter = None
+        o = None
+        option = None
+        stack = []
+        groups = []
+
+
+        index = 0
+        while index < len(opcodes):
+            op = opcodes[index]
+
+            # remove labels
+            if op.op == opcode.label:
+                if op in labels:
+                    raise AppealConfigurationError(f"label used twice: {op}")
+                labels[op] = index
+                del opcodes[index]
+                # forget current registers,
+                # who knows what state the interpreter
+                # will be in when we jump here.
+                converter = o = None
+                continue
+            elif op.op == opcode.jump_to_label:
+                fixups.append(index)
+            elif op.op == opcode.branch_on_o_to_label:
+                fixups.append(index)
+
+            # remove no_ops
+            elif op.op == opcode.no_op:
+                del opcodes[index]
+                continue
+            elif op.op == opcode.comment:
+                if not want_prints:
+                    del opcodes[index]
+                    continue
+
+            # compute total and group values
+            elif op.op == opcode.set_group:
+                group = op.group
+                optional = op.optional
+                if op.repeating:
+                    total.maximum = math.inf
+            elif op.op == opcode.consume_argument:
+                if not optional:
+                    total.minimum += 1
+                total.maximum += 1
+
+                assert group
+                group.minimum += 1
+                group.maximum += 1
+
+                o = '(string value)'
+
+            # discard redundant load_converter and load_o ops
+            # using dataflow analysis
+            elif op.op == opcode.load_converter:
+                if converter == op.key:
+                    del opcodes[index]
+                    continue
+                converter = op.key
+            elif op.op == opcode.load_o:
+                if o == op.key:
+                    del opcodes[index]
+                    continue
+                o = op.key
+            elif op.op == opcode.create_converter:
+                o = op.key
+
+            index += 1
+
+        # now process jump fixups:
+        # replace *_to_label ops with absolute jump ops
+        replacement_op = {
+            opcode.jump_to_label: CharmInstructionJump,
+            opcode.branch_on_o_to_label: CharmInstructionBranchOnO,
+        }
+        for index in fixups:
+            op = opcodes[index]
+            address = labels.get(op.label)
+            if address is None:
+                raise AppealConfigurationError(f"unknown label {op.label}")
+            opcodes[index] = replacement_op[op.op](address)
+
+        # and *now* do a jump-to-jump peephole optimization
+        # (I don't know if Appeal *can* actually generate jump-to-jumps)
+        for index in fixups:
+            op = opcodes[index]
+            while True:
+                op2 = opcodes[op.address]
+                if op2.op != opcode.jump:
+                    break
+                op.address = op2.address
+
+        # add end instruction
+        end_op = CharmInstructionEnd(self.name)
+        opcodes.append(end_op)
+
+        program = CharmProgram(self.name, option_names=self.option_names)
+        program.opcodes = opcodes
+        end_op.id = program.id
+        total.id = program.total.id
+        program.total = total
+        program.option_to_child_options = self.option_to_child_options
+        program.option_to_parent_options = self.option_to_parent_options
+        return program
 
 
 class CharmCompiler:
-    def __init__(self, appeal, *, name=None, converter_key_prefix=None, argument_group_prefix=None, option=None, indent=''):
+    def __init__(self, appeal, *, name=None, converter_key_prefix=None, argument_group_prefix=None, option_names=None, indent='', processor=None):
         self.appeal = appeal
         self.name = name
         self.indent = indent
+        self.processor = processor
 
         if want_prints:
             print(f"[cc]")
             print(f"[cc] {indent}Initializing compiler")
             print(f"[cc]")
-
-        self.program = CharmProgram(name, option=option)
 
         self.next_converter_key = serial_number_generator(prefix=converter_key_prefix or 'c-').__next__
         self.command_converter_key = None
@@ -1166,14 +1305,8 @@ class CharmCompiler:
         # These go into discrete "assemblers" which are carefully ordered in
         # the self.assemblers list.
         #
-        # Second, we iterate over self.assemblers and knit togetherthe
-        # instructions from every assembler into one big program.
-        self.root_a = CharmAssembler("root")
-
-        self.initial_a = a = CharmAssembler("initial")
-        self.root_a.append(a)
-
-        self.final_a = CharmAssembler("final")
+        # Second, we root_a.finalize(), which assembles the final program.
+        self.root_a = CharmAssembler(name, option_names=option_names)
 
         self.option_depth = 0
 
@@ -1303,14 +1436,14 @@ class CharmCompiler:
         # The top-level command is a converter, all the functions we call to convert
         # arguments are converters.
         self.ag_initialize_a = a = CharmAssembler(f"'{group_id}' initialize")
-        a.comment(f"{self.program.name} argument group '{group_id}' initialization")
+        a.comment(f"{self.name} argument group '{group_id}' initialization")
         ag_a.append(a)
 
         self.ag_options_a = a = CharmAssembler(f"'{group_id}' options")
-        a.comment(f"{self.program.name} argument group '{group_id}' options")
+        a.comment(f"{self.name} argument group '{group_id}' options")
 
         self.body_a = a = CharmAssembler(f"'{group_id}' body")
-        a.comment(f"{self.program.name} argument group '{group_id}' body")
+        a.comment(f"{self.name} argument group '{group_id}' body")
         ag_a.append(a)
 
         # initially in an argument group we don't allow duplicate options.
@@ -1330,7 +1463,7 @@ class CharmCompiler:
 
         group_id = self.group_id
         self.ag_duplicate_options_a = a = CharmAssembler(f"{group_id} duplicate options")
-        a.comment(f"{self.program.name} argument group {group_id} duplicate options")
+        a.comment(f"{self.name} argument group {group_id} duplicate options")
         self.body_a.append(a)
 
     def is_converter_discretionary(self, parameter, converter_class):
@@ -1360,7 +1493,7 @@ class CharmCompiler:
 
         assert options
 
-        self.program.options.update({o: self.program.option for o in options})
+        # self.options.update({o: self.program.option for o in options})
         name = parent_callable.__name__
         option_names = [denormalize_option(o) for o in options]
         assert option_names
@@ -1371,14 +1504,12 @@ class CharmCompiler:
             # a single required str argument.
             if want_prints:
                 print(f"[cc] {indent}hand-coded program for simple str")
-            program = CharmProgram(name=program_name, minimum=1, maximum=1, option=option_names)
-            a = CharmAssembler(self)
-            a.set_group(self.next_argument_group_id(), 1, 1, optional=False)
+            a = CharmAssembler(program_name, option_names=option_names)
+            a.set_group(self.next_argument_group_id(), optional=False)
             a.load_converter(key)
             a.consume_argument(required=True, is_oparg=True)
             a.add_to_kwargs(parameter.name)
-            a.end(name=program_name, id=program.id)
-            program.opcodes = a.opcodes
+            program = a.assemble()
         else:
             annotation = dereference_annotated(parameter.annotation)
             if not is_legal_annotation(annotation):
@@ -1389,12 +1520,12 @@ class CharmCompiler:
             if want_prints:
                 print(f"[cc] {indent}<< recurse on option >>")
 
-            cc = CharmCompiler(self.appeal, name=program_name, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-", option=option_names, indent=indent)
+            cc = CharmCompiler(self.appeal, name=program_name, option_names=option_names, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-", indent=indent)
 
             add_to_kwargs = key, parameter.name
             program = cc(annotation, parameter.default, is_option=True, multioption=multioption, add_to_kwargs=add_to_kwargs)
-            program.option = option_names
-            self.program.options.update(program.options)
+            # program.options = option_names
+            # self.options.update(program.options)
 
         for option in options:
             # option doesn't have to be unique in this argument group,
@@ -1472,6 +1603,8 @@ class CharmCompiler:
         """
         returns is_degenerate, a boolean, True if this entire subtree is "degenerate".
         """
+        if self.processor:
+            self.processor.log_event((" " * depth) + f"- compile {parameter.name}")
 
         if want_prints:
             print(f"[cc] {indent}compile_parameter {parameter}")
@@ -1701,9 +1834,12 @@ class CharmCompiler:
     def __call__(self, callable, default, is_option=False, multioption=None, add_to_kwargs=None):
         indent = self.indent
 
+        if self.processor:
+            self.processor.log_event(f"- compile {callable}")
+
         if self.name is None:
             self.name = callable.__name__
-            self.program.name = self.name
+            self.root_a.name = self.name
 
         parameter_name = callable.__name__
         while True:
@@ -1746,7 +1882,7 @@ class CharmCompiler:
             parameter._name = 'lambda'
         self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, add_to_kwargs=add_to_kwargs, is_command=True)
 
-        self.finalize()
+        program = self.finalize()
 
         if is_option:
             self.option_depth -= 1
@@ -1757,9 +1893,7 @@ class CharmCompiler:
             if not self.option_depth:
                 print()
 
-
-        return self.program
-
+        return program
 
     def finalize(self):
         """
@@ -1774,129 +1908,13 @@ class CharmCompiler:
 
         self.clean_up_argument_group()
 
-        self.final_a.end(self.program.id, self.name)
-        self.root_a.append(self.final_a)
-
-        p = self.program.opcodes
-        for opcodes in self.root_a:
-            p.extend(opcodes)
-
-        labels = {}
-        jump_fixups = []
-        total = self.program.total
-        group = None
-        converter = None
-        o = None
-        option = None
-        stack = []
-        groups = []
-
-        optional = False
-
-        i = 0
-
-        while i < len(p):
-            op = p[i]
-
-            # remove labels
-            if op.op == opcode.label:
-                if op in labels:
-                    raise AppealConfigurationError(f"label used twice: {op}")
-                labels[op] = i
-                del p[i]
-                # forget current registers,
-                # who knows what state the interpreter
-                # will be in when we jump here.
-                converter = o = None
-                continue
-            if op.op in (opcode.jump_to_label, opcode.branch_on_o_to_label):
-                jump_fixups.append(i)
-
-            # remove no_ops
-            if op.op == opcode.no_op:
-                del p[i]
-                continue
-            if op.op == opcode.comment:
-                # if 1:
-                if not want_prints:
-                    del p[i]
-                    continue
-
-            # compute total and group values
-            if op.op == opcode.set_group:
-                group = op.group
-                optional = op.optional
-                if op.repeating:
-                    if total:
-                        total.maximum = math.inf
-            if op.op == opcode.consume_argument:
-                if total:
-                    if not optional:
-                        total.minimum += 1
-                    total.maximum += 1
-                if group:
-                    group.minimum += 1
-                    group.maximum += 1
-
-            # discard redundant load_converter and load_o ops
-            if op.op == opcode.load_converter:
-                if converter == op.key:
-                    del p[i]
-                    continue
-                converter = op.key
-            if op.op == opcode.load_o:
-                if o == op.key:
-                    del p[i]
-                    continue
-                o = op.key
-            if op.op == opcode.create_converter:
-                o = op.key
-            if op.op == opcode.consume_argument:
-                o = '(string value)'
-            # if op.op == opcode.push_context:
-            #     # stack.append(CharmContextStackEntry(converter, group, o, total))
-            #     stack.append(CharmContextStackEntry(converter, o, group, groups))
-            # if op.op == opcode.pop_context:
-            #     context = stack.pop()
-            #     converter = context.converter
-            #     group = context.group
-            #     o = context.o
-            #     # total = context.total
-
-            i += 1
-
-        # now process jump fixups:
-        # replace *_to_label ops with absolute jump ops
-        opcode_map = {
-            opcode.jump_to_label: CharmInstructionJump,
-            opcode.branch_on_o_to_label: CharmInstructionBranchOnO,
-        }
-        for i in jump_fixups:
-            op = p[i]
-            new_instruction_cls = opcode_map[op.op]
-            address = labels.get(op.label)
-            if address is None:
-                raise AppealConfigurationError(f"unknown label {op.label}")
-            p[i] = new_instruction_cls(address)
-
-        # and *now* do a jump-to-jump peephole optimization
-        # (I don't know if Appeal can actually generate jump-to-jumps)
-        for i in jump_fixups:
-            op = p[i]
-            while True:
-                op2 = p[op.address]
-                if op2.op != opcode.jump:
-                    break
-                op.address = op2.address
-
-        return p
+        self.program = self.root_a.assemble()
+        return self.program
 
 
-def charm_compile(appeal, callable, default=empty, name=None, *, is_option=False):
-    if name is None:
-        name = callable.__name__
-    cc = CharmCompiler(appeal, name=name)
-    program = cc(callable, default, is_option=is_option)
+def charm_compile(appeal, callable, processor):
+    cc = CharmCompiler(appeal, name=callable.__name__, processor=processor)
+    program = cc(callable, default=empty, is_option=False)
     return program
 
 
@@ -2404,9 +2422,14 @@ class CharmInterpreter(CharmBaseInterpreter):
                 try:
                     options, token = next(i)
                 except StopIteration:
-                    parent_options = self.interpreter.program.options.get(option)
+                    parent_options = self.interpreter.program.option_to_parent_options.get(option)
                     if parent_options:
-                        parent_options = parent_options.replace("|", "or")
+                        # parent_options = parent_options.replace("|", "or")
+                        parent_options = ", ".join(denormalize_option(o) for o in parent_options)
+                        fields = parent_options.rpartition(", ")
+                        if fields[1]:
+                            fields[1] = ' or '
+                        parent_options = "".join(fields)
                         message = f"{denormalize_option(option)} can't be used here, it must be used immediately after {parent_options}"
                     else:
                         message = f"unknown option {denormalize_option(option)}"
@@ -2444,7 +2467,7 @@ class CharmInterpreter(CharmBaseInterpreter):
             print(f"{self.opcodes_prefix}")
             print(f'{self.opcodes_prefix} CharmInterpreter start')
             print(f"{self.opcodes_prefix}")
-            all_options = list(denormalize_option(o) for o in self.program.options)
+            all_options = list(denormalize_option(o) for o in self.program.option_to_child_options)
             all_options.sort(key=lambda s: s.lstrip('-'))
             all_options = " ".join(all_options)
             print(f"{self.opcodes_prefix} all options supported: {all_options}")
@@ -5272,14 +5295,14 @@ class Appeal:
                 raise AppealUsageError(f'"{name}" is not a legal command.')
         appeal.usage(usage=True, summary=True, doc=True)
 
-    def _analyze_attribute(self, name):
+    def _analyze_attribute(self, name, processor):
         if not getattr(self, name):
             return None
         program_attr = name + "_program"
         program = getattr(self, program_attr)
         if not program:
             callable = getattr(self, name)
-            program = charm_compile(self, callable)
+            program = charm_compile(self, callable, processor)
             if want_prints:
                 print()
             setattr(self, program_attr, program)
@@ -5294,10 +5317,10 @@ class Appeal:
             else:
                 name = "None"
             processor.log_event(f"analyze start ({name})")
-        self._analyze_attribute("_global")
+        self._analyze_attribute("_global", processor)
 
     def _parse_attribute(self, name, processor):
-        program = self._analyze_attribute(name)
+        program = self._analyze_attribute(name, processor)
         if not program:
             return None
         if want_prints:
