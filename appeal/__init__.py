@@ -1520,7 +1520,7 @@ class CharmCompiler:
             if want_prints:
                 print(f"[cc] {indent}<< recurse on option >>")
 
-            cc = CharmCompiler(self.appeal, name=program_name, option_names=option_names, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-", indent=indent)
+            cc = CharmCompiler(self.appeal, name=program_name, option_names=option_names, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-", indent=indent, processor=self.processor)
 
             add_to_kwargs = key, parameter.name
             program = cc(annotation, parameter.default, is_option=True, multioption=multioption, add_to_kwargs=add_to_kwargs)
@@ -1604,7 +1604,7 @@ class CharmCompiler:
         returns is_degenerate, a boolean, True if this entire subtree is "degenerate".
         """
         if self.processor:
-            self.processor.log_event((" " * depth) + f"- compile {parameter.name}")
+            self.processor.log_enter_context(f"compile parameter {parameter.name}")
 
         if want_prints:
             print(f"[cc] {indent}compile_parameter {parameter}")
@@ -1828,6 +1828,9 @@ class CharmCompiler:
                 print(f"[cc] {indent}suppress usage for non-leaf parameter {append_op.usage}")
             append_op.usage = None
 
+        if self.processor:
+            self.processor.log_exit_context()
+
         return is_degenerate
 
 
@@ -1835,7 +1838,7 @@ class CharmCompiler:
         indent = self.indent
 
         if self.processor:
-            self.processor.log_event(f"- compile {callable}")
+            self.processor.log_enter_context(f"compile {callable}")
 
         if self.name is None:
             self.name = callable.__name__
@@ -1867,6 +1870,8 @@ class CharmCompiler:
         if fix_lambda:
             parameter_name = '_____lambda______'
 
+        if self.processor:
+            self.processor.log_event("parameter grouper")
         def signature(p):
             cls = self.appeal.map_to_converter(p)
             signature = cls.get_signature(p)
@@ -1892,6 +1897,9 @@ class CharmCompiler:
             print(f"[cc]")
             if not self.option_depth:
                 print()
+
+        if self.processor:
+            self.processor.log_exit_context()
 
         return program
 
@@ -5311,12 +5319,7 @@ class Appeal:
 
     def analyze(self, processor):
         if processor:
-            callable = getattr(self, "_global")
-            if callable:
-                name = getattr(callable, "__name__", repr(callable))
-            else:
-                name = "None"
-            processor.log_event(f"analyze start ({name})")
+            processor.log_event(f"analyze _global")
         self._analyze_attribute("_global", processor)
 
     def _parse_attribute(self, name, processor):
@@ -5333,11 +5336,7 @@ class Appeal:
 
     def parse(self, processor):
         callable = getattr(self, "_global")
-        if callable:
-            name = getattr(callable, "__name__", repr(callable))
-        else:
-            name = "None"
-        processor.log_event(f"parse start ({name})")
+        processor.log_event(f"parse _global")
 
         self._parse_attribute("_global", processor)
 
@@ -5352,6 +5351,7 @@ class Appeal:
                 raise AppealUsageError("no command specified.")
             return
 
+        processor.log_enter_context(f"parsing commands")
         if self.commands:
             # okay, we have arguments waiting, and there are commands defined.
             for command_name in processor.argi:
@@ -5369,6 +5369,8 @@ class Appeal:
         if processor.argi:
             leftovers = " ".join(shlex.quote(s) for s in processor.argi)
             raise AppealUsageError(f"leftover cmdline arguments! {leftovers!r}")
+
+        processor.log_exit_context()
 
     def convert(self, processor):
         processor.log_event("convert start")
@@ -5400,27 +5402,144 @@ class Appeal:
 class Processor:
     def __init__(self, appeal):
         self.events = []
-        self.log_event("process start")
 
         self.appeal = appeal
 
         self.argi = None
         self.preparers = []
         self.commands = []
-        self.breadcrumbs = []
         self.result = None
 
-    def push_breadcrumb(self, breadcrumb):
-        self.breadcrumbs.append(breadcrumb)
+        self.log_start()
+        self.log_event("process start")
 
-    def pop_breadcrumb(self):
-        return self.breadcrumbs.pop()
+    class Log:
+        def __init__(self, name=None, *, parent=None):
+            start = event_clock()
 
-    def format_breadcrumbs(self):
-        return " ".join(self.breadcrumbs)
+            if name:
+                assert parent, "don't give your root Log instance a name"
 
-    def log_event(self, event):
-        self.events.append((event, event_clock()))
+            self.name = name
+            self.events = []
+            self.parent = parent
+            self.start = self.end = start
+
+            # *sigh* a hack.
+            self.waiting = None
+
+        def log(self, event):
+            t = event_clock()
+            self.events.append((event, t))
+            self.end = t
+
+        def enter(self, name):
+            logger = Processor.Log(name, parent=self)
+            self.events.append(logger)
+
+        def exit(self):
+            self.end = event_clock()
+            return self.parent
+
+        def iterator(self, depth=0, logging_start=None):
+            """
+            yields 4-tuple:
+                (depth, start_time, elapsed_time, event)
+            start_time resets to 0 every time depth increments
+            start_time then restores the previous value every time depth decrements
+            """
+
+            # any time variable that doesn't start with "relative_"
+            # is an absolute time.
+            if not depth:
+                assert logging_start == None
+                logging_start = self.start
+            else:
+                assert logging_start != None
+
+            previous_start = self.start
+
+            if self.name:
+                waiting = [depth - 1, self.start - logging_start, None, "start " + self.name]
+            else:
+                waiting = None
+
+            for o in self.events:
+                if isinstance(o, Processor.Log):
+                    if waiting:
+                        previous_elapsed = o.start - previous_start
+                        waiting[2] = previous_elapsed
+                        yield waiting
+
+                    yield from o.iterator(depth=depth + 1, logging_start=logging_start)
+                    waiting = o.waiting
+                    o.waiting = None
+                    previous_start = o.end
+                    continue
+
+                event, start = o
+                relative_start = start - logging_start
+
+                if waiting:
+                    previous_elapsed = start - previous_start
+                    waiting[2] = previous_elapsed
+                    yield waiting
+                    waiting = None
+
+                waiting = [depth, relative_start, None, event]
+                previous_start = start
+
+            if waiting:
+                delta = self.end - previous_start
+                if delta:
+                    waiting[2] = delta
+                yield tuple(waiting)
+
+            if self.name:
+                total_elapsed = self.end - self.start
+                yield (depth - 1, None, total_elapsed, self.name + " subtotal")
+
+                relative_start = self.end - logging_start
+                elapsed = self.end - previous_start
+                self.waiting = [depth - 1, relative_start, None, "end " + self.name]
+
+
+
+
+    def log_start(self):
+        self.logger = logger = Processor.Log()
+        self.log_event = logger.log
+
+    def log_enter_context(self, event):
+        logger = self.Log(event, parent=self.logger)
+        self.logger.events.append(logger)
+        self.logger = logger
+        self.log_event = logger.log
+
+    def log_exit_context(self):
+        self.logger = logger = self.logger.exit()
+        self.log_event = logger.log
+
+
+    def print_log(self):
+        time_spacer = " " * 12
+        def format_time(t):
+            if t is None:
+                return time_spacer
+            seconds = t // 1000000000
+            nanoseconds = t - seconds
+            return f"{seconds:02}.{nanoseconds:09}"
+
+        print()
+        print("[event log]")
+        print(f"  start         elapsed       event")
+        print(f"  ------------  ------------  -------------")
+
+        formatted = []
+        for depth, start, elapsed, event in self.logger.iterator():
+            indent = "  " * depth
+            print(f"  {format_time(start)}  {format_time(elapsed)}  {indent}{event}")
+
 
     def preparer(self, preparer):
         if not callable(preparer):
@@ -5435,32 +5554,6 @@ class Processor:
             except ValueError:
                 pass
         return fn
-
-    def print_log(self):
-        if not self.events:
-            return
-        def format_time(t):
-            seconds = t // 1000000000
-            nanoseconds = t - seconds
-            return f"{seconds:02}.{nanoseconds:09}"
-
-        start_time = previous = self.events[0][1]
-        formatted = []
-        for i, (event, t) in enumerate(self.events):
-            elapsed = t - start_time
-            if i:
-                delta = elapsed - previous
-                formatted[-1][-1] = format_time(delta)
-            formatted.append([event, format_time(elapsed), "            "])
-            previous = elapsed
-
-        print()
-        print("[event log]")
-        print(f"  start         elapsed       event")
-        print(f"  ------------  ------------  -------------")
-
-        for event, start, elapsed in formatted:
-            print(f"  {start}  {elapsed}  {event}")
 
     def __call__(self, args=None):
         if args is None:
