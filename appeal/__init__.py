@@ -599,7 +599,7 @@ class CharmInstructionBranchOnO(CharmInstruction): # CharmInstructionAddressBase
         return f"<branch_on_o address={self.address}>"
 
 
-label_id_counter = 0
+next_label_id = serial_number_generator(prefix='label')
 
 class CharmInstructionLabel(CharmInstruction):
     """
@@ -618,10 +618,8 @@ class CharmInstructionLabel(CharmInstruction):
     __slots__ = ['id', 'label']
 
     def __init__(self, label):
-        global label_id_counter
         self.op = opcode.label
-        label_id_counter += 1
-        self.id = label_id_counter
+        self.id = next_label_id()
         self.label = label
 
     def __repr__(self):
@@ -630,7 +628,7 @@ class CharmInstructionLabel(CharmInstruction):
         return f"<{opcode} id={self.id}{label}>"
 
     def __hash__(self):
-        return id(CharmInstructionLabel) ^ self.id
+        return hash(self.id)
 
 class CharmInstructionJumpToLabel(CharmInstruction): # CharmInstructionLabelBase
     """
@@ -781,33 +779,6 @@ class CharmInstructionAddToKwargs(CharmInstruction):
     def __repr__(self):
         return f"<add_to_kwargs name={self.name}>"
 
-# class CharmInstructionPushContext(CharmInstruction): # CharmInstructionNoArgBase
-#     """
-#     push_context
-
-#     Pushes the current 'converter', 'group', 'o', 'option',
-#     and 'total' registers on the stack.
-#     """
-#     def __init__(self):
-#         self.op = opcode.push_context
-
-#     def __repr__(self):
-#         return f"<push_context>"
-
-# class CharmInstructionPopContext(CharmInstruction): # CharmInstructionNoArgBase
-#     """
-#     pop_context
-
-#     Pops the top value from the stack, restoring
-#     the previous values of the 'converter', 'group',
-#     'o', 'option', and 'total' registers.
-#     """
-#     def __init__(self):
-#         self.op = opcode.pop_context
-
-#     def __repr__(self):
-#         return f"<pop_context>"
-
 class CharmInstructionMapOption(CharmInstruction):
     """
     map_option <option> <program> <callable> <parameter> <key> <group>
@@ -954,6 +925,10 @@ class CharmProgram:
 
         self.opcodes = []
 
+        # pairs of (index in opcode table, comment)
+        # note that one instruction can have multiple comments.
+        self.comments = []
+
         # maps option to its parent option (if any)
         # used for usage
         self.options = None
@@ -990,6 +965,11 @@ class CharmAssembler:
     with the instructions appended to it, recursively.
     """
 
+    PRESERVE = "_preserve_comment_instructions"
+    STRIP = "_strip_comments_completely"
+    EXTERNAL = "_move_comments_to_external_table"
+
+
     next_id = serial_number_generator(prefix="asm-").__next__
 
     def __init__(self, name=None, *, option_names=None):
@@ -1000,7 +980,8 @@ class CharmAssembler:
 
     def clear(self):
         self.opcodes = opcodes = []
-        self.contents = [opcodes]
+        # first entry in contents is there for "spilling names"
+        self.contents = [[], opcodes]
         self._append_opcode = opcodes.append
 
         self.option_to_child_options = defaultdict(set)
@@ -1141,13 +1122,48 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
+    def spill_names(self):
+        """
+        Recursively walk the tree of opcodes and assemblers
+        inside self.  If self has *any* opcodes, insert a
+        comment opcode at the front of this assembler's
+        opcode stream.  Also perform these insertions
+        for all the child assemblers.
+        """
+        stack = []
+        def new(assembler):
+            return assembler, iter(assembler.contents), 0
+        def push(assembler, iterator, count):
+            stack.append((assembler, iterator, count))
+        pop = stack.pop
+
+        push(*new(self))
+
+        while stack:
+            assembler, iterator, count = stack.pop()
+
+            for o in iterator:
+                if isinstance(o, list):
+                    count += len(o)
+                    continue
+                push(assembler, iterator, count)
+                push(*new(o))
+                break
+            else:
+                if count:
+                    # spill!
+                    first_opcodes = assembler.contents[0]
+                    assert isinstance(first_opcodes, list)
+                    assert len(first_opcodes) == 0, f"expected first_opcodes to be empty, but it's {first_opcodes}"
+                    first_opcodes.append(CharmInstructionComment(self.name))
+
+
     def lists(self):
         for o in self.contents:
             if isinstance(o, list):
                 yield o
                 continue
             yield from o.lists()
-
 
     def __getitem__(self, index):
         if not isinstance(index, int):
@@ -1162,7 +1178,9 @@ class CharmAssembler:
 
         raise IndexError(f"CharmAssembler index out of range")
 
-    def assemble(self):
+    def assemble(self, *, comments=EXTERNAL):
+        self.spill_names()
+
         opcodes = []
         for sublist in self.lists():
             opcodes.extend(sublist)
@@ -1180,10 +1198,21 @@ class CharmAssembler:
         stack = []
         groups = []
 
+        external_comments = []
 
         index = 0
         while index < len(opcodes):
             op = opcodes[index]
+
+            if op.op == opcode.comment:
+                if comments == CharmAssembler.EXTERNAL:
+                    external_comments.append((index, op.comment))
+                    del opcodes[index]
+                elif comments == CharmAssembler.STRIP:
+                    del opcodes[index]
+                else:
+                    assert comments == CharmAssembler.PRESERVE
+                continue
 
             # remove labels
             if op.op == opcode.label:
@@ -1203,9 +1232,6 @@ class CharmAssembler:
 
             # remove no_ops
             elif op.op == opcode.no_op:
-                del opcodes[index]
-                continue
-            elif op.op == opcode.comment:
                 del opcodes[index]
                 continue
 
@@ -1277,6 +1303,7 @@ class CharmAssembler:
         program.total = total
         program.option_to_child_options = self.option_to_child_options
         program.option_to_parent_options = self.option_to_parent_options
+        program.comments = external_comments
         return program
 
 
@@ -1929,6 +1956,9 @@ def charm_print(program, indent=''):
     print_divider = False
     seen = set((program.id,))
     specially_formatted_opcodes = set((opcode.comment, opcode.label))
+
+    comments = list(program.comments)
+    comments.reverse()
     while programs:
         if print_divider:
             print("________________")
@@ -1942,8 +1972,17 @@ def charm_print(program, indent=''):
         empty_line = indent2.rstrip()
         print(program)
         print_leading_blank_line = False
+        comment_prefix = f"{indent}{' ':{width}}# "
         for i, op in enumerate(program):
             prefix = f"{indent}{i:0{width}}| "
+
+            if comments and (comments[-1][0] == i):
+                while comments and (comments[-1][0] == i):
+                    _, comment = comments.pop()
+                    if print_leading_blank_line:
+                        print(empty_line)
+                    print(f"{comment_prefix}{comment}")
+                    print_leading_blank_line = True
 
             # specialized opcode printers
             if op.op in specially_formatted_opcodes:
@@ -1958,6 +1997,8 @@ def charm_print(program, indent=''):
                 continue
 
             # generic opcode printer
+            if print_leading_blank_line:
+                print(empty_line)
             print_leading_blank_line = True
             suffix = ""
             printable_op = str(op.op).rpartition(".")[2]
