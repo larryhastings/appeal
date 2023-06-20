@@ -2233,12 +2233,17 @@ class CharmBaseInterpreter:
         o = self.repr_converter(self.o)
         return f"<{self.__class__.__name__} [{ip}] converter={converter!s} o={o!s} group={group!s}>"
 
+    def converter_to_key(self, converter):
+        if self.converters:
+            for key, value in self.converters.items():
+                if converter == value:
+                    return key
+        return None
+
     def repr_converter(self, converter):
         if self.converters:
             width = math.floor(math.log10(len(self.converters)) + 1)
-            for key, value in self.converters.items():
-                if converter == value:
-                    return repr([key]) + "=" + repr(converter)
+            return repr([self.converter_to_key(converter)]) + "=" + repr(converter)
         return repr(converter)
 
     @big.BoundInnerClass
@@ -2638,6 +2643,9 @@ class CharmInterpreter(CharmBaseInterpreter):
 
         sentinel = object()
 
+        register_width = 20
+        total_register_width = len(ip_zero) + 1 + register_width
+
         def print_changed_registers(**kwargs):
             """
             Call this *after* changing registers.
@@ -2653,52 +2661,54 @@ class CharmInterpreter(CharmBaseInterpreter):
             That made it easier to copy with the
             two-phase loop and printing consume_positional.)
             """
-            for r in ('converter', 'o', 'group', 'groups', ('options group', 'options.token')):
-                if isinstance(r, str):
-                    name = attr = r
-                else:
-                    name, attr = r
+            nonlocal register_width
+
+            def format_options_group(token):
+                l = list(self.options.stack)
+                l.append((self.options.options, self.options.token))
+                l2 = list()
+                for t in l:
+                    l2.append(t)
+                    if t[1] == token:
+                        break
+                l2.reverse()
+                strings = [f"{token} {list(group)}" for group, token in l2]
+                s = " ".join(strings)
+                return s
+
+            for t in (
+                ('converter', None, self.repr_converter),
+                ('o', None, self.repr_converter),
+                ('group', None, lambda value: value.summary() if value else repr(value) ),
+                ('groups', None, lambda value: str([group.id for group in value])),
+                ('options group', 'options.token', format_options_group),
+                ):
+                name, attr, format = t
+                attr = attr or name
 
                 value = self
+
                 for field in attr.split('.'):
                     value = getattr(value, field)
 
-                fields = [name.rjust(13), "|   "] # len(coverter) == 9
+                fields = [name.rjust(register_width), "|   "]
 
-                old = kwargs.get(r, sentinel)
+                old = kwargs.get(name, sentinel)
                 changed = (old != sentinel) and (value != old)
                 if changed:
-                    if r == 'groups':
-                        s = repr([group.id for group in old ])
-                    elif r == 'group':
-                        s = old.summary() if old else repr(old)
-                    else:
-                        s = self.repr_converter(old)
-                    fields.append(s)
+                    fields.append(format(old))
                     fields.append("->")
 
-                if name == 'groups':
-                    s = repr([group.id for group in value ])
-                elif name == 'group':
-                    s = value.summary() if value else repr(value)
-                elif name == 'options group':
-                    l = list(self.options.stack)
-                    l.append((self.options.options, self.options.token))
-                    l.reverse()
-                    strings = [f"{token} {list(group)}" for group, token in l]
-                    s = " ".join(strings)
-                else:
-                    s = self.repr_converter(value)
-                fields.append(s)
+                fields.append(format(value))
 
                 result = " ".join(fields)
                 if len(result) < 50:
                     print(f"{self.opcodes_prefix} {self.register_spacer} {result}")
                 else:
                     # split it across two lines
-                    print(f"{self.opcodes_prefix} {self.register_spacer} {name:>13} |    {fields[2]}")
+                    print(f"{self.opcodes_prefix} {name:>{total_register_width}} |    {fields[2]}")
                     if changed:
-                        print(f"{self.opcodes_prefix} {self.register_spacer}               | -> {fields[-1]}")
+                        print(f"{self.opcodes_prefix} {'':{total_register_width}} | -> {fields[-1]}")
 
         while self.running() or argi:
             # if want_prints:
@@ -2780,6 +2790,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                 if op.op == opcode.append_to_args:
                     o = self.o
                     converter = self.converter
+                    # if want_prints:
+                    #     new = converter.args_queue if op.discretionary else converter.args_converters
+                    #     old = list(new)
+
                     # either queue or append o as indicated
                     (converter.queue_converter if op.discretionary else converter.append_converter)(o)
 
@@ -2787,6 +2801,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     discretionary = "yes" if op.discretionary else "no"
                     #     print(f"{self.opcodes_prefix} {prefix} append_to_args | parameter {op.parameter} | discretionary? {discretionary}")
                     #     print_changed_registers()
+                    #     new = list(new)
+                    #     print(f"{self.opcodes_prefix}{f'{self.converter_to_key(converter)}.args_converters':>{total_register_width + 1}} |    {old}")
+                    #     print(f"{self.opcodes_prefix}{' ':>{total_register_width + 1}} | -> {new}")
+                    #     print()
                     continue
 
                 if op.op == opcode.add_to_kwargs:
@@ -2802,11 +2820,17 @@ class CharmInterpreter(CharmBaseInterpreter):
                         # and it's a multioption.  it's fine, we just ignore it.
                         continue
 
+                    # if want_prints:
+                    #     new = converter.kwargs_converters
+                    #     old = old.copy()
+
                     converter.unqueue()
                     converter.kwargs_converters[name] = o
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} add_to_kwargs | name {op.name}")
                     #     print_changed_registers()
+                    #     print(f"{self.opcodes_prefix}{f'{self.converter_to_key(converter)}.kwargs_converters':>{total_register_width + 1}} |    {old}")
+                    #     print(f"{self.opcodes_prefix}{' ':>{total_register_width + 1}} | -> {new}")
                     continue
 
                 if op.op == opcode.get_keyword:
