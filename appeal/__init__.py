@@ -692,16 +692,15 @@ class CharmInstructionCreateConverter(CharmInstruction):
     Stores the resulting converter object
     in 'converters[key]' and in the 'o' register.
     """
-    __slots__ = ['parameter', 'key', 'is_command']
+    __slots__ = ['parameter', 'key']
 
-    def __init__(self, parameter, key, is_command):
+    def __init__(self, parameter, key):
         self.op = opcode.create_converter
         self.parameter = parameter
         self.key = key
-        self.is_command = is_command
 
     def __repr__(self):
-        return f"<create_converter parameter={parameter!r} key={self.key} is_command={self.is_command}>"
+        return f"<create_converter parameter={parameter!r} key={self.key}>"
 
 class CharmInstructionLoadConverter(CharmInstruction): # CharmInstructionKeyBase
     """
@@ -1082,11 +1081,10 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def create_converter(self, parameter, key, is_command):
+    def create_converter(self, parameter, key):
         op = CharmInstructionCreateConverter(
             parameter=parameter,
             key=key,
-            is_command=is_command,
             )
         self._append_opcode(op)
         return op
@@ -1420,6 +1418,39 @@ class CharmCompiler:
 
         self.next_converter_key = serial_number_generator(prefix=self.next_compilation_id() + '_k-').__next__
 
+    @staticmethod
+    def fake_parameter(kind, callable, default=empty):
+        parameter_name = callable.__name__
+        while True:
+            if parameter_name.startswith('<'):
+                parameter_name = parameter_name[1:-1]
+                continue
+            if parameter_name.endswith("()"):
+                parameter_name = parameter_name[:-2]
+                continue
+            break
+
+        parameter = inspect.Parameter("___fake_name___", kind, annotation=callable, default=default)
+        parameter._name = parameter_name
+        return parameter
+
+    def assemble(self):
+        """
+        Assembles all the instructions together to produce a final program.
+        """
+
+        self.clean_up_argument_group()
+
+        self.program = self.root_a.assemble()
+        return self.program
+
+
+class CharmAppealCompiler(CharmCompiler):
+
+    def __init__(self, appeal, processor, name='', *, indent=''):
+        super().__init__(appeal, processor, name, indent=indent)
+        self.command_converter_key = None
+
     def clean_up_argument_group(self, indent=''):
         if self.ag_a:
             if self.ag_options:
@@ -1586,7 +1617,7 @@ class CharmCompiler:
 
         return is_converter and optional
 
-    def compile_options(self, parent_callable, key, parameter, options, indent, group_id):
+    def compile_options(self, group_id, options, name, key, parameter, indent):
         # if want_prints:
         #     print(f"[cc] {indent}compile_options options={options}")
         #     indent += "  "
@@ -1600,7 +1631,6 @@ class CharmCompiler:
         assert options
 
         # self.options.update({o: self.program.option for o in options})
-        name = parent_callable.__name__
         option_names = [denormalize_option(o) for o in options]
         assert option_names
         option_names = " | ".join(option_names)
@@ -1631,7 +1661,6 @@ class CharmCompiler:
         add_to_self_a.load_converter(key=key)
         add_to_self_a.add_to_kwargs(name=parameter.name)
         program = cc.assemble()
-
 
         for option in options:
             # option doesn't have to be unique in this argument group,
@@ -1700,19 +1729,20 @@ class CharmCompiler:
 
         for parameter_index, options in parameter_index_to_options.items():
             parameter = parameters[parameter_index]
-            self.compile_options(callable, key, parameter, options, indent, group_id)
+            self.compile_options(group_id, options, callable.__name__, key, parameter, indent)
 
         return mapped_options
 
 
-    def compile_parameter(self, depth, indent, parameter, pgi, usage_callable, usage_parameter, multioption=False, is_command=False):
+    def compile_parameter(self, parameter, pgi, depth, indent, *, multioption=False):
         """
         returns add_to_self_a, is_degenerate
 
         add_to_self_a is an assembler inserted immediately after
           the value for this parameter is read in / created.
-          at that moment, the value has just been loaded in
-          the 'o' register.
+          (the value is either a string from the command-line
+          or a converter). at that moment, the value has loaded
+          in the 'o' register.
         is_degenerate is a boolean, True if this entire subtree is "degenerate".
         """
         if self.processor:
@@ -1776,7 +1806,7 @@ class CharmCompiler:
             self.ag_initialize_a.branch_on_o_to_label(label_flush_multioption)
 
         # leaves the converter in the "o" register
-        self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key, is_command=is_command)
+        self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key)
         add_to_parent_a = CharmAssembler()
         add_to_parent_a.load_o(key=converter_key)
         self.body_a.append(add_to_parent_a)
@@ -1799,12 +1829,12 @@ class CharmCompiler:
         #
         # if depth>0, we're in a child annotation function. all options go into
         # the same group as the first argument (if any)
-        mapped_options = False
-        def map_options():
-            nonlocal mapped_options
-            if mapped_options:
+        spilled_options = False
+        def spill_options():
+            nonlocal spilled_options
+            if spilled_options:
                 return
-            mapped_options = True
+            spilled_options = True
             # if want_prints:
             #     print(f"[cc] {indent}automatically map keyword-only parameters to options")
 
@@ -1834,7 +1864,7 @@ class CharmCompiler:
                     self.map_options(callable, parameter, signature, converter_key, depth, indent, self.group.id)
 
         if not depth:
-            map_options()
+            spill_options()
 
         group = None
 
@@ -1900,7 +1930,7 @@ class CharmCompiler:
             if pgi_parameter.first_in_group and (not pgi_parameter.in_required_group):
                 group = self.group = self.new_argument_group(optional=True, indent=indent + "    ")
 
-            map_options()
+            spill_options()
 
 
             if cls is SimpleTypeConverterStr:
@@ -1913,7 +1943,7 @@ class CharmCompiler:
                 # if want_prints:
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
-                add_to_self_a, is_degenerate_subtree = self.compile_parameter(depth + 1, indent + "    ", p, pgi, usage_callable, usage_parameter, None, is_command=False)
+                add_to_self_a, is_degenerate_subtree = self.compile_parameter(p, pgi, depth + 1, indent + "    ")
                 is_degenerate = is_degenerate and is_degenerate_subtree
 
             add_to_self_a.load_converter(key=converter_key)
@@ -1931,45 +1961,12 @@ class CharmCompiler:
             # if want_prints:
             #     print(f"[cc]")
 
-        map_options()
+        spill_options()
 
         if self.processor:
             self.processor.log_exit_context()
 
         return add_to_parent_a, is_degenerate
-
-    @staticmethod
-    def fake_parameter(kind, callable, default=empty):
-        parameter_name = callable.__name__
-        while True:
-            if parameter_name.startswith('<'):
-                parameter_name = parameter_name[1:-1]
-                continue
-            if parameter_name.endswith("()"):
-                parameter_name = parameter_name[:-2]
-                continue
-            break
-
-        parameter = inspect.Parameter("___fake_name___", kind, annotation=callable, default=default)
-        parameter._name = parameter_name
-        return parameter
-
-    def assemble(self):
-        """
-        Assembles all the instructions together to produce a final program.
-        """
-
-        self.clean_up_argument_group()
-
-        self.program = self.root_a.assemble()
-        return self.program
-
-
-class CharmAppealCompiler(CharmCompiler):
-
-    def __init__(self, appeal, processor, name='', *, indent=''):
-        super().__init__(appeal, processor, name, indent=indent)
-        self.command_converter_key = None
 
     def __call__(self, parameter, *, multioption=False):
         # The compiler is effectively two passes.
@@ -2025,8 +2022,7 @@ class CharmAppealCompiler(CharmCompiler):
         pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
         pgi = pg.iter_all()
 
-        # self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, add_to_kwargs=add_to_kwargs, is_command=True)
-        add_to_parent_a, is_degenerate = self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, is_command=True)
+        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent, multioption=multioption)
 
         # if want_prints:
         #     print(f"[cc] {indent}compilation of {parameter} complete.")
@@ -2892,10 +2888,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                             break
 
                         cls = self.appeal.map_to_converter(op.parameter)
-                        converter = cls(op.parameter, self.appeal, is_command=op.is_command)
+                        converter = cls(op.parameter, self.appeal)
                         old_o = self.o
                         self.converters[op.key] = self.o = converter
-                        if op.is_command and (not command_converter):
+                        if not command_converter:
                             command_converter = converter
                             self.command_converter_key = op.key
 
@@ -3277,10 +3273,9 @@ class Converter:
 
     A Converter
     """
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         self.parameter = parameter
         self.appeal = appeal
-        self.is_command = is_command
 
         callable = dereference_annotated(parameter.annotation)
         default = parameter.default
@@ -3567,11 +3562,11 @@ class Converter:
 
 
 class InferredConverter(Converter):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         if not parameter.default:
             raise AppealConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=type(parameter.default), default=parameter.default)
-        super().__init__(p2, appeal, is_command=is_command)
+        super().__init__(p2, appeal)
 
     @classmethod
     def get_signature(cls, parameter):
@@ -3602,10 +3597,9 @@ class InferredSequenceConverter(InferredConverter):
 
 
 class SimpleTypeConverter(Converter):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         self.appeal = appeal
         self.default = parameter.default
-        self.is_command = is_command
 
         self.name = parameter.name
 
@@ -3678,11 +3672,11 @@ class BaseOption(Converter):
     pass
 
 class InferredOption(BaseOption):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         if not parameter.default:
             raise AppealConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=type(parameter.default), default=parameter.default)
-        super().__init__(p2, appeal, is_command=is_command)
+        super().__init__(p2, appeal)
 
     @classmethod
     def get_signature(cls, parameter):
@@ -3750,10 +3744,10 @@ def strip_self_from_signature(signature):
 
 
 class Option(BaseOption):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         # the callable passed in is ignored
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=self.option, default=parameter.default)
-        super().__init__(p2, appeal, is_command=is_command)
+        super().__init__(p2, appeal)
         self.init(parameter.default)
 
     def __repr__(self):
@@ -3834,12 +3828,12 @@ class BooleanOptionConverter(Option):
         return self.value
 
 class MultiOption(Option):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         self.multi_converters = []
         self.multi_args = []
         # the callable passed in is ignored
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=self.option, default=parameter.default)
-        super().__init__(p2, appeal, is_command=is_command)
+        super().__init__(p2, appeal)
 
     def flush(self):
         self.multi_converters.append((self.args_converters, self.kwargs_converters))
