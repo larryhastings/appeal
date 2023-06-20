@@ -1766,7 +1766,7 @@ class CharmCompiler:
         # leaves the converter in the "o" register
         self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key, is_command=is_command)
         add_to_parent_a = CharmAssembler()
-        self.body_a.append(add_to_parent_a)
+        self.ag_initialize_a.append(add_to_parent_a)
 
         if multioption:
             load_o_op.key = converter_key
@@ -1955,6 +1955,7 @@ class CharmCompiler:
 
         self.program = self.root_a.assemble()
         return self.program
+
 
 class CharmAppealCompiler(CharmCompiler):
 
