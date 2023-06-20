@@ -30,6 +30,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
 OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
+# run appeal/want_prints.py to toggle debug prints on and off
 want_prints = 0
 
 
@@ -467,6 +468,7 @@ print_enum('''
     create_converter
     load_converter
     load_o
+    converter_to_o
     append_to_args
     add_to_kwargs
     map_option
@@ -502,7 +504,7 @@ print()
 # line below is generated.
 #
 # Modify the code in the quotes above and run
-#         % python3 cpp.py __init__.py
+#         % python3 cpp.py appeal/__init__.py
 # to regenerate.
 
 class opcode(enum.Enum):
@@ -513,14 +515,15 @@ class opcode(enum.Enum):
     create_converter = 4
     load_converter = 5
     load_o = 6
-    append_to_args = 7
-    add_to_kwargs = 8
-    map_option = 9
-    consume_positional = 10
-    get_keyword = 11
-    flush_multioption = 12
-    set_group = 13
-    end = 14
+    converter_to_o = 7
+    append_to_args = 8
+    add_to_kwargs = 9
+    map_option = 10
+    consume_positional = 11
+    get_keyword = 12
+    flush_multioption = 13
+    set_group = 14
+    end = 15
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
@@ -689,16 +692,15 @@ class CharmInstructionCreateConverter(CharmInstruction):
     Stores the resulting converter object
     in 'converters[key]' and in the 'o' register.
     """
-    __slots__ = ['parameter', 'key', 'is_command']
+    __slots__ = ['parameter', 'key']
 
-    def __init__(self, parameter, key, is_command):
+    def __init__(self, parameter, key):
         self.op = opcode.create_converter
         self.parameter = parameter
         self.key = key
-        self.is_command = is_command
 
     def __repr__(self):
-        return f"<create_converter parameter={parameter!r} key={self.key} is_command={self.is_command}>"
+        return f"<create_converter parameter={parameter!r} key={self.key}>"
 
 class CharmInstructionLoadConverter(CharmInstruction): # CharmInstructionKeyBase
     """
@@ -734,32 +736,45 @@ class CharmInstructionLoadO(CharmInstruction): # CharmInstructionKeyBase
     def __repr__(self):
         return f"<load_converter key={self.key}>"
 
+class CharmInstructionConverterToO(CharmInstruction): # CharmInstructionKeyBase
+    """
+    converter_to_o
+
+    Sets the 'o' register to the contents of the 'converter'
+    register.
+    """
+    def __init__(self):
+        self.op = opcode.converter_to_o
+
+    def __repr__(self):
+        return f"<converter_to_o>"
+
 class CharmInstructionAppendToArgs(CharmInstruction):
     """
-    append_to_args <parameter> <usage>
+    append_to_args <parameter> <discretionary>
 
     Takes a reference to the value in the 'o' register
     and appends it to 'converter.args'.
 
-    <callable> is a callable object.
-    <parameter> and <usage> are strings identifying
-    the name of the parameter.  These are all used in
-    generating usage information and documentation.
+    <parameter> is an inspect.Parameter representing
+    the positional parameter being filled here.
+    It's used to generate usage.
+
+    <discretionary> is a boolean value.
+    If True, this argument may or may not be used,
+    depending on what values we process at runtime.
+    If False, this argument is mandatory.
     """
 
-    __slots__ = ['callable', 'parameter', 'discretionary', 'usage', 'usage_callable', 'usage_parameter']
+    __slots__ = ['parameter', 'discretionary']
 
-    def __init__(self, callable, parameter, discretionary, usage, usage_callable, usage_parameter):
+    def __init__(self, parameter, discretionary):
         self.op = opcode.append_to_args
-        self.callable = callable
         self.parameter = parameter
         self.discretionary = discretionary
-        self.usage = usage
-        self.usage_callable = usage_callable
-        self.usage_parameter = usage_parameter
 
     def __repr__(self):
-        return f"<append_to_args callable={self.callable} parameter={self.parameter} discretionary={self.discretionary} usage={self.usage} usage_callable={self.usage_callable} usage_parameter={self.usage_parameter}>"
+        return f"<append_to_args parameter={self.parameter} discretionary={self.discretionary}>"
 
 class CharmInstructionAddToKwargs(CharmInstruction):
     """
@@ -783,35 +798,33 @@ class CharmInstructionAddToKwargs(CharmInstruction):
 
 class CharmInstructionMapOption(CharmInstruction):
     """
-    map_option <option> <program> <callable> <parameter> <key> <group>
+    map_option <group> <option> <program> <key> <parameter>
 
     Maps the option <option> to the program <program>.
 
-    <program> is self-contained; if the option is invoked
-    on the command-line, you may simply 'push' the new
-    program on your current CharmInterpreter.
-
-    <callable>, <parameter>, and <key> are used in
-    generating usage information.  <key> is the
-    converter key for the converter, <parameter>
-    is the parameter accepted by that converter
-    which this option fills, and <callable> is the
-    function that accepts <parameter>.  (The value
-    returned by this program becomes the argument for
-    <parameter> when calling <callable>.)
-
     <group> is the id of the ArgumentGroup this is mapped in.
-    """
-    __slots__ = ['option', 'program', 'callable', 'parameter', 'key', 'group']
 
-    def __init__(self, option, program, callable, parameter, key, group):
+    <program> is self-contained; if the option is invoked
+    on the command-line, you may run it with
+    CharmInterpreter.call(program).
+
+    <key> and <parameter> are used in generating
+    usage information.  <key> is the converter key
+    for the converter, and <parameter> is the
+    parameter accepted by that converter which this
+    option fills.  (The value returned by this program
+    becomes the argument for <parameter> when calling
+    the callable in <converter>.)
+    """
+    __slots__ = ['option', 'program', 'key', 'parameter', 'group']
+
+    def __init__(self, group, option, program, key, parameter):
         self.op = opcode.map_option
+        self.group = group
         self.option = option
         self.program = program
-        self.callable = callable
-        self.parameter = parameter
         self.key = key
-        self.group = group
+        self.parameter = parameter
 
     def __repr__(self):
         return f"<map_option option={self.option!r} program={self.program} key={self.key} parameter={self.parameter} key={self.key} group={self.group}>"
@@ -948,9 +961,8 @@ class CharmProgram:
 
     next_id = serial_number_generator(prefix="program-").__next__
 
-    def __init__(self, name, *, option_names=None):
+    def __init__(self, name):
         self.name = name
-        self.option_names = option_names
 
         self.id = CharmProgram.next_id()
 
@@ -1003,9 +1015,8 @@ class CharmAssembler:
 
     next_id = serial_number_generator(prefix="asm-").__next__
 
-    def __init__(self, name=None, *, option_names=None):
+    def __init__(self, name=None):
         self.name = name
-        self.option_names = option_names
         self.id = CharmAssembler.next_id()
         self.clear()
 
@@ -1070,11 +1081,10 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def create_converter(self, parameter, key, is_command):
+    def create_converter(self, parameter, key):
         op = CharmInstructionCreateConverter(
             parameter=parameter,
             key=key,
-            is_command=is_command,
             )
         self._append_opcode(op)
         return op
@@ -1093,14 +1103,15 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def append_to_args(self, callable, parameter, discretionary, usage, usage_callable, usage_parameter):
+    def converter_to_o(self):
+        op = CharmInstructionConverterToO()
+        self._append_opcode(op)
+        return op
+
+    def append_to_args(self, parameter, discretionary):
         op = CharmInstructionAppendToArgs(
-            callable = callable,
             parameter = parameter,
             discretionary = discretionary,
-            usage = usage,
-            usage_callable = usage_callable,
-            usage_parameter = usage_parameter,
             )
         self._append_opcode(op)
         return op
@@ -1112,7 +1123,7 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def map_option(self, option, program, callable, parameter, key, group):
+    def map_option(self, group, option, program, key, parameter):
         self.option_to_child_options[option].update(program.option_to_child_options)
 
         self.option_to_parent_options.update(program.option_to_parent_options)
@@ -1120,12 +1131,11 @@ class CharmAssembler:
             self.option_to_parent_options[child_option].add(option)
 
         op = CharmInstructionMapOption(
+            group = group,
             option = option,
             program = program,
-            callable = callable,
-            parameter = parameter,
             key = key,
-            group = group,
+            parameter = parameter,
             )
         self._append_opcode(op)
         return op
@@ -1218,6 +1228,27 @@ class CharmAssembler:
         raise IndexError(f"CharmAssembler index out of range")
 
     def assemble(self, *, comments=EXTERNAL):
+        """
+        Merges all the opcodes and the nested assemblers
+        into a single list, and processes
+
+        * Computes total and group min/max values.
+        * Convert label/jump_to_label pseudo-ops into
+          absolute jump ops (and removes labels).
+        * Handles comment instructions based on the 'comments'
+          argument:
+            * EXTERNAL means delete the instructions, but move
+              the comments themselves into an external table
+              (a la CPython's "lnotab").
+            * STRIP means simply delete the instructions.
+            * PRESERVE means preserve the comments.
+        * Removes no-ops.
+        * Removes redundant load_converter, load_o,
+          and converter_to_o instructions based on
+          rudimentary dataflow analysis.
+        * Simple jump-to-jumps peephole optimizer.
+        """
+
         self.spill_names()
 
         opcodes = []
@@ -1243,6 +1274,7 @@ class CharmAssembler:
         while index < len(opcodes):
             op = opcodes[index]
 
+            # handle comments
             if op.op == opcode.comment:
                 if comments == CharmAssembler.EXTERNAL:
                     external_comments.append((index, op.comment))
@@ -1303,6 +1335,11 @@ class CharmAssembler:
                     del opcodes[index]
                     continue
                 o = op.key
+            elif op.op == opcode.converter_to_o:
+                if o == converter:
+                    del opcodes[index]
+                    continue
+                o = converter
             elif op.op == opcode.create_converter:
                 o = op.key
 
@@ -1335,7 +1372,7 @@ class CharmAssembler:
         end_op = CharmInstructionEnd(self.name)
         opcodes.append(end_op)
 
-        program = CharmProgram(self.name, option_names=self.option_names)
+        program = CharmProgram(self.name)
         program.opcodes = opcodes
         end_op.id = program.id
         total.id = program.total.id
@@ -1347,43 +1384,68 @@ class CharmAssembler:
 
 
 class CharmCompiler:
-    def __init__(self, appeal, *, name=None, converter_key_prefix=None, argument_group_prefix=None, option_names=None, indent='', processor=None):
+    """
+    Base compiler class.
+    You don't want to use this directly; you want one of the subclasses:
+
+    * CharmCommandCompiler compiles an Appeal "command".
+    * CharmOptionCompiler compiles an "option" for an Appeal "command".
+    * CharmMappingCompiler compiles a reader for a mapping.
+    * CharmIterableCompiler compiles a reader for an iterable.
+
+    In general the workflow is like this:
+
+    * Construct the Compiler.  All compilers take the same arguments
+      in their constructor.
+    * Compile the thing, whatever it is, by calling the compiler object
+      (aka __call__).  These calls take context-specific arguments.
+    * Call the assemble method on the compiler.  This takes no arguments
+      and returns the finalized program.
+
+    (Why not have __call__ return the finalized program?  Because we might
+    want to modify the program after compliation but before final assembly.)
+    """
+
+    next_compilation_id = serial_number_generator(prefix="c-").__next__
+
+    def __init__(self, appeal, processor, *, indent='', name=''):
         self.appeal = appeal
-        self.name = name
-        self.indent = indent
+        self.root = appeal.root
         self.processor = processor
 
-        # if want_prints:
-        #     print(f"[cc]")
-        #     print(f"[cc] {indent}Initializing compiler")
-        #     print(f"[cc]")
+        self.name = name
+        self.indent = indent
 
-        self.next_converter_key = serial_number_generator(prefix=converter_key_prefix or 'c-').__next__
-        self.command_converter_key = None
+        self.next_converter_key = serial_number_generator(prefix=self.next_compilation_id() + '_k-').__next__
 
-        self.root = appeal.root
+    @staticmethod
+    def fake_parameter(kind, callable, default=empty):
+        parameter_name = callable.__name__
+        while True:
+            if parameter_name.startswith('<'):
+                parameter_name = parameter_name[1:-1]
+                continue
+            if parameter_name.endswith("()"):
+                parameter_name = parameter_name[:-2]
+                continue
+            break
 
-        # The compiler is effectively two passes.
-        #
-        # First, we iterate over the annotation tree generating instructions.
-        # These go into discrete "assemblers" which are carefully ordered in
-        # the self.assemblers list.
-        #
-        # Second, we root_a.finalize(), which assembles the final program.
-        self.root_a = CharmAssembler(name, option_names=option_names)
+        parameter = inspect.Parameter("___fake_name___", kind, annotation=callable, default=default)
+        parameter._name = parameter_name
+        return parameter
 
-        self.option_depth = 0
+    def assemble(self):
+        """
+        Assembles all the instructions together to produce a final program.
+        """
 
-        # options defined in the current argument group
-        self.ag_a = self.ag_initialize_a = None
-        self.ag_options_a = self.ag_duplicate_options_a = None
-        self.ag_options = set()
-        self.ag_duplicate_options = set()
-        self.next_argument_group_id = serial_number_generator(prefix=f"{name} ag-").__next__
+        self.clean_up_argument_group()
 
-        self.new_argument_group(optional=False, indent=indent)
+        self.program = self.root_a.assemble()
+        return self.program
 
-        self.name_to_callable = {}
+
+class CharmAppealCompiler(CharmCompiler):
 
     def clean_up_argument_group(self, indent=''):
         if self.ag_a:
@@ -1482,8 +1544,8 @@ class CharmCompiler:
         #     base [-v] a b c [-o] d e f [-o] d e f
         #
         # It looks a little strange, but hey man, you're the one who
-        # asked Appeal to turn that into a command-line.  It's doing
-        # its best.
+        # asked Appeal to turn *that* into a command-line.  It's doing
+        # its best!
 
         self.clean_up_argument_group(indent=indent)
 
@@ -1520,6 +1582,13 @@ class CharmCompiler:
         return self.group
 
     def reset_duplicate_options_a(self):
+        """
+        Clear the "duplicate options" state, so that additional duplicates
+        can get mapped.
+
+        Call this immediately after you append a positional argument
+        (append_to_args).  Every time.
+        """
         if self.ag_duplicate_options:
             self.ag_duplicate_options.clear()
         elif self.ag_duplicate_options_a:
@@ -1544,128 +1613,194 @@ class CharmCompiler:
 
         return is_converter and optional
 
-    def compile_options(self, parent_callable, key, parameter, options, depth, indent, group_id):
+    def compile_option(self, program_name, parameter, indent):
+        """
+        This compiles everything in the option except for the
+        last little bit where we store the result in the parent
+        converter's kwargs.
+        """
+
         # if want_prints:
-        #     print(f"[cc] {indent}compile_options options={options}")
+        #     print(f"[cc] {indent}compile_option")
         #     indent += "  "
-        #     print(f"[cc] {indent}key={key}")
+        #     print(f"[cc] {indent}program_name={program_name}")
         #     print(f"[cc] {indent}parameter={parameter}")
-        #     print(f"[cc] {indent}parameter.kind={parameter.kind}")
         #     print(f"[cc]")
 
         cls = self.appeal.root.map_to_converter(parameter)
-
-        assert options
-
-        # self.options.update({o: self.program.option for o in options})
-        name = parent_callable.__name__
-        option_names = [denormalize_option(o) for o in options]
-        assert option_names
-        option_names = " | ".join(option_names)
-        program_name = f"{name} {option_names}"
         if cls is SimpleTypeConverterStr:
             # hand-coded program to handle this option that takes
             # a single required str argument.
             # if want_prints:
             #     print(f"[cc] {indent}hand-coded program for simple str")
-            a = CharmAssembler(program_name, option_names=option_names)
+            a = CharmAssembler(program_name)
             a.set_group(self.next_argument_group_id(), optional=False)
-            a.load_converter(key)
             a.consume_positional(required=True, is_oparg=True)
-            a.add_to_kwargs(parameter.name)
-            program = a.assemble()
+            add_to_self_a = cc = a
         else:
             annotation = dereference_annotated(parameter.annotation)
             if not is_legal_annotation(annotation):
-                raise AppealConfigurationError(f"{parent_callable.__name__}: parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
-
-            multioption = issubclass(cls, MultiOption)
+                raise AppealConfigurationError(f"precompile_option(): parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
 
             # if want_prints:
             #     print(f"[cc] {indent}<< recurse on option >>")
 
-            cc = CharmCompiler(self.appeal, name=program_name, option_names=option_names, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-", indent=indent, processor=self.processor)
+            cc = CharmOptionCompiler(self.appeal, self.processor, parameter, indent=indent, name=program_name)
+            add_to_self_a = cc.add_to_parent_a
 
-            add_to_kwargs = key, parameter.name
-            program = cc(annotation, parameter.default, is_option=True, multioption=multioption, add_to_kwargs=add_to_kwargs)
-            # program.options = option_names
-            # self.options.update(program.options)
+        return cc, add_to_self_a
 
-        for option in options:
-            # option doesn't have to be unique in this argument group,
-            # but it must be unique per consumed argument.
-            # (you can't define the same option twice without at least one consume_positional between.)
-
-            if option not in self.ag_options:
-                self.ag_options.add(option)
-                destination = self.ag_options_a
-            elif self.ag_duplicate_options_a:
-                if option in self.ag_duplicate_options:
-                    raise AppealConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no arguments consumed in between definitions)")
-                destination = self.ag_duplicate_options_a
-                self.ag_duplicate_options.add(option)
-            else:
-                raise AppealConfigurationError(f"argument group initialized with multiple definitions of option {denormalize_option(option)}, ambiguous")
-
-            # if want_prints:
-            #     print(f"[cc] {indent}option={option}")
-            #     print(f"[cc] {indent}    program={program}")
-            #     print(f"[cc] {indent}    destination={destination}")
-            destination.map_option(option, program, parent_callable, parameter, key, group_id)
-
-    def map_options(self, callable, parameter, signature, key, depth, indent, group_id):
+    def map_options(self, callable, key, parameters, depth, indent):
         # if want_prints:
-        #     print(f"[cc] {indent}map_options parameter={parameter}")
-        #     indent += "  "
-        #     print(f"[cc] {indent}key={key}")
-        #     if not signature.parameters:
-        #         print(f"[cc] {indent}signature=()")
-        #     else:
-        #         print(f"[cc] {indent}signature=(")
-        #         for _k, _v in signature.parameters.items():
-        #             print(f"[cc] {indent}    {_v},")
-        #         print(f"[cc] {indent}    )")
-        #     print(f"[cc]")
+        #     print(f"[cc] {indent}map_options")
+        #     indent += "    "
+        #     print(f"[cc] {indent}automatically map keyword-only parameters to options")
+
         _, kw_parameters, _ = self.appeal.fn_database_lookup(callable)
-        mappings = kw_parameters.get(parameter.name, ())
 
-        if not mappings:
-            p = signature.parameters.get(parameter.name)
-            assert p
-            annotation = dereference_annotated(p.annotation)
-            default = p.default
-            default_options = self.appeal.root.default_options
-            assert builtins.callable(default_options)
-            default_options(self.appeal, callable, parameter.name, annotation, default)
+        all_kwonly_names = []
 
-        parameter_index_to_options = collections.defaultdict(list)
-        parameters = []
+        # step 1: populate explicit keyword-only options
+        #
+        # we have to iterate over parameters, because we need
+        # to force mapping with default_options.
+        var_keyword = None
+        for parameter in parameters.values():
+            if parameter.kind == KEYWORD_ONLY:
+                if parameter.default == empty:
+                    raise AppealConfigurationError(f"x: keyword-only argument {parameter.name} doesn't have a default value")
+                mappings = kw_parameters.get(parameter.name, None)
+                if not mappings:
+                    annotation = dereference_annotated(parameter.annotation)
+                    default_options = self.appeal.root.default_options
+                    assert builtins.callable(default_options)
+                    default_options(self.appeal, callable, parameter.name, annotation, parameter.default)
+                all_kwonly_names.append(parameter.name)
+                continue
+            if parameter.kind == VAR_KEYWORD:
+                var_keyword = parameter.name
+                continue
+
+        # step 2: populate **kwargs-only options
+        # (options created with appeal.option(), where the parameter_name doesn't
+        #  appear in the function, so the output goes into **kwargs)
+
+        # if want_prints:
+        #     print(f"[cc] {indent}map user-defined options")
+
+        kw_parameters_unseen = set(kw_parameters) - set(all_kwonly_names)
+        if kw_parameters_unseen:
+            if not var_keyword:
+                raise AppealConfigurationError(f"x: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
+            # avoid randomness
+            kw_parameters_unseen = list(kw_parameters_unseen)
+            kw_parameters_unseen.sort()
+            all_kwonly_names.extend(kw_parameters_unseen)
+
+        # if want_prints:
+        #     print(f"[cc] {indent}all keyword only parameters: {all_kwonly_names}")
+
         mapped_options = []
-        for option_entry in kw_parameters[parameter.name]:
-            option, callable2, parameter = option_entry
-            mapped_options.append(option)
-            # assert callable is not empty
-            assert callable == callable2
+        for name in all_kwonly_names:
+            # Group together all options for an individual Parameter object.
+            #
+            # There may be multiple *different* Parameter objects for a
+            # single parameter, because that's how we represent mapping multiple
+            # different converters to a single keyword-only parameter.
+            #
+            #     https://github.com/larryhastings/appeal#multiple-options-for-the-same-parameter
+            #
+            # But Parameter objects aren't necessarily hashable.
+            # (the default might be a list, etc.)
+            # Also!  You also can't rely on Parameter objects
+            # being unique.  There can be two Parameter objects
+            # with the same value.
+            #
+            # And it gets worse!  The official way to turn a parameter into a callable
+            # is through the converter factories via map_to_converter.  But the only way
+            # to get the converter out is to instantiate it.  And that might give you a
+            # bound method of a dynamically-generated class, which means nothing will
+            # compare the same because the instances are different.
+            #
+            # So we correlate them together by converter and default value.  And if the
+            # converter is an instance of a bound method, we yank out the class and the
+            # unbound method and use those.
 
-            # not all parameters are hashable.  (default might be a list, etc.)
-            try:
-                parameter_index = parameters.index(parameter)
-            except ValueError:
-                parameter_index = len(parameters)
-                parameters.append(parameter)
+            work = []
+            parameter_ids = []
+            for option_entry in kw_parameters[name]:
+                option, redundant_callable, parameter = option_entry
+                assert callable == redundant_callable
+                mapped_options.append(option)
 
-            parameter_index_to_options[parameter_index].append(option)
+                cls = self.root.map_to_converter(parameter)
+                converter = cls(parameter, self.appeal)
+                parameter_callable = converter.callable
 
-        for parameter_index, options in parameter_index_to_options.items():
-            parameter = parameters[parameter_index]
-            self.compile_options(callable, key, parameter, options, depth, indent, group_id)
+                # I can't believe it's come to this
+                if isinstance(parameter_callable, types.MethodType):
+                    parameter_callable = (parameter_callable.__self__.__class__, parameter_callable.__func__)
+
+                parameter_key = (parameter_callable, parameter.default)
+                for parameter_id, parameter_key2 in enumerate(parameter_ids):
+                    if parameter_key == parameter_key2:
+                        break
+                else:
+                    parameter_id = len(parameter_ids)
+                    parameter_ids.append(parameter_key)
+                    work.append((parameter, []))
+
+                options = work[parameter_id][1]
+                options.append(option)
+
+            for parameter, options in work:
+                # if want_prints:
+                #     print(f"[cc] {indent}work: {parameter=} {options=}")
+
+                option_names = [denormalize_option(o) for o in options]
+                assert option_names
+                option_names = " | ".join(option_names)
+                program_name = f"{callable.__name__} {option_names}"
+
+                cc, add_to_self_a = self.compile_option(program_name, parameter, indent)
+                add_to_self_a.load_converter(key=key)
+                add_to_self_a.add_to_kwargs(name=parameter.name)
+                program = cc.assemble()
+
+                for option in options:
+                    # option doesn't have to be unique in this argument group,
+                    # but it must be unique per consumed argument.
+                    # (you can't define the same option twice without at least one consume_positional between.)
+
+                    if option not in self.ag_options:
+                        self.ag_options.add(option)
+                        destination = self.ag_options_a
+                    elif self.ag_duplicate_options_a:
+                        if option in self.ag_duplicate_options:
+                            raise AppealConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no arguments consumed in between definitions)")
+                        destination = self.ag_duplicate_options_a
+                        self.ag_duplicate_options.add(option)
+                    else:
+                        raise AppealConfigurationError(f"argument group initialized with multiple definitions of option {denormalize_option(option)}, ambiguous")
+
+                    # if want_prints:
+                    #     print(f"[cc] {indent}option={option}")
+                    #     print(f"[cc] {indent}    program={program}")
+                    #     print(f"[cc] {indent}    destination={destination}")
+                    destination.map_option(self.group_id, option, program, key, parameter)
 
         return mapped_options
 
-
-    def compile_parameter(self, depth, indent, parameter, pgi, usage_callable, usage_parameter, multioption=False, append=None, add_to_kwargs=None, is_command=False):
+    def compile_parameter(self, parameter, pgi, depth, indent):
         """
-        returns is_degenerate, a boolean, True if this entire subtree is "degenerate".
+        returns add_to_self_a, is_degenerate
+
+        add_to_self_a is an assembler inserted immediately after
+          the value for this parameter is read in / created.
+          (the value is either a string from the command-line
+          or a converter). at that moment, the value has loaded
+          in the 'o' register.
+        is_degenerate is a boolean, True if this entire subtree is "degenerate".
         """
         if self.processor:
             self.processor.log_enter_context(f"compile parameter {parameter.name}")
@@ -1676,24 +1811,20 @@ class CharmCompiler:
         #     required = "yes" if parameter.default is empty else "no"
         #     print(f"[cc] {indent}required? {required}")
         #     print(f"[cc] {indent}depth={depth}")
-        #     print(f"[cc] {indent}multioption={multioption}")
-        #     print(f"[cc] {indent}append={append}")
         #     print(f"[cc]")
 
         maps_to_positional = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
         tracked_by_argument_grouping = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
 
-        # hard-coded, at least for now
-        annotation = dereference_annotated(parameter.annotation)
-        if annotation is not empty:
-            cls = annotation
-        elif parameter.default is not empty:
-            cls = type(parameter.default)
-
-        callable = annotation
+        # the official and *only correct* way
+        # to produce a converter from a parameter.
         cls = self.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+
         signature = cls.get_signature(parameter)
         parameters = signature.parameters
+
         # if want_prints:
         #     print(f"[cc] {indent}cls={cls}")
         #     if not parameters:
@@ -1720,38 +1851,29 @@ class CharmCompiler:
             # guarantee that the root converter has a special key
             self.command_converter_key = converter_key
 
+        multioption = issubclass(cls, MultiOption)
         if multioption:
-            assert not append
+            # assert issubclass(cls, MultiOption), f"{cls=} is not a MultiOption"
             label_flush_multioption = CharmInstructionLabel("flush_multioption")
             label_after_multioption = CharmInstructionLabel("after_multioption")
 
             assert self.command_converter_key
             load_o_op = self.ag_initialize_a.load_o(key=self.command_converter_key)
             self.ag_initialize_a.branch_on_o_to_label(label_flush_multioption)
+        # else:
+        #     assert not issubclass(cls, MultiOption), f"{cls=} IS a MultiOption"
 
-        # leaves the converter in the "o" register
-        op = self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key, is_command=is_command)
-
-        append_op = None
-        if append:
-            self.body_a.load_o(key=converter_key)
-            append_op = self.body_a.append_to_args(**append)
-        elif add_to_kwargs:
-            parent_key, parameter_name = add_to_kwargs
-            self.body_a.load_converter(key=parent_key)
-            self.body_a.load_o(key=converter_key)
-            self.body_a.add_to_kwargs(name=parameter_name)
+        self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key)
+        add_to_parent_a = CharmAssembler()
+        add_to_parent_a.load_o(key=converter_key)
+        self.body_a.append(add_to_parent_a)
 
         if multioption:
             load_o_op.key = converter_key
             self.ag_initialize_a.jump_to_label(label_after_multioption)
             self.ag_initialize_a.append(label_flush_multioption)
-            op = self.ag_initialize_a.flush_multioption()
+            self.ag_initialize_a.flush_multioption()
             self.ag_initialize_a.append(label_after_multioption)
-
-        var_keyword = None
-        kw_parameters_seen = set()
-        _, kw_parameters, positionals = self.appeal.fn_database_lookup(callable)
 
         # we need to delay mapping options sometimes.
         #
@@ -1760,42 +1882,16 @@ class CharmCompiler:
         #
         # if depth>0, we're in a child annotation function. all options go into
         # the same group as the first argument (if any)
-        mapped_options = False
-        def map_options():
-            nonlocal mapped_options
-            if mapped_options:
+        spilled_options = False
+        def spill_options():
+            nonlocal spilled_options
+            if spilled_options:
                 return
-            mapped_options = True
-            # if want_prints:
-            #     print(f"[cc] {indent}automatically map keyword-only parameters to options")
-
-            for i, (parameter_name, p) in enumerate(parameters.items()):
-                if p.kind == KEYWORD_ONLY:
-                    if p.default == empty:
-                        raise AppealConfigurationError(f"{usage_callable}: keyword-only argument {parameter_name} doesn't have a default value")
-                    kw_parameters_seen.add(parameter_name)
-                    self.map_options(callable, p, signature, converter_key, depth, indent, self.group.id)
-                    continue
-                if p.kind == VAR_KEYWORD:
-                    var_keyword = parameter_name
-                    continue
-
-            # step 2: populate **kwargs-only options
-            # (options created with appeal.option(), where the parameter_name doesn't
-            #  appear in the function, so the output goes into **kwargs)
-            # if want_prints:
-            #     print(f"[cc] {indent}map user-defined options")
-
-            kw_parameters_unseen = set(kw_parameters) - kw_parameters_seen
-            if kw_parameters_unseen:
-                if not var_keyword:
-                    raise AppealConfigurationError(f"{usage_callable}: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
-                for parameter_name in kw_parameters_unseen:
-                    parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
-                    self.map_options(callable, parameter, signature, converter_key, depth, indent, self.group.id)
+            spilled_options = True
+            self.map_options(callable, converter_key, parameters, depth, indent)
 
         if not depth:
-            map_options()
+            spill_options()
 
         group = None
 
@@ -1836,13 +1932,14 @@ class CharmCompiler:
             else:
                 index = i
 
-            if is_degenerate:
-                usage_parameter = usage = None
-            else:
-                usage_callable = callable
-                usage = usage_parameter = parameter_name
+            # if is_degenerate:
+            #     usage_parameter = usage = None
+            # else:
+            #     usage_callable = callable
+            #     usage = usage_parameter = parameter_name
 
-            usage = positionals.get(parameter_name, usage)
+            # usage = positionals.get(parameter_name, usage)
+            usage = "-x"
 
             # only create new groups here if it's an optional group
             # (we pre-create the initial, required group)
@@ -1861,22 +1958,29 @@ class CharmCompiler:
             if pgi_parameter.first_in_group and (not pgi_parameter.in_required_group):
                 group = self.group = self.new_argument_group(optional=True, indent=indent + "    ")
 
-            map_options()
+            spill_options()
 
-            self.body_a.load_converter(key=converter_key)
+
             if cls is SimpleTypeConverterStr:
                 # if want_prints:
                 #     print(f"[cc] {indent}    simple str converter, consume_positional and append.")
-                self.body_a.consume_positional(required=pgi_parameter.required, is_oparg=bool(self.option_depth))
-                op = self.body_a.append_to_args(callable=callable, parameter=parameter_name, discretionary=False, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
-                self.reset_duplicate_options_a()
+                self.body_a.consume_positional(required=pgi_parameter.required, is_oparg=isinstance(self, CharmOptionCompiler))
+                discretionary = False
+                add_to_self_a = self.body_a
             else:
                 # if want_prints:
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
-                append = {'callable': callable, 'parameter': parameter_name, "discretionary": discretionary, "usage": usage, 'usage_callable': usage_callable, 'usage_parameter': usage_parameter }
-                is_degenerate_subtree = self.compile_parameter(depth + 1, indent + "    ", p, pgi, usage_callable, usage_parameter, None, append=append, is_command=False)
+                add_to_self_a, is_degenerate_subtree = self.compile_parameter(p, pgi, depth + 1, indent + "    ")
                 is_degenerate = is_degenerate and is_degenerate_subtree
+
+            add_to_self_a.load_converter(key=converter_key)
+            add_to_self_a.append_to_args(
+                parameter=parameter_name,
+                discretionary=discretionary,
+                )
+
+            self.reset_duplicate_options_a()
 
             if p.kind == VAR_POSITIONAL:
                 group.repeating = True
@@ -1885,38 +1989,46 @@ class CharmCompiler:
             # if want_prints:
             #     print(f"[cc]")
 
-        map_options()
-
-        if append_op and not is_degenerate:
-            # if want_prints:
-            #     print(f"[cc] {indent}suppress usage for non-leaf parameter {append_op.usage}")
-            append_op.usage = None
+        spill_options()
 
         if self.processor:
             self.processor.log_exit_context()
 
-        return is_degenerate
+        return add_to_parent_a, is_degenerate
 
+    def __init__(self, appeal, processor, parameter, *, indent='', name=''):
+        name = name or parameter.name
+        super().__init__(appeal, processor, indent=indent, name=name)
+        self.command_converter_key = None
 
-    def __call__(self, callable, default, is_option=False, multioption=None, add_to_kwargs=None):
+        # The compiler is effectively two passes.
+        #
+        # First, we iterate over the annotation tree generating instructions.
+        # These go into discrete "assemblers" which are carefully ordered in
+        # the self.assemblers list.
+        #
+        # Second, we root_a.finalize(), which assembles the final program.
+
+        callable = dereference_annotated(parameter.annotation)
+        default = parameter.default
+
         indent = self.indent
+
+        self.root_a = CharmAssembler(self.name)
+
+        # options defined in the current argument group
+        self.ag_a = self.ag_initialize_a = None
+        self.ag_options_a = self.ag_duplicate_options_a = None
+        self.ag_options = set()
+        self.ag_duplicate_options = set()
+        self.next_argument_group_id = serial_number_generator(prefix=f"{name} ag-").__next__
+
+        self.new_argument_group(optional=False, indent=indent)
+
+        self.name_to_callable = {}
 
         if self.processor:
             self.processor.log_enter_context(f"compile {callable}")
-
-        if self.name is None:
-            self.name = callable.__name__
-            self.root_a.name = self.name
-
-        parameter_name = callable.__name__
-        while True:
-            if parameter_name.startswith('<'):
-                parameter_name = parameter_name[1:-1]
-                continue
-            if parameter_name.endswith("()"):
-                parameter_name = parameter_name[:-2]
-                continue
-            break
 
         # if want_prints:
         #     print(f"[cc]")
@@ -1930,9 +2042,6 @@ class CharmCompiler:
         # But if we're compiling a lambda function, we create a
         # Parameter out of the function's name, which is '<lambda>',
         # and, well... we gotta use *something*.  (hope this works!)
-        fix_lambda = parameter_name == 'lambda'
-        if fix_lambda:
-            parameter_name = '_____lambda______'
 
         if self.processor:
             self.processor.log_event("parameter grouper")
@@ -1943,51 +2052,41 @@ class CharmCompiler:
         pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
         pgi = pg.iter_all()
 
-        kind = KEYWORD_ONLY if is_option else POSITIONAL_ONLY
-        if is_option:
-            self.option_depth += 1
-        parameter = inspect.Parameter(parameter_name, kind, annotation=callable, default=default)
-        if fix_lambda and (getattr(parameter, '_name', '') == parameter_name):
-            parameter._name = 'lambda'
-        self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, add_to_kwargs=add_to_kwargs, is_command=True)
-
-        program = self.finalize()
-
-        if is_option:
-            self.option_depth -= 1
+        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent)
 
         # if want_prints:
-        #     print(f"[cc] {indent}compilation of {parameter_name} complete.")
+        #     print(f"[cc] {indent}compilation of {parameter} complete.")
         #     print(f"[cc]")
-        #     if not self.option_depth:
-        #         print()
 
         if self.processor:
             self.processor.log_exit_context()
 
-        return program
-
-    def finalize(self):
-        """
-        Performs a finalization pass on program:
-
-        * Computes total and group min/max values.
-        * Convert label/jump_to_label pseudo-ops into
-          absolute jump ops.
-        * Simple peephole optimizations to remove redundant
-          load_* ops and jump-to-jumps.
-        """
-
-        self.clean_up_argument_group()
-
-        self.program = self.root_a.assemble()
-        return self.program
+        self.add_to_parent_a = add_to_parent_a
 
 
-def charm_compile(appeal, callable, processor):
-    cc = CharmCompiler(appeal, name=callable.__name__, processor=processor)
-    program = cc(callable, default=empty, is_option=False)
-    return program
+class CharmCommandCompiler(CharmAppealCompiler):
+
+    def __init__(self, appeal, processor, callable, *, indent='', name=''):
+        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
+        super().__init__(appeal, processor, parameter, indent=indent, name=name)
+
+
+def charm_compile_command(appeal, processor, callable):
+    cc = CharmCommandCompiler(appeal, processor, callable)
+    return cc.assemble()
+
+
+
+class CharmOptionCompiler(CharmAppealCompiler):
+    pass
+
+
+class CharmMappingCompiler(CharmCompiler):
+    pass
+
+class CharmIterableCompiler(CharmCompiler):
+    pass
+
 
 
 def charm_print(program, indent=''):
@@ -2154,12 +2253,17 @@ class CharmBaseInterpreter:
         o = self.repr_converter(self.o)
         return f"<{self.__class__.__name__} [{ip}] converter={converter!s} o={o!s} group={group!s}>"
 
+    def converter_to_key(self, converter):
+        if self.converters:
+            for key, value in self.converters.items():
+                if converter == value:
+                    return key
+        return None
+
     def repr_converter(self, converter):
         if self.converters:
             width = math.floor(math.log10(len(self.converters)) + 1)
-            for key, value in self.converters.items():
-                if converter == value:
-                    return repr([key]) + "=" + repr(converter)
+            return repr([self.converter_to_key(converter)]) + "=" + repr(converter)
         return repr(converter)
 
     @big.BoundInnerClass
@@ -2253,7 +2357,7 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
             options = []
             for op in op_list:
                 options.append(denormalize_option(op.option))
-            full_name = f"{op.callable.__name__}.{op.parameter.name}"
+            full_name = f"{op.key}.{op.parameter.name}"
             option_value = "|".join(options)
             option_values[full_name] = option_value
 
@@ -2289,14 +2393,15 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
         elif op.op == opcode.append_to_args:
             # append_to_args can only be after one of those two opcodes!
             # if last_op.op in (opcode.consume_positional, opcode.load_o):
-                if op.usage:
-                    if first_argument_in_group:
-                        first_argument_in_group = False
-                    else:
-                        usage.append(" ")
-                    full_name = f"{op.usage_callable.__name__}.{op.usage_parameter}"
-                    arguments_values[full_name] = op.usage
-                    usage.append(formatter(op.usage))
+            usage.append(" *garbage, usage is broken* ")
+                # if op.usage:
+                #     if first_argument_in_group:
+                #         first_argument_in_group = False
+                #     else:
+                #         usage.append(" ")
+                #     full_name = f"{op.usage_parameter}"
+                #     arguments_values[full_name] = op.usage
+                #     usage.append(formatter(op.usage))
         last_op = op
 
     flush_options()
@@ -2420,10 +2525,10 @@ class CharmInterpreter(CharmBaseInterpreter):
             self.reset()
 
         def reset(self):
-            options = {}
-            token = self.next_token()
-            self.options = self.token_to_dict[token] = options
-            self.token = self.dict_id_to_token[id(options)] = token
+            self.options = options = {}
+            self.token = token = self.next_token()
+            self.token_to_dict[token] = options
+            self.dict_id_to_token[id(options)] = token
             return token
 
         def push(self):
@@ -2431,7 +2536,7 @@ class CharmInterpreter(CharmBaseInterpreter):
             token = self.reset()
 
             # if want_prints:
-            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.push token={token}")
+            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.push, new options group {token}")
 
         def pop(self):
             options_id = id(self.options)
@@ -2447,16 +2552,16 @@ class CharmInterpreter(CharmBaseInterpreter):
             #     options = [denormalize_option(option) for option in options]
             #     options.sort(key=lambda s: s.lstrip('-'))
             #     options = "{" + " ".join(options) + "}"
-            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop: popped to token {token}, options={options}")
+            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop: popped to options group {token}, options={options}")
 
-        def pop_until_token(self, token):
+        def pop_until_group(self, token):
             if self.token == token:
                 # if want_prints:
-                #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_token: token={token} is current token.  popped 0 times.")
+                #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_group: current group has token {token}.  popped 0 times.")
                 return
             options_to_stop_at = self.token_to_dict.get(token)
             if not options_to_stop_at:
-                raise ValueError(f"Options.pop_until_token: specified non-existent options token={token}")
+                raise ValueError(f"Options.pop_until_token: specified non-existent options group token={token}")
 
             count = 0
             while self.stack and (self.options != options_to_stop_at):
@@ -2464,10 +2569,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                 self.pop()
 
             if self.options != options_to_stop_at:
-                raise ValueError(f"Options.pop_until_token: couldn't find options with token={token}")
+                raise ValueError(f"Options.pop_until_token: couldn't find options group with token={token}")
 
             # if want_prints:
-            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_token: token={token}, popped {count} times.")
+            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_group: popped {count} times, down to options group {token}.")
 
         def unmap_all_child_options(self):
             """
@@ -2559,7 +2664,10 @@ class CharmInterpreter(CharmBaseInterpreter):
 
         sentinel = object()
 
-        def print_changed_registers(**kwargs):
+        register_width = 20
+        total_register_width = len(ip_zero) + 1 + register_width
+
+        def print_registers(**kwargs):
             """
             Call this *after* changing registers.
             Pass in the *old value* of every registers
@@ -2574,38 +2682,64 @@ class CharmInterpreter(CharmBaseInterpreter):
             That made it easier to copy with the
             two-phase loop and printing consume_positional.)
             """
-            for r in ('converter', 'o', 'group', 'groups'):
-                fields = [r.rjust(9), "|   "] # len(coverter) == 9
+            nonlocal register_width
 
-                value = getattr(self, r)
-                old = kwargs.get(r, sentinel)
+            def format_options_group(token):
+                l = list(self.options.stack)
+                l.append((self.options.options, self.options.token))
+                l2 = list()
+                for t in l:
+                    l2.append(t)
+                    if t[1] == token:
+                        break
+                l2.reverse()
+                strings = [f"{token} {list(group)}" for group, token in l2]
+                s = " ".join(strings)
+                return s
+
+            for t in (
+                ('converter', None, self.repr_converter),
+                ('o', None, self.repr_converter),
+                ('group', None, lambda value: value.summary() if value else repr(value) ),
+                ('groups', None, lambda value: str([group.id for group in value])),
+                ('options group', 'options.token', format_options_group),
+                ):
+                name, attr, format = t
+                attr = attr or name
+
+                value = self
+
+                for field in attr.split('.'):
+                    value = getattr(value, field)
+
+                fields = [name.rjust(register_width), "|   "]
+
+                old = kwargs.pop(name, sentinel)
                 changed = (old != sentinel) and (value != old)
                 if changed:
-                    if r == 'groups':
-                        s = repr([group.id for group in old ])
-                    elif r == 'group':
-                        s = old.summary() if old else repr(old)
-                    else:
-                        s = self.repr_converter(old)
-                    fields.append(s)
+                    fields.append(format(old))
                     fields.append("->")
 
-                if r == 'groups':
-                    s = repr([group.id for group in value ])
-                elif r == 'group':
-                    s = value.summary() if value else repr(value)
-                else:
-                    s = self.repr_converter(value)
-                fields.append(s)
+                fields.append(format(value))
 
                 result = " ".join(fields)
                 if len(result) < 50:
                     print(f"{self.opcodes_prefix} {self.register_spacer} {result}")
                 else:
                     # split it across two lines
-                    print(f"{self.opcodes_prefix} {self.register_spacer} {r:>9} |    {fields[2]}")
+                    print(f"{self.opcodes_prefix} {name:>{total_register_width}} |    {fields[2]}")
                     if changed:
-                        print(f"{self.opcodes_prefix} {self.register_spacer}           | -> {fields[-1]}")
+                        print(f"{self.opcodes_prefix} {'':{total_register_width}} | -> {fields[-1]}")
+
+            extras = kwargs.pop('extras', ())
+            assert not kwargs
+            # if they passed in *extra* stuff, just print it normal
+            for name, old, new in extras:
+                if (old != sentinel) and (old != new):
+                    print(f"{self.opcodes_prefix} {name:>{total_register_width}} |    {old}")
+                    print(f"{self.opcodes_prefix} {'  ':>{total_register_width}} | -> {new}")
+                else:
+                    print(f"{self.opcodes_prefix} {name:>{total_register_width}} |    {new}")
 
         while self.running() or argi:
             # if want_prints:
@@ -2654,7 +2788,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.converter = converter
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} load_converter | key {op.key}")
-                    #     print_changed_registers(converter=old_converter)
+                    #     print_registers(converter=old_converter)
                     continue
 
                 if op.op == opcode.load_o:
@@ -2663,7 +2797,15 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.o = o
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} load_o | key {op.key}")
-                    #     print_changed_registers(o=old_o)
+                    #     print_registers(o=old_o)
+                    continue
+
+                if op.op == opcode.converter_to_o:
+                    old_o = self.o
+                    self.o = self.converter
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} converter_to_o")
+                    #     print_registers(o=old_o)
                     continue
 
                 if op.op == opcode.consume_positional:
@@ -2679,13 +2821,25 @@ class CharmInterpreter(CharmBaseInterpreter):
                 if op.op == opcode.append_to_args:
                     o = self.o
                     converter = self.converter
+                    # if want_prints:
+                    #     if op.discretionary:
+                    #         field_name = "args_queue"
+                    #         new = converter.args_queue
+                    #     else:
+                    #         field_name = "args_converters"
+                    #         new = converter.args_converters
+                    #     old = new.copy()
+
                     # either queue or append o as indicated
                     (converter.queue_converter if op.discretionary else converter.append_converter)(o)
 
                     # if want_prints:
                     #     discretionary = "yes" if op.discretionary else "no"
                     #     print(f"{self.opcodes_prefix} {prefix} append_to_args | parameter {op.parameter} | discretionary? {discretionary}")
-                    #     print_changed_registers()
+                    #     new = list(new)
+                    #     print_registers(extras = [
+                    #         (f'{self.converter_to_key(converter)}.{field_name}', old, new),
+                    #         ])
                     continue
 
                 if op.op == opcode.add_to_kwargs:
@@ -2701,11 +2855,18 @@ class CharmInterpreter(CharmBaseInterpreter):
                         # and it's a multioption.  it's fine, we just ignore it.
                         continue
 
+                    # if want_prints:
+                    #     new = converter.kwargs_converters
+                    #     old = new.copy()
+
                     converter.unqueue()
                     converter.kwargs_converters[name] = o
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} add_to_kwargs | name {op.name}")
-                    #     print_changed_registers()
+                    #     print_registers(extras = [
+                    #         (f'{self.converter_to_key(converter)}.kwargs_converters', old, new),
+                    #         ])
+
                     continue
 
                 if op.op == opcode.get_keyword:
@@ -2721,7 +2882,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.o = value
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} get_keyword")
-                    #     print_changed_registers(o=old_o)
+                    #     print_registers(o=old_o)
                     continue
 
                 if op.op == opcode.flush_multioption:
@@ -2729,7 +2890,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.o.flush()
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} flush_multioption")
-                    #     print_changed_registers()
+                    #     print_registers()
                     continue
 
                 if op.op == opcode.map_option:
@@ -2743,8 +2904,8 @@ class CharmInterpreter(CharmBaseInterpreter):
                             break
                         self.options[op.option] = (op.program, op.group)
                         # if want_prints:
-                        #     print(f"{self.opcodes_prefix} {prefix} map_option | '{denormalize_option(op.option)}' -> {op.program} | token {self.options.token}")
-                        #     print_changed_registers()
+                        #     print(f"{self.opcodes_prefix} {prefix} map_option | '{denormalize_option(op.option)}' -> {op.program} | options group {self.options.token}")
+                        #     print_registers()
                     self.rewind_one_instruction()
                     continue
 
@@ -2759,18 +2920,16 @@ class CharmInterpreter(CharmBaseInterpreter):
                             break
 
                         cls = self.appeal.map_to_converter(op.parameter)
-                        converter = cls(op.parameter, self.appeal, is_command=op.is_command)
+                        converter = cls(op.parameter, self.appeal)
                         old_o = self.o
                         self.converters[op.key] = self.o = converter
-                        if op.is_command and (not command_converter):
+                        if not command_converter:
                             command_converter = converter
                             self.command_converter_key = op.key
 
                         # if want_prints:
                         #     print(f"{self.opcodes_prefix} {prefix} create_converter | cls {cls.__name__} | parameter {op.parameter.name} | key {op.key}")
-                        #     print_changed_registers(o=old_o)
-                        #     print(f"{self.opcodes_prefix} ")
-                        #     print(f"{self.opcodes_prefix} {self.register_spacer} converters[{op.key}] = {converter}")
+                        #     print_registers(o=old_o)
                     self.rewind_one_instruction()
                     continue
 
@@ -2783,13 +2942,13 @@ class CharmInterpreter(CharmBaseInterpreter):
                     id_to_group[group.id] = group
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} set_group")
-                    #     print_changed_registers(group=old_group, groups=old_groups)
+                    #     print_registers(group=old_group, groups=old_groups)
                     continue
 
                 if op.op == opcode.jump:
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} jump | op.address {op.address}")
-                    #     print_changed_registers()
+                    #     print_registers()
                     self.ip.jump(op.address)
                     continue
 
@@ -2797,7 +2956,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     # if want_prints:
                     #     branch = "yes" if self.o else "no"
                     #     print(f"{self.opcodes_prefix} {prefix} branch_on_o | o? {branch} | address {op.address}")
-                    #     print_changed_registers()
+                    #     print_registers()
                     if self.o:
                         self.ip.jump(op.address)
                     continue
@@ -2810,7 +2969,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                 if op.op == opcode.end:
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} end | id {op.id} | name {op.name!r}")
-                    #     print_changed_registers()
+                    #     print_registers()
                     continue
 
                 if op.op == opcode.create_converter:
@@ -2925,7 +3084,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     # if want_prints:
                     #     print(f"{self.cmdline_prefix}")
                     #     print(f"{self.opcodes_prefix} {prefix} consume_positional")
-                    #     print_changed_registers(o=old_o, group=old_group)
+                    #     print_registers(o=old_o, group=old_group)
 
                     break
 
@@ -3078,7 +3237,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     op = None
 
                 # throw away child options mapped below our option's sibling.
-                self.options.pop_until_token(token)
+                self.options.pop_until_group(token)
 
                 # and push a fresh options dict.
                 self.options.push()
@@ -3144,10 +3303,9 @@ class Converter:
 
     A Converter
     """
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         self.parameter = parameter
         self.appeal = appeal
-        self.is_command = is_command
 
         callable = dereference_annotated(parameter.annotation)
         default = parameter.default
@@ -3407,11 +3565,9 @@ class Converter:
             pass
 
     def convert(self, processor):
-        # print(f"self={self} self.args_converters={self.args_converters} self.kwargs_converters={self.kwargs_converters}")
         for iterable in (self.args_converters, self.kwargs_converters.values()):
             for converter in iterable:
                 if converter and not isinstance(converter, str):
-                    # print(f"self={self}.convert, converter={converter}")
                     converter.convert(processor)
 
         try:
@@ -3434,11 +3590,11 @@ class Converter:
 
 
 class InferredConverter(Converter):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         if not parameter.default:
             raise AppealConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=type(parameter.default), default=parameter.default)
-        super().__init__(p2, appeal, is_command=is_command)
+        super().__init__(p2, appeal)
 
     @classmethod
     def get_signature(cls, parameter):
@@ -3469,10 +3625,9 @@ class InferredSequenceConverter(InferredConverter):
 
 
 class SimpleTypeConverter(Converter):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         self.appeal = appeal
         self.default = parameter.default
-        self.is_command = is_command
 
         self.name = parameter.name
 
@@ -3545,11 +3700,11 @@ class BaseOption(Converter):
     pass
 
 class InferredOption(BaseOption):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         if not parameter.default:
             raise AppealConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=type(parameter.default), default=parameter.default)
-        super().__init__(p2, appeal, is_command=is_command)
+        super().__init__(p2, appeal)
 
     @classmethod
     def get_signature(cls, parameter):
@@ -3617,10 +3772,10 @@ def strip_self_from_signature(signature):
 
 
 class Option(BaseOption):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         # the callable passed in is ignored
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=self.option, default=parameter.default)
-        super().__init__(p2, appeal, is_command=is_command)
+        super().__init__(p2, appeal)
         self.init(parameter.default)
 
     def __repr__(self):
@@ -3701,12 +3856,12 @@ class BooleanOptionConverter(Option):
         return self.value
 
 class MultiOption(Option):
-    def __init__(self, parameter, appeal, *, is_command=False):
+    def __init__(self, parameter, appeal):
         self.multi_converters = []
         self.multi_args = []
         # the callable passed in is ignored
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=self.option, default=parameter.default)
-        super().__init__(p2, appeal, is_command=is_command)
+        super().__init__(p2, appeal)
 
     def flush(self):
         self.multi_converters.append((self.args_converters, self.kwargs_converters))
@@ -4446,7 +4601,7 @@ class Appeal:
         def __init__(self, appeal, *, bind_method=True):
             super().__init__(bind_method=bind_method)
             self.appeal = appeal
-            self.placeholder = f"_cmp_{hex(id(object()))}"
+            self.placeholder = f"_commandmethodpreparer_placeholder_{hex(id(object()))}"
 
         def command(self, name=None):
             def command(fn):
@@ -5416,7 +5571,7 @@ class Appeal:
         program = getattr(self, program_attr)
         if not program:
             callable = getattr(self, name)
-            program = charm_compile(self, callable, processor)
+            program = charm_compile_command(self, processor, callable)
             # if want_prints:
             #     print()
             setattr(self, program_attr, program)
@@ -5509,17 +5664,16 @@ class Appeal:
 
 class Processor:
     def __init__(self, appeal):
-        self.events = []
-
         self.appeal = appeal
-
-        self.argi = None
         self.preparers = []
+        self.reset()
+
+
+    def reset(self):
+        self.events = []
+        self.argi = None
         self.commands = []
         self.result = None
-
-        self.log_start()
-        self.log_event("process start")
 
     class Log:
         def __init__(self, name=None, *, parent=None):
@@ -5660,6 +5814,10 @@ class Processor:
         return fn
 
     def __call__(self, args=None, kwargs=None):
+        self.reset()
+        self.log_start()
+        self.log_event("process start")
+
         self.args = args
         if args is not None:
             self.argi = argi = PushbackIterator(args)
