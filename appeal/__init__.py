@@ -752,30 +752,30 @@ class CharmInstructionConverterToO(CharmInstruction): # CharmInstructionKeyBase
 
 class CharmInstructionAppendToArgs(CharmInstruction):
     """
-    append_to_args <parameter> <usage>
+    append_to_args <parameter> <discretionary>
 
     Takes a reference to the value in the 'o' register
     and appends it to 'converter.args'.
 
-    <callable> is a callable object.
-    <parameter> and <usage> are strings identifying
-    the name of the parameter.  These are all used in
-    generating usage information and documentation.
+    <parameter> is an inspect.Parameter representing
+    the positional parameter being filled here.
+    It's used to generate usage.
+
+    <discretionary> is a boolean value.
+    If True, this argument may or may not be used,
+    depending on what values we process at runtime.
+    If False, this argument is mandatory.
     """
 
-    __slots__ = ['callable', 'parameter', 'discretionary', 'usage', 'usage_callable', 'usage_parameter']
+    __slots__ = ['parameter', 'discretionary']
 
-    def __init__(self, callable, parameter, discretionary, usage, usage_callable, usage_parameter):
+    def __init__(self, parameter, discretionary):
         self.op = opcode.append_to_args
-        self.callable = callable
         self.parameter = parameter
         self.discretionary = discretionary
-        self.usage = usage
-        self.usage_callable = usage_callable
-        self.usage_parameter = usage_parameter
 
     def __repr__(self):
-        return f"<append_to_args callable={self.callable} parameter={self.parameter} discretionary={self.discretionary} usage={self.usage} usage_callable={self.usage_callable} usage_parameter={self.usage_parameter}>"
+        return f"<append_to_args parameter={self.parameter} discretionary={self.discretionary}>"
 
 class CharmInstructionAddToKwargs(CharmInstruction):
     """
@@ -799,35 +799,33 @@ class CharmInstructionAddToKwargs(CharmInstruction):
 
 class CharmInstructionMapOption(CharmInstruction):
     """
-    map_option <option> <program> <callable> <parameter> <key> <group>
+    map_option <group> <option> <program> <key> <parameter>
 
     Maps the option <option> to the program <program>.
 
-    <program> is self-contained; if the option is invoked
-    on the command-line, you may simply 'push' the new
-    program on your current CharmInterpreter.
-
-    <callable>, <parameter>, and <key> are used in
-    generating usage information.  <key> is the
-    converter key for the converter, <parameter>
-    is the parameter accepted by that converter
-    which this option fills, and <callable> is the
-    function that accepts <parameter>.  (The value
-    returned by this program becomes the argument for
-    <parameter> when calling <callable>.)
-
     <group> is the id of the ArgumentGroup this is mapped in.
-    """
-    __slots__ = ['option', 'program', 'callable', 'parameter', 'key', 'group']
 
-    def __init__(self, option, program, callable, parameter, key, group):
+    <program> is self-contained; if the option is invoked
+    on the command-line, you may run it with
+    CharmInterpreter.call(program).
+
+    <key> and <parameter> are used in generating
+    usage information.  <key> is the converter key
+    for the converter, and <parameter> is the
+    parameter accepted by that converter which this
+    option fills.  (The value returned by this program
+    becomes the argument for <parameter> when calling
+    the callable in <converter>.)
+    """
+    __slots__ = ['option', 'program', 'key', 'parameter', 'group']
+
+    def __init__(self, group, option, program, key, parameter):
         self.op = opcode.map_option
+        self.group = group
         self.option = option
         self.program = program
-        self.callable = callable
-        self.parameter = parameter
         self.key = key
-        self.group = group
+        self.parameter = parameter
 
     def __repr__(self):
         return f"<map_option option={self.option!r} program={self.program} key={self.key} parameter={self.parameter} key={self.key} group={self.group}>"
@@ -1112,14 +1110,10 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def append_to_args(self, callable, parameter, discretionary, usage, usage_callable, usage_parameter):
+    def append_to_args(self, parameter, discretionary):
         op = CharmInstructionAppendToArgs(
-            callable = callable,
             parameter = parameter,
             discretionary = discretionary,
-            usage = usage,
-            usage_callable = usage_callable,
-            usage_parameter = usage_parameter,
             )
         self._append_opcode(op)
         return op
@@ -1131,7 +1125,7 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def map_option(self, option, program, callable, parameter, key, group):
+    def map_option(self, group, option, program, key, parameter):
         self.option_to_child_options[option].update(program.option_to_child_options)
 
         self.option_to_parent_options.update(program.option_to_parent_options)
@@ -1139,12 +1133,11 @@ class CharmAssembler:
             self.option_to_parent_options[child_option].add(option)
 
         op = CharmInstructionMapOption(
+            group = group,
             option = option,
             program = program,
-            callable = callable,
-            parameter = parameter,
             key = key,
-            group = group,
+            parameter = parameter,
             )
         self._append_opcode(op)
         return op
@@ -1238,12 +1231,24 @@ class CharmAssembler:
 
     def assemble(self, *, comments=EXTERNAL):
         """
+        Merges all the opcodes and the nested assemblers
+        into a single list, and processes
 
         * Computes total and group min/max values.
         * Convert label/jump_to_label pseudo-ops into
-          absolute jump ops.
-        * Simple peephole optimizations to remove redundant
-          load_* ops and jump-to-jumps.
+          absolute jump ops (and removes labels).
+        * Handles comment instructions based on the 'comments'
+          argument:
+            * EXTERNAL means delete the instructions, but move
+              the comments themselves into an external table
+              (a la CPython's "lnotab").
+            * STRIP means simply delete the instructions.
+            * PRESERVE means preserve the comments.
+        * Removes no-ops.
+        * Removes redundant load_converter, load_o,
+          and converter_to_o instructions based on
+          rudimentary dataflow analysis.
+        * Simple jump-to-jumps peephole optimizer.
         """
 
         self.spill_names()
@@ -1271,6 +1276,7 @@ class CharmAssembler:
         while index < len(opcodes):
             op = opcodes[index]
 
+            # handle comments
             if op.op == opcode.comment:
                 if comments == CharmAssembler.EXTERNAL:
                     external_comments.append((index, op.comment))
@@ -1331,6 +1337,11 @@ class CharmAssembler:
                     del opcodes[index]
                     continue
                 o = op.key
+            elif op.op == opcode.converter_to_o:
+                if o == converter:
+                    del opcodes[index]
+                    continue
+                o = converter
             elif op.op == opcode.create_converter:
                 o = op.key
 
@@ -1575,7 +1586,7 @@ class CharmCompiler:
 
         return is_converter and optional
 
-    def compile_options(self, parent_callable, key, parameter, options, depth, indent, group_id):
+    def compile_options(self, parent_callable, key, parameter, options, indent, group_id):
         # if want_prints:
         #     print(f"[cc] {indent}compile_options options={options}")
         #     indent += "  "
@@ -1606,7 +1617,7 @@ class CharmCompiler:
         else:
             annotation = dereference_annotated(parameter.annotation)
             if not is_legal_annotation(annotation):
-                raise AppealConfigurationError(f"{parent_callable.__name__}: parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
+                raise AppealConfigurationError(f"{name}: parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
 
             multioption = issubclass(cls, MultiOption)
 
@@ -1642,7 +1653,7 @@ class CharmCompiler:
             #     print(f"[cc] {indent}option={option}")
             #     print(f"[cc] {indent}    program={program}")
             #     print(f"[cc] {indent}    destination={destination}")
-            destination.map_option(option, program, parent_callable, parameter, key, group_id)
+            destination.map_option(group_id, option, program, key, parameter)
 
     def map_options(self, callable, parameter, signature, key, depth, indent, group_id):
         # if want_prints:
@@ -1689,7 +1700,7 @@ class CharmCompiler:
 
         for parameter_index, options in parameter_index_to_options.items():
             parameter = parameters[parameter_index]
-            self.compile_options(callable, key, parameter, options, depth, indent, group_id)
+            self.compile_options(callable, key, parameter, options, indent, group_id)
 
         return mapped_options
 
@@ -1907,12 +1918,8 @@ class CharmCompiler:
 
             add_to_self_a.load_converter(key=converter_key)
             add_to_self_a.append_to_args(
-                callable=callable,
                 parameter=parameter_name,
                 discretionary=discretionary,
-                usage=usage,
-                usage_callable=usage_callable,
-                usage_parameter=usage_parameter,
                 )
 
             self.reset_duplicate_options_a()
@@ -2337,7 +2344,7 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
             options = []
             for op in op_list:
                 options.append(denormalize_option(op.option))
-            full_name = f"{op.callable.__name__}.{op.parameter.name}"
+            full_name = f"{op.key}.{op.parameter.name}"
             option_value = "|".join(options)
             option_values[full_name] = option_value
 
@@ -2373,14 +2380,15 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
         elif op.op == opcode.append_to_args:
             # append_to_args can only be after one of those two opcodes!
             # if last_op.op in (opcode.consume_positional, opcode.load_o):
-                if op.usage:
-                    if first_argument_in_group:
-                        first_argument_in_group = False
-                    else:
-                        usage.append(" ")
-                    full_name = f"{op.usage_callable.__name__}.{op.usage_parameter}"
-                    arguments_values[full_name] = op.usage
-                    usage.append(formatter(op.usage))
+            usage.append(" *garbage, usage is broken* ")
+                # if op.usage:
+                #     if first_argument_in_group:
+                #         first_argument_in_group = False
+                #     else:
+                #         usage.append(" ")
+                #     full_name = f"{op.usage_parameter}"
+                #     arguments_values[full_name] = op.usage
+                #     usage.append(formatter(op.usage))
         last_op = op
 
     flush_options()
