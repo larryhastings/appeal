@@ -468,6 +468,7 @@ print_enum('''
     create_converter
     load_converter
     load_o
+    converter_to_o
     append_to_args
     add_to_kwargs
     map_option
@@ -503,7 +504,7 @@ print()
 # line below is generated.
 #
 # Modify the code in the quotes above and run
-#         % python3 cpp.py __init__.py
+#         % python3 cpp.py appeal/__init__.py
 # to regenerate.
 
 class opcode(enum.Enum):
@@ -514,14 +515,15 @@ class opcode(enum.Enum):
     create_converter = 4
     load_converter = 5
     load_o = 6
-    append_to_args = 7
-    add_to_kwargs = 8
-    map_option = 9
-    consume_positional = 10
-    get_keyword = 11
-    flush_multioption = 12
-    set_group = 13
-    end = 14
+    converter_to_o = 7
+    append_to_args = 8
+    add_to_kwargs = 9
+    map_option = 10
+    consume_positional = 11
+    get_keyword = 12
+    flush_multioption = 13
+    set_group = 14
+    end = 15
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
@@ -734,6 +736,19 @@ class CharmInstructionLoadO(CharmInstruction): # CharmInstructionKeyBase
 
     def __repr__(self):
         return f"<load_converter key={self.key}>"
+
+class CharmInstructionConverterToO(CharmInstruction): # CharmInstructionKeyBase
+    """
+    converter_to_o
+
+    Sets the 'o' register to the contents of the 'converter'
+    register.
+    """
+    def __init__(self):
+        self.op = opcode.converter_to_o
+
+    def __repr__(self):
+        return f"<converter_to_o>"
 
 class CharmInstructionAppendToArgs(CharmInstruction):
     """
@@ -1089,6 +1104,11 @@ class CharmAssembler:
         op = CharmInstructionLoadO(
             key=key,
             )
+        self._append_opcode(op)
+        return op
+
+    def converter_to_o(self):
+        op = CharmInstructionConverterToO()
         self._append_opcode(op)
         return op
 
@@ -1596,6 +1616,7 @@ class CharmCompiler:
             cc = CharmOptionCompiler(self.appeal, self.processor, name=program_name, indent=indent)
             multioption = issubclass(cls, MultiOption)
             add_to_self_a = cc(parameter, multioption=multioption)
+            add_to_self_a.converter_to_o()
 
         add_to_self_a.load_converter(key=key)
         add_to_self_a.add_to_kwargs(name=parameter.name)
@@ -1676,7 +1697,11 @@ class CharmCompiler:
 
     def compile_parameter(self, depth, indent, parameter, pgi, usage_callable, usage_parameter, multioption=False, is_command=False):
         """
-        returns is_degenerate, a boolean, True if this entire subtree is "degenerate".
+        returns add_to_self_a, is_degenerate
+
+        add_to_self_a is an assembler inserted immediately after the converter for this parameter
+          is created.  it's sitting in the
+        is_degenerate is a boolean, True if this entire subtree is "degenerate".
         """
         if self.processor:
             self.processor.log_enter_context(f"compile parameter {parameter.name}")
@@ -1740,8 +1765,6 @@ class CharmCompiler:
 
         # leaves the converter in the "o" register
         self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key, is_command=is_command)
-
-        self.body_a.load_o(key=converter_key)
         add_to_parent_a = CharmAssembler()
         self.body_a.append(add_to_parent_a)
 
@@ -1866,7 +1889,7 @@ class CharmCompiler:
 
             map_options()
 
-            self.body_a.load_converter(key=converter_key)
+
             if cls is SimpleTypeConverterStr:
                 # if want_prints:
                 #     print(f"[cc] {indent}    simple str converter, consume_positional and append.")
@@ -1878,8 +1901,10 @@ class CharmCompiler:
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
                 add_to_self_a, is_degenerate_subtree = self.compile_parameter(depth + 1, indent + "    ", p, pgi, usage_callable, usage_parameter, None, is_command=False)
+                add_to_self_a.load_o(key=converter_key)
                 is_degenerate = is_degenerate and is_degenerate_subtree
 
+            add_to_self_a.load_converter(key=converter_key)
             add_to_self_a.append_to_args(
                 callable=callable,
                 parameter=parameter_name,
@@ -2729,6 +2754,14 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.o = o
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} load_o | key {op.key}")
+                    #     print_changed_registers(o=old_o)
+                    continue
+
+                if op.op == opcode.converter_to_o:
+                    old_o = self.o
+                    self.o = self.converter
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} converter_to_o")
                     #     print_changed_registers(o=old_o)
                     continue
 
