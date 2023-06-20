@@ -30,6 +30,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
 OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
+# run appeal/want_prints.py to toggle debug prints on and off
 want_prints = 0
 
 
@@ -948,9 +949,8 @@ class CharmProgram:
 
     next_id = serial_number_generator(prefix="program-").__next__
 
-    def __init__(self, name, *, option_names=None):
+    def __init__(self, name):
         self.name = name
-        self.option_names = option_names
 
         self.id = CharmProgram.next_id()
 
@@ -1003,9 +1003,8 @@ class CharmAssembler:
 
     next_id = serial_number_generator(prefix="asm-").__next__
 
-    def __init__(self, name=None, *, option_names=None):
+    def __init__(self, name=None):
         self.name = name
-        self.option_names = option_names
         self.id = CharmAssembler.next_id()
         self.clear()
 
@@ -1218,6 +1217,15 @@ class CharmAssembler:
         raise IndexError(f"CharmAssembler index out of range")
 
     def assemble(self, *, comments=EXTERNAL):
+        """
+
+        * Computes total and group min/max values.
+        * Convert label/jump_to_label pseudo-ops into
+          absolute jump ops.
+        * Simple peephole optimizations to remove redundant
+          load_* ops and jump-to-jumps.
+        """
+
         self.spill_names()
 
         opcodes = []
@@ -1335,7 +1343,7 @@ class CharmAssembler:
         end_op = CharmInstructionEnd(self.name)
         opcodes.append(end_op)
 
-        program = CharmProgram(self.name, option_names=self.option_names)
+        program = CharmProgram(self.name)
         program.opcodes = opcodes
         end_op.id = program.id
         total.id = program.total.id
@@ -1346,44 +1354,19 @@ class CharmAssembler:
         return program
 
 
+
 class CharmCompiler:
-    def __init__(self, appeal, *, name=None, converter_key_prefix=None, argument_group_prefix=None, option_names=None, indent='', processor=None):
+    next_compilation_id = serial_number_generator(prefix="c-").__next__
+
+    def __init__(self, appeal, processor, name='', *, indent=''):
         self.appeal = appeal
-        self.name = name
-        self.indent = indent
-        self.processor = processor
-
-        # if want_prints:
-        #     print(f"[cc]")
-        #     print(f"[cc] {indent}Initializing compiler")
-        #     print(f"[cc]")
-
-        self.next_converter_key = serial_number_generator(prefix=converter_key_prefix or 'c-').__next__
-        self.command_converter_key = None
-
         self.root = appeal.root
+        self.processor = processor
+        self.name = name
 
-        # The compiler is effectively two passes.
-        #
-        # First, we iterate over the annotation tree generating instructions.
-        # These go into discrete "assemblers" which are carefully ordered in
-        # the self.assemblers list.
-        #
-        # Second, we root_a.finalize(), which assembles the final program.
-        self.root_a = CharmAssembler(name, option_names=option_names)
+        self.indent = indent
 
-        self.option_depth = 0
-
-        # options defined in the current argument group
-        self.ag_a = self.ag_initialize_a = None
-        self.ag_options_a = self.ag_duplicate_options_a = None
-        self.ag_options = set()
-        self.ag_duplicate_options = set()
-        self.next_argument_group_id = serial_number_generator(prefix=f"{name} ag-").__next__
-
-        self.new_argument_group(optional=False, indent=indent)
-
-        self.name_to_callable = {}
+        self.next_converter_key = serial_number_generator(prefix=self.next_compilation_id() + '_k-').__next__
 
     def clean_up_argument_group(self, indent=''):
         if self.ag_a:
@@ -1568,7 +1551,7 @@ class CharmCompiler:
             # a single required str argument.
             # if want_prints:
             #     print(f"[cc] {indent}hand-coded program for simple str")
-            a = CharmAssembler(program_name, option_names=option_names)
+            a = CharmAssembler(program_name)
             a.set_group(self.next_argument_group_id(), optional=False)
             a.load_converter(key)
             a.consume_positional(required=True, is_oparg=True)
@@ -1584,10 +1567,11 @@ class CharmCompiler:
             # if want_prints:
             #     print(f"[cc] {indent}<< recurse on option >>")
 
-            cc = CharmCompiler(self.appeal, name=program_name, option_names=option_names, converter_key_prefix=key + f".{parameter.name}-", argument_group_prefix=group_id + "-", indent=indent, processor=self.processor)
-
+            cc = CharmOptionCompiler(self.appeal, self.processor, name=program_name, indent=indent)
             add_to_kwargs = key, parameter.name
-            program = cc(annotation, parameter.default, is_option=True, multioption=multioption, add_to_kwargs=add_to_kwargs)
+            multioption = issubclass(cls, MultiOption)
+            cc(parameter, add_to_kwargs=add_to_kwargs, multioption=multioption)
+            program = cc.assemble()
             # program.options = option_names
             # self.options.update(program.options)
 
@@ -1661,6 +1645,7 @@ class CharmCompiler:
             self.compile_options(callable, key, parameter, options, depth, indent, group_id)
 
         return mapped_options
+
 
 
     def compile_parameter(self, depth, indent, parameter, pgi, usage_callable, usage_parameter, multioption=False, append=None, add_to_kwargs=None, is_command=False):
@@ -1867,7 +1852,7 @@ class CharmCompiler:
             if cls is SimpleTypeConverterStr:
                 # if want_prints:
                 #     print(f"[cc] {indent}    simple str converter, consume_positional and append.")
-                self.body_a.consume_positional(required=pgi_parameter.required, is_oparg=bool(self.option_depth))
+                self.body_a.consume_positional(required=pgi_parameter.required, is_oparg=isinstance(self, CharmOptionCompiler))
                 op = self.body_a.append_to_args(callable=callable, parameter=parameter_name, discretionary=False, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
                 self.reset_duplicate_options_a()
             else:
@@ -1897,17 +1882,8 @@ class CharmCompiler:
 
         return is_degenerate
 
-
-    def __call__(self, callable, default, is_option=False, multioption=None, add_to_kwargs=None):
-        indent = self.indent
-
-        if self.processor:
-            self.processor.log_enter_context(f"compile {callable}")
-
-        if self.name is None:
-            self.name = callable.__name__
-            self.root_a.name = self.name
-
+    @staticmethod
+    def fake_parameter(kind, callable, default=empty):
         parameter_name = callable.__name__
         while True:
             if parameter_name.startswith('<'):
@@ -1917,6 +1893,58 @@ class CharmCompiler:
                 parameter_name = parameter_name[:-2]
                 continue
             break
+
+        parameter = inspect.Parameter("___fake_name___", kind, annotation=callable, default=default)
+        parameter._name = parameter_name
+        return parameter
+
+    def assemble(self):
+        """
+        Assembles all the instructions together to produce a final program.
+        """
+
+        self.clean_up_argument_group()
+
+        self.program = self.root_a.assemble()
+        return self.program
+
+class CharmAppealCompiler(CharmCompiler):
+
+    def __init__(self, appeal, processor, name='', *, indent=''):
+        super().__init__(appeal, processor, name, indent=indent)
+        self.command_converter_key = None
+
+    def __call__(self, parameter, *, add_to_kwargs=None, multioption=False):
+        # The compiler is effectively two passes.
+        #
+        # First, we iterate over the annotation tree generating instructions.
+        # These go into discrete "assemblers" which are carefully ordered in
+        # the self.assemblers list.
+        #
+        # Second, we root_a.finalize(), which assembles the final program.
+
+        name = parameter.name
+        callable = dereference_annotated(parameter.annotation)
+        default = parameter.default
+
+        indent = self.indent
+
+        self.root_a = CharmAssembler(self.name)
+
+        # options defined in the current argument group
+        self.ag_a = self.ag_initialize_a = None
+        self.ag_options_a = self.ag_duplicate_options_a = None
+        self.ag_options = set()
+        self.ag_duplicate_options = set()
+        self.next_argument_group_id = serial_number_generator(prefix=f"{name} ag-").__next__
+
+        self.new_argument_group(optional=False, indent=indent)
+
+        self.name_to_callable = {}
+
+        if self.processor:
+            self.processor.log_enter_context(f"compile {callable}")
+
 
         # if want_prints:
         #     print(f"[cc]")
@@ -1930,9 +1958,6 @@ class CharmCompiler:
         # But if we're compiling a lambda function, we create a
         # Parameter out of the function's name, which is '<lambda>',
         # and, well... we gotta use *something*.  (hope this works!)
-        fix_lambda = parameter_name == 'lambda'
-        if fix_lambda:
-            parameter_name = '_____lambda______'
 
         if self.processor:
             self.processor.log_event("parameter grouper")
@@ -1943,51 +1968,47 @@ class CharmCompiler:
         pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
         pgi = pg.iter_all()
 
-        kind = KEYWORD_ONLY if is_option else POSITIONAL_ONLY
-        if is_option:
-            self.option_depth += 1
-        parameter = inspect.Parameter(parameter_name, kind, annotation=callable, default=default)
-        if fix_lambda and (getattr(parameter, '_name', '') == parameter_name):
-            parameter._name = 'lambda'
+        # self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, add_to_kwargs=add_to_kwargs, is_command=True)
         self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, add_to_kwargs=add_to_kwargs, is_command=True)
 
-        program = self.finalize()
-
-        if is_option:
-            self.option_depth -= 1
-
         # if want_prints:
-        #     print(f"[cc] {indent}compilation of {parameter_name} complete.")
+        #     print(f"[cc] {indent}compilation of {parameter} complete.")
         #     print(f"[cc]")
-        #     if not self.option_depth:
-        #         print()
 
         if self.processor:
             self.processor.log_exit_context()
 
-        return program
 
-    def finalize(self):
-        """
-        Performs a finalization pass on program:
+class CharmCommandCompiler(CharmAppealCompiler):
 
-        * Computes total and group min/max values.
-        * Convert label/jump_to_label pseudo-ops into
-          absolute jump ops.
-        * Simple peephole optimizations to remove redundant
-          load_* ops and jump-to-jumps.
-        """
-
-        self.clean_up_argument_group()
-
-        self.program = self.root_a.assemble()
-        return self.program
+    def __call__(self, callable):
+        if not self.name:
+            self.name = callable.__name__
+        self.command_converter_key = None
+        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
+        super().__call__(parameter)
 
 
-def charm_compile(appeal, callable, processor):
-    cc = CharmCompiler(appeal, name=callable.__name__, processor=processor)
-    program = cc(callable, default=empty, is_option=False)
-    return program
+
+class CharmOptionCompiler(CharmAppealCompiler):
+
+    def __call__(self, parameter, add_to_kwargs, multioption):
+        super().__call__(parameter, add_to_kwargs=add_to_kwargs, multioption=multioption)
+
+
+
+class CharmDictCompiler(CharmCompiler):
+
+    def __call__(self, callable):
+        pass
+
+
+
+
+def charm_compile_command(appeal, processor, callable):
+    cc = CharmCommandCompiler(appeal, processor)
+    cc(callable)
+    return cc.assemble()
 
 
 def charm_print(program, indent=''):
@@ -2420,10 +2441,10 @@ class CharmInterpreter(CharmBaseInterpreter):
             self.reset()
 
         def reset(self):
-            options = {}
-            token = self.next_token()
-            self.options = self.token_to_dict[token] = options
-            self.token = self.dict_id_to_token[id(options)] = token
+            self.options = options = {}
+            self.token = token = self.next_token()
+            self.token_to_dict[token] = options
+            self.dict_id_to_token[id(options)] = token
             return token
 
         def push(self):
@@ -2431,7 +2452,7 @@ class CharmInterpreter(CharmBaseInterpreter):
             token = self.reset()
 
             # if want_prints:
-            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.push token={token}")
+            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.push, new options group {token}")
 
         def pop(self):
             options_id = id(self.options)
@@ -2447,16 +2468,16 @@ class CharmInterpreter(CharmBaseInterpreter):
             #     options = [denormalize_option(option) for option in options]
             #     options.sort(key=lambda s: s.lstrip('-'))
             #     options = "{" + " ".join(options) + "}"
-            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop: popped to token {token}, options={options}")
+            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop: popped to options group {token}, options={options}")
 
-        def pop_until_token(self, token):
+        def pop_until_group(self, token):
             if self.token == token:
                 # if want_prints:
-                #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_token: token={token} is current token.  popped 0 times.")
+                #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_group: current group has token {token}.  popped 0 times.")
                 return
             options_to_stop_at = self.token_to_dict.get(token)
             if not options_to_stop_at:
-                raise ValueError(f"Options.pop_until_token: specified non-existent options token={token}")
+                raise ValueError(f"Options.pop_until_token: specified non-existent options group token={token}")
 
             count = 0
             while self.stack and (self.options != options_to_stop_at):
@@ -2464,10 +2485,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                 self.pop()
 
             if self.options != options_to_stop_at:
-                raise ValueError(f"Options.pop_until_token: couldn't find options with token={token}")
+                raise ValueError(f"Options.pop_until_token: couldn't find options group with token={token}")
 
             # if want_prints:
-            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_token: token={token}, popped {count} times.")
+            #     print(f"{self.interpreter.cmdline_prefix} {self.interpreter.ip_spacer} Options.pop_until_group: popped {count} times, down to options group {token}.")
 
         def unmap_all_child_options(self):
             """
@@ -2574,10 +2595,18 @@ class CharmInterpreter(CharmBaseInterpreter):
             That made it easier to copy with the
             two-phase loop and printing consume_positional.)
             """
-            for r in ('converter', 'o', 'group', 'groups'):
-                fields = [r.rjust(9), "|   "] # len(coverter) == 9
+            for r in ('converter', 'o', 'group', 'groups', ('options group', 'options.token')):
+                if isinstance(r, str):
+                    name = attr = r
+                else:
+                    name, attr = r
 
-                value = getattr(self, r)
+                value = self
+                for field in attr.split('.'):
+                    value = getattr(value, field)
+
+                fields = [name.rjust(13), "|   "] # len(coverter) == 9
+
                 old = kwargs.get(r, sentinel)
                 changed = (old != sentinel) and (value != old)
                 if changed:
@@ -2590,10 +2619,16 @@ class CharmInterpreter(CharmBaseInterpreter):
                     fields.append(s)
                     fields.append("->")
 
-                if r == 'groups':
+                if name == 'groups':
                     s = repr([group.id for group in value ])
-                elif r == 'group':
+                elif name == 'group':
                     s = value.summary() if value else repr(value)
+                elif name == 'options group':
+                    l = list(self.options.stack)
+                    l.append((self.options.options, self.options.token))
+                    l.reverse()
+                    strings = [f"{token} {list(group)}" for group, token in l]
+                    s = " ".join(strings)
                 else:
                     s = self.repr_converter(value)
                 fields.append(s)
@@ -2603,9 +2638,9 @@ class CharmInterpreter(CharmBaseInterpreter):
                     print(f"{self.opcodes_prefix} {self.register_spacer} {result}")
                 else:
                     # split it across two lines
-                    print(f"{self.opcodes_prefix} {self.register_spacer} {r:>9} |    {fields[2]}")
+                    print(f"{self.opcodes_prefix} {self.register_spacer} {name:>13} |    {fields[2]}")
                     if changed:
-                        print(f"{self.opcodes_prefix} {self.register_spacer}           | -> {fields[-1]}")
+                        print(f"{self.opcodes_prefix} {self.register_spacer}               | -> {fields[-1]}")
 
         while self.running() or argi:
             # if want_prints:
@@ -2743,7 +2778,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                             break
                         self.options[op.option] = (op.program, op.group)
                         # if want_prints:
-                        #     print(f"{self.opcodes_prefix} {prefix} map_option | '{denormalize_option(op.option)}' -> {op.program} | token {self.options.token}")
+                        #     print(f"{self.opcodes_prefix} {prefix} map_option | '{denormalize_option(op.option)}' -> {op.program} | options group {self.options.token}")
                         #     print_changed_registers()
                     self.rewind_one_instruction()
                     continue
@@ -3078,7 +3113,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     op = None
 
                 # throw away child options mapped below our option's sibling.
-                self.options.pop_until_token(token)
+                self.options.pop_until_group(token)
 
                 # and push a fresh options dict.
                 self.options.push()
@@ -5416,7 +5451,7 @@ class Appeal:
         program = getattr(self, program_attr)
         if not program:
             callable = getattr(self, name)
-            program = charm_compile(self, callable, processor)
+            program = charm_compile_command(self, processor, callable)
             # if want_prints:
             #     print()
             setattr(self, program_attr, program)
