@@ -1646,13 +1646,11 @@ class CharmAppealCompiler(CharmCompiler):
             if not is_legal_annotation(annotation):
                 raise AppealConfigurationError(f"precompile_option(): parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
 
-            multioption = issubclass(cls, MultiOption)
-
             # if want_prints:
             #     print(f"[cc] {indent}<< recurse on option >>")
 
             cc = CharmOptionCompiler(self.appeal, self.processor, name=program_name, indent=indent)
-            add_to_self_a = cc(parameter, multioption=multioption)
+            add_to_self_a = cc(parameter)
 
         return cc, add_to_self_a
 
@@ -1749,7 +1747,7 @@ class CharmAppealCompiler(CharmCompiler):
         return mapped_options
 
 
-    def compile_parameter(self, parameter, pgi, depth, indent, *, multioption=False):
+    def compile_parameter(self, parameter, pgi, depth, indent):
         """
         returns add_to_self_a, is_degenerate
 
@@ -1810,13 +1808,17 @@ class CharmAppealCompiler(CharmCompiler):
             # guarantee that the root converter has a special key
             self.command_converter_key = converter_key
 
+        multioption = issubclass(cls, MultiOption)
         if multioption:
+            # assert issubclass(cls, MultiOption), f"{cls=} is not a MultiOption"
             label_flush_multioption = CharmInstructionLabel("flush_multioption")
             label_after_multioption = CharmInstructionLabel("after_multioption")
 
             assert self.command_converter_key
             load_o_op = self.ag_initialize_a.load_o(key=self.command_converter_key)
             self.ag_initialize_a.branch_on_o_to_label(label_flush_multioption)
+        # else:
+        #     assert not issubclass(cls, MultiOption), f"{cls=} IS a MultiOption"
 
         self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key)
         add_to_parent_a = CharmAssembler()
@@ -1981,7 +1983,7 @@ class CharmAppealCompiler(CharmCompiler):
 
         return add_to_parent_a, is_degenerate
 
-    def __call__(self, parameter, *, multioption=False):
+    def __call__(self, parameter):
         # The compiler is effectively two passes.
         #
         # First, we iterate over the annotation tree generating instructions.
@@ -2012,7 +2014,6 @@ class CharmAppealCompiler(CharmCompiler):
         if self.processor:
             self.processor.log_enter_context(f"compile {callable}")
 
-
         # if want_prints:
         #     print(f"[cc]")
         #     print(f"[cc] {indent}Compiling '{self.name}'")
@@ -2035,7 +2036,7 @@ class CharmAppealCompiler(CharmCompiler):
         pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
         pgi = pg.iter_all()
 
-        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent, multioption=multioption)
+        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent)
 
         # if want_prints:
         #     print(f"[cc] {indent}compilation of {parameter} complete.")
@@ -2064,11 +2065,10 @@ def charm_compile_command(appeal, processor, callable):
 
 
 
-
 class CharmOptionCompiler(CharmAppealCompiler):
 
-    def __call__(self, parameter, multioption):
-        return super().__call__(parameter, multioption=multioption)
+    def __call__(self, parameter):
+        return super().__call__(parameter)
 
 
 
