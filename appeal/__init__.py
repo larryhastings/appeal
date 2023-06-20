@@ -1408,12 +1408,12 @@ class CharmCompiler:
 
     next_compilation_id = serial_number_generator(prefix="c-").__next__
 
-    def __init__(self, appeal, processor, name='', *, indent=''):
+    def __init__(self, appeal, processor, *, indent='', name=''):
         self.appeal = appeal
         self.root = appeal.root
         self.processor = processor
-        self.name = name
 
+        self.name = name
         self.indent = indent
 
         self.next_converter_key = serial_number_generator(prefix=self.next_compilation_id() + '_k-').__next__
@@ -1446,10 +1446,6 @@ class CharmCompiler:
 
 
 class CharmAppealCompiler(CharmCompiler):
-
-    def __init__(self, appeal, processor, name='', *, indent=''):
-        super().__init__(appeal, processor, name, indent=indent)
-        self.command_converter_key = None
 
     def clean_up_argument_group(self, indent=''):
         if self.ag_a:
@@ -1649,13 +1645,13 @@ class CharmAppealCompiler(CharmCompiler):
             # if want_prints:
             #     print(f"[cc] {indent}<< recurse on option >>")
 
-            cc = CharmOptionCompiler(self.appeal, self.processor, name=program_name, indent=indent)
-            add_to_self_a = cc(parameter)
+            cc = CharmOptionCompiler(self.appeal, self.processor, parameter, indent=indent, name=program_name)
+            add_to_self_a = cc.add_to_parent_a
 
         return cc, add_to_self_a
 
 
-    def map_options(self, group_id, callable, parameter, key, depth, indent):
+    def map_options(self, group_id, callable, key, parameter, depth, indent):
         # if want_prints:
         #     print(f"[cc] {indent}map_options parameter={parameter}")
         #     indent += "  "
@@ -1857,7 +1853,7 @@ class CharmAppealCompiler(CharmCompiler):
                     if p.default == empty:
                         raise AppealConfigurationError(f"x: keyword-only argument {parameter_name} doesn't have a default value")
                     kw_parameters_seen.add(parameter_name)
-                    self.map_options(self.group_id, callable, p, converter_key, depth, indent)
+                    self.map_options(self.group_id, callable, converter_key, p, depth, indent)
                     continue
                 if p.kind == VAR_KEYWORD:
                     var_keyword = parameter_name
@@ -1875,7 +1871,7 @@ class CharmAppealCompiler(CharmCompiler):
                     raise AppealConfigurationError(f"x: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
                 for parameter_name in kw_parameters_unseen:
                     parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
-                    self.map_options(self.group_id, callable, parameter, converter_key, depth, indent)
+                    self.map_options(self.group_id, callable, converter_key, parameter, depth, indent)
 
         if not depth:
             spill_options()
@@ -1983,7 +1979,11 @@ class CharmAppealCompiler(CharmCompiler):
 
         return add_to_parent_a, is_degenerate
 
-    def __call__(self, parameter):
+    def __init__(self, appeal, processor, parameter, *, indent='', name=''):
+        name = name or parameter.name
+        super().__init__(appeal, processor, indent=indent, name=name)
+        self.command_converter_key = None
+
         # The compiler is effectively two passes.
         #
         # First, we iterate over the annotation tree generating instructions.
@@ -1992,7 +1992,6 @@ class CharmAppealCompiler(CharmCompiler):
         #
         # Second, we root_a.finalize(), which assembles the final program.
 
-        name = parameter.name
         callable = dereference_annotated(parameter.annotation)
         default = parameter.default
 
@@ -2045,43 +2044,31 @@ class CharmAppealCompiler(CharmCompiler):
         if self.processor:
             self.processor.log_exit_context()
 
-        return add_to_parent_a
+        self.add_to_parent_a = add_to_parent_a
 
 
 class CharmCommandCompiler(CharmAppealCompiler):
 
-    def __call__(self, callable):
-        if not self.name:
-            self.name = callable.__name__
-        self.command_converter_key = None
+    def __init__(self, appeal, processor, callable, *, indent='', name=''):
         parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
-        super().__call__(parameter)
+        super().__init__(appeal, processor, parameter, indent=indent, name=name)
 
 
 def charm_compile_command(appeal, processor, callable):
-    cc = CharmCommandCompiler(appeal, processor)
-    cc(callable)
+    cc = CharmCommandCompiler(appeal, processor, callable)
     return cc.assemble()
 
 
 
 class CharmOptionCompiler(CharmAppealCompiler):
-
-    def __call__(self, parameter):
-        return super().__call__(parameter)
-
+    pass
 
 
 class CharmMappingCompiler(CharmCompiler):
-
-    def __call__(self, callable):
-        pass
+    pass
 
 class CharmIterableCompiler(CharmCompiler):
-
-    def __call__(self, callable):
-        pass
-
+    pass
 
 
 
