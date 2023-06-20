@@ -1354,8 +1354,29 @@ class CharmAssembler:
         return program
 
 
-
 class CharmCompiler:
+    """
+    Base compiler class.
+    You don't want to use this directly; you want one of the subclasses:
+
+    * CharmCommandCompiler compiles an Appeal "command".
+    * CharmOptionCompiler compiles an "option" for an Appeal "command".
+    * CharmMappingCompiler compiles a reader for a mapping.
+    * CharmIterableCompiler compiles a reader for an iterable.
+
+    In general the workflow is like this:
+
+    * Construct the Compiler.  All compilers take the same arguments
+      in their constructor.
+    * Compile the thing, whatever it is, by calling the compiler object
+      (aka __call__).  These calls take context-specific arguments.
+    * Call the assemble method on the compiler.  This takes no arguments
+      and returns the finalized program.
+
+    (Why not have __call__ return the finalized program?  Because we might
+    want to modify the program after compliation but before final assembly.)
+    """
+
     next_compilation_id = serial_number_generator(prefix="c-").__next__
 
     def __init__(self, appeal, processor, name='', *, indent=''):
@@ -1465,8 +1486,8 @@ class CharmCompiler:
         #     base [-v] a b c [-o] d e f [-o] d e f
         #
         # It looks a little strange, but hey man, you're the one who
-        # asked Appeal to turn that into a command-line.  It's doing
-        # its best.
+        # asked Appeal to turn *that* into a command-line.  It's doing
+        # its best!
 
         self.clean_up_argument_group(indent=indent)
 
@@ -1503,6 +1524,13 @@ class CharmCompiler:
         return self.group
 
     def reset_duplicate_options_a(self):
+        """
+        Clear the "duplicate options" state, so that additional duplicates
+        can get mapped.
+
+        Call this immediately after you append a positional argument
+        (append_to_args).  Every time.
+        """
         if self.ag_duplicate_options:
             self.ag_duplicate_options.clear()
         elif self.ag_duplicate_options_a:
@@ -1553,10 +1581,8 @@ class CharmCompiler:
             #     print(f"[cc] {indent}hand-coded program for simple str")
             a = CharmAssembler(program_name)
             a.set_group(self.next_argument_group_id(), optional=False)
-            a.load_converter(key)
             a.consume_positional(required=True, is_oparg=True)
-            a.add_to_kwargs(parameter.name)
-            program = a.assemble()
+            add_to_self_a = cc = a
         else:
             annotation = dereference_annotated(parameter.annotation)
             if not is_legal_annotation(annotation):
@@ -1568,12 +1594,13 @@ class CharmCompiler:
             #     print(f"[cc] {indent}<< recurse on option >>")
 
             cc = CharmOptionCompiler(self.appeal, self.processor, name=program_name, indent=indent)
-            add_to_kwargs = key, parameter.name
             multioption = issubclass(cls, MultiOption)
-            cc(parameter, add_to_kwargs=add_to_kwargs, multioption=multioption)
-            program = cc.assemble()
-            # program.options = option_names
-            # self.options.update(program.options)
+            add_to_self_a = cc(parameter, multioption=multioption)
+
+        add_to_self_a.load_converter(key=key)
+        add_to_self_a.add_to_kwargs(name=parameter.name)
+        program = cc.assemble()
+
 
         for option in options:
             # option doesn't have to be unique in this argument group,
@@ -1647,8 +1674,7 @@ class CharmCompiler:
         return mapped_options
 
 
-
-    def compile_parameter(self, depth, indent, parameter, pgi, usage_callable, usage_parameter, multioption=False, append=None, add_to_kwargs=None, is_command=False):
+    def compile_parameter(self, depth, indent, parameter, pgi, usage_callable, usage_parameter, multioption=False, is_command=False):
         """
         returns is_degenerate, a boolean, True if this entire subtree is "degenerate".
         """
@@ -1662,7 +1688,6 @@ class CharmCompiler:
         #     print(f"[cc] {indent}required? {required}")
         #     print(f"[cc] {indent}depth={depth}")
         #     print(f"[cc] {indent}multioption={multioption}")
-        #     print(f"[cc] {indent}append={append}")
         #     print(f"[cc]")
 
         maps_to_positional = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
@@ -1706,7 +1731,6 @@ class CharmCompiler:
             self.command_converter_key = converter_key
 
         if multioption:
-            assert not append
             label_flush_multioption = CharmInstructionLabel("flush_multioption")
             label_after_multioption = CharmInstructionLabel("after_multioption")
 
@@ -1715,23 +1739,17 @@ class CharmCompiler:
             self.ag_initialize_a.branch_on_o_to_label(label_flush_multioption)
 
         # leaves the converter in the "o" register
-        op = self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key, is_command=is_command)
+        self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key, is_command=is_command)
 
-        append_op = None
-        if append:
-            self.body_a.load_o(key=converter_key)
-            append_op = self.body_a.append_to_args(**append)
-        elif add_to_kwargs:
-            parent_key, parameter_name = add_to_kwargs
-            self.body_a.load_converter(key=parent_key)
-            self.body_a.load_o(key=converter_key)
-            self.body_a.add_to_kwargs(name=parameter_name)
+        self.body_a.load_o(key=converter_key)
+        add_to_parent_a = CharmAssembler()
+        self.body_a.append(add_to_parent_a)
 
         if multioption:
             load_o_op.key = converter_key
             self.ag_initialize_a.jump_to_label(label_after_multioption)
             self.ag_initialize_a.append(label_flush_multioption)
-            op = self.ag_initialize_a.flush_multioption()
+            self.ag_initialize_a.flush_multioption()
             self.ag_initialize_a.append(label_after_multioption)
 
         var_keyword = None
@@ -1853,15 +1871,25 @@ class CharmCompiler:
                 # if want_prints:
                 #     print(f"[cc] {indent}    simple str converter, consume_positional and append.")
                 self.body_a.consume_positional(required=pgi_parameter.required, is_oparg=isinstance(self, CharmOptionCompiler))
-                op = self.body_a.append_to_args(callable=callable, parameter=parameter_name, discretionary=False, usage=usage, usage_callable=usage_callable, usage_parameter=usage_parameter)
-                self.reset_duplicate_options_a()
+                discretionary = False
+                add_to_self_a = self.body_a
             else:
                 # if want_prints:
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
-                append = {'callable': callable, 'parameter': parameter_name, "discretionary": discretionary, "usage": usage, 'usage_callable': usage_callable, 'usage_parameter': usage_parameter }
-                is_degenerate_subtree = self.compile_parameter(depth + 1, indent + "    ", p, pgi, usage_callable, usage_parameter, None, append=append, is_command=False)
+                add_to_self_a, is_degenerate_subtree = self.compile_parameter(depth + 1, indent + "    ", p, pgi, usage_callable, usage_parameter, None, is_command=False)
                 is_degenerate = is_degenerate and is_degenerate_subtree
+
+            add_to_self_a.append_to_args(
+                callable=callable,
+                parameter=parameter_name,
+                discretionary=discretionary,
+                usage=usage,
+                usage_callable=usage_callable,
+                usage_parameter=usage_parameter,
+                )
+
+            self.reset_duplicate_options_a()
 
             if p.kind == VAR_POSITIONAL:
                 group.repeating = True
@@ -1872,15 +1900,10 @@ class CharmCompiler:
 
         map_options()
 
-        if append_op and not is_degenerate:
-            # if want_prints:
-            #     print(f"[cc] {indent}suppress usage for non-leaf parameter {append_op.usage}")
-            append_op.usage = None
-
         if self.processor:
             self.processor.log_exit_context()
 
-        return is_degenerate
+        return add_to_parent_a, is_degenerate
 
     @staticmethod
     def fake_parameter(kind, callable, default=empty):
@@ -1914,7 +1937,7 @@ class CharmAppealCompiler(CharmCompiler):
         super().__init__(appeal, processor, name, indent=indent)
         self.command_converter_key = None
 
-    def __call__(self, parameter, *, add_to_kwargs=None, multioption=False):
+    def __call__(self, parameter, *, multioption=False):
         # The compiler is effectively two passes.
         #
         # First, we iterate over the annotation tree generating instructions.
@@ -1969,7 +1992,7 @@ class CharmAppealCompiler(CharmCompiler):
         pgi = pg.iter_all()
 
         # self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, add_to_kwargs=add_to_kwargs, is_command=True)
-        self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, add_to_kwargs=add_to_kwargs, is_command=True)
+        add_to_parent_a, is_degenerate = self.compile_parameter(0, indent, parameter, pgi, usage_callable=None, usage_parameter=None, multioption=multioption, is_command=True)
 
         # if want_prints:
         #     print(f"[cc] {indent}compilation of {parameter} complete.")
@@ -1977,6 +2000,8 @@ class CharmAppealCompiler(CharmCompiler):
 
         if self.processor:
             self.processor.log_exit_context()
+
+        return add_to_parent_a
 
 
 class CharmCommandCompiler(CharmAppealCompiler):
@@ -1989,26 +2014,32 @@ class CharmCommandCompiler(CharmAppealCompiler):
         super().__call__(parameter)
 
 
+def charm_compile_command(appeal, processor, callable):
+    cc = CharmCommandCompiler(appeal, processor)
+    cc(callable)
+    return cc.assemble()
+
+
+
 
 class CharmOptionCompiler(CharmAppealCompiler):
 
-    def __call__(self, parameter, add_to_kwargs, multioption):
-        super().__call__(parameter, add_to_kwargs=add_to_kwargs, multioption=multioption)
+    def __call__(self, parameter, multioption):
+        return super().__call__(parameter, multioption=multioption)
 
 
 
-class CharmDictCompiler(CharmCompiler):
+class CharmMappingCompiler(CharmCompiler):
+
+    def __call__(self, callable):
+        pass
+
+class CharmIterableCompiler(CharmCompiler):
 
     def __call__(self, callable):
         pass
 
 
-
-
-def charm_compile_command(appeal, processor, callable):
-    cc = CharmCommandCompiler(appeal, processor)
-    cc(callable)
-    return cc.assemble()
 
 
 def charm_print(program, indent=''):
