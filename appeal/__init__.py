@@ -1742,6 +1742,45 @@ class CharmAppealCompiler(CharmCompiler):
 
         return mapped_options
 
+    def spill_options(self, callable, converter_key, parameters, depth, indent):
+        # if want_prints:
+        #     print(f"[cc] {indent}automatically map keyword-only parameters to options")
+
+        _, kw_parameters, positionals = self.appeal.fn_database_lookup(callable)
+
+        var_keyword = None
+        kw_parameters_seen = set()
+
+        # step 1: populate explicit keyword-only options
+        #
+        # we have to iterate over parameters, because we need
+        # to force mapping with default_options.
+        for parameter_name, p in parameters.items():
+            if p.kind == KEYWORD_ONLY:
+                if p.default == empty:
+                    raise AppealConfigurationError(f"x: keyword-only argument {parameter_name} doesn't have a default value")
+                kw_parameters_seen.add(parameter_name)
+                self.map_options(self.group_id, callable, converter_key, p, depth, indent)
+                continue
+            if p.kind == VAR_KEYWORD:
+                var_keyword = parameter_name
+                continue
+
+        # step 2: populate **kwargs-only options
+        # (options created with appeal.option(), where the parameter_name doesn't
+        #  appear in the function, so the output goes into **kwargs)
+
+        # if want_prints:
+        #     print(f"[cc] {indent}map user-defined options")
+
+        kw_parameters_unseen = set(kw_parameters) - kw_parameters_seen
+        if kw_parameters_unseen:
+            if not var_keyword:
+                raise AppealConfigurationError(f"x: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
+            for parameter_name in kw_parameters_unseen:
+                parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
+                self.map_options(self.group_id, callable, converter_key, parameter, depth, indent)
+
 
     def compile_parameter(self, parameter, pgi, depth, indent):
         """
@@ -1775,7 +1814,6 @@ class CharmAppealCompiler(CharmCompiler):
 
         signature = cls.get_signature(parameter)
         parameters = signature.parameters
-        _, kw_parameters, positionals = self.appeal.fn_database_lookup(callable)
 
         # print(f"OCELOT {cls=} {signature=} {converter=} {callable=} {parameters=} {kw_parameters=} {positionals=}")
         # if want_prints:
@@ -1841,42 +1879,7 @@ class CharmAppealCompiler(CharmCompiler):
             if spilled_options:
                 return
             spilled_options = True
-
-            # if want_prints:
-            #     print(f"[cc] {indent}automatically map keyword-only parameters to options")
-
-            var_keyword = None
-            kw_parameters_seen = set()
-
-            # step 1: populate explicit keyword-only options
-            #
-            # we have to iterate over parameters, because we need
-            # to force mapping with default_options.
-            for parameter_name, p in parameters.items():
-                if p.kind == KEYWORD_ONLY:
-                    if p.default == empty:
-                        raise AppealConfigurationError(f"x: keyword-only argument {parameter_name} doesn't have a default value")
-                    kw_parameters_seen.add(parameter_name)
-                    self.map_options(self.group_id, callable, converter_key, p, depth, indent)
-                    continue
-                if p.kind == VAR_KEYWORD:
-                    var_keyword = parameter_name
-                    continue
-
-            # step 2: populate **kwargs-only options
-            # (options created with appeal.option(), where the parameter_name doesn't
-            #  appear in the function, so the output goes into **kwargs)
-
-            # if want_prints:
-            #     print(f"[cc] {indent}map user-defined options")
-
-            kw_parameters_unseen = set(kw_parameters) - kw_parameters_seen
-            if kw_parameters_unseen:
-                if not var_keyword:
-                    raise AppealConfigurationError(f"x: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
-                for parameter_name in kw_parameters_unseen:
-                    parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
-                    self.map_options(self.group_id, callable, converter_key, parameter, depth, indent)
+            self.spill_options(callable, converter_key, parameters, depth, indent)
 
         if not depth:
             spill_options()
