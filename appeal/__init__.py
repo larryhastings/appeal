@@ -1616,7 +1616,6 @@ class CharmCompiler:
             cc = CharmOptionCompiler(self.appeal, self.processor, name=program_name, indent=indent)
             multioption = issubclass(cls, MultiOption)
             add_to_self_a = cc(parameter, multioption=multioption)
-            add_to_self_a.converter_to_o()
 
         add_to_self_a.load_converter(key=key)
         add_to_self_a.add_to_kwargs(name=parameter.name)
@@ -1699,8 +1698,10 @@ class CharmCompiler:
         """
         returns add_to_self_a, is_degenerate
 
-        add_to_self_a is an assembler inserted immediately after the converter for this parameter
-          is created.  it's sitting in the
+        add_to_self_a is an assembler inserted immediately after
+          the value for this parameter is read in / created.
+          at that moment, the value has just been loaded in
+          the 'o' register.
         is_degenerate is a boolean, True if this entire subtree is "degenerate".
         """
         if self.processor:
@@ -1766,7 +1767,8 @@ class CharmCompiler:
         # leaves the converter in the "o" register
         self.ag_initialize_a.create_converter(parameter=parameter, key=converter_key, is_command=is_command)
         add_to_parent_a = CharmAssembler()
-        self.ag_initialize_a.append(add_to_parent_a)
+        add_to_parent_a.load_o(key=converter_key)
+        self.body_a.append(add_to_parent_a)
 
         if multioption:
             load_o_op.key = converter_key
@@ -1901,7 +1903,6 @@ class CharmCompiler:
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
                 add_to_self_a, is_degenerate_subtree = self.compile_parameter(depth + 1, indent + "    ", p, pgi, usage_callable, usage_parameter, None, is_command=False)
-                add_to_self_a.load_o(key=converter_key)
                 is_degenerate = is_degenerate and is_degenerate_subtree
 
             add_to_self_a.load_converter(key=converter_key)
