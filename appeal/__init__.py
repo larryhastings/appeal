@@ -1848,7 +1848,11 @@ class CharmAppealCompiler(CharmCompiler):
             var_keyword = None
             kw_parameters_seen = set()
 
-            for i, (parameter_name, p) in enumerate(parameters.items()):
+            # step 1: populate explicit keyword-only options
+            #
+            # we have to iterate over parameters, because we need
+            # to force mapping with default_options.
+            for parameter_name, p in parameters.items():
                 if p.kind == KEYWORD_ONLY:
                     if p.default == empty:
                         raise AppealConfigurationError(f"x: keyword-only argument {parameter_name} doesn't have a default value")
@@ -1862,6 +1866,7 @@ class CharmAppealCompiler(CharmCompiler):
             # step 2: populate **kwargs-only options
             # (options created with appeal.option(), where the parameter_name doesn't
             #  appear in the function, so the output goes into **kwargs)
+
             # if want_prints:
             #     print(f"[cc] {indent}map user-defined options")
 
