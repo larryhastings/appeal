@@ -1625,7 +1625,7 @@ class CharmAppealCompiler(CharmCompiler):
         """
 
         # if want_prints:
-        #     print(f"[cc] {indent}compile_most_of_option")
+        #     print(f"[cc] {indent}compile_option")
         #     indent += "  "
         #     print(f"[cc] {indent}program_name={program_name}")
         #     print(f"[cc] {indent}parameter={parameter}")
@@ -1657,7 +1657,7 @@ class CharmAppealCompiler(CharmCompiler):
         return cc, add_to_self_a
 
 
-    def map_options(self, group_id, converter, parameter, key, depth, indent):
+    def map_options(self, group_id, callable, parameter, key, depth, indent):
         # if want_prints:
         #     print(f"[cc] {indent}map_options parameter={parameter}")
         #     indent += "  "
@@ -1670,9 +1670,6 @@ class CharmAppealCompiler(CharmCompiler):
         #     #         print(f"[cc] {indent}    {_v},")
         #     #     print(f"[cc] {indent}    )")
         #     print(f"[cc]")
-
-        # the official way to produce a callable from a parameter
-        callable = converter.callable
 
         _, kw_parameters, _ = self.appeal.fn_database_lookup(callable)
         mappings = kw_parameters.get(parameter.name, ())
@@ -1687,32 +1684,35 @@ class CharmAppealCompiler(CharmCompiler):
         #
         # not all inspect.Parameter objects are hashable.
         # (the default might be a list, etc.)
-        # so we match them up using id(Parameter).
-
+        # but you also can't rely on inspect.Parameter objects
+        # being unique.
+        #
+        # so we do this the hard way: we compare every one ourselves,
+        # and assign it a name.
         work = []
-        id_to_options = {}
+        parameters = []
         mapped_options = []
         for option_entry in kw_parameters[parameter.name]:
             option, callable2, parameter = option_entry
             mapped_options.append(option)
             assert callable == callable2
 
-            parameter_id = id(parameter)
-            options = id_to_options.get(parameter_id, None)
-            if options is None:
-                options = []
-                id_to_options[parameter_id] = options
-                work.append((parameter, options))
+            try:
+                parameter_id = parameters.index(parameter)
+            except ValueError:
+                parameter_id = len(parameters)
+                parameters.append(parameter)
+                work.append((parameter, []))
+
+            options = work[parameter_id][1]
             options.append(option)
 
+        # if want_prints:
+        #     print(f"[cc] {indent}computed work, mapping options")
+        #     indent += "  "
         for parameter, options in work:
             # if want_prints:
-            #     print(f"[cc] {indent}compile_options options={options}")
-            #     indent += "  "
-            #     print(f"[cc] {indent}key={key}")
-            #     print(f"[cc] {indent}parameter={parameter}")
-            #     print(f"[cc] {indent}parameter.kind={parameter.kind}")
-            #     print(f"[cc]")
+            #     print(f"[cc] {indent}work: {parameter=} {id(parameter)=} {options=}")
 
             option_names = [denormalize_option(o) for o in options]
             assert option_names
@@ -1855,7 +1855,7 @@ class CharmAppealCompiler(CharmCompiler):
                     if p.default == empty:
                         raise AppealConfigurationError(f"x: keyword-only argument {parameter_name} doesn't have a default value")
                     kw_parameters_seen.add(parameter_name)
-                    self.map_options(self.group_id, converter, p, converter_key, depth, indent)
+                    self.map_options(self.group_id, callable, p, converter_key, depth, indent)
                     continue
                 if p.kind == VAR_KEYWORD:
                     var_keyword = parameter_name
@@ -1873,7 +1873,7 @@ class CharmAppealCompiler(CharmCompiler):
                     raise AppealConfigurationError(f"x: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
                 for parameter_name in kw_parameters_unseen:
                     parameter = inspect.Parameter(parameter_name, KEYWORD_ONLY)
-                    self.map_options(self.group_id, converter, parameter, converter_key, depth, indent)
+                    self.map_options(self.group_id, callable, parameter, converter_key, depth, indent)
 
         if not depth:
             spill_options()
