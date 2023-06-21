@@ -907,7 +907,7 @@ class CharmInstructionCreateConverter(CharmInstruction):
         self.key = key
 
     def __repr__(self):
-        return f"<create_converter parameter={parameter!r} key={self.key}>"
+        return f"<create_converter parameter={self.parameter!r} key={self.key}>"
 
 class CharmInstructionLoadConverter(CharmInstruction): # CharmInstructionKeyBase
     """
@@ -1499,12 +1499,6 @@ class CharmAssembler:
         group = None
         optional = False
 
-        converter = None
-        o = None
-        option = None
-        stack = []
-        groups = []
-
         external_comments = []
 
         index = 0
@@ -1528,10 +1522,6 @@ class CharmAssembler:
                     raise AppealConfigurationError(f"label used twice: {op}")
                 labels[op] = index
                 del opcodes[index]
-                # forget current registers,
-                # who knows what state the interpreter
-                # will be in when we jump here.
-                converter = o = None
                 continue
             elif op.op == opcode.jump_to_label:
                 fixups.append(index)
@@ -1545,12 +1535,100 @@ class CharmAssembler:
                 del opcodes[index]
                 continue
 
+            index += 1
+
+        # now process jump fixups:
+        # replace *_to_label ops with absolute jump ops
+        replacement_op = {
+            opcode.jump_to_label: CharmInstructionJump,
+            opcode.branch_on_flag_to_label: CharmInstructionBranchOnFlag,
+            opcode.branch_on_not_flag_to_label: CharmInstructionBranchOnNotFlag,
+        }
+        jump_ops = { opcode.jump_to_label, opcode.jump }
+        fixup_ops = []
+        for index in fixups:
+            op = opcodes[index]
+            address = labels.get(op.label)
+            if address is None:
+                raise AppealConfigurationError(f"unknown label {op.label}")
+            replacement = replacement_op[op.op](address)
+            opcodes[index] = replacement
+            fixup_ops.append(replacement)
+
+        jump_targets = []
+        # and *now* do a jump-to-jump peephole optimization
+        # (I don't know if Appeal *can* actually generate jump-to-jumps)
+        for index in fixups:
+            while True:
+                op = opcodes[index]
+                op2 = opcodes[op.address]
+                if op2.op not in jump_ops:
+                    jump_targets.append(op.address)
+                    break
+                op.address = op2.address
+
+        jump_targets.sort()
+        jump_targets.reverse()
+
+        # remove redundant load_converter,
+        # load_o, and converter_to_o ops
+
+        class Unknown:
+            def __repr__(self):
+                return "<Unknown>"
+
+        unknown = Unknown()
+        converter = unknown
+        o = unknown
+        stack = []
+        groups = []
+
+        def reset_registers():
+            # if want_prints:
+            #     print("*reset!* jump target!")
+            nonlocal converter
+            nonlocal o
+
+            converter = unknown
+            o = unknown
+
+        # if want_prints:
+        #     print("\nremoving redundant loads\n")
+        #     def print_op():
+        #         print(f"[{index:02}] {converter=} {o=} {op}", end=' ')
+        #
+        #     def nc():
+        #         print("no change")
+
+        def remove_op():
+            # if want_prints:
+            #     print(f"*deleting!* redudnant.")
+            del opcodes[index]
+            for i in range(len(jump_targets)):
+                assert jump_targets[i] > index
+                jump_targets[i] -= 1
+            for op in fixup_ops:
+                if op.address > index:
+                    op.address -= 1
+
+        index = 0
+        while index < len(opcodes):
+            if jump_targets and (jump_targets[-1] == index):
+                jump_targets.pop()
+                reset_registers()
+
+            op = opcodes[index]
+
             # compute total and group values
-            elif op.op == opcode.set_group:
+            # if want_prints:
+            #     print_op()
+            if op.op == opcode.set_group:
                 group = op.group
                 optional = op.optional
                 if op.repeating:
                     total.maximum = math.inf
+                # if want_prints:
+                #     nc()
             elif op.op == opcode.consume_positional:
                 if not optional:
                     total.minimum += 1
@@ -1561,52 +1639,45 @@ class CharmAssembler:
                 group.maximum += 1
 
                 o = '(string value)'
-
+                # if want_prints:
+                #     print(f"o -> {o}")
+            elif op.op == opcode.lookup_to_o:
+                o = unknown
+                # if want_prints:
+                #     print(f"o -> {o}")
             # discard redundant load_converter and load_o ops
             # using dataflow analysis
             elif op.op == opcode.load_converter:
                 if converter == op.key:
-                    del opcodes[index]
+                    remove_op()
                     continue
                 converter = op.key
+                # if want_prints:
+                #     print(f"converter -> {converter}")
             elif op.op == opcode.load_o:
                 if o == op.key:
-                    del opcodes[index]
+                    remove_op()
                     continue
                 o = op.key
+                # if want_prints:
+                #     print(f"o -> {o}")
             elif op.op == opcode.converter_to_o:
                 if o == converter:
-                    del opcodes[index]
+                    remove_op()
                     continue
                 o = converter
+                # if want_prints:
+                #     print(f"o -> {o}")
             elif op.op == opcode.create_converter:
                 o = op.key
+                # if want_prints:
+                #     print(f"o -> {o}")
+            else:
+                pass
+                # if want_prints:
+                #     nc()
 
             index += 1
-
-        # now process jump fixups:
-        # replace *_to_label ops with absolute jump ops
-        replacement_op = {
-            opcode.jump_to_label: CharmInstructionJump,
-            opcode.branch_on_flag_to_label: CharmInstructionBranchOnFlag,
-            opcode.branch_on_not_flag_to_label: CharmInstructionBranchOnNotFlag,
-        }
-        for index in fixups:
-            op = opcodes[index]
-            address = labels.get(op.label)
-            if address is None:
-                raise AppealConfigurationError(f"unknown label {op.label}")
-            opcodes[index] = replacement_op[op.op](address)
-
-        # and *now* do a jump-to-jump peephole optimization
-        # (I don't know if Appeal *can* actually generate jump-to-jumps)
-        for index in fixups:
-            op = opcodes[index]
-            while True:
-                op2 = opcodes[op.address]
-                if op2.op != opcode.jump:
-                    break
-                op.address = op2.address
 
         # add end instruction
         end_op = CharmInstructionEnd()
@@ -2541,7 +2612,7 @@ class CharmBaseInterpreter:
             interpreter.groups = self.groups
 
         def __repr__(self):
-            return f"<CharmProgramStackEntry ip={self.ip} program={self.program.name!r} converter={self.converter} o={self.o} o={self.flag} group={self.group.summary() if self.group else 'None'} groups=[{len(self.groups)}]>"
+            return f"<CharmProgramStackEntry ip={self.ip} program={self.program.name!r} converter={self.converter} o={self.o} flag={self.flag} group={self.group.summary() if self.group else 'None'} groups=[{len(self.groups)}]>"
 
     def __iter__(self):
         return self
@@ -2576,6 +2647,7 @@ class CharmBaseInterpreter:
         self.ip = CharmProgramIterator(program)
         self.groups = []
         self.converter = self.o = self.group = None
+        self.flag = False
 
     def end(self):
         if self.call_stack:
@@ -2875,6 +2947,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
         def __setitem__(self, option, value):
             self.options[option] = value
+
 
     def __call__(self):
         (
@@ -3300,9 +3373,17 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                 if op.op == opcode.end:
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} end")
-                    #     print_registers()
+                    #     cpse = self.CharmProgramStackEntry()
                     self.end()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} end")
+                    #     print_registers(
+                    #         converter=cpse.converter,
+                    #         o=cpse.o,
+                    #         flag=cpse.flag,
+                    #         group=cpse.group,
+                    #         groups=cpse.groups,
+                    #         )
                     continue
 
                 if op.op == opcode.abort:
@@ -3383,21 +3464,41 @@ class CharmInterpreter(CharmBaseInterpreter):
                         #     old_flag = self.flag
                         #     old_o = o
 
-                        if not op.required:
+                        # HACK
+                        #
+                        # if we're the first positional argument in an optional group,
+                        # we are never required.
+                        #
+                        # why is this a hack?
+                        # we *should* be able to figure this out in the compiler.
+                        if op.required:
+                            end_gracefully = self.group.optional and (not self.group.laden)
+                        else:
                             self.o = None
                             self.flag = False
+                            end_gracefully = False
 
                         # if want_prints:
                         #     print(f"{self.cmdline_prefix}")
                         #     print(f"{self.opcodes_prefix} {prefix} consume_positional | required={op.required} | is_oparg={op.is_oparg}")
-                        #     print(f"{self.opcodes_prefix} {prefix} iterator exhausted")
-                        #     abort = "yes" if op.required else "no"
-                        #     print_registers(o=old_o, flag=old_flag, extras=[('abort?', sentinel, abort)])
+                        #     print(f"{self.opcodes_prefix} {self.ip_spacer} iterator exhausted.")
+                        #     if end_gracefully:
+                        #         result = "end gracefully"
+                        #     elif op.required:
+                        #         result = "abort"
+                        #     else:
+                        #         result = "continue"
+                        #     print_registers(o=old_o, flag=old_flag, extras=[('result', sentinel, result)])
 
                         if op.required:
-                            # if want_prints:
-                            #     print(f"{self.opcodes_prefix} {prefix} aborting.")
-                            return self.abort()
+                            if end_gracefully:
+                                # if want_prints:
+                                #     print(f"{self.opcodes_prefix} {prefix} ending.")
+                                self.unwind()
+                            else:
+                                # if want_prints:
+                                #     print(f"{self.opcodes_prefix} {prefix} aborting.")
+                                return self.abort()
 
                         # consider the instruction executed.
                         op = False
@@ -3640,13 +3741,15 @@ class CharmInterpreter(CharmBaseInterpreter):
                         # if want_prints:
                         #     print(f"{self.cmdline_prefix} {self.ip_spacer} pushing split value {split_value!r} back onto iterator")
 
-                    # if want_prints:
-                    #     print(f"{self.cmdline_prefix}")
-                    #     print(f"{self.cmdline_prefix} call program={program}")
-
                     # self.push_context()
                     self.call(program)
                     stay_in_loop_two = False
+
+                    # if want_prints:
+                    #     print(f"{self.cmdline_prefix}")
+                    #     print(f"{self.cmdline_prefix} call program={program}")
+                    #     print_registers(extras=[('pushed context', sentinel, self.call_stack[-1])])
+
                     break
 
         self.unwind()
@@ -5984,6 +6087,8 @@ class Appeal:
 
         interpreter = CharmInterpreter(processor, program)
         converter = interpreter()
+        if converter == None:
+            raise AppealUsageError("unknown error")
         processor.commands.append(converter)
         return converter
 
