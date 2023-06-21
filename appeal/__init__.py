@@ -39,7 +39,8 @@ import base64
 import big.all as big
 from big.itertools import PushbackIterator
 import builtins
-import collections
+import collections.abc
+from collections.abc import Iterable, Mapping
 import enum
 import functools
 import inspect
@@ -343,11 +344,10 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##        (if you have two parameters annotated with int_float,
 ##        these two instances get different converter keys.)
 ##    converter
-##        a reference to a converter (or None).
-##        the current converter context.
-##        conceptually an indirect register like SP or a segment register,
-##          you index through it to reference things.
-##          specifically:
+##        the current converter context.  a reference to a converter (or None).
+##        conceptually an indirect register like SP or a segment register.
+##        you index through it to interact with the attributes of a converter,
+##        specifically:
 ##              args
 ##                positional arguments, accessed with an index (-1 permitted).
 ##              kwargs
@@ -356,19 +356,17 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##          or, create converters and store (and possibly later retrieve)
 ##          converter objects in these attributes.
 ##    o
-##        a reference to a converter, a string, or None.
 ##        a general-purpose register.
-##        contains the result of create_converter, pop_converter,
-##        consume_positional, and load_converter.
-##    total
-##        argument counter object (or None).
-##        argument counts for this entire command function (so far).
+##        a reference to a converter, a string, or None.
+##    flag
+##        a boolean register.
+##        contains the result of o_is_* instructions.
 ##    group
 ##        argument counter object (or None).
 ##        local argument counts just for this argument group.
 ##
-## the interpreter has a stack.  it's used to push/pop all registers
-## except ip (which is pushed/popped separately).
+## the interpreter has a stack.  it's used to push/pop registers
+## when making a "call".
 
 
 ## argument counter objects have these fields:
@@ -462,21 +460,33 @@ print('class opcode(enum.Enum):')
 
 print_enum('''
     invalid
+    end
+    abort
     jump
-    branch_on_o
+    branch_on_flag
+    branch_on_not_flag
+    test_is_o_true
+    test_is_o_none
+    test_is_o_empty
+    test_is_o_iterable
+    test_is_o_str
+    test_is_o_mapping
     call
     create_converter
     load_converter
     load_o
     converter_to_o
-    append_to_args
-    add_to_kwargs
+    push_mapping
+    pop_mapping
+    push_iterator
+    pop_iterator
+    append_to_converter_args
+    set_in_converter_kwargs
     map_option
     consume_positional
-    get_keyword
+    lookup_to_o
     flush_multioption
     set_group
-    end
 
 ''')
 
@@ -491,7 +501,8 @@ print_enum('''
     comment
     label
     jump_to_label
-    branch_on_o_to_label
+    branch_on_flag_to_label
+    branch_on_not_flag_to_label
 ''', i=200)
 
 print()
@@ -509,21 +520,33 @@ print()
 
 class opcode(enum.Enum):
     invalid = 0
-    jump = 1
-    branch_on_o = 2
-    call = 3
-    create_converter = 4
-    load_converter = 5
-    load_o = 6
-    converter_to_o = 7
-    append_to_args = 8
-    add_to_kwargs = 9
-    map_option = 10
-    consume_positional = 11
-    get_keyword = 12
-    flush_multioption = 13
-    set_group = 14
-    end = 15
+    end = 1
+    abort = 2
+    jump = 3
+    branch_on_flag = 4
+    branch_on_not_flag = 5
+    test_is_o_true = 6
+    test_is_o_none = 7
+    test_is_o_empty = 8
+    test_is_o_iterable = 9
+    test_is_o_str = 10
+    test_is_o_mapping = 11
+    call = 12
+    create_converter = 13
+    load_converter = 14
+    load_o = 15
+    converter_to_o = 16
+    push_mapping = 17
+    pop_mapping = 18
+    push_iterator = 19
+    pop_iterator = 20
+    append_to_converter_args = 21
+    set_in_converter_kwargs = 22
+    map_option = 23
+    consume_positional = 24
+    lookup_to_o = 25
+    flush_multioption = 26
+    set_group = 27
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
@@ -533,7 +556,8 @@ class opcode(enum.Enum):
     comment = 201
     label = 202
     jump_to_label = 203
-    branch_on_o_to_label = 204
+    branch_on_flag_to_label = 204
+    branch_on_not_flag_to_label = 205
 
 # cpp
 
@@ -564,7 +588,37 @@ class CharmInstructionNoOp(CharmInstruction): # CharmInstructionNoArgBase
         self.op = opcode.no_op
 
     def __repr__(self):
-        return f"<no-op>"
+        return f"<no_op>"
+
+
+class CharmInstructionEnd(CharmInstruction):
+    """
+    end
+
+    Exits the current program.
+    """
+
+    __slots__ = ['name', 'id']
+
+    def __init__(self):
+        self.op = opcode.end
+
+    def __repr__(self):
+        return f"<end>"
+
+
+class CharmInstructionAbort(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    abort
+
+    Aborts processing with an error.
+    """
+
+    def __init__(self, address):
+        self.op = opcode.abort
+
+    def __repr__(self):
+        return f"<abort>"
 
 
 class CharmInstructionJump(CharmInstruction): # CharmInstructionAddressBase
@@ -585,11 +639,11 @@ class CharmInstructionJump(CharmInstruction): # CharmInstructionAddressBase
         return f"<jump address={self.address}>"
 
 
-class CharmInstructionBranchOnO(CharmInstruction): # CharmInstructionAddressBase
+class CharmInstructionBranchOnFlag(CharmInstruction): # CharmInstructionAddressBase
     """
-    branch_on_o <address>
+    branch_on_flag <address>
 
-    If the 'o' register is a true value,
+    If the 'flag' register is True,
     sets the 'ip' register to <address>.
     <address> is an integer.
     """
@@ -597,12 +651,142 @@ class CharmInstructionBranchOnO(CharmInstruction): # CharmInstructionAddressBase
     __slots__ = ['address']
 
     def __init__(self, address):
-        self.op = opcode.branch_on_o
+        self.op = opcode.branch_on_flag
         self.address = address
 
     def __repr__(self):
-        return f"<branch_on_o address={self.address}>"
+        return f"<branch_on_flag address={self.address}>"
 
+class CharmInstructionBranchOnNotFlag(CharmInstruction): # CharmInstructionAddressBase
+    """
+    branch_on_not_flag <address>
+
+    If the 'flag' register is False,
+    sets the 'ip' register to <address>.
+    <address> is an integer.
+    """
+
+    __slots__ = ['address']
+
+    def __init__(self, address):
+        self.op = opcode.branch_on_not_flag
+        self.address = address
+
+    def __repr__(self):
+        return f"<branch_on_not_flag address={self.address}>"
+
+class CharmInstructionTestIsOTrue(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_true
+
+    If the 'o' register contains a true value,
+    set the 'flag' register to True,
+    otherwise set the 'flag' register to False.
+
+    In other words:
+        flag = bool(o)
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_true
+
+    def __repr__(self):
+        return f"<test_is_o_true>"
+
+class CharmInstructionTestIsONone(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_none
+
+    If the 'o' register contains None,
+    set the 'flag' register to True,
+    otherwise set the 'flag' register to False.
+
+    In other words:
+        flag = o == None
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_none
+
+    def __repr__(self):
+        return f"<test_is_o_none>"
+
+class CharmInstructionTestIsOEmpty(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_empty
+
+    If the 'o' register contains inspect.Parameter.Empty,
+    set the 'flag' register to True,
+    otherwise set the 'flag' register to False.
+
+    In other words:
+        flag = o == inspect.Parameter.empty
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_empty
+
+    def __repr__(self):
+        return f"<test_is_o_empty>"
+
+class CharmInstructionTestIsOIterable(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_iterable
+
+    If the 'o' register contains an instance
+    of an collections.abc.Iterable object, set the 'flag'
+    register to True, otherwise set it to False.
+
+    In other words:
+        flag = isinstance(o, collections.abc.Iterable)
+
+    Note that str objects and most Mapping objects
+    (e.g. dict) are collections.abc.Iterable.  You may
+    need to test for those separately, depending on your
+    use case.
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_iterable
+
+    def __repr__(self):
+        return f"<test_is_o_iterable>"
+
+class CharmInstructionTestIsOStr(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_str
+
+    If the 'o' register contains a str object,
+    set the 'flag' register to True,
+    otherwise set the 'flag' register to False.
+
+    In other words:
+        flag = isinstance(o, str)
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_str
+
+    def __repr__(self):
+        return f"<test_is_o_str>"
+
+class CharmInstructionTestIsOMapping(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_mapping
+
+    If the 'o' register contains an instance
+    of an collections.abc.Mapping object, set the 'flag'
+    register to True, otherwise set it to False.
+
+    In other words:
+        flag = isinstance(o, collections.abc.Mapping)
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_mapping
+
+    def __repr__(self):
+        return f"<test_is_o_mapping>"
 
 next_label_id = serial_number_generator(prefix='label').__next__
 
@@ -628,9 +812,8 @@ class CharmInstructionLabel(CharmInstruction):
         self.label = label
 
     def __repr__(self):
-        opcode = str(self.op).rpartition('.')[2]
         label = f" label={self.label!r}" if self.label else ""
-        return f"<{opcode} id={self.id}{label}>"
+        return f"<label id={self.id}{label}>"
 
     def __hash__(self):
         return hash(self.id)
@@ -655,14 +838,14 @@ class CharmInstructionJumpToLabel(CharmInstruction): # CharmInstructionLabelBase
 
     def __repr__(self):
         label = f" label={self.label!r}" if self.label else ""
-        return f"<jump-to-label {label}>"
+        return f"<jump_to_label {label}>"
 
 
-class CharmInstructionBranchOnOToLabel(CharmInstruction):
+class CharmInstructionBranchOnFlagToLabel(CharmInstruction):
     """
-    branch_on_o_to_label <label>
+    branch_on_flag_to_label <label>
 
-    If the 'o' register is a true value,
+    If the 'flag' register is True,
     sets the 'ip' register to point to the instruction
     after the instance of the <label> instruction in the
     current program.
@@ -674,12 +857,36 @@ class CharmInstructionBranchOnOToLabel(CharmInstruction):
     __slots__ = ['label']
 
     def __init__(self, label):
-        self.op = opcode.branch_on_o_to_label
+        self.op = opcode.branch_on_flag_to_label
         self.label = label
 
     def __repr__(self):
         label = f" label={self.label!r}" if self.label else ""
-        return f"<branch-on-o-to-label {label}>"
+        return f"<branch_on_flag_to_label {label}>"
+
+
+class CharmInstructionBranchOnNotFlagToLabel(CharmInstruction):
+    """
+    branch_on_not_flag_to_label <label>
+
+    If the 'flag' register is False,
+    sets the 'ip' register to point to the instruction
+    after the instance of the <label> instruction in the
+    current program.
+
+    label and *_to_label are both pseudo-instructions.
+    They're removed by a pass in the peephole optimizer.
+    """
+
+    __slots__ = ['label']
+
+    def __init__(self, label):
+        self.op = opcode.branch_on_not_flag_to_label
+        self.label = label
+
+    def __repr__(self):
+        label = f" label={self.label!r}" if self.label else ""
+        return f"<branch_on_not_flag_to_label {label}>"
 
 
 class CharmInstructionCreateConverter(CharmInstruction):
@@ -734,7 +941,7 @@ class CharmInstructionLoadO(CharmInstruction): # CharmInstructionKeyBase
         self.key = key
 
     def __repr__(self):
-        return f"<load_converter key={self.key}>"
+        return f"<load_o key={self.key}>"
 
 class CharmInstructionConverterToO(CharmInstruction): # CharmInstructionKeyBase
     """
@@ -749,9 +956,9 @@ class CharmInstructionConverterToO(CharmInstruction): # CharmInstructionKeyBase
     def __repr__(self):
         return f"<converter_to_o>"
 
-class CharmInstructionAppendToArgs(CharmInstruction):
+class CharmInstructionAppendToConverterArgs(CharmInstruction):
     """
-    append_to_args <parameter> <discretionary>
+    append_to_converter_args <parameter> <discretionary>
 
     Takes a reference to the value in the 'o' register
     and appends it to 'converter.args'.
@@ -769,16 +976,16 @@ class CharmInstructionAppendToArgs(CharmInstruction):
     __slots__ = ['parameter', 'discretionary']
 
     def __init__(self, parameter, discretionary):
-        self.op = opcode.append_to_args
+        self.op = opcode.append_to_converter_args
         self.parameter = parameter
         self.discretionary = discretionary
 
     def __repr__(self):
-        return f"<append_to_args parameter={self.parameter} discretionary={self.discretionary}>"
+        return f"<append_to_converter_args parameter={self.parameter} discretionary={self.discretionary}>"
 
-class CharmInstructionAddToKwargs(CharmInstruction):
+class CharmInstructionSetInConverterKwargs(CharmInstruction):
     """
-    add_to_kwargs <name>
+    set_in_converter_kwargs <name>
 
     Takes a reference to the object currently in
     the 'o' register and stores it in 'converter.kwargs[<name>]'.
@@ -790,11 +997,11 @@ class CharmInstructionAddToKwargs(CharmInstruction):
     __slots__ = ['name']
 
     def __init__(self, name):
-        self.op = opcode.add_to_kwargs
+        self.op = opcode.set_in_converter_kwargs
         self.name = name
 
     def __repr__(self):
-        return f"<add_to_kwargs name={self.name}>"
+        return f"<set_in_converter_kwargs name={self.name}>"
 
 class CharmInstructionMapOption(CharmInstruction):
     """
@@ -831,11 +1038,10 @@ class CharmInstructionMapOption(CharmInstruction):
 
 class CharmInstructionConsumePositional(CharmInstruction):
     """
-    consume_positional <is_oparg> <required>
+    consume_positional <required> <is_oparg>
 
-    Consumes the next value from the positional arguments
-    iterator and stores it in the 'o' register.
-    If no more values are available, abort the program.
+    Consume the next value from the iterator
+    and store it in the 'o' register.
 
     <is_oparg> is a boolean flag:
         * If <is_oparg> is True, you're consuming an oparg.
@@ -853,14 +1059,18 @@ class CharmInstructionConsumePositional(CharmInstruction):
           and then consume that argument to satisfy this
           instruction.
 
-    <required> is also a boolean flag:
+    <required> is also a boolean flag, and is only considered
+    when the iterator is exhausted.
         * If <required> is True, this argument is required.
-          If there's no string to fill it from the
-          command-line, you should raise a usage exception.
-        * If <required> is False, this argument isn't required.
-          If there's no string to fill it from the
-          command-line, that's fine, you should consider
-          processing a success and exit.
+          If the iterator is exhausted, abort processing and
+          raise a usage exception.
+        * If <required> is False, this argument isn't
+          required.  If the iterator is exhausted, 'o'
+          is set to None.
+
+    'flag' is set to True if this consumed a value and set
+    it in the 'o' register, and False if it did not (and
+    <required> is false).
     """
     __slots__ = ['required', 'is_oparg']
 
@@ -872,32 +1082,34 @@ class CharmInstructionConsumePositional(CharmInstruction):
     def __repr__(self):
         return f"<consume_positional required={self.required} is_oparg={self.is_oparg}>"
 
-class CharmInstructionGetKeyword(CharmInstruction):
+class CharmInstructionLookupToO(CharmInstruction):
     """
-    get_keyword <key> <required>
+    lookup_to_o <key> <required>
 
-    Retrieves a value from the keyword arguments dict,
+    Retrieves the value named <key> from the mapping
     and stores it in the 'o' register.
 
     <key> is the key used to look up the value.
 
     <required> is a boolean flag:
-        * If <required> is True, this argument is required.
-          If there's no string to fill it from the
-          command-line, abort processing and raise a usage
-          exception.
-        * If <required> is False, this argument isn't
-          required.  'o' will be set to None.
+        * If <required> is True, this value is required.
+          If <key> is not currently mapped, you must abort
+          processing and raise a usage exception.
+        * If <required> is False, this value isn't
+          required.  'o' will be set to empty.
+
+    'flag' is set to True if the lookup succeeded,
+    and False if the lookup failed (and <required> is false).
     """
     __slots__ = ['key', 'required']
 
     def __init__(self, key, required):
-        self.op = opcode.get_keyword
+        self.op = opcode.lookup_to_o
         self.key = key
         self.required = required
 
     def __repr__(self):
-        return f"<get_keyword key={self.key} required={self.required}>"
+        return f"<lookup_to_o key={self.key} required={self.required}>"
 
 
 class CharmInstructionFlushMultioption(CharmInstruction): # CharmInstructionNoArgBase
@@ -936,26 +1148,6 @@ class CharmInstructionSetGroup(CharmInstruction):
 
     def __repr__(self):
         return f"<set_group id={self.id} group={self.group.summary()} optional={self.optional} repeating={self.repeating}>"
-
-class CharmInstructionEnd(CharmInstruction):
-    """
-    end
-
-    Marks the end of a program.  A no-op, exists only
-    to provide some context when reading the trace from
-    a running interpreter.
-    """
-
-    __slots__ = ['name', 'id']
-
-    def __init__(self, name, *, id=None):
-        self.op = opcode.end
-        self.id = id
-        self.name = name
-
-    def __repr__(self):
-        return f"<end id={self.id} name={self.name!r}>"
-
 
 class CharmProgram:
 
@@ -1056,6 +1248,16 @@ class CharmAssembler:
 
     # opcodes
 
+    def abort(self):
+        op = CharmInstructionAbort()
+        self._append_opcode(op)
+        return op
+
+    def end(self):
+        op = CharmInstructionEnd()
+        self._append_opcode(op)
+        return op
+
     def no_op(self):
         op = CharmInstructionNoOp()
         self._append_opcode(op)
@@ -1108,16 +1310,16 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def append_to_args(self, parameter, discretionary):
-        op = CharmInstructionAppendToArgs(
+    def append_to_converter_args(self, parameter, discretionary):
+        op = CharmInstructionAppendToConverterArgs(
             parameter = parameter,
             discretionary = discretionary,
             )
         self._append_opcode(op)
         return op
 
-    def add_to_kwargs(self, name):
-        op = CharmInstructionAddToKwargs(
+    def set_in_converter_kwargs(self, name):
+        op = CharmInstructionSetInConverterKwargs(
             name=name,
             )
         self._append_opcode(op)
@@ -1148,8 +1350,8 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def get_keyword(self, key, required=False):
-        op = CharmInstructionGetKeyword(
+    def lookup_to_o(self, key, required=False):
+        op = CharmInstructionLookupToO(
             key=key,
             required=required,
             )
@@ -1161,8 +1363,43 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def branch_on_o_to_label(self, label):
-        op = CharmInstructionBranchOnOToLabel(label=label)
+    def branch_on_flag_to_label(self, label):
+        op = CharmInstructionBranchOnFlagToLabel(label=label)
+        self._append_opcode(op)
+        return op
+
+    def branch_on_not_flag_to_label(self, label):
+        op = CharmInstructionBranchOnNotFlagToLabel(label=label)
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_true(self):
+        op = CharmInstructionTestIsOTrue()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_none(self):
+        op = CharmInstructionTestIsONone()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_empty(self):
+        op = CharmInstructionTestIsOEmpty()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_iterable(self):
+        op = CharmInstructionTestIsOIterable()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_str(self):
+        op = CharmInstructionTestIsOStr()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_mapping(self):
+        op = CharmInstructionTestIsOMapping()
         self._append_opcode(op)
         return op
 
@@ -1298,7 +1535,9 @@ class CharmAssembler:
                 continue
             elif op.op == opcode.jump_to_label:
                 fixups.append(index)
-            elif op.op == opcode.branch_on_o_to_label:
+            elif op.op == opcode.branch_on_flag_to_label:
+                fixups.append(index)
+            elif op.op == opcode.branch_on_not_flag_to_label:
                 fixups.append(index)
 
             # remove no_ops
@@ -1349,7 +1588,8 @@ class CharmAssembler:
         # replace *_to_label ops with absolute jump ops
         replacement_op = {
             opcode.jump_to_label: CharmInstructionJump,
-            opcode.branch_on_o_to_label: CharmInstructionBranchOnO,
+            opcode.branch_on_flag_to_label: CharmInstructionBranchOnFlag,
+            opcode.branch_on_not_flag_to_label: CharmInstructionBranchOnNotFlag,
         }
         for index in fixups:
             op = opcodes[index]
@@ -1369,7 +1609,7 @@ class CharmAssembler:
                 op.address = op2.address
 
         # add end instruction
-        end_op = CharmInstructionEnd(self.name)
+        end_op = CharmInstructionEnd()
         opcodes.append(end_op)
 
         program = CharmProgram(self.name)
@@ -1587,7 +1827,7 @@ class CharmAppealCompiler(CharmCompiler):
         can get mapped.
 
         Call this immediately after you append a positional argument
-        (append_to_args).  Every time.
+        (append_to_converter_args).  Every time.
         """
         if self.ag_duplicate_options:
             self.ag_duplicate_options.clear()
@@ -1764,7 +2004,7 @@ class CharmAppealCompiler(CharmCompiler):
 
                 cc, add_to_self_a = self.compile_option(program_name, parameter, indent)
                 add_to_self_a.load_converter(key=key)
-                add_to_self_a.add_to_kwargs(name=parameter.name)
+                add_to_self_a.set_in_converter_kwargs(name=parameter.name)
                 program = cc.assemble()
 
                 for option in options:
@@ -1859,7 +2099,8 @@ class CharmAppealCompiler(CharmCompiler):
 
             assert self.command_converter_key
             load_o_op = self.ag_initialize_a.load_o(key=self.command_converter_key)
-            self.ag_initialize_a.branch_on_o_to_label(label_flush_multioption)
+            self.ag_initialize_a.test_is_o_true()
+            self.ag_initialize_a.branch_on_flag_to_label(label_flush_multioption)
         # else:
         #     assert not issubclass(cls, MultiOption), f"{cls=} IS a MultiOption"
 
@@ -1964,7 +2205,14 @@ class CharmAppealCompiler(CharmCompiler):
             if cls is SimpleTypeConverterStr:
                 # if want_prints:
                 #     print(f"[cc] {indent}    simple str converter, consume_positional and append.")
-                self.body_a.consume_positional(required=pgi_parameter.required, is_oparg=isinstance(self, CharmOptionCompiler))
+                required = pgi_parameter.required
+                self.body_a.consume_positional(required=required, is_oparg=isinstance(self, CharmOptionCompiler))
+                if not required:
+                    label2 = CharmInstructionLabel('exit after optional argument')
+                    self.body_a.branch_on_flag_to_label(label2)
+                    self.body_a.end()
+                    self.body_a.append(label2)
+
                 discretionary = False
                 add_to_self_a = self.body_a
             else:
@@ -1975,7 +2223,7 @@ class CharmAppealCompiler(CharmCompiler):
                 is_degenerate = is_degenerate and is_degenerate_subtree
 
             add_to_self_a.load_converter(key=converter_key)
-            add_to_self_a.append_to_args(
+            add_to_self_a.append_to_converter_args(
                 parameter=parameter_name,
                 discretionary=discretionary,
                 )
@@ -2228,11 +2476,13 @@ class CharmBaseInterpreter:
 
         self.converter = None
         self.o = None
+        self.flag = False
         self.group = None
 
         self.converters = {}
         self.groups = []
 
+        self.aborted = False
 
     def repr_ip(self, ip=None):
         s = "--"
@@ -2268,7 +2518,7 @@ class CharmBaseInterpreter:
 
     @big.BoundInnerClass
     class CharmProgramStackEntry:
-        __slots__ = ['interpreter', 'ip', 'program', 'converter', 'o', 'group', 'groups']
+        __slots__ = ['interpreter', 'ip', 'program', 'converter', 'o', 'flag', 'group', 'groups']
 
         def __init__(self, interpreter):
             self.interpreter = interpreter
@@ -2276,6 +2526,7 @@ class CharmBaseInterpreter:
             self.program = interpreter.program
             self.converter = interpreter.converter
             self.o = interpreter.o
+            self.flag = interpreter.flag
             self.group = interpreter.group
             self.groups = interpreter.groups
 
@@ -2285,12 +2536,12 @@ class CharmBaseInterpreter:
             interpreter.program = self.program
             interpreter.converter = self.converter
             interpreter.o = self.o
+            interpreter.flag = self.flag
             interpreter.group = self.group
             interpreter.groups = self.groups
 
         def __repr__(self):
-            return f"<CharmProgramStackEntry ip={self.ip} program={self.program.name!r} converter={self.converter} o={self.o} group={self.group.summary() if self.group else 'None'} groups=[{len(self.groups)}]>"
-
+            return f"<CharmProgramStackEntry ip={self.ip} program={self.program.name!r} converter={self.converter} o={self.o} o={self.flag} group={self.group.summary() if self.group else 'None'} groups=[{len(self.groups)}]>"
 
     def __iter__(self):
         return self
@@ -2304,7 +2555,7 @@ class CharmBaseInterpreter:
                 op = self.ip.__next__()
                 return ip, op
             except StopIteration as e:
-                self.finish()
+                self.end()
                 continue
 
     # def __bool__(self):
@@ -2326,23 +2577,26 @@ class CharmBaseInterpreter:
         self.groups = []
         self.converter = self.o = self.group = None
 
-    def finish(self):
+    def end(self):
         if self.call_stack:
             cpse = self.call_stack.pop()
             cpse.restore()
         else:
             self.ip = None
 
-    def abort(self):
+    def _stop(self):
         self.ip = None
         self.call_stack.clear()
 
+    def abort(self):
+        self._stop()
+        self.aborted = True
+        return None
+
     def unwind(self):
         while self.call_stack:
-            self.finish()
-        self.abort()
-
-
+            self.end()
+        self._stop()
 
 
 def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, option_values):
@@ -2390,9 +2644,7 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
                 if op.repeating:
                     closing_brackets.append("... ")
             first_argument_in_group = True
-        elif op.op == opcode.append_to_args:
-            # append_to_args can only be after one of those two opcodes!
-            # if last_op.op in (opcode.consume_positional, opcode.load_o):
+        elif op.op == opcode.append_to_converter_args:
             usage.append(" *garbage, usage is broken* ")
                 # if op.usage:
                 #     if first_argument_in_group:
@@ -2428,8 +2680,8 @@ class CharmInterpreter(CharmBaseInterpreter):
         self.program = program
 
         self.appeal = processor.appeal
-        self.argi = processor.argi
-        self.kwargs = processor.kwargs
+        self.iterator = processor.iterator
+        self.mapping = processor.mapping
 
         self.command_converter_key = None
 
@@ -2632,8 +2884,15 @@ class CharmInterpreter(CharmBaseInterpreter):
         short_option_concatenated_oparg,
         ) = self.appeal.root.option_parsing_semantics
 
-        argi = self.argi
-        kwargs = self.kwargs
+        # def print(s=None):
+        #     if not s:
+        #         return
+        #     with open("/tmp/xyz", "at") as f:
+        #         f.write(s + "\n")
+
+
+        iterator = self.iterator
+        mapping = self.mapping
 
         id_to_group = {}
 
@@ -2700,6 +2959,7 @@ class CharmInterpreter(CharmBaseInterpreter):
             for t in (
                 ('converter', None, self.repr_converter),
                 ('o', None, self.repr_converter),
+                ('flag', None, lambda value: str(bool(value))),
                 ('group', None, lambda value: value.summary() if value else repr(value) ),
                 ('groups', None, lambda value: str([group.id for group in value])),
                 ('options group', 'options.token', format_options_group),
@@ -2741,11 +3001,11 @@ class CharmInterpreter(CharmBaseInterpreter):
                 else:
                     print(f"{self.opcodes_prefix} {name:>{total_register_width}} |    {new}")
 
-        while self.running() or argi:
+        while self.running() or iterator:
             # if want_prints:
             #     print(f'{self.opcodes_prefix}')
             #     print(charm_separator_line)
-            #     print(f"{self.opcodes_prefix} command-line: {shlex_join(list(reversed(argi.stack)))}")
+            #     print(f"{self.opcodes_prefix} command-line: {shlex_join(list(reversed(iterator.stack)))}")
 
             # The main interpreter loop.
             #
@@ -2783,25 +3043,26 @@ class CharmInterpreter(CharmBaseInterpreter):
                 #     prefix = f"[{self.repr_ip(ip)}]"
 
                 if op.op == opcode.load_converter:
-                    converter = self.converters.get(op.key, None)
-                    old_converter = self.converter
-                    self.converter = converter
+                    # if want_prints:
+                    #     old_converter = self.converter
+                    self.converter = self.converters.get(op.key, None)
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} load_converter | key {op.key}")
                     #     print_registers(converter=old_converter)
                     continue
 
                 if op.op == opcode.load_o:
-                    o = self.converters.get(op.key, None)
-                    old_o = self.o
-                    self.o = o
+                    # if want_prints:
+                    #     old_o = self.o
+                    self.o = self.converters.get(op.key, None)
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} load_o | key {op.key}")
                     #     print_registers(o=old_o)
                     continue
 
                 if op.op == opcode.converter_to_o:
-                    old_o = self.o
+                    # if want_prints:
+                    #     old_o = self.o
                     self.o = self.converter
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} converter_to_o")
@@ -2809,16 +3070,12 @@ class CharmInterpreter(CharmBaseInterpreter):
                     continue
 
                 if op.op == opcode.consume_positional:
-                    if not argi:
-                        # if want_prints:
-                        #     print(f"{self.opcodes_prefix} {prefix} consume_positional | no more arguments, aborting program.")
-                        self.abort()
                     # proceed to second part of interpreter loop
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} consume_positional | switching from loop part 1 to loop part 2")
                     break
 
-                if op.op == opcode.append_to_args:
+                if op.op == opcode.append_to_converter_args:
                     o = self.o
                     converter = self.converter
                     # if want_prints:
@@ -2828,21 +3085,21 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     else:
                     #         field_name = "args_converters"
                     #         new = converter.args_converters
-                    #     old = new.copy()
+                    #     old = list(new.copy())
 
                     # either queue or append o as indicated
                     (converter.queue_converter if op.discretionary else converter.append_converter)(o)
 
                     # if want_prints:
                     #     discretionary = "yes" if op.discretionary else "no"
-                    #     print(f"{self.opcodes_prefix} {prefix} append_to_args | parameter {op.parameter} | discretionary? {discretionary}")
+                    #     print(f"{self.opcodes_prefix} {prefix} append_to_converter_args | parameter {op.parameter} | discretionary? {discretionary}")
                     #     new = list(new)
                     #     print_registers(extras = [
                     #         (f'{self.converter_to_key(converter)}.{field_name}', old, new),
                     #         ])
                     continue
 
-                if op.op == opcode.add_to_kwargs:
+                if op.op == opcode.set_in_converter_kwargs:
                     name = op.name
                     converter = self.converter
                     o = self.o
@@ -2862,27 +3119,39 @@ class CharmInterpreter(CharmBaseInterpreter):
                     converter.unqueue()
                     converter.kwargs_converters[name] = o
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} add_to_kwargs | name {op.name}")
+                    #     print(f"{self.opcodes_prefix} {prefix} set_in_converter_kwargs | name {op.name}")
                     #     print_registers(extras = [
                     #         (f'{self.converter_to_key(converter)}.kwargs_converters', old, new),
                     #         ])
 
                     continue
 
-                if op.op == opcode.get_keyword:
-                    value = kwargs.get(op.key, sentinel)
-                    if value == sentinel:
-                        if op.required:
-                            # if want_prints:
-                            #     print(f"{self.opcodes_prefix} {prefix} get_keyword | key={op.key!r} not set, required={op.required}, aborting.")
-                            self.abort()
+                if op.op == opcode.lookup_to_o:
+                    # if want_prints:
+                    #     old_o = self.o
+                    #     old_flag = self.flag
+
+                    value = mapping.get(op.key, sentinel)
+                    flag = value != sentinel
+                    if flag:
+                        abort = False
+                        self.flag = flag
+                        self.o = value
+                    else:
+                        abort = op.required
                         value = None
 
-                    old_o = self.o
-                    self.o = value
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} get_keyword")
-                    #     print_registers(o=old_o)
+                    #     print(f"{self.opcodes_prefix} {prefix} get_keyword | key='{op.key}")
+                    #     if flag:
+                    #         print(f"{self.opcodes_prefix} {prefix} got value '{value}'")
+                    #     else:
+                    #         print(f"{self.opcodes_prefix} {prefix} key not defined")
+                    #     abort_yes_no = "yes" if abort else "no"
+                    #     print_registers(o=old_o, flag=old_flag, extras=[('abort?', sentinel, abort_yes_no)])
+
+                    if abort:
+                        return self.abort()
                     continue
 
                 if op.op == opcode.flush_multioption:
@@ -2952,13 +3221,76 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.ip.jump(op.address)
                     continue
 
-                if op.op == opcode.branch_on_o:
+                if op.op == opcode.branch_on_flag:
                     # if want_prints:
-                    #     branch = "yes" if self.o else "no"
-                    #     print(f"{self.opcodes_prefix} {prefix} branch_on_o | o? {branch} | address {op.address}")
+                    #     branch = "yes" if self.flag else "no"
+                    #     print(f"{self.opcodes_prefix} {prefix} branch_on_flag | branch? {branch} | address {op.address}")
                     #     print_registers()
-                    if self.o:
+                    if self.flag:
                         self.ip.jump(op.address)
+                    continue
+
+                if op.op == opcode.branch_on_not_flag:
+                    # if want_prints:
+                    #     branch = "yes" if (not self.flag) else "no"
+                    #     print(f"{self.opcodes_prefix} {prefix} branch_on_not_flag | branch? {branch} | address {op.address}")
+                    #     print_registers()
+                    if not self.flag:
+                        self.ip.jump(op.address)
+                    continue
+
+                if op.op == opcode.test_is_o_true:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = bool(self.o)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} o_is_true")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_none:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = self.o == None
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} o_is_true")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_empty:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = self.o == empty
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} o_is_empty")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_iterable:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = isinstance(self.o, Iterable)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} o_is_iterable")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_str:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = isinstance(self.o, str)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} o_is_str")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_mapping:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = isinstance(self.o, Mapping)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} o_is_mapping")
+                    #     print_registers(flag=old_flag)
                     continue
 
                 if op.op == opcode.comment:
@@ -2968,8 +3300,16 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                 if op.op == opcode.end:
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} end | id {op.id} | name {op.name!r}")
+                    #     print(f"{self.opcodes_prefix} {prefix} end")
                     #     print_registers()
+                    self.end()
+                    continue
+
+                if op.op == opcode.abort:
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} abort | id {op.id} | name {op.name!r}")
+                    #     print_registers()
+                    self.abort()
                     continue
 
                 if op.op == opcode.create_converter:
@@ -2981,7 +3321,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                 # we finished the program
                 # if want_prints:
                 #     print(f"{self.opcodes_prefix} ")
-                #     print(f"{self.opcodes_prefix} finished.")
+                #     if self.aborted:
+                #         print(f"{self.opcodes_prefix} aborted!")
+                #     else:
+                #         print(f"{self.opcodes_prefix} ended.")
                 #     print(f"{self.opcodes_prefix} ")
                 op = None
 
@@ -2995,17 +3338,17 @@ class CharmInterpreter(CharmBaseInterpreter):
             #   If we've finished the program, op will be None.
             assert (op == None) or (op.op == opcode.consume_positional), f"op={op}, expected either None or consume_positional"
 
-            # Technically we loop over argi, but in practice
-            # we usually only consume one argument at a time.
+            # Technically we *loop* over iterator.
+            # But in practice we usually only consume one argument at a time.
             #
-            # for a in argi:
+            # for a in iterator:
             #    * if a is an option (or options),
             #      push that program (programs) and resume
             #      the charm interpreter.
             #    * if a is the special value '--', remember
             #      that all subsequent command-line arguments
             #      can no longer be options, and continue to
-            #      the next a in argi.  (this is the only case
+            #      the next a in iterator.  (this is the only case
             #      in which we'll consume more than one argument
             #      in this loop.)
             #    * else a is a positional argument.
@@ -3014,251 +3357,297 @@ class CharmInterpreter(CharmBaseInterpreter):
             #      * else, hmm, we have a positional argument
             #        we don't know what to do with.  the program
             #        is done, and we don't have a consume_positional
-            #        to give it to.  so push it back onto argi
+            #        to give it to.  so push it back onto iterator
             #        and exit.  (hopefully the argument is the
             #        name of a command/subcomand.)
 
-            print_loop_start = True
+            # if want_prints:
+            #     print_loop_start = True
 
-            for a in argi:
+            stay_in_loop_two = True
+
+            while stay_in_loop_two:
                 # if want_prints:
                 #     if print_loop_start:
                 #         print(f"{self.cmdline_prefix} ")
-                #         print(f"{self.cmdline_prefix} loop part 2: consume argument(s): op={op} cmdline: {shlex_join(list(reversed(argi.stack)))}")
+                #         print(f"{self.cmdline_prefix} loop part 2: consume argument(s): op={op} cmdline: {shlex_join(list(reversed(iterator.stack)))}")
                 #         print(f"{self.cmdline_prefix} ")
                 #         print_loop_start = False
-                #     print(f"{self.cmdline_prefix} argument: {a!r}  remaining: {shlex_join(list(reversed(argi.stack)))}")
-                #     print(f"{self.cmdline_prefix}")
 
-                # Is this command-line argument a "positional argument", or an "option"?
-                # In this context, a "positional argument" can be either a conventional
-                # positional argument on the command-line, or an "oparg".
+                if not iterator:
+                    if op:
+                        # iterator is exhausted, and we still have a
+                        # consume_parameter instruction waiting to be executed.
 
-                # If force_positional is true, we encountered "--" on the command-line.
-                # This forces Appeal to ignore dashes and process all subsequent
-                # arguments as positional arguments.
-
-                # If the argument doesn't start with a dash,
-                # it can't be an option, therefore it must be a positional argument.
-                doesnt_start_with_a_dash = not a.startswith("-")
-
-                # If the argument is a single dash, it isn't an option,
-                # it's a positional argument.  This is an old UNIX idiom;
-                # if you were expecting a filename and you got "-", you should
-                # use the appropriate stdio file (stdin/stdout) there.
-                is_a_single_dash = a == "-"
-
-                # If we're consuming opargs, we ignore leading dashes,
-                # and all arguments are forced to be opargs
-                # until we've consume all the opargs we need.
-                is_oparg = op and (op.op == opcode.consume_positional) and op.is_oparg
-
-                is_positional_argument = (
-                    force_positional
-                    or doesnt_start_with_a_dash
-                    or is_a_single_dash
-                    or is_oparg
-                    )
-
-                if is_positional_argument:
-                    if not op:
                         # if want_prints:
-                        #     print(f"{self.cmdline_prefix}  positional argument we don't want.")
-                        #     print(f"{self.cmdline_prefix}  maybe somebody else will consume it.")
-                        #     print(f"{self.cmdline_prefix}  exit.")
-                        argi.push(a)
-                        return self.converters[self.command_converter_key]
+                        #     old_flag = self.flag
+                        #     old_o = o
 
-                    # set register "o" to our string and return to running bytecodes.
+                        if not op.required:
+                            self.o = None
+                            self.flag = False
+
+                        # if want_prints:
+                        #     print(f"{self.cmdline_prefix}")
+                        #     print(f"{self.opcodes_prefix} {prefix} consume_positional | required={op.required} | is_oparg={op.is_oparg}")
+                        #     print(f"{self.opcodes_prefix} {prefix} iterator exhausted")
+                        #     abort = "yes" if op.required else "no"
+                        #     print_registers(o=old_o, flag=old_flag, extras=[('abort?', sentinel, abort)])
+
+                        if op.required:
+                            # if want_prints:
+                            #     print(f"{self.opcodes_prefix} {prefix} aborting.")
+                            return self.abort()
+
+                        # consider the instruction executed.
+                        op = False
+
+                    # if we reach here,
+                    # either there was no outstanding instruction,
+                    # or there was one and we executed it.
+                    # break out of loop two and go back up to the top.
+                    # (if we're no longer running, we'll finish from there.)
+                    break
+
+                for a in iterator:
                     # if want_prints:
-                    #     old_o = self.o
-                    #     old_group = self.group.copy()
-                    self.o = a
-                    if self.group:
-                        self.group.count += 1
-                        self.group.laden = True
+                    #     print(f"{self.cmdline_prefix} argument: {a!r}  remaining: {shlex_join(list(reversed(iterator.stack)))}")
+                    #     print(f"{self.cmdline_prefix}")
 
-                    if not is_oparg:
-                        self.options.unmap_all_child_options()
+                    # Is this command-line argument a "positional argument", or an "option"?
+                    # In this context, a "positional argument" can be either a conventional
+                    # positional argument on the command-line, or an "oparg".
+
+                    # If force_positional is true, we encountered "--" on the command-line.
+                    # This forces Appeal to ignore dashes and process all subsequent
+                    # arguments as positional arguments.
+
+                    # If the argument doesn't start with a dash,
+                    # it can't be an option, therefore it must be a positional argument.
+                    doesnt_start_with_a_dash = not a.startswith("-")
+
+                    # If the argument is a single dash, it isn't an option,
+                    # it's a positional argument.  This is an old UNIX idiom;
+                    # if you were expecting a filename and you got "-", you should
+                    # use the appropriate stdio file (stdin/stdout) there.
+                    is_a_single_dash = a == "-"
+
+                    # If we're consuming opargs, we ignore leading dashes,
+                    # and all arguments are forced to be opargs
+                    # until we've consume all the opargs we need.
+                    is_oparg = op and (op.op == opcode.consume_positional) and op.is_oparg
+
+                    is_positional_argument = (
+                        force_positional
+                        or doesnt_start_with_a_dash
+                        or is_a_single_dash
+                        or is_oparg
+                        )
+
+                    if is_positional_argument:
+                        if not op:
+                            # if want_prints:
+                            #     print(f"{self.cmdline_prefix}  positional argument we don't want.")
+                            #     print(f"{self.cmdline_prefix}  maybe somebody else will consume it someday.")
+                            #     print(f"{self.cmdline_prefix}  exit.")
+                            iterator.push(a)
+                            return self.converters[self.command_converter_key]
+
+                        # set register "o" to our string and return to running bytecodes.
+                        # if want_prints:
+                        #     old_o = self.o
+                        #     old_group = self.group.copy()
+                        self.o = a
+                        self.flag = True
+                        if self.group:
+                            self.group.count += 1
+                            self.group.laden = True
+
+                        if not is_oparg:
+                            self.options.unmap_all_child_options()
+
+                        # if want_prints:
+                        #     print(f"{self.cmdline_prefix}")
+                        #     print(f"{self.opcodes_prefix} {prefix} consume_positional | required={op.required} | is_oparg={op.is_oparg}")
+                        #     print(f"{self.opcodes_prefix} {prefix} got '{a}'")
+                        #     print_registers(o=old_o, group=old_group)
+
+                        stay_in_loop_two = False
+                        break
+
+                    if not option_space_oparg:
+                        raise AppealConfigurationError("oops, currently the only supported value of option_space_oparg is True")
+
+                    if a == "--":
+                        # we shouldn't be able to reach this twice.
+                        # if the user specifies -- twice on the command-line,
+                        # the first time turns of option processing, which means
+                        # it should be impossible to get here.
+                        assert not force_positional
+                        force_positional = self.appeal.root.force_positional = True
+                        # if want_prints:
+                        #     print(f"{self.cmdline_prefix}  '--', force_positional=True")
+                        continue
+
+                    # it's an option!
+                    double_dash = a.startswith("--")
+                    pushed_remainder = False
+
+                    # split_value is the value we "split" from the option string.
+                    # In these example, split_value is 'X':
+                    #     --option=X
+                    #     -o=X
+                    # and, if o takes exactly one optional argument,
+                    # and short_option_concatenated_oparg is true:
+                    #     -oX
+                    # If none of these syntaxes (syntices?) is used,
+                    # split_value is None.
+                    #
+                    # Literally we handle it by splitting it off,
+                    # then pushing it *back* onto iterator, so the option
+                    # program can consume it.  Thus we actually transform
+                    # all the above examples into
+                    #     -o X
+                    #
+                    # Note: split_value can be an empty string!
+                    #     -f=
+                    # So, simply checking truthiness is insufficient.
+                    # You *must* check "if split_value is None".
+                    split_value = None
+
+                    try_to_split_value = double_dash or short_option_equals_oparg
+                    if try_to_split_value:
+                        a, equals, _split_value = a.partition("=")
+                        if equals:
+                            split_value = _split_value
+                    else:
+                        split_value = None
+
+                    if double_dash:
+                        option = a
+                        program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
+                    else:
+                        ## In Appeal,
+                        ##      % python3 myscript foo -abcde
+                        ## must be EXACTLY EQUIVALENT TO
+                        ##      % python3 myscript foo -a -b -c -d -e
+                        ##
+                        ## The best way to handle this is to transform the former
+                        ## into the latter.  Every time we encounter a single-dash
+                        ## option, consume just the first letter, and if the rest
+                        ## is more options, reconstruct the remaining short options
+                        ## and push it onto the 'iterator' pushback iterator.
+                        ## For example, if -a is an option that accepts no opargs,
+                        ## we transform
+                        ##      % python3 myscript foo -abcde
+                        ## into
+                        ##      % python3 myscript foo -a -bcde
+                        ## and then handle "-a".
+                        ##
+                        ## What about options that take opargs?  Except for
+                        ## the special case of short_option_concatenated_oparg,
+                        ## options that take opargs have to be the last short option.
+
+                        # strip off this short option by itself:
+                        option = a[1]
+                        program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
+
+                        # handle the remainder.
+                        remainder = a[2:]
+                        if remainder:
+                            if maximum_arguments == 0:
+                                # more short options.  push them back onto iterator.
+                                pushed_remainder = True
+                                remainder = "-" + remainder
+                                iterator.push(remainder)
+                                # if want_prints:
+                                #     print(f"{self.cmdline_prefix} isolating '-{option}', pushing remainder '{remainder}' back onto iterator")
+                            elif maximum_arguments >= 2:
+                                if minimum_arguments == maximum_arguments:
+                                    number_of_arguments = maximum_arguments
+                                else:
+                                    number_of_arguments = f"{minimum_arguments} to {maximum_arguments}"
+                                raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} takes {number_of_arguments} arguments, it must be last")
+                            # in the remaining cases, we know maximum_arguments is 1
+                            elif short_option_concatenated_oparg and (minimum_arguments == 0):
+                                # Support short_option_concatenated_oparg.
+                                #
+                                # If a short option takes *exactly* one *optional*
+                                # oparg, you can smash the option and the oparg together.
+                                # For example, if short option "-f" takes exactly one
+                                # optional oparg, and you want to supplythe oparg "guava",
+                                # you can do
+                                #    -f=guava
+                                #    -f guava
+                                # and in ONLY THIS CASE
+                                #    -fguava
+                                #
+                                # Technically POSIX doesn't allow us to support this:
+                                #    -f guava
+                                #
+                                # On the other hand, there's a *long list* of things
+                                # POSIX doesn't allow us to support:
+                                #
+                                #    * short options with '=' (split_value, e.g. '-f=guava')
+                                #    * long options
+                                #    * subcommands
+                                #    * options that take multiple opargs
+                                #
+                                # So, clearly, exact POSIX compliance is not of
+                                # paramount importance to Appeal.
+                                #
+                                # Get with the times, you musty old fogeys!
+
+                                if split_value is not None:
+                                    raise AppealUsageError(f"-{option}{remainder}={split_value} isn't allowed, -{option} must be last because it takes an argument")
+                                split_value = remainder
+                            else:
+                                assert minimum_arguments == maximum_arguments == 1
+                                raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} must be last because it takes an argument")
+
+                    laden_group = id_to_group[group_id]
+
+                    denormalized_option = denormalize_option(option)
+                    # if want_prints:
+                    #     print(f"{self.cmdline_prefix} option {denormalized_option}")
+                    #     print(f"{self.cmdline_prefix} {self.ip_spacer} program={program}")
+                    #     print(f"{self.cmdline_prefix} {self.ip_spacer} group={laden_group.summary()}")
+                    #     print(f"{self.cmdline_prefix}")
+
+                    # mark argument group as having had stuff done in it.
+                    laden_group.laden = True
+
+                    # we have an option to run.
+                    # the existing consume_positional op will have to wait.
+                    if op:
+                        assert op.op == opcode.consume_positional
+                        self.rewind_one_instruction()
+                        op = None
+
+                    # throw away child options mapped below our option's sibling.
+                    self.options.pop_until_group(token)
+
+                    # and push a fresh options dict.
+                    self.options.push()
+
+                    if split_value is not None:
+                        if maximum_arguments != 1:
+                            if maximum_arguments == 0:
+                                raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} doesn't take an argument")
+                            if maximum_arguments >= 2:
+                                raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} takes multiple arguments")
+                        iterator.push(split_value)
+                        # if want_prints:
+                        #     print(f"{self.cmdline_prefix} {self.ip_spacer} pushing split value {split_value!r} back onto iterator")
 
                     # if want_prints:
                     #     print(f"{self.cmdline_prefix}")
-                    #     print(f"{self.opcodes_prefix} {prefix} consume_positional")
-                    #     print_registers(o=old_o, group=old_group)
+                    #     print(f"{self.cmdline_prefix} call program={program}")
 
+                    # self.push_context()
+                    self.call(program)
+                    stay_in_loop_two = False
                     break
-
-                if not option_space_oparg:
-                    raise AppealConfigurationError("oops, currently the only supported value of option_space_oparg is True")
-
-                if a == "--":
-                    # we shouldn't be able to reach this twice.
-                    # if the user specifies -- twice on the command-line,
-                    # the first time turns of option processing, which means
-                    # it should be impossible to get here.
-                    assert not force_positional
-                    force_positional = self.appeal.root.force_positional = True
-                    # if want_prints:
-                    #     print(f"{self.cmdline_prefix}  '--', force_positional=True")
-                    continue
-
-                # it's an option!
-                double_dash = a.startswith("--")
-                pushed_remainder = False
-
-                # split_value is the value we "split" from the option string.
-                # In these example, split_value is 'X':
-                #     --option=X
-                #     -o=X
-                # and, if o takes exactly one optional argument,
-                # and short_option_concatenated_oparg is true:
-                #     -oX
-                # If none of these syntaxes (syntices?) is used,
-                # split_value is None.
-                #
-                # Literally we handle it by splitting it off,
-                # then pushing it *back* onto argi, so the option
-                # program can consume it.  Thus we actually transform
-                # all the above examples into
-                #     -o X
-                #
-                # Note: split_value can be an empty string!
-                #     -f=
-                # So, simply checking truthiness is insufficient.
-                # You *must* check "if split_value is None".
-                split_value = None
-
-                try_to_split_value = double_dash or short_option_equals_oparg
-                if try_to_split_value:
-                    a, equals, _split_value = a.partition("=")
-                    if equals:
-                        split_value = _split_value
-                else:
-                    split_value = None
-
-                if double_dash:
-                    option = a
-                    program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
-                else:
-                    ## In Appeal,
-                    ##      % python3 myscript foo -abcde
-                    ## must be EXACTLY EQUIVALENT TO
-                    ##      % python3 myscript foo -a -b -c -d -e
-                    ##
-                    ## The best way to handle this is to transform the former
-                    ## into the latter.  Every time we encounter a single-dash
-                    ## option, consume just the first letter, and if the rest
-                    ## is more options, reconstruct the remaining short options
-                    ## and push it onto the argi pushback iterator.  For example,
-                    ## if -a is an option that accepts no opargs, we transform
-                    ##      % python3 myscript foo -abcde
-                    ## into
-                    ##      % python3 myscript foo -a -bcde
-                    ## and then handle "-a".
-                    ##
-                    ## What about options that take opargs?  Except for
-                    ## the special case of short_option_concatenated_oparg,
-                    ## options that take opargs have to be the last short option.
-
-                    # strip off this short option by itself:
-                    option = a[1]
-                    program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
-
-                    # handle the remainder.
-                    remainder = a[2:]
-                    if remainder:
-                        if maximum_arguments == 0:
-                            # more short options.  push them back onto argi.
-                            pushed_remainder = True
-                            remainder = "-" + remainder
-                            argi.push(remainder)
-                            # if want_prints:
-                            #     print(f"{self.cmdline_prefix} isolating '-{option}', pushing remainder '{remainder}' back onto argi")
-                        elif maximum_arguments >= 2:
-                            if minimum_arguments == maximum_arguments:
-                                number_of_arguments = maximum_arguments
-                            else:
-                                number_of_arguments = f"{minimum_arguments} to {maximum_arguments}"
-                            raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} takes {number_of_arguments} arguments, it must be last")
-                        # in the remaining cases, we know maximum_arguments is 1
-                        elif short_option_concatenated_oparg and (minimum_arguments == 0):
-                            # Support short_option_concatenated_oparg.
-                            #
-                            # If a short option takes *exactly* one *optional*
-                            # oparg, you can smash the option and the oparg together.
-                            # For example, if short option "-f" takes exactly one
-                            # optional oparg, and you want to supplythe oparg "guava",
-                            # you can do
-                            #    -f=guava
-                            #    -f guava
-                            # and in ONLY THIS CASE
-                            #    -fguava
-                            #
-                            # Technically POSIX doesn't allow us to support this:
-                            #    -f guava
-                            #
-                            # On the other hand, there's a *long list* of things
-                            # POSIX doesn't allow us to support:
-                            #
-                            #    * short options with '=' (split_value, e.g. '-f=guava')
-                            #    * long options
-                            #    * subcommands
-                            #    * options that take multiple opargs
-                            #
-                            # So, clearly, exact POSIX compliance is not of
-                            # paramount importance to Appeal.
-                            #
-                            # Get with the times, you musty old fogeys!
-
-                            if split_value is not None:
-                                raise AppealUsageError(f"-{option}{remainder}={split_value} isn't allowed, -{option} must be last because it takes an argument")
-                            split_value = remainder
-                        else:
-                            assert minimum_arguments == maximum_arguments == 1
-                            raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} must be last because it takes an argument")
-
-                laden_group = id_to_group[group_id]
-
-                denormalized_option = denormalize_option(option)
-                # if want_prints:
-                #     print(f"{self.cmdline_prefix} option {denormalized_option}")
-                #     print(f"{self.cmdline_prefix} {self.ip_spacer} program={program}")
-                #     print(f"{self.cmdline_prefix} {self.ip_spacer} group={laden_group.summary()}")
-                #     print(f"{self.cmdline_prefix}")
-
-                # mark argument group as having had stuff done in it.
-                laden_group.laden = True
-
-                # we have an option to run.
-                # the existing consume_positional op will have to wait.
-                if op:
-                    assert op.op == opcode.consume_positional
-                    self.rewind_one_instruction()
-                    op = None
-
-                # throw away child options mapped below our option's sibling.
-                self.options.pop_until_group(token)
-
-                # and push a fresh options dict.
-                self.options.push()
-
-                if split_value is not None:
-                    if maximum_arguments != 1:
-                        if maximum_arguments == 0:
-                            raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} doesn't take an argument")
-                        if maximum_arguments >= 2:
-                            raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} takes multiple arguments")
-                    argi.push(split_value)
-                    # if want_prints:
-                    #     print(f"{self.cmdline_prefix} {self.ip_spacer} pushing split value {split_value!r} back onto argi")
-
-                # if want_prints:
-                #     print(f"{self.cmdline_prefix}")
-                #     print(f"{self.cmdline_prefix} call program={program}")
-
-                # self.push_context()
-                self.call(program)
-                break
 
         self.unwind()
 
@@ -3281,14 +3670,17 @@ class CharmInterpreter(CharmBaseInterpreter):
         #     print(f"{self.opcodes_prefix} ending parse.")
         #     finished_state = "did not finish" if self else "finished"
         #     print(f"{self.opcodes_prefix}      program {finished_state}.")
-        #     if argi:
-        #         print(f"{self.opcodes_prefix}      remaining cmdline: {list(reversed(argi.stack))}")
+        #     if iterator:
+        #         print(f"{self.opcodes_prefix}      remaining cmdline: {list(reversed(iterator.stack))}")
         #     else:
         #         print(f"{self.opcodes_prefix}      cmdline was completely consumed.")
 
         # if want_prints:
         #     print(charm_separator_line)
         #     print()
+
+        if self.aborted:
+            return None
 
         return self.converters[self.command_converter_key]
 
@@ -3402,8 +3794,8 @@ class Converter:
     ## For example:
     ##   * the first actual positional argument is optional
     ##   * it's nested three levels deep in the annotation tree
-    ##   * we have command-line arguments waiting in argi but
-    ##     the next argument is an option, and we don't know
+    ##   * we have command-line arguments waiting in iterator
+    ##     but the next argument is an option, and we don't know
     ##     how many opargs it wants to consume until we run it
     ##
     ## Or:
@@ -4879,7 +5271,7 @@ class Appeal:
                 ci.converter = ci.converters[op.key]
                 continue
 
-            if (op.op == opcode.append_to_args) and last_op and (last_op.op == opcode.consume_positional):
+            if (op.op == opcode.append_to_converter_args) and last_op and (last_op.op == opcode.consume_positional):
                 ci.converter['parameters'][op.parameter] = op.usage
                 continue
 
@@ -5601,7 +5993,7 @@ class Appeal:
 
         self._parse_attribute("_global", processor)
 
-        if not processor.argi:
+        if not processor.iterator:
             # if there are no arguments waiting here,
             # then they didn't want to run a command.
             # if any commands are defined, and they didn't specify one,
@@ -5615,7 +6007,7 @@ class Appeal:
         processor.log_enter_context(f"parsing commands")
         if self.commands:
             # okay, we have arguments waiting, and there are commands defined.
-            for command_name in processor.argi:
+            for command_name in processor.iterator:
                 sub_appeal = self.commands.get(command_name)
                 if not sub_appeal:
                     # partial spelling check would go here, e.g. "sta" being short for "status"
@@ -5624,11 +6016,11 @@ class Appeal:
                 # the recursive Appeal.parse call will append.
                 sub_appeal.analyze(processor)
                 sub_appeal.parse(processor)
-                if not (self.repeat and processor.argi):
+                if not (self.repeat and processor.iterator):
                     break
 
-        if processor.argi:
-            leftovers = " ".join(shlex.quote(s) for s in processor.argi)
+        if processor.iterator:
+            leftovers = " ".join(shlex.quote(s) for s in processor.iterator)
             raise AppealUsageError(f"leftover cmdline arguments! {leftovers!r}")
 
         processor.log_exit_context()
@@ -5671,7 +6063,8 @@ class Processor:
 
     def reset(self):
         self.events = []
-        self.argi = None
+        self.iterator = None
+        self.mapping = None
         self.commands = []
         self.result = None
 
@@ -5813,30 +6206,36 @@ class Processor:
                 pass
         return fn
 
-    def __call__(self, args=None, kwargs=None):
+    def __call__(self, sequence=None, mapping=None):
         self.reset()
         self.log_start()
         self.log_event("process start")
 
-        self.args = args
-        if args is not None:
-            self.argi = argi = PushbackIterator(args)
+        self.sequence = sequence
+        iterator = sequence
+        if (iterator is not None) and (not isinstance(sequence, PushbackIterator)):
+            iterator = PushbackIterator(iterator)
+        self.iterator = iterator
 
-        self.kwargs = kwargs
+        self.mapping = mapping
 
         # if want_prints:
-        #     argi.stack.extend(reversed(args))
-        #     argi.i = None
+        #     # allow us to print the remaining contents of the iterator
+        #     # by examining its stack
+        #     l = list(iterator)
+        #     l.reverse()
+        #     iterator.stack.extend(l)
+        #     iterator.i = None
 
         appeal = self.appeal
         if appeal.support_version:
-            if (len(args) == 1) and args[0] in ("-v", "--version"):
+            if (len(sequence) == 1) and sequence[0] in ("-v", "--version"):
                 return appeal.version()
             if appeal.commands and (not "version" in appeal.commands):
                 appeal.command()(appeal.version)
 
         if appeal.support_help:
-            if (len(args) == 1) and args[0] in ("-h", "--help"):
+            if (len(sequence) == 1) and sequence[0] in ("-h", "--help"):
                 return appeal.help()
             if appeal.commands and (not "help" in appeal.commands):
                 appeal.command()(appeal.help)
@@ -5857,9 +6256,9 @@ class Processor:
         #     self.print_log()
         return result
 
-    def main(self, args=None):
+    def main(self, args=None, kwargs=None):
         try:
-            sys.exit(self(args=args))
+            sys.exit(self(sequence=args, mapping=kwargs))
         except AppealUsageError as e:
             print("Error:", str(e))
             self.appeal.usage(usage=True)
