@@ -364,13 +364,21 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##    group
 ##        argument counter object (or None).
 ##        local argument counts just for this argument group.
+##    iterator
+##        An iterator yielding objects (e.g. strings from the command-line).
+##        You can get the next object using next_to_o.
+##        There's also an iterator_stack, and you can push new iterables
+##        (e.g. from a Perky file).
+##    mapping
+##        A dict-like object mapping strings to value.
+##        You can get a value with lookup_to_o.
 ##
 ## the interpreter has a stack.  it's used to push/pop registers
 ## when making a "call".
 
 
 ## argument counter objects have these fields:
-##    count = how many arguments we've consumed
+##    count = how many arguments we've added to this group
 ##    minimum = the minimum "arguments" needed
 ##    maximum = the maximum "arguments" permissible
 ##    optional = flag, is this an optional group?
@@ -483,7 +491,7 @@ print_enum('''
     append_to_converter_args
     set_in_converter_kwargs
     map_option
-    consume_positional
+    next_to_o
     lookup_to_o
     flush_multioption
     set_group
@@ -543,7 +551,7 @@ class opcode(enum.Enum):
     append_to_converter_args = 21
     set_in_converter_kwargs = 22
     map_option = 23
-    consume_positional = 24
+    next_to_o = 24
     lookup_to_o = 25
     flush_multioption = 26
     set_group = 27
@@ -1003,6 +1011,78 @@ class CharmInstructionSetInConverterKwargs(CharmInstruction):
     def __repr__(self):
         return f"<set_in_converter_kwargs name={self.name}>"
 
+class CharmInstructionPushMapping(CharmInstruction):
+    """
+    push_mapping
+
+    Pushes the current mapping dict onto the mapping
+    stack, then takes a reference to the object currently
+    in the 'o' register and sets it as the new mapping dict.
+
+    If 'o' is not isinstance(o, collections.abc.Mapping)
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.push_mapping
+
+    def __repr__(self):
+        return f"<push_mapping>"
+
+class CharmInstructionPopMapping(CharmInstruction):
+    """
+    pop_mapping
+
+    Pops the top value from the mapping stack and
+    sets it as the current mapping dict, overwriting
+    the reference to the current mapping dict.
+
+    If the mapping stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.pop_mapping
+
+    def __repr__(self):
+        return f"<pop_mapping>"
+
+class CharmInstructionPushIterator(CharmInstruction):
+    """
+    push_iterator
+
+    Pushes the current iterator onto the iterator stack,
+    then takes a reference to the object currently in the
+    'o' register and sets it as the new iterator.
+
+    If 'o' is not isinstance(o, collections.abc.Iterable)
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.push_iterator
+
+    def __repr__(self):
+        return f"<push_iterator>"
+
+class CharmInstructionPopIterator(CharmInstruction):
+    """
+    pop_iterator
+
+    Pops the top value from the iterator stack and
+    sets it as the current iterator, overwriting
+    the reference to the current iterator.
+
+    If the iterator stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.pop_iterator
+
+    def __repr__(self):
+        return f"<pop_iterator>"
+
 class CharmInstructionMapOption(CharmInstruction):
     """
     map_option <group> <option> <program> <key> <parameter>
@@ -1036,9 +1116,9 @@ class CharmInstructionMapOption(CharmInstruction):
     def __repr__(self):
         return f"<map_option option={self.option!r} program={self.program} key={self.key} parameter={self.parameter} key={self.key} group={self.group}>"
 
-class CharmInstructionConsumePositional(CharmInstruction):
+class CharmInstructionNextToO(CharmInstruction):
     """
-    consume_positional <required> <is_oparg>
+    next_to_o <required> <is_oparg>
 
     Consume the next value from the iterator
     and store it in the 'o' register.
@@ -1066,7 +1146,7 @@ class CharmInstructionConsumePositional(CharmInstruction):
           raise a usage exception.
         * If <required> is False, this argument isn't
           required.  If the iterator is exhausted, 'o'
-          is set to None.
+          is set to None and 'flag' to False.
 
     'flag' is set to True if this consumed a value and set
     it in the 'o' register, and False if it did not (and
@@ -1075,12 +1155,12 @@ class CharmInstructionConsumePositional(CharmInstruction):
     __slots__ = ['required', 'is_oparg']
 
     def __init__(self, required, is_oparg):
-        self.op = opcode.consume_positional
+        self.op = opcode.next_to_o
         self.required = required
         self.is_oparg = is_oparg
 
     def __repr__(self):
-        return f"<consume_positional required={self.required} is_oparg={self.is_oparg}>"
+        return f"<next_to_o required={self.required} is_oparg={self.is_oparg}>"
 
 class CharmInstructionLookupToO(CharmInstruction):
     """
@@ -1325,6 +1405,26 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
+    def push_mapping(self):
+        op = CharmInstructionPushMapping()
+        self._append_opcode(op)
+        return op
+
+    def pop_mapping(self):
+        op = CharmInstructionPopMapping()
+        self._append_opcode(op)
+        return op
+
+    def push_iterator(self):
+        op = CharmInstructionPushIterator()
+        self._append_opcode(op)
+        return op
+
+    def pop_iterator(self):
+        op = CharmInstructionPopIterator()
+        self._append_opcode(op)
+        return op
+
     def map_option(self, group, option, program, key, parameter):
         self.option_to_child_options[option].update(program.option_to_child_options)
 
@@ -1342,8 +1442,8 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def consume_positional(self, required=False, is_oparg=False):
-        op = CharmInstructionConsumePositional(
+    def next_to_o(self, required=False, is_oparg=False):
+        op = CharmInstructionNextToO(
             required=required,
             is_oparg=is_oparg,
             )
@@ -1629,7 +1729,7 @@ class CharmAssembler:
                     total.maximum = math.inf
                 # if want_prints:
                 #     nc()
-            elif op.op == opcode.consume_positional:
+            elif op.op == opcode.next_to_o:
                 if not optional:
                     total.minimum += 1
                 total.maximum += 1
@@ -1803,7 +1903,7 @@ class CharmAppealCompiler(CharmCompiler):
         #     instructions for options that *have* been mapped before
         #     in this argument group.  Initially this is None, and
         #     then we create a fresh one after emitting every
-        #     consume_positional opcode.
+        #     next_to_o opcode.
         #
         # What's this about duplicate options?  It's Appeal trying
         # to be a nice guy, to bend over backwards and allow crazy
@@ -1849,7 +1949,7 @@ class CharmAppealCompiler(CharmCompiler):
         # Appeal permits this because it isn't actually ambiguous.
         # It permits you to map the same option twice in one argument
         # group *provided that* it can intelligently map the duplicate
-        # option after a consume_positional opcode--between positional
+        # option after a next_to_o opcode--between positional
         # parameters.  So usage looks like this:
         #
         #     base [-v] a b c [-o] d e f [-o] d e f
@@ -1884,7 +1984,7 @@ class CharmAppealCompiler(CharmCompiler):
         ag_a.append(a)
 
         # initially in an argument group we don't allow duplicate options.
-        # you can only have duplicates after the first consume_positional
+        # you can only have duplicates after the first next_to_o
         # opcode in an argument group.
         self.ag_duplicate_options_a = None
         self.ag_duplicate_options.clear()
@@ -1946,7 +2046,7 @@ class CharmAppealCompiler(CharmCompiler):
             #     print(f"[cc] {indent}hand-coded program for simple str")
             a = CharmAssembler(program_name)
             a.set_group(self.next_argument_group_id(), optional=False)
-            a.consume_positional(required=True, is_oparg=True)
+            a.next_to_o(required=True, is_oparg=True)
             add_to_self_a = cc = a
         else:
             annotation = dereference_annotated(parameter.annotation)
@@ -2080,15 +2180,15 @@ class CharmAppealCompiler(CharmCompiler):
 
                 for option in options:
                     # option doesn't have to be unique in this argument group,
-                    # but it must be unique per consumed argument.
-                    # (you can't define the same option twice without at least one consume_positional between.)
+                    # but it must be unique per command-line argument.
+                    # (you can't define the same option twice without at least one next_to_o between.)
 
                     if option not in self.ag_options:
                         self.ag_options.add(option)
                         destination = self.ag_options_a
                     elif self.ag_duplicate_options_a:
                         if option in self.ag_duplicate_options:
-                            raise AppealConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no arguments consumed in between definitions)")
+                            raise AppealConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no command-line arguments between definitions)")
                         destination = self.ag_duplicate_options_a
                         self.ag_duplicate_options.add(option)
                     else:
@@ -2275,9 +2375,9 @@ class CharmAppealCompiler(CharmCompiler):
 
             if cls is SimpleTypeConverterStr:
                 # if want_prints:
-                #     print(f"[cc] {indent}    simple str converter, consume_positional and append.")
+                #     print(f"[cc] {indent}    simple str converter, next_to_o and append.")
                 required = pgi_parameter.required
-                self.body_a.consume_positional(required=required, is_oparg=isinstance(self, CharmOptionCompiler))
+                self.body_a.next_to_o(required=required, is_oparg=isinstance(self, CharmOptionCompiler))
                 if not required:
                     label2 = CharmInstructionLabel('exit after optional argument')
                     self.body_a.branch_on_flag_to_label(label2)
@@ -2536,6 +2636,12 @@ class CharmBaseInterpreter:
         self.name = name
         self.call_stack = []
 
+        self.iterator = None
+        self.iterator_stack = []
+
+        self.mapping = None
+        self.mapping_stack = []
+
         assert program
 
         # registers
@@ -2660,7 +2766,7 @@ class CharmBaseInterpreter:
         self.ip = None
         self.call_stack.clear()
 
-    def abort(self):
+    def abort(self, message=''):
         self._stop()
         self.aborted = True
         return None
@@ -3012,7 +3118,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
             (Why *changed* instead of *changing*?
             That made it easier to copy with the
-            two-phase loop and printing consume_positional.)
+            two-phase loop and printing next_to_o.)
             """
             nonlocal register_width
 
@@ -3087,7 +3193,7 @@ class CharmInterpreter(CharmBaseInterpreter):
             # In the first part, we iterate over bytecodes until either
             #    * we finish the program, or
             #    * we must consume a command-line argument
-            #      (we encounter a "consume_positional" bytecode).
+            #      (we encounter a "next_to_o" bytecode).
             # If we finish the program, obviously, we're done.
             # If we must consume a command-line argument, we proceed
             # to the second "part".
@@ -3142,10 +3248,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     print_registers(o=old_o)
                     continue
 
-                if op.op == opcode.consume_positional:
+                if op.op == opcode.next_to_o:
                     # proceed to second part of interpreter loop
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} consume_positional | switching from loop part 1 to loop part 2")
+                    #     print(f"{self.opcodes_prefix} {prefix} next_to_o | switching from loop part 1 to loop part 2")
                     break
 
                 if op.op == opcode.append_to_converter_args:
@@ -3366,9 +3472,48 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     print_registers(flag=old_flag)
                     continue
 
+                if op.op == opcode.push_mapping:
+                    if not isinstance(self.o, Mapping):
+                        self.abort(f'object in o is not a Mapping, o={o}')
+                    self.mapping_stack.append(self.mapping)
+                    self.mapping = mapping = self.o
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} push_mapping")
+                    #     print_registers()
+                    continue
+
+                if op.op == opcode.pop_mapping:
+                    self.mapping = mapping = self.mapping_stack.pop()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} pop_mapping")
+                    #     print_registers()
+                    continue
+
+                if op.op == opcode.push_iterator:
+                    if not isinstance(self.o, Iterable):
+                        self.abort(f'object in o is not an Iterable, o={o}')
+                    self.iterator_stack.append(self.iterator)
+                    self.iterator = iterator = self.o
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} push_mapping")
+                    #     print_registers()
+                    continue
+
+                if op.op == opcode.pop_iterator:
+                    self.iterator = iterator = self.iterator_stack.pop()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} pop_mapping")
+                    #     print_registers()
+                    continue
+
                 if op.op == opcode.comment:
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} # {op.comment!r}")
+                    continue
+
+                if op.op == opcode.no_op:
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} no_op")
                     continue
 
                 if op.op == opcode.end:
@@ -3410,14 +3555,14 @@ class CharmInterpreter(CharmBaseInterpreter):
                 op = None
 
 
-            # Second "part" of the loop: consume a command-line argument.
+            # Second "part" of the loop: consume a positional argument from the command-line.
             #
             # We've either paused or finished the program.
             #   If we've paused, it's because the program wants us
             #     to consume an argument.  In that case op
-            #     will be a 'consume_positional' op.
+            #     will be a 'next_to_o' op.
             #   If we've finished the program, op will be None.
-            assert (op == None) or (op.op == opcode.consume_positional), f"op={op}, expected either None or consume_positional"
+            assert (op == None) or (op.op == opcode.next_to_o), f"op={op}, expected either None or next_to_o"
 
             # Technically we *loop* over iterator.
             # But in practice we usually only consume one argument at a time.
@@ -3433,11 +3578,11 @@ class CharmInterpreter(CharmBaseInterpreter):
             #      in which we'll consume more than one argument
             #      in this loop.)
             #    * else a is a positional argument.
-            #      * if op is consume_positional, consume it and
+            #      * if op is next_to_o, consume it and
             #        resume the charm interpreter.
             #      * else, hmm, we have a positional argument
             #        we don't know what to do with.  the program
-            #        is done, and we don't have a consume_positional
+            #        is done, and we don't have a next_to_o
             #        to give it to.  so push it back onto iterator
             #        and exit.  (hopefully the argument is the
             #        name of a command/subcomand.)
@@ -3466,11 +3611,22 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                         # HACK
                         #
-                        # if we're the first positional argument in an optional group,
-                        # we are never required.
+                        # if this is the first consume_argument instruction
+                        # in an optional group, it isn't *really* required.
+                        # if the iterator is exhausted, and this is marked
+                        # required, exit gracefully instead of aborting.
                         #
                         # why is this a hack?
-                        # we *should* be able to figure this out in the compiler.
+                        # we *should* figure this out in the compiler,
+                        # and generate these instructions to handle it:
+                        #
+                        #     ...
+                        #     next_to_o(required=False)
+                        #     branch_on_flag label_x
+                        #     end
+                        #   label_x:
+                        #     ...
+                        #
                         if op.required:
                             end_gracefully = self.group.optional and (not self.group.laden)
                         else:
@@ -3480,7 +3636,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                         # if want_prints:
                         #     print(f"{self.cmdline_prefix}")
-                        #     print(f"{self.opcodes_prefix} {prefix} consume_positional | required={op.required} | is_oparg={op.is_oparg}")
+                        #     print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg}")
                         #     print(f"{self.opcodes_prefix} {self.ip_spacer} iterator exhausted.")
                         #     if end_gracefully:
                         #         result = "end gracefully"
@@ -3536,7 +3692,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     # If we're consuming opargs, we ignore leading dashes,
                     # and all arguments are forced to be opargs
                     # until we've consume all the opargs we need.
-                    is_oparg = op and (op.op == opcode.consume_positional) and op.is_oparg
+                    is_oparg = op and (op.op == opcode.next_to_o) and op.is_oparg
 
                     is_positional_argument = (
                         force_positional
@@ -3569,7 +3725,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                         # if want_prints:
                         #     print(f"{self.cmdline_prefix}")
-                        #     print(f"{self.opcodes_prefix} {prefix} consume_positional | required={op.required} | is_oparg={op.is_oparg}")
+                        #     print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg}")
                         #     print(f"{self.opcodes_prefix} {prefix} got '{a}'")
                         #     print_registers(o=old_o, group=old_group)
 
@@ -3719,9 +3875,9 @@ class CharmInterpreter(CharmBaseInterpreter):
                     laden_group.laden = True
 
                     # we have an option to run.
-                    # the existing consume_positional op will have to wait.
+                    # the existing next_to_o op will have to wait.
                     if op:
-                        assert op.op == opcode.consume_positional
+                        assert op.op == opcode.next_to_o
                         self.rewind_one_instruction()
                         op = None
 
@@ -5374,7 +5530,7 @@ class Appeal:
                 ci.converter = ci.converters[op.key]
                 continue
 
-            if (op.op == opcode.append_to_converter_args) and last_op and (last_op.op == opcode.consume_positional):
+            if (op.op == opcode.append_to_converter_args) and last_op and (last_op.op == opcode.next_to_o):
                 ci.converter['parameters'][op.parameter] = op.usage
                 continue
 
