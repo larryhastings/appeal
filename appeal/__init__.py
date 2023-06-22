@@ -2502,6 +2502,12 @@ class CharmOptionCompiler(CharmAppealCompiler):
     pass
 
 
+def flat(callable):
+    callable.__appeal_flat__ = True
+    return callable
+
+
+
 class CharmMappingCompiler(CharmCompiler):
 
     # a "parent's name" can be a special value CONSUME
@@ -2592,16 +2598,23 @@ class CharmMappingCompiler(CharmCompiler):
             # FIXME it's lame to do this here,
             # you need to rewrite compile_parameter so it
             # always recurses for positional parameters
-            cls = self.root.map_to_converter(p)
+            p_cls = self.root.map_to_converter(p)
+            p_converter = cls(p, self.appeal)
+            p_callable = p_converter.callable
 
             required = p.default is not empty
-            self.root_a.lookup_to_o(p.name, required=required)
-            if cls is not SimpleTypeConverterStr:
+            if p_cls is SimpleTypeConverterStr:
                 self.root_a.lookup_to_o(p.name, required=required)
-                self.root_a.test_is_o_mapping()
-                self.root_a.push_mapping()
+            else:
+                print(f"CALALBLE {p_callable=}, {dir(p_callable)=}")
+                nested = not getattr(p_callable, '__appeal_flat__', False)
+                if nested:
+                    self.root_a.lookup_to_o(p.name, required=required)
+                    self.root_a.test_is_o_mapping()
+                    self.root_a.push_mapping()
                 child_key = self.compile_parameter(p, indent + "    ")
-                self.root_a.pop_mapping()
+                if nested:
+                    self.root_a.pop_mapping()
                 self.root_a.load_o(child_key)
 
             self.root_a.load_converter(converter_key)
@@ -3464,7 +3477,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                         value = None
 
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} get_keyword | key='{op.key}")
+                        print(f"{self.opcodes_prefix} {prefix} get_keyword | key='{op.key}'")
                         if flag:
                             print(f"{self.opcodes_prefix} {prefix} got value '{value}'")
                         else:
