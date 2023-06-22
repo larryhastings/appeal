@@ -1841,6 +1841,14 @@ class CharmCompiler:
                 continue
             break
 
+        # in Python 3.11, inspect.Parameter won't allow you to use
+        # 'lambda' (or '<lambda>') as a parameter name.  And we aren't
+        # doing that... not *really*.  It's not a *real* Parameter,
+        # we just use one of those because of the way _compile recurses.
+        # But if we're compiling a lambda function, we create a
+        # Parameter out of the function's name, which is '<lambda>',
+        # and, well... we gotta use *something*.  (hope this works!)
+
         parameter = inspect.Parameter("___fake_name___", kind, annotation=callable, default=default)
         parameter._name = parameter_name
         return parameter
@@ -2444,8 +2452,6 @@ class CharmAppealCompiler(CharmCompiler):
 
         self.new_argument_group(optional=False, indent=indent)
 
-        self.name_to_callable = {}
-
         if self.processor:
             self.processor.log_enter_context(f"compile {callable}")
 
@@ -2453,14 +2459,6 @@ class CharmAppealCompiler(CharmCompiler):
         #     print(f"[cc]")
         #     print(f"[cc] {indent}Compiling '{self.name}'")
         #     print(f"[cc]")
-
-        # in Python 3.11, inspect.Parameter won't allow you to use
-        # 'lambda' (or '<lambda>') as a parameter name.  And we aren't
-        # doing that... not *really*.  It's not a *real* Parameter,
-        # we just use one of those because of the way _compile recurses.
-        # But if we're compiling a lambda function, we create a
-        # Parameter out of the function's name, which is '<lambda>',
-        # and, well... we gotta use *something*.  (hope this works!)
 
         if self.processor:
             self.processor.log_event("parameter grouper")
@@ -2501,7 +2499,46 @@ class CharmOptionCompiler(CharmAppealCompiler):
 
 
 class CharmMappingCompiler(CharmCompiler):
-    pass
+
+    def compile_parameter(self, parameter, indent):
+        pass
+
+    def __init__(self, appeal, processor, callable, *, indent='', name=''):
+        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
+
+        name = name or parameter.name
+        super().__init__(appeal, processor, indent=indent, name=name)
+        self.command_converter_key = None
+
+        callable = dereference_annotated(parameter.annotation)
+
+        self.root_a = CharmAssembler(self.name)
+
+        if self.processor:
+            self.processor.log_enter_context(f"compile {callable}")
+
+        # if want_prints:
+        #     print(f"[cc]")
+        #     print(f"[cc] {indent}Compiling '{self.name}'")
+        #     print(f"[cc]")
+
+        def signature(p):
+            cls = self.appeal.map_to_converter(p)
+            signature = cls.get_signature(p)
+            return signature
+
+        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
+        self.compile_parameter(parameter, indent)
+
+        # if want_prints:
+        #     print(f"[cc] {indent}compilation of {parameter} complete.")
+        #     print(f"[cc]")
+
+        if self.processor:
+            self.processor.log_exit_context()
+
+        self.add_to_parent_a = add_to_parent_a
+
 
 class CharmIterableCompiler(CharmCompiler):
     pass
