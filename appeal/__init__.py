@@ -2539,6 +2539,9 @@ class CharmMappingCompiler(CharmCompiler):
     #   pop iterator
     #
 
+    # @flat should be on app instance, not global
+    # [cm] for compile mappable
+
     def compile_parameter(self, parameter, indent):
         """
         returns add_to_self_a, is_degenerate
@@ -2554,11 +2557,11 @@ class CharmMappingCompiler(CharmCompiler):
             self.processor.log_enter_context(f"compile parameter {parameter.name}")
 
         if want_prints:
-            print(f"[cc] {indent}compile_parameter {parameter}")
+            print(f"[cm] {indent}compile_parameter {parameter}")
             indent += "    "
             required = "yes" if parameter.default is empty else "no"
-            print(f"[cc] {indent}required? {required}")
-            print(f"[cc]")
+            print(f"[cm] {indent}required? {required}")
+            print(f"[cm]")
 
         # the official and *only correct* way
         # to produce a converter from a parameter.
@@ -2570,19 +2573,19 @@ class CharmMappingCompiler(CharmCompiler):
         parameters = signature.parameters
 
         if want_prints:
-            print(f"[cc] {indent}cls={cls}")
+            print(f"[cm] {indent}cls={cls}")
             if not parameters:
-                print(f"[cc] {indent}signature=()")
+                print(f"[cm] {indent}signature=()")
             else:
-                print(f"[cc] {indent}signature=(")
+                print(f"[cm] {indent}signature=(")
                 for _k, _v in parameters.items():
-                    print(f"[cc] {indent}    {_v},")
-                print(f"[cc] {indent}    )")
-            print(f"[cc]")
+                    print(f"[cm] {indent}    {_v},")
+                print(f"[cm] {indent}    )")
+            print(f"[cm]")
 
         if want_prints:
-            print(f"[cc] {indent}len(parameters)={len(parameters)}")
-            print(f"[cc]")
+            print(f"[cm] {indent}len(parameters)={len(parameters)}")
+            print(f"[cm]")
 
         converter_key = self.next_converter_key()
         self.root_a.create_converter(parameter=parameter, key=converter_key)
@@ -2621,7 +2624,7 @@ class CharmMappingCompiler(CharmCompiler):
             self.root_a.set_in_converter_kwargs(p.name)
 
             if want_prints:
-                print(f"[cc]")
+                print(f"[cm]")
 
         if self.processor:
             self.processor.log_exit_context()
@@ -2640,16 +2643,16 @@ class CharmMappingCompiler(CharmCompiler):
             self.processor.log_enter_context(f"compile {callable}")
 
         if want_prints:
-            print(f"[cc]")
-            print(f"[cc] {indent}Compiling '{self.name}'")
-            print(f"[cc]")
+            print(f"[cm]")
+            print(f"[cm] {indent}Compiling '{self.name}'")
+            print(f"[cm]")
 
         self.root_a = CharmAssembler(name)
         self.compile_parameter(parameter, indent)
 
         if want_prints:
-            print(f"[cc] {indent}compilation of {parameter} complete.")
-            print(f"[cc]")
+            print(f"[cm] {indent}compilation of {parameter} complete.")
+            print(f"[cm]")
 
         if self.processor:
             self.processor.log_exit_context()
