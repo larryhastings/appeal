@@ -367,8 +367,8 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##    iterator
 ##        An iterator yielding objects (e.g. strings from the command-line).
 ##        You can get the next object using next_to_o.
-##        There's also an iterator_stack, and you can push new iterables
-##        (e.g. from a Perky file).
+##        There's also an iterator_stack, and you can push new iterators
+##        (e.g. to iterate over a list from a Perky file).
 ##    mapping
 ##        A dict-like object mapping strings to value.
 ##        You can get a value with lookup_to_o.
@@ -471,8 +471,10 @@ print_enum('''
     end
     abort
     jump
+    indirect_jump
     branch_on_flag
     branch_on_not_flag
+    literal_to_o
     test_is_o_true
     test_is_o_none
     test_is_o_empty
@@ -484,6 +486,9 @@ print_enum('''
     load_converter
     load_o
     converter_to_o
+    push_o
+    pop_o
+    peek_o
     push_mapping
     pop_mapping
     push_iterator
@@ -511,6 +516,7 @@ print_enum('''
     jump_to_label
     branch_on_flag_to_label
     branch_on_not_flag_to_label
+    label_to_o
 ''', i=200)
 
 print()
@@ -531,8 +537,12 @@ class opcode(enum.Enum):
     end = 1
     abort = 2
     jump = 3
+    indirect_jump = 35
     branch_on_flag = 4
     branch_on_not_flag = 5
+    literal_to_o = 77
+    label_to_o = 78
+    address = 36
     test_is_o_true = 6
     test_is_o_none = 7
     test_is_o_empty = 8
@@ -544,17 +554,20 @@ class opcode(enum.Enum):
     load_converter = 14
     load_o = 15
     converter_to_o = 16
-    push_mapping = 17
-    pop_mapping = 18
-    push_iterator = 19
-    pop_iterator = 20
-    append_to_converter_args = 21
-    set_in_converter_kwargs = 22
-    map_option = 23
-    next_to_o = 24
-    lookup_to_o = 25
-    flush_multioption = 26
-    set_group = 27
+    push_o = 17
+    pop_o = 18
+    peek_o = 30
+    push_mapping = 19
+    pop_mapping = 20
+    push_iterator = 21
+    pop_iterator = 22
+    append_to_converter_args = 23
+    set_in_converter_kwargs = 24
+    map_option = 25
+    next_to_o = 26
+    lookup_to_o = 27
+    flush_multioption = 28
+    set_group = 29
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
@@ -622,8 +635,11 @@ class CharmInstructionAbort(CharmInstruction): # CharmInstructionNoArgBase
     Aborts processing with an error.
     """
 
-    def __init__(self, address):
+    __slots__ = ['message']
+
+    def __init__(self, message):
         self.op = opcode.abort
+        self.message = message
 
     def __repr__(self):
         return f"<abort>"
@@ -645,6 +661,21 @@ class CharmInstructionJump(CharmInstruction): # CharmInstructionAddressBase
 
     def __repr__(self):
         return f"<jump address={self.address}>"
+
+
+class CharmInstructionIndirectJump(CharmInstruction): # CharmInstructionAddressBase
+    """
+    indirect_jump
+
+    Sets the 'ip' register to the value in the 'o' register.
+    The value must be an integer.
+    """
+
+    def __init__(self):
+        self.op = opcode.indirect_jump
+
+    def __repr__(self):
+        return f"<indirect_jump>"
 
 
 class CharmInstructionBranchOnFlag(CharmInstruction): # CharmInstructionAddressBase
@@ -682,6 +713,23 @@ class CharmInstructionBranchOnNotFlag(CharmInstruction): # CharmInstructionAddre
 
     def __repr__(self):
         return f"<branch_on_not_flag address={self.address}>"
+
+class CharmInstructionLiteralToO(CharmInstruction): # CharmInstructionAddressBase
+    """
+    literal_to_o
+
+    Sets the 'o' register to a precompiled literal value.
+    """
+
+    __slots__ = ['value']
+
+    def __init__(self, value):
+        self.op = opcode.literal_to_o
+        self.value = value
+
+    def __repr__(self):
+        return f"<literal_to_o value={repr(self.value)}>"
+
 
 class CharmInstructionTestIsOTrue(CharmInstruction): # CharmInstructionNoArgBase
     """
@@ -748,10 +796,8 @@ class CharmInstructionTestIsOIterable(CharmInstruction): # CharmInstructionNoArg
     In other words:
         flag = isinstance(o, collections.abc.Iterable)
 
-    Note that str objects and most Mapping objects
-    (e.g. dict) are collections.abc.Iterable.  You may
-    need to test for those separately, depending on your
-    use case.
+    Note that str objects and most Mapping objects (e.g. dict)
+    are iterable.  You may want to test for those first.
     """
 
     def __init__(self):
@@ -896,6 +942,23 @@ class CharmInstructionBranchOnNotFlagToLabel(CharmInstruction):
         label = f" label={self.label!r}" if self.label else ""
         return f"<branch_on_not_flag_to_label {label}>"
 
+class CharmInstructionLabelToO(CharmInstruction): # CharmInstructionAddressBase
+    """
+    label_to_o
+
+    Sets the 'o' register to the address of a label.
+    Is converted by the assembler into a literal_to_o instruction.
+    """
+
+    __slots__ = ['label']
+
+    def __init__(self, label):
+        self.op = opcode.label_to_o
+        self.label = label
+
+    def __repr__(self):
+        label = f" label={self.label!r}" if self.label else ""
+        return f"<label_to_o {label}>"
 
 class CharmInstructionCreateConverter(CharmInstruction):
     """
@@ -1011,6 +1074,54 @@ class CharmInstructionSetInConverterKwargs(CharmInstruction):
     def __repr__(self):
         return f"<set_in_converter_kwargs name={self.name}>"
 
+class CharmInstructionPushO(CharmInstruction):
+    """
+    push_o
+
+    Pushes the value currently in the 'o' register
+    onto to the 'o' stack.
+    """
+
+    def __init__(self):
+        self.op = opcode.push_o
+
+    def __repr__(self):
+        return f"<push_o>"
+
+class CharmInstructionPopO(CharmInstruction):
+    """
+    pop_o
+
+    Pops the top value from the 'o' stack and
+    sets it as the value of 'o''.
+
+    If the 'o' stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.pop_o
+
+    def __repr__(self):
+        return f"<pop_o>"
+
+class CharmInstructionPeekO(CharmInstruction):
+    """
+    peek_o
+
+    Gets the top value from the 'o' stack (without popping)
+    and sets it as the value of 'o''.
+
+    If the 'o' stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.peek_o
+
+    def __repr__(self):
+        return f"<peek_o>"
+
 class CharmInstructionPushMapping(CharmInstruction):
     """
     push_mapping
@@ -1055,7 +1166,7 @@ class CharmInstructionPushIterator(CharmInstruction):
     then takes a reference to the object currently in the
     'o' register and sets it as the new iterator.
 
-    If 'o' is not isinstance(o, collections.abc.Iterable)
+    If 'o' is not isinstance(o, collections.abc.Iterator)
     you must abort processing and produce an error.
     """
 
@@ -1244,6 +1355,10 @@ class CharmProgram:
         # note that one instruction can have multiple comments.
         self.comments = []
 
+        # same as self.comments, but for labels
+        # (presentation is slightly different)
+        self.labels = {}
+
         # maps option to its parent option (if any)
         # used for usage
         self.options = None
@@ -1328,8 +1443,8 @@ class CharmAssembler:
 
     # opcodes
 
-    def abort(self):
-        op = CharmInstructionAbort()
+    def abort(self, message):
+        op = CharmInstructionAbort(message)
         self._append_opcode(op)
         return op
 
@@ -1355,6 +1470,21 @@ class CharmAssembler:
 
     def jump_to_label(self, label):
         op = CharmInstructionJumpToLabel(label)
+        self._append_opcode(op)
+        return op
+
+    def indirect_jump(self):
+        op = CharmInstructionIndirectJump()
+        self._append_opcode(op)
+        return op
+
+    def literal_to_o(self, value):
+        op = CharmInstructionLiteralToO(value)
+        self._append_opcode(op)
+        return op
+
+    def label_to_o(self, label):
+        op = CharmInstructionLabelToO(label)
         self._append_opcode(op)
         return op
 
@@ -1402,6 +1532,21 @@ class CharmAssembler:
         op = CharmInstructionSetInConverterKwargs(
             name=name,
             )
+        self._append_opcode(op)
+        return op
+
+    def push_o(self):
+        op = CharmInstructionPushO()
+        self._append_opcode(op)
+        return op
+
+    def pop_o(self):
+        op = CharmInstructionPopO()
+        self._append_opcode(op)
+        return op
+
+    def peek_o(self):
+        op = CharmInstructionPeekO()
         self._append_opcode(op)
         return op
 
@@ -1599,7 +1744,13 @@ class CharmAssembler:
         group = None
         optional = False
 
+        # we store these as [index, s] lists initially
+        # then boil them down into dicts mapping index to lists of strings
+        # why? so we can fixup the indexes when we delete opcodes later
         external_comments = []
+        external_labels = []
+
+        labels_seen = set()
 
         index = 0
         while index < len(opcodes):
@@ -1608,7 +1759,7 @@ class CharmAssembler:
             # handle comments
             if op.op == opcode.comment:
                 if comments == CharmAssembler.EXTERNAL:
-                    external_comments.append((index, op.comment))
+                    external_comments.append([index, op.comment])
                     del opcodes[index]
                 elif comments == CharmAssembler.STRIP:
                     del opcodes[index]
@@ -1619,8 +1770,12 @@ class CharmAssembler:
             # remove labels
             if op.op == opcode.label:
                 if op in labels:
-                    raise AppealConfigurationError(f"label used twice: {op}")
+                    raise AppealConfigurationError(f"label instruction used twice: {op}")
+                if op.label in labels_seen:
+                    raise AppealConfigurationError(f"label description used twice: '{op.label}'")
+                labels_seen.add(op.label)
                 labels[op] = index
+                external_labels.append([index, op.label])
                 del opcodes[index]
                 continue
             elif op.op == opcode.jump_to_label:
@@ -1628,6 +1783,8 @@ class CharmAssembler:
             elif op.op == opcode.branch_on_flag_to_label:
                 fixups.append(index)
             elif op.op == opcode.branch_on_not_flag_to_label:
+                fixups.append(index)
+            elif op.op == opcode.label_to_o:
                 fixups.append(index)
 
             # remove no_ops
@@ -1643,6 +1800,7 @@ class CharmAssembler:
             opcode.jump_to_label: CharmInstructionJump,
             opcode.branch_on_flag_to_label: CharmInstructionBranchOnFlag,
             opcode.branch_on_not_flag_to_label: CharmInstructionBranchOnNotFlag,
+            opcode.label_to_o: CharmInstructionLiteralToO,
         }
         jump_ops = { opcode.jump_to_label, opcode.jump }
         fixup_ops = []
@@ -1655,20 +1813,22 @@ class CharmAssembler:
             opcodes[index] = replacement
             fixup_ops.append(replacement)
 
-        jump_targets = []
+        jump_targets = set()
         # and *now* do a jump-to-jump peephole optimization
         # (I don't know if Appeal *can* actually generate jump-to-jumps)
         for index in fixups:
             while True:
                 op = opcodes[index]
-                op2 = opcodes[op.address]
+                op_attr = 'value' if op.op == opcode.literal_to_o else 'address'
+                address = getattr(op, op_attr)
+                op2 = opcodes[address]
                 if op2.op not in jump_ops:
-                    jump_targets.append(op.address)
+                    jump_targets.add(address)
                     break
-                op.address = op2.address
+                setattr(op, op_attr, op2.address)
 
-        jump_targets.sort()
-        jump_targets.reverse()
+        jump_targets = list(jump_targets)
+        jump_targets.sort(reverse=True)
 
         # remove redundant load_converter,
         # load_o, and converter_to_o ops
@@ -1702,15 +1862,22 @@ class CharmAssembler:
 
         def remove_op():
             if want_prints:
-                print(f"*deleting!* redudnant.")
+                print(f" >>> deleting! redundant. <<<")
             del opcodes[index]
             for i in range(len(jump_targets)):
                 assert jump_targets[i] > index
                 jump_targets[i] -= 1
             for op in fixup_ops:
-                if op.address > index:
-                    op.address -= 1
+                op_attr = 'value' if op.op == opcode.literal_to_o else 'address'
+                address = getattr(op, op_attr)
+                if address > index:
+                    setattr(op, op_attr, address - 1)
+            for parent in (external_comments, external_labels):
+                for l in parent:
+                    if l[0] > index:
+                        l[0] -= 1
 
+        print("jump targets ", jump_targets)
         index = 0
         while index < len(opcodes):
             if jump_targets and (jump_targets[-1] == index):
@@ -1734,9 +1901,9 @@ class CharmAssembler:
                     total.minimum += 1
                 total.maximum += 1
 
-                assert group
-                group.minimum += 1
-                group.maximum += 1
+                if group:
+                    group.minimum += 1
+                    group.maximum += 1
 
                 o = '(string value)'
                 if want_prints:
@@ -1790,7 +1957,17 @@ class CharmAssembler:
         program.total = total
         program.option_to_child_options = self.option_to_child_options
         program.option_to_parent_options = self.option_to_parent_options
-        program.comments = external_comments
+
+        comments = defaultdict(list)
+        for index, comment in external_comments:
+            comments[index].append(comment)
+        program.comments = comments
+
+        labels = defaultdict(list)
+        for index, label in external_labels:
+            labels[index].append(label)
+        program.labels = labels
+
         return program
 
 
@@ -1802,7 +1979,7 @@ class CharmCompiler:
     * CharmCommandCompiler compiles an Appeal "command".
     * CharmOptionCompiler compiles an "option" for an Appeal "command".
     * CharmMappingCompiler compiles a reader for a mapping.
-    * CharmIterableCompiler compiles a reader for an iterable.
+    * CharmIteratorCompiler compiles a reader for an iterator.
 
     In general the workflow is like this:
 
@@ -2502,45 +2679,10 @@ class CharmOptionCompiler(CharmAppealCompiler):
     pass
 
 
-def flat(callable):
-    callable.__appeal_flat__ = True
-    return callable
-
-
 
 class CharmMappingCompiler(CharmCompiler):
 
     # a "parent's name" can be a special value CONSUME
-    #
-    # if multioption
-    #    get keyword
-    #    verify list
-    #    push iterator
-    #    again:
-    #    consume_argument
-    #    if I take one parameter
-    #       if it's a string
-    #           if I have my paren'ts name
-    #               if it's CONSUME
-    #                  consume_argument
-    #               else
-    #                  get_keyword paren'ts name
-    #           else
-    #               get_keyword my name
-    #           verify string
-    #       else
-    #          I pass my name down and recurse
-    #    else
-    #       verify dict
-    #       push_dict
-    #       < get arguments >
-    #       pop_dict
-    #   loop again
-    #   pop iterator
-    #
-
-    # @flat should be on app instance, not global
-    # [cm] for compile mappable
 
     def compile_parameter(self, parameter, indent):
         """
@@ -2587,8 +2729,82 @@ class CharmMappingCompiler(CharmCompiler):
             print(f"[cm] {indent}len(parameters)={len(parameters)}")
             print(f"[cm]")
 
+        multioption = issubclass(cls, MultiOption)
+
         converter_key = self.next_converter_key()
-        self.root_a.create_converter(parameter=parameter, key=converter_key)
+
+        a = self.root_a
+
+        if multioption:
+            print(f"[cm] {indent}multioption!")
+
+            label_prefix = f'[mo] {parameter.name}: '
+            def Label(s):
+                return CharmInstructionLabel(label_prefix + s)
+
+            label_next = Label('next')
+            label_done = Label(f'done')
+            label_flush = Label('flush')
+
+            # do we have another value to process with the multioption?
+            # if not, goto done.
+            a.append(label_next)
+            a.next_to_o(required=False, is_oparg=True)
+            a.branch_on_not_flag_to_label(label_done)
+
+            # we do.  push o.
+            # has the converter been created?  if so, goto flush.
+            a.push_o()
+            a.load_o(key=converter_key)
+            a.branch_on_flag_to_label(label_flush)
+
+            # converter hasn't been created yet.
+            # and... why, lookee here!
+
+        a.create_converter(parameter=parameter, key=converter_key)
+
+        if multioption:
+            label_test_is_o_mapping_before = Label('test, is o mapping? (before)')
+            label_test_is_o_iterable_before = Label('test, is o iterable? (before)')
+            label_o_is_an_iterable_before = Label('o is an iterable (before)')
+            label_process_arguments = Label(f'process arguments')
+
+            label_pop_mapping = Label(f'[mo] {parameter.name}: pop mapping')
+            label_pop_iterator = Label(f'[mo] {parameter.name}: pop iterator')
+
+            # created converter, goto test is o a mapping.
+            a.jump_to_label(label_test_is_o_mapping_before)
+
+            # converter already existed, flush.
+            a.append(label_flush)
+            a.flush_multioption()
+
+            # is top of o stack a mapping?
+            a.append(label_test_is_o_mapping_before)
+            a.pop_o()
+            a.test_is_o_mapping()
+            a.branch_on_not_flag_to_label(label_test_is_o_iterable_before)
+
+            # o is a mapping.  push it to mapping stack and process arguments.
+            a.push_mapping()
+            a.label_to_o(label_pop_mapping)
+            a.push_o()
+            a.jump_to_label(label_process_arguments)
+
+            # o is not a mapping.  confirm that it's an iterable.
+            a.append(label_test_is_o_iterable_before)
+            a.test_is_o_iterable()
+            a.branch_on_flag_to_label(label_o_is_an_iterable_before)
+            a.abort(f"self.o (from next_to_o) is invalid, neither dict nor iterator")
+
+            # o is an iterable.  push it to iterator stack and process arguments.
+            a.append(label_o_is_an_iterable_before)
+            a.push_iterator()
+            a.label_to_o(label_pop_iterator)
+            a.push_o()
+
+            # process arguments
+            a.append(label_process_arguments)
 
         ##
         ## can we pass degenerate DOWN?
@@ -2602,29 +2818,46 @@ class CharmMappingCompiler(CharmCompiler):
             # you need to rewrite compile_parameter so it
             # always recurses for positional parameters
             p_cls = self.root.map_to_converter(p)
-            p_converter = cls(p, self.appeal)
+            p_converter = p_cls(p, self.appeal)
             p_callable = p_converter.callable
 
             required = p.default is not empty
+            if want_prints:
+                print(f"[cm] {indent} {p=} {p_cls=} {p_converter=} {p_callable=}")
             if p_cls is SimpleTypeConverterStr:
                 self.root_a.lookup_to_o(p.name, required=required)
             else:
-                print(f"CALALBLE {p_callable=}, {dir(p_callable)=}")
-                nested = not getattr(p_callable, '__appeal_flat__', False)
+                nested = p_callable not in self.root.unnested_converters
                 if nested:
-                    self.root_a.lookup_to_o(p.name, required=required)
-                    self.root_a.test_is_o_mapping()
-                    self.root_a.push_mapping()
+                    a.lookup_to_o(p.name, required=required)
+                    a.test_is_o_mapping()
+                    a.push_mapping()
                 child_key = self.compile_parameter(p, indent + "    ")
                 if nested:
-                    self.root_a.pop_mapping()
-                self.root_a.load_o(child_key)
+                    a.pop_mapping()
+                a.load_o(child_key)
 
-            self.root_a.load_converter(converter_key)
-            self.root_a.set_in_converter_kwargs(p.name)
+            a.load_converter(converter_key)
+            a.set_in_converter_kwargs(p.name)
 
             if want_prints:
                 print(f"[cm]")
+
+        if multioption:
+            # okay.  we processed arguments.
+            # Charm doesn't have conventional memory, so we have to
+            a.pop_o()
+            a.indirect_jump()
+
+            a.append(label_pop_mapping)
+            a.pop_mapping()
+            a.jump_to_label(label_next)
+
+            a.append(label_pop_iterator)
+            a.pop_iterator()
+            a.jump_to_label(label_next)
+
+            a.append(label_done)
 
         if self.processor:
             self.processor.log_exit_context()
@@ -2633,11 +2866,8 @@ class CharmMappingCompiler(CharmCompiler):
 
 
     def __init__(self, appeal, processor, callable, *, indent='', name=''):
-        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
         name = name or callable.__name__
         super().__init__(appeal, processor, indent=indent, name=name)
-
-        self.root_a = CharmAssembler(self.name)
 
         if self.processor:
             self.processor.log_enter_context(f"compile {callable}")
@@ -2647,8 +2877,39 @@ class CharmMappingCompiler(CharmCompiler):
             print(f"[cm] {indent}Compiling '{self.name}'")
             print(f"[cm]")
 
+        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
         self.root_a = CharmAssembler(name)
-        self.compile_parameter(parameter, indent)
+
+        cls = self.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+
+        unnested = False
+        if callable in self.root.unnested_converters:
+            signature = cls.get_signature(parameter)
+            parameters = signature.parameters
+
+            if len(parameters) > 1:
+                raise AppealConfigurationError(f"top-level callable {callable.__name__} is marked uunested, but it has more than one parameter")
+
+            converter_key = self.next_converter_key()
+            self.root_a.create_converter(parameter=parameter, key=converter_key)
+            unnested = True
+
+            for parameter in parameters.values():
+                break
+
+            child_cls = self.root.map_to_converter(parameter)
+            converter = child_cls(parameter, self.appeal)
+            child_callable = converter.callable
+
+
+        child_key = self.compile_parameter(parameter, indent)
+
+        if unnested:
+            self.root_a.load_converter(converter_key)
+            self.root_a.load_o(child_key)
+            self.root_a.set_in_converter_kwargs(parameter.name)
 
         if want_prints:
             print(f"[cm] {indent}compilation of {parameter} complete.")
@@ -2658,7 +2919,7 @@ class CharmMappingCompiler(CharmCompiler):
             self.processor.log_exit_context()
 
 
-class CharmIterableCompiler(CharmCompiler):
+class CharmIteratorCompiler(CharmCompiler):
     pass
 
 
@@ -2669,8 +2930,9 @@ def charm_print(program, indent=''):
     seen = set((program.id,))
     specially_formatted_opcodes = set((opcode.comment, opcode.label))
 
-    comments = list(program.comments)
-    comments.reverse()
+    comments = program.comments
+    labels = program.labels
+
     while programs:
         if print_divider:
             print("________________")
@@ -2685,16 +2947,27 @@ def charm_print(program, indent=''):
         print(program)
         print_leading_blank_line = False
         comment_prefix = f"{indent}{' ':{width}}# "
+        label_prefix = f"{indent}{' ':{width}}: "
         for i, op in enumerate(program):
             prefix = f"{indent}{i:0{width}}| "
 
-            if comments and (comments[-1][0] == i):
-                while comments and (comments[-1][0] == i):
-                    _, comment = comments.pop()
-                    if print_leading_blank_line:
-                        print(empty_line)
-                    print(f"{comment_prefix}{comment}")
-                    print_leading_blank_line = True
+            print_blank = True
+            c = comments.get(i, ())
+            for comment in c:
+                if print_blank:
+                    print(indent2)
+                    print_blank = False
+                print(f"{comment_prefix}{comment}")
+                print_leading_blank_line = False
+
+            print_blank = True
+            l = labels.get(i, ())
+            for label in l:
+                if print_blank:
+                    print(indent2)
+                    print_blank = False
+                print(f"{label_prefix}{label}")
+                print_leading_blank_line = False
 
             # specialized opcode printers
             if op.op in specially_formatted_opcodes:
@@ -2729,6 +3002,11 @@ def charm_print(program, indent=''):
                     continue
                 if slot == "callable":
                     value = value.__name__ if value is not None else value
+                elif slot == "address":
+                    assert value is not None
+                    label_names = ", ".join(f"'{s}'" for s in labels.get(value, ()))
+                    assert label_names, f"didn't have any labels for index {value=}, {labels=}"
+                    value = f"{value} # {label_names}"
                 elif value == empty:
                     value = "(empty)"
                 elif isinstance(value, ArgumentGroup):
@@ -2808,6 +3086,8 @@ class CharmBaseInterpreter:
 
         self.converter = None
         self.o = None
+        self.o_stack = []
+
         self.flag = False
         self.group = None
 
@@ -2922,6 +3202,7 @@ class CharmBaseInterpreter:
         self.call_stack.clear()
 
     def abort(self, message=''):
+        print("ABORT MESSAGE:", message)
         self._stop()
         self.aborted = True
         return None
@@ -3005,6 +3286,38 @@ def charm_usage(program, *, formatter=str):
 
 
 
+from abc import ABCMeta, abstractmethod
+def _check_methods(C, *methods):
+    mro = C.__mro__
+    for method in methods:
+        for B in mro:
+            if method in B.__dict__:
+                if B.__dict__[method] is None:
+                    return NotImplemented
+                break
+        else:
+            return NotImplemented
+    return True
+
+class Gumball(metaclass=ABCMeta):
+
+    __slots__ = ()
+
+    @abstractmethod
+    def __iter__(self):
+        while False:
+            yield None
+
+    @classmethod
+    def __subclasshook__(cls, C):
+        print(f"__subclasshook__({cls=}, {C=})")
+        if cls is Gumball:
+            return _check_methods(C, "__iter__")
+        return NotImplemented
+
+    # __class_getitem__ = classmethod(collections.abc.GenericAlias)
+
+
 
 class CharmInterpreter(CharmBaseInterpreter):
     def __init__(self, processor, program, *, name=''):
@@ -3013,7 +3326,10 @@ class CharmInterpreter(CharmBaseInterpreter):
         self.program = program
 
         self.appeal = processor.appeal
-        self.iterator = processor.iterator
+        i = processor.iterator
+        if i:
+            i = big.PushbackIterator(i)
+        self.iterator = i
         self.mapping = processor.mapping
 
         self.command_converter_key = None
@@ -3296,6 +3612,8 @@ class CharmInterpreter(CharmBaseInterpreter):
                 ('flag', None, lambda value: str(bool(value))),
                 ('group', None, lambda value: value.summary() if value else repr(value) ),
                 ('groups', None, lambda value: str([group.id for group in value])),
+                ('iterator', None, str),
+                ('mapping', None, lambda value: 'None' if value is None else " ".join(k for k in value.keys())),
                 ('options group', 'options.token', format_options_group),
                 ):
                 name, attr, format = t
@@ -3383,19 +3701,33 @@ class CharmInterpreter(CharmBaseInterpreter):
                 if op.op == opcode.load_converter:
                     if want_prints:
                         old_converter = self.converter
-                    self.converter = self.converters.get(op.key, None)
+                        old_flag = self.flag
+                    converter = self.converters.get(op.key, sentinel)
+                    if converter is sentinel:
+                        converter = None
+                        self.flag = False
+                    else:
+                        self.flag = True
+                    self.converter = converter
                     if want_prints:
                         print(f"{self.opcodes_prefix} {prefix} load_converter | key {op.key}")
-                        print_registers(converter=old_converter)
+                        print_registers(converter=old_converter, flag=old_flag)
                     continue
 
                 if op.op == opcode.load_o:
                     if want_prints:
                         old_o = self.o
-                    self.o = self.converters.get(op.key, None)
+                        old_flag = self.flag
+                    o = self.converters.get(op.key, sentinel)
+                    if o is sentinel:
+                        o = None
+                        self.flag = False
+                    else:
+                        self.flag = True
+                    self.o = o
                     if want_prints:
                         print(f"{self.opcodes_prefix} {prefix} load_o | key {op.key}")
-                        print_registers(o=old_o)
+                        print_registers(o=old_o, flag=old_flag)
                     continue
 
                 if op.op == opcode.converter_to_o:
@@ -3442,8 +3774,8 @@ class CharmInterpreter(CharmBaseInterpreter):
                     converter = self.converter
                     o = self.o
 
-                    existing = converter.kwargs_converters.get(name)
-                    if existing:
+                    existing = converter.kwargs_converters.get(name, sentinel)
+                    if existing is not sentinel:
                         if not ((existing == o) and isinstance(existing, MultiOption)):
                             raise AppealUsageError(f"{program.name} specified more than once.")
                         # we're setting the kwarg to the value it's already set to,
@@ -3470,18 +3802,19 @@ class CharmInterpreter(CharmBaseInterpreter):
                         old_flag = self.flag
 
                     value = mapping.get(op.key, sentinel)
-                    flag = value != sentinel
-                    if flag:
+                    if value != sentinel:
+                        self.flag = True
                         abort = False
-                        self.flag = flag
-                        self.o = value
                     else:
+                        self.flag = False
                         abort = op.required
                         value = None
 
+                    self.o = value
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} get_keyword | key='{op.key}'")
-                        if flag:
+                        required_yes_no = "yes" if op.required else "no"
+                        print(f"{self.opcodes_prefix} {prefix} get_keyword | key='{op.key}' | required? {required_yes_no}")
+                        if self.flag:
                             print(f"{self.opcodes_prefix} {prefix} got value '{value}'")
                         else:
                             print(f"{self.opcodes_prefix} {prefix} key not defined")
@@ -3542,7 +3875,10 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                 if op.op == opcode.set_group:
                     if want_prints:
-                        old_group = self.group
+                        if self.group is None:
+                            old_group = None
+                        else:
+                            old_group = self.group
                         old_groups = self.groups.copy()
                     self.group = group = op.group.copy()
                     self.groups.append(group)
@@ -3557,6 +3893,13 @@ class CharmInterpreter(CharmBaseInterpreter):
                         print(f"{self.opcodes_prefix} {prefix} jump | op.address {op.address}")
                         print_registers()
                     self.ip.jump(op.address)
+                    continue
+
+                if op.op == opcode.indirect_jump:
+                    if want_prints:
+                        print(f"{self.opcodes_prefix} {prefix} indirect_jump")
+                        print_registers()
+                    self.ip.jump(self.o)
                     continue
 
                 if op.op == opcode.branch_on_flag:
@@ -3582,7 +3925,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                         old_flag = self.flag
                     self.flag = bool(self.o)
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} o_is_true")
+                        print(f"{self.opcodes_prefix} {prefix} test_is_o_true")
                         print_registers(flag=old_flag)
                     continue
 
@@ -3591,7 +3934,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                         old_flag = self.flag
                     self.flag = self.o == None
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} o_is_true")
+                        print(f"{self.opcodes_prefix} {prefix} test_is_o_none")
                         print_registers(flag=old_flag)
                     continue
 
@@ -3600,16 +3943,18 @@ class CharmInterpreter(CharmBaseInterpreter):
                         old_flag = self.flag
                     self.flag = self.o == empty
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} o_is_empty")
+                        print(f"{self.opcodes_prefix} {prefix} test_is_o_empty")
                         print_registers(flag=old_flag)
                     continue
 
                 if op.op == opcode.test_is_o_iterable:
                     if want_prints:
                         old_flag = self.flag
+                    # self.flag = isinstance(self.o, Iterator)
                     self.flag = isinstance(self.o, Iterable)
+                    print(f"{isinstance(self.o, Gumball)=}")
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} o_is_iterable")
+                        print(f"{self.opcodes_prefix} {prefix} test_is_o_iterable")
                         print_registers(flag=old_flag)
                     continue
 
@@ -3618,7 +3963,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                         old_flag = self.flag
                     self.flag = isinstance(self.o, str)
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} o_is_str")
+                        print(f"{self.opcodes_prefix} {prefix} test_is_o_str")
                         print_registers(flag=old_flag)
                     continue
 
@@ -3627,42 +3972,94 @@ class CharmInterpreter(CharmBaseInterpreter):
                         old_flag = self.flag
                     self.flag = isinstance(self.o, Mapping)
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} o_is_mapping")
+                        print(f"{self.opcodes_prefix} {prefix} test_is_o_mapping")
                         print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.push_o:
+                    if want_prints:
+                        old_o_stack = self.o_stack.copy()
+                    self.o_stack.append(self.o)
+                    if want_prints:
+                        print(f"{self.opcodes_prefix} {prefix} push_o")
+                        print_registers(extras=[('o stack', old_o_stack, self.o_stack)])
+                    continue
+
+                if op.op == opcode.pop_o:
+                    if want_prints:
+                        old_o = self.o
+                        old_o_stack = self.o_stack.copy()
+                    self.o = self.o_stack.pop()
+                    if want_prints:
+                        print(f"{self.opcodes_prefix} {prefix} pop_o")
+                        print_registers(o=old_o, extras=[('o stack', old_o_stack, self.o_stack)])
+                    continue
+
+                if op.op == opcode.peek_o:
+                    if want_prints:
+                        old_o = self.o
+                    self.o = self.o_stack[-1]
+                    if want_prints:
+                        print(f"{self.opcodes_prefix} {prefix} peek_o")
+                        print_registers(o=old_o)
+                    continue
+
+                if op.op == opcode.literal_to_o:
+                    if want_prints:
+                        old_o = self.o
+                    self.o = op.value
+                    if want_prints:
+                        print(f"{self.opcodes_prefix} {prefix} literal_to_o | value={repr(op.value)}")
+                        print_registers(o=old_o)
                     continue
 
                 if op.op == opcode.push_mapping:
                     if not isinstance(self.o, Mapping):
                         self.abort(f'object in o is not a Mapping, o={o}')
+                    if want_prints:
+                        old_mapping_stack = self.mapping_stack.copy()
                     self.mapping_stack.append(self.mapping)
                     self.mapping = mapping = self.o
                     if want_prints:
                         print(f"{self.opcodes_prefix} {prefix} push_mapping")
-                        print_registers()
+                        print_registers(extras=[('mapping stack', old_mapping_stack, self.mapping_stack)])
                     continue
 
                 if op.op == opcode.pop_mapping:
+                    if want_prints:
+                        old_mapping = self.mapping
+                        old_mapping_stack = self.mapping_stack.copy()
                     self.mapping = mapping = self.mapping_stack.pop()
                     if want_prints:
                         print(f"{self.opcodes_prefix} {prefix} pop_mapping")
-                        print_registers()
+                        print("OLD MAPPING", old_mapping)
+                        print("MA MAPPING", self.mapping)
+                        print_registers(mapping=old_mapping, extras=[('mapping stack', old_mapping_stack, self.mapping_stack)])
                     continue
 
                 if op.op == opcode.push_iterator:
-                    if not isinstance(self.o, Iterable):
-                        self.abort(f'object in o is not an Iterable, o={o}')
-                    self.iterator_stack.append(self.iterator)
-                    self.iterator = iterator = self.o
+                    if not isinstance(self.o, Iterator):
+                        self.abort(f'object in o is not an Iterator, o={o}')
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} push_mapping")
-                        print_registers()
+                        old_iterator = self.iterator
+                        old_iterator_stack = self.iterator_stack.copy()
+                    self.iterator_stack.append(self.iterator)
+                    # why a PushbackIterator? just for the nicer repr.
+                    iterator = big.PushbackIterator(self.o)
+                    self.iterator = iterator
+                    if want_prints:
+                        print(f"{self.opcodes_prefix} {prefix} push_iterator")
+                        print_registers(iterator=old_iterator, extras=[('iterator stack', old_iterator_stack, self.iterator_stack)])
                     continue
 
                 if op.op == opcode.pop_iterator:
+                    if want_prints:
+                        old_iterator = self.iterator
+                        old_iterator_stack = self.iterator_stack.copy()
                     self.iterator = iterator = self.iterator_stack.pop()
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} pop_mapping")
-                        print_registers()
+                        print(f"{self.opcodes_prefix} {prefix} pop_iterator")
+                        print_registers(iterator=old_iterator, extras=[('iterator stack', old_iterator_stack, self.iterator_stack)])
                     continue
 
                 if op.op == opcode.comment:
@@ -3692,7 +4089,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                 if op.op == opcode.abort:
                     if want_prints:
-                        print(f"{self.opcodes_prefix} {prefix} abort | id {op.id} | name {op.name!r}")
+                        print(f"{self.opcodes_prefix} {prefix} abort | message '{op.message}'")
                         print_registers()
                     self.abort()
                     continue
@@ -3712,6 +4109,9 @@ class CharmInterpreter(CharmBaseInterpreter):
                         print(f"{self.opcodes_prefix} ended.")
                     print(f"{self.opcodes_prefix} ")
                 op = None
+
+            if self.aborted:
+                break
 
 
             # Second "part" of the loop: consume a positional argument from the command-line.
@@ -3842,16 +4242,6 @@ class CharmInterpreter(CharmBaseInterpreter):
                     # This forces Appeal to ignore dashes and process all subsequent
                     # arguments as positional arguments.
 
-                    # If the argument doesn't start with a dash,
-                    # it can't be an option, therefore it must be a positional argument.
-                    doesnt_start_with_a_dash = not a.startswith("-")
-
-                    # If the argument is a single dash, it isn't an option,
-                    # it's a positional argument.  This is an old UNIX idiom;
-                    # if you were expecting a filename and you got "-", you should
-                    # use the appropriate stdio file (stdin/stdout) there.
-                    is_a_single_dash = a == "-"
-
                     # If we're consuming opargs, we ignore leading dashes,
                     # and all arguments are forced to be opargs
                     # until we've consume all the opargs we need.
@@ -3859,10 +4249,24 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                     is_positional_argument = (
                         force_positional
-                        or doesnt_start_with_a_dash
-                        or is_a_single_dash
                         or is_oparg
                         )
+
+                    if (not is_positional_argument) and isinstance(a, str):
+                        # If the argument doesn't start with a dash,
+                        # it can't be an option, therefore it must be a positional argument.
+                        doesnt_start_with_a_dash = not a.startswith("-")
+
+                        # If the argument is a single dash, it isn't an option,
+                        # it's a positional argument.  This is an old UNIX idiom;
+                        # if you were expecting a filename and you got "-", you should
+                        # use the appropriate stdio file (stdin/stdout) there.
+                        is_a_single_dash = a == "-"
+
+                        is_positional_argument = (
+                            doesnt_start_with_a_dash
+                            or is_a_single_dash
+                            )
 
                     if is_positional_argument:
                         if not op:
@@ -3876,7 +4280,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                         # set register "o" to our string and return to running bytecodes.
                         if want_prints:
                             old_o = self.o
-                            old_group = self.group.copy()
+                            if self.group is None:
+                                old_group = None
+                            else:
+                                old_group = self.group.copy()
                         self.o = a
                         self.flag = True
                         if self.group:
@@ -5311,6 +5718,8 @@ class Appeal:
                 inferred_type_to_converter,
                 sequence_to_converter,
                 ]
+
+            self.unnested_converters = set()
         else:
             self.root = self.parent.root
 
@@ -5366,6 +5775,12 @@ class Appeal:
         if not a:
             a = Appeal(name=name, parent=self)
         return a
+
+    def unnested(self):
+        def unnested(fn):
+            self.root.unnested_converters.add(fn)
+            return fn
+        return unnested
 
     def __call__(self, callable):
         assert callable and builtins.callable(callable)
