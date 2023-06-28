@@ -1844,25 +1844,25 @@ class CharmAssembler:
         groups = []
 
         def reset_registers():
-            if want_prints:
-                print("*reset!* jump target!")
+            # if 1 and want_prints:
+            #     print("*reset!* jump target!")
             nonlocal converter
             nonlocal o
 
             converter = unknown
             o = unknown
 
-        if want_prints:
-            print("\nremoving redundant loads\n")
-            def print_op():
-                print(f"[{index:02}] {converter=} {o=} {op}", end=' ')
+        # if 1 and want_prints:
+        #     print("\nremoving redundant loads\n")
+        #     def print_op():
+        #         print(f"[{index:02}] {converter=} {o=} {op}", end=' ')
 
-            def nc():
-                print("no change")
+        #     def nc():
+        #         print("no change")
 
         def remove_op():
-            if want_prints:
-                print(f" >>> deleting! redundant. <<<")
+            # if 1 and want_prints:
+            #     print(f" >>> deleting! redundant. <<<")
             del opcodes[index]
             for i in range(len(jump_targets)):
                 assert jump_targets[i] > index
@@ -1877,7 +1877,8 @@ class CharmAssembler:
                     if l[0] > index:
                         l[0] -= 1
 
-        print("jump targets ", jump_targets)
+        # if 1 and want_prints:
+        #     print("jump targets ", jump_targets)
         index = 0
         while index < len(opcodes):
             if jump_targets and (jump_targets[-1] == index):
@@ -1887,8 +1888,8 @@ class CharmAssembler:
             op = opcodes[index]
 
             # compute total and group values
-            if want_prints:
-                print_op()
+            # if 1 and want_prints:
+            #     print_op()
             if op.op == opcode.set_group:
                 group = op.group
                 optional = op.optional
@@ -1906,12 +1907,12 @@ class CharmAssembler:
                     group.maximum += 1
 
                 o = '(string value)'
-                if want_prints:
-                    print(f"o -> {o}")
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
             elif op.op == opcode.lookup_to_o:
                 o = unknown
-                if want_prints:
-                    print(f"o -> {o}")
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
             # discard redundant load_converter and load_o ops
             # using dataflow analysis
             elif op.op == opcode.load_converter:
@@ -1919,30 +1920,30 @@ class CharmAssembler:
                     remove_op()
                     continue
                 converter = op.key
-                if want_prints:
-                    print(f"converter -> {converter}")
+                # if 1 and want_prints:
+                #     print(f"converter -> {converter}")
             elif op.op == opcode.load_o:
                 if o == op.key:
                     remove_op()
                     continue
                 o = op.key
-                if want_prints:
-                    print(f"o -> {o}")
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
             elif op.op == opcode.converter_to_o:
                 if o == converter:
                     remove_op()
                     continue
                 o = converter
-                if want_prints:
-                    print(f"o -> {o}")
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
             elif op.op == opcode.create_converter:
                 o = op.key
-                if want_prints:
-                    print(f"o -> {o}")
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
             else:
                 pass
-                if want_prints:
-                    nc()
+                # if 1 and want_prints:
+                #     nc()
 
             index += 1
 
@@ -2684,25 +2685,20 @@ class CharmMappingCompiler(CharmCompiler):
 
     # a "parent's name" can be a special value CONSUME
 
-    def compile_parameter(self, parameter, indent):
+    def compile_parameter(self, parameter, indent, depth=0):
         """
-        returns add_to_self_a, is_degenerate
-
-        add_to_self_a is an assembler inserted immediately after
-          the value for this parameter is read in / created.
-          (the value is either a string from the command-line
-          or a converter). at that moment, the value has loaded
-          in the 'o' register.
-        is_degenerate is a boolean, True if this entire subtree is "degenerate".
+        returns 2-tuple
+            (child_converter_key, is_degenerate)
         """
         if self.processor:
             self.processor.log_enter_context(f"compile parameter {parameter.name}")
 
         if want_prints:
-            print(f"[cm] {indent}compile_parameter {parameter}")
+            print(f"[cm] {indent}compile_parameter {parameter=}")
             indent += "    "
             required = "yes" if parameter.default is empty else "no"
             print(f"[cm] {indent}required? {required}")
+            print(f"[cm] {indent}depth {depth}")
             print(f"[cm]")
 
         # the official and *only correct* way
@@ -2746,14 +2742,15 @@ class CharmMappingCompiler(CharmCompiler):
             label_done = Label(f'done')
             label_flush = Label('flush')
 
-            # do we have another value to process with the multioption?
+            # do we have a value to process with the multioption?
             # if not, goto done.
             a.append(label_next)
             a.next_to_o(required=False, is_oparg=True)
             a.branch_on_not_flag_to_label(label_done)
 
-            # we do.  push o.
-            # has the converter been created?  if so, goto flush.
+            # we do.  push o, so we can examine it later.
+            # has the converter been created?  if so, goto flush,
+            # else create it.
             a.push_o()
             a.load_o(key=converter_key)
             a.branch_on_flag_to_label(label_flush)
@@ -2806,6 +2803,8 @@ class CharmMappingCompiler(CharmCompiler):
             # process arguments
             a.append(label_process_arguments)
 
+        is_degenerate = (not depth) and (len(parameters) < 2)
+
         ##
         ## can we pass degenerate DOWN?
         ##
@@ -2822,23 +2821,32 @@ class CharmMappingCompiler(CharmCompiler):
             p_callable = p_converter.callable
 
             required = p.default is not empty
+
             if want_prints:
                 print(f"[cm] {indent} {p=} {p_cls=} {p_converter=} {p_callable=}")
             if p_cls is SimpleTypeConverterStr:
                 self.root_a.lookup_to_o(p.name, required=required)
             else:
+                nested_prologue = CharmAssembler()
+
+                a.append(nested_prologue)
+
+                child_key, is_child_degenerate = self.compile_parameter(p, indent + "    ", depth + 1)
+
                 nested = p_callable not in self.root.unnested_converters
-                if nested:
-                    a.lookup_to_o(p.name, required=required)
-                    a.test_is_o_mapping()
-                    a.push_mapping()
-                child_key = self.compile_parameter(p, indent + "    ")
-                if nested:
+                if nested and (not is_child_degenerate):
+                    nested_prologue.lookup_to_o(p.name, required=required)
+                    nested_prologue.test_is_o_mapping()
+                    nested_prologue.push_mapping()
+
                     a.pop_mapping()
+
                 a.load_o(child_key)
 
             a.load_converter(converter_key)
             a.set_in_converter_kwargs(p.name)
+
+            is_degenerate = is_degenerate and is_child_degenerate
 
             if want_prints:
                 print(f"[cm]")
@@ -2862,7 +2870,7 @@ class CharmMappingCompiler(CharmCompiler):
         if self.processor:
             self.processor.log_exit_context()
 
-        return converter_key
+        return converter_key, is_degenerate and is_child_degenerate
 
 
     def __init__(self, appeal, processor, callable, *, indent='', name=''):
@@ -2903,7 +2911,6 @@ class CharmMappingCompiler(CharmCompiler):
             converter = child_cls(parameter, self.appeal)
             child_callable = converter.callable
 
-
         child_key = self.compile_parameter(parameter, indent)
 
         if unnested:
@@ -2919,8 +2926,8 @@ class CharmMappingCompiler(CharmCompiler):
             self.processor.log_exit_context()
 
 
-class CharmIteratorCompiler(CharmCompiler):
-    pass
+# class CharmIteratorCompiler(CharmCompiler):
+#     pass
 
 
 
@@ -3123,9 +3130,11 @@ class CharmBaseInterpreter:
         return None
 
     def repr_converter(self, converter):
-        if self.converters:
-            width = math.floor(math.log10(len(self.converters)) + 1)
-            return repr([self.converter_to_key(converter)]) + "=" + repr(converter)
+        if isinstance(converter, str) and self.converters:
+            key = self.converter_to_key(converter)
+            if key:
+                width = math.floor(math.log10(len(self.converters)) + 1)
+                return f"[{key}]={converter!r}"
         return repr(converter)
 
     @big.BoundInnerClass
@@ -3540,6 +3549,8 @@ class CharmInterpreter(CharmBaseInterpreter):
         #     with open("/tmp/xyz", "at") as f:
         #         f.write(s + "\n")
 
+        if self.processor:
+            self.processor.log_enter_context(f"interpreter {self.program}")
 
         iterator = self.iterator
         mapping = self.mapping
@@ -4032,8 +4043,6 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.mapping = mapping = self.mapping_stack.pop()
                     if want_prints:
                         print(f"{self.opcodes_prefix} {prefix} pop_mapping")
-                        print("OLD MAPPING", old_mapping)
-                        print("MA MAPPING", self.mapping)
                         print_registers(mapping=old_mapping, extras=[('mapping stack', old_mapping_stack, self.mapping_stack)])
                     continue
 
@@ -4508,6 +4517,9 @@ class CharmInterpreter(CharmBaseInterpreter):
         if want_prints:
             print(charm_separator_line)
             print()
+
+        if self.processor:
+            self.processor.log_exit_context()
 
         if self.aborted:
             return None
@@ -6805,7 +6817,7 @@ class Appeal:
             if want_prints:
                 print()
             setattr(self, program_attr, program)
-            # print(f"compiled program for {name}, {program}")
+            print(f"compiled program for {name}, {program}")
         return program
 
     def analyze(self, processor):
@@ -6936,7 +6948,7 @@ class Processor:
             self.end = event_clock()
             return self.parent
 
-        def iterator(self, depth=0, logging_start=None):
+        def iterator(self, depth=0):
             """
             yields 4-tuple:
                 (depth, start_time, elapsed_time, event)
@@ -6944,59 +6956,56 @@ class Processor:
             start_time then restores the previous value every time depth decrements
             """
 
-            # any time variable that doesn't start with "relative_"
-            # is an absolute time.
-            if not depth:
-                assert logging_start == None
-                logging_start = self.start
-            else:
-                assert logging_start != None
+            # ALL TIMES ARE ABSOLUTE
+            # writing this any other way is madness.
+            # we subtract self.start only immediately before yielding.
 
-            previous_start = self.start
-
+            # "waiting" is a tuple waiting to be yielded.
+            # it's only three elements because it doesn't have elapsed time.
+            # also, start_time is absolute.  we don't make it relative
+            # until just before yielding.
             if self.name:
-                waiting = [depth - 1, self.start - logging_start, None, "start " + self.name]
+                waiting = (depth - 1, self.start, "start " + self.name)
             else:
                 waiting = None
 
             for o in self.events:
+                print(f">>{depth * 4 * ' '}O {o=}")
                 if isinstance(o, Processor.Log):
+                    print(f">>{depth * 4 * ' '}  '{o.name}' {o.start=} {o.end=} {o.end - o.start=}")
                     if waiting:
-                        previous_elapsed = o.start - previous_start
-                        waiting[2] = previous_elapsed
-                        yield waiting
+                        waiting_depth, waiting_start, waiting_event = waiting
+                        waiting_elapsed = o.start - waiting_start
+                        relative_start = waiting_start - self.start
+                        yield (waiting_depth, relative_start, waiting_elapsed, waiting_event)
 
-                    yield from o.iterator(depth=depth + 1, logging_start=logging_start)
+                    yield from o.iterator(depth=depth + 1)
                     waiting = o.waiting
                     o.waiting = None
-                    previous_start = o.end
+                    print(f">>{depth * 4 * ' '}  child's {waiting=}")
                     continue
 
                 event, start = o
-                relative_start = start - logging_start
 
                 if waiting:
-                    previous_elapsed = start - previous_start
-                    waiting[2] = previous_elapsed
-                    yield waiting
-                    waiting = None
+                    waiting_depth, waiting_start, waiting_event = waiting
+                    waiting_elapsed = start - waiting_start
+                    relative_start = waiting_start - self.start
+                    yield (waiting_depth, relative_start, waiting_elapsed, waiting_event)
 
-                waiting = [depth, relative_start, None, event]
-                previous_start = start
+                waiting = (depth, start, event)
+                print(f">>{depth * 4 * ' '}  set {waiting=}")
 
             if waiting:
-                delta = self.end - previous_start
-                if delta:
-                    waiting[2] = delta
-                yield tuple(waiting)
+                print(f">>{depth * 4 * ' '}  final {waiting=}")
+                waiting_depth, waiting_start, waiting_event = waiting
+                waiting_elapsed = start - waiting_start
+                relative_start = waiting_start - self.start
+                yield (waiting_depth, relative_start, waiting_elapsed, waiting_event)
 
             if self.name:
-                total_elapsed = self.end - self.start
-                yield (depth - 1, None, total_elapsed, self.name + " subtotal")
-
-                relative_start = self.end - logging_start
-                elapsed = self.end - previous_start
-                self.waiting = [depth - 1, relative_start, None, "end " + self.name]
+                elapsed = self.end - self.start
+                self.waiting = [depth - 1, elapsed, elapsed, "end " + self.name]
 
     def log_start(self):
         self.logger = logger = Processor.Log()
@@ -7029,7 +7038,7 @@ class Processor:
         formatted = []
         for depth, start, elapsed, event in self.logger.iterator():
             indent = "  " * depth
-            print(f"  {format_time(start)}  {format_time(elapsed)}  {indent}{event}")
+            # print(f"  {format_time(start)}  {format_time(elapsed)}  {indent}{event}")
 
 
     def preparer(self, preparer):
