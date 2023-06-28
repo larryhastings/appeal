@@ -6921,8 +6921,30 @@ class Processor:
         self.result = None
 
     class Log:
-        def __init__(self, name=None, *, parent=None):
+        """
+        Simple logging class.
+
+        Allows nesting, which is just a presentation thing.
+
+        Iterate over the object using log.iterator(),
+        which yields info you can present however you like.
+
+        Internally, all times are stored relative to
+        logging start time.
+        Writing this any other way was madness.
+        (You're dealing with 15-digit numbers that change
+        randomly in the last... seven? digits.  You'll go blind!)
+        """
+
+        def __init__(self, name=None, *, parent=None, logging_start=None):
             start = event_clock()
+
+            if logging_start is None:
+                logging_start = start
+
+            self.logging_start = logging_start
+
+            start = start - self.logging_start
 
             if name:
                 assert parent, "don't give your root Log instance a name"
@@ -6936,16 +6958,19 @@ class Processor:
             self.waiting = None
 
         def log(self, event):
-            t = event_clock()
+            t = event_clock() - self.logging_start
             self.events.append((event, t))
             self.end = t
 
         def enter(self, name):
-            logger = Processor.Log(name, parent=self)
+            print(f">><<>> ENTER {name} {event_clock()}")
+            logger = Processor.Log(name, parent=self, logging_start=self.logging_start)
             self.events.append(logger)
+            return logger
 
         def exit(self):
-            self.end = event_clock()
+            print(f">><<>> EXIT {self.name} {event_clock()}")
+            self.end = event_clock() - self.logging_start
             return self.parent
 
         def iterator(self, depth=0):
@@ -6956,64 +6981,68 @@ class Processor:
             start_time then restores the previous value every time depth decrements
             """
 
-            # ALL TIMES ARE ABSOLUTE
-            # writing this any other way is madness.
-            # we subtract self.start only immediately before yielding.
-
             # "waiting" is a tuple waiting to be yielded.
             # it's only three elements because it doesn't have elapsed time.
             # also, start_time is absolute.  we don't make it relative
             # until just before yielding.
+            end = self.end or (event_clock() - self.logging_start)
+
             if self.name:
                 waiting = (depth - 1, self.start, "start " + self.name)
             else:
                 waiting = None
 
             for o in self.events:
-                print(f">>{depth * 4 * ' '}O {o=}")
+                # print(f">>{depth * 4 * ' '}O {o=}")
                 if isinstance(o, Processor.Log):
-                    print(f">>{depth * 4 * ' '}  '{o.name}' {o.start=} {o.end=} {o.end - o.start=}")
+                    # print(f">>{depth * 4 * ' '}  '{o.name}' {o.start=} {o.end=} {o.end - o.start=}")
                     if waiting:
                         waiting_depth, waiting_start, waiting_event = waiting
                         waiting_elapsed = o.start - waiting_start
-                        relative_start = waiting_start - self.start
-                        yield (waiting_depth, relative_start, waiting_elapsed, waiting_event)
+                        # print(f">>{depth * 4 * ' '}  before yield from {waiting=}")
+                        # print(f">>{depth * 4 * ' '}  {o.start=}")
+                        yield (waiting_depth, waiting_start, waiting_elapsed, waiting_event)
 
                     yield from o.iterator(depth=depth + 1)
                     waiting = o.waiting
                     o.waiting = None
-                    print(f">>{depth * 4 * ' '}  child's {waiting=}")
+                    # print(f">>{depth * 4 * ' '}  child's {waiting=}")
                     continue
 
                 event, start = o
+                # print(f">>{depth * 4 * ' '}  {start=}")
+                # print(f">>{depth * 4 * ' '}  {event=}")
 
                 if waiting:
+                    # print(f">>{depth * 4 * ' '}  normal event {waiting=}")
                     waiting_depth, waiting_start, waiting_event = waiting
                     waiting_elapsed = start - waiting_start
-                    relative_start = waiting_start - self.start
-                    yield (waiting_depth, relative_start, waiting_elapsed, waiting_event)
+                    yield (waiting_depth, waiting_start, waiting_elapsed, waiting_event)
 
                 waiting = (depth, start, event)
-                print(f">>{depth * 4 * ' '}  set {waiting=}")
-
-            if waiting:
-                print(f">>{depth * 4 * ' '}  final {waiting=}")
-                waiting_depth, waiting_start, waiting_event = waiting
-                waiting_elapsed = start - waiting_start
-                relative_start = waiting_start - self.start
-                yield (waiting_depth, relative_start, waiting_elapsed, waiting_event)
+                # print(f">>{depth * 4 * ' '}  set {waiting=}")
 
             if self.name:
-                elapsed = self.end - self.start
-                self.waiting = [depth - 1, elapsed, elapsed, "end " + self.name]
+                if waiting:
+                    # print(f">>{depth * 4 * ' '}  final {waiting=}")
+                    # print(f">>{depth * 4 * ' '}  {self.name=}")
+                    # print(f">>{depth * 4 * ' '}  {self.start=}")
+                    # print(f">>{depth * 4 * ' '}  {end=}")
+                    waiting_depth, waiting_start, waiting_event = waiting
+                    waiting_elapsed = end - waiting_start
+                    # print(f">>{depth * 4 * ' '}  yielding {(waiting_depth, 0, waiting_elapsed, waiting_event)}")
+                    yield (waiting_depth, waiting_start, waiting_elapsed, waiting_event)
+
+                self.waiting = (depth - 1, end, "end " + self.name)
+                # print(f">>{depth * 4 * ' '}  END waiting={self.waiting}")
 
     def log_start(self):
         self.logger = logger = Processor.Log()
         self.log_event = logger.log
+        self.logger.events.append(('log start', 0))
 
     def log_enter_context(self, event):
-        logger = self.Log(event, parent=self.logger)
-        self.logger.events.append(logger)
+        logger = self.logger.enter(event)
         self.logger = logger
         self.log_event = logger.log
 
@@ -7038,7 +7067,9 @@ class Processor:
         formatted = []
         for depth, start, elapsed, event in self.logger.iterator():
             indent = "  " * depth
-            # print(f"  {format_time(start)}  {format_time(elapsed)}  {indent}{event}")
+            print(f"  {format_time(start)}  {format_time(elapsed)}  {indent}{event}")
+        start = start + elapsed
+        print(f"  {format_time(start)}  {format_time(0)}  {indent}log end")
 
 
     def preparer(self, preparer):
