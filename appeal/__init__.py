@@ -40,7 +40,7 @@ import big.all as big
 from big.itertools import PushbackIterator
 import builtins
 import collections.abc
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 import enum
 import functools
 import inspect
@@ -83,14 +83,6 @@ KEYWORD_ONLY = inspect.Parameter.KEYWORD_ONLY
 VAR_KEYWORD = inspect.Parameter.VAR_KEYWORD
 empty = inspect.Parameter.empty
 
-try:
-    # new in 3.7
-    from time import monotonic_ns as event_clock
-except ImportError:
-    from time import perf_counter
-
-    def event_clock():
-        return int(perf_counter() * 1000000000.0)
 
 # new in 3.8
 shlex_join = getattr(shlex, 'join', None)
@@ -479,7 +471,6 @@ print_enum('''
     test_is_o_none
     test_is_o_empty
     test_is_o_iterable
-    test_is_o_str
     test_is_o_mapping
     call
     create_converter
@@ -547,7 +538,6 @@ class opcode(enum.Enum):
     test_is_o_none = 7
     test_is_o_empty = 8
     test_is_o_iterable = 9
-    test_is_o_str = 10
     test_is_o_mapping = 11
     call = 12
     create_converter = 13
@@ -805,24 +795,6 @@ class CharmInstructionTestIsOIterable(CharmInstruction): # CharmInstructionNoArg
 
     def __repr__(self):
         return f"<test_is_o_iterable>"
-
-class CharmInstructionTestIsOStr(CharmInstruction): # CharmInstructionNoArgBase
-    """
-    test_is_o_str
-
-    If the 'o' register contains a str object,
-    set the 'flag' register to True,
-    otherwise set the 'flag' register to False.
-
-    In other words:
-        flag = isinstance(o, str)
-    """
-
-    def __init__(self):
-        self.op = opcode.test_is_o_str
-
-    def __repr__(self):
-        return f"<test_is_o_str>"
 
 class CharmInstructionTestIsOMapping(CharmInstruction): # CharmInstructionNoArgBase
     """
@@ -1638,11 +1610,6 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def test_is_o_str(self):
-        op = CharmInstructionTestIsOStr()
-        self._append_opcode(op)
-        return op
-
     def test_is_o_mapping(self):
         op = CharmInstructionTestIsOMapping()
         self._append_opcode(op)
@@ -2039,13 +2006,13 @@ class CharmCompiler:
         """
         Assembles all the instructions together to produce a final program.
         """
-        self.processor.log_enter(f"assemble {self.name}")
+        self.processor.log.enter(f"assemble {self.name}")
 
         self.clean_up_argument_group()
 
         self.program = self.root_a.assemble()
 
-        self.processor.log_exit()
+        self.processor.log.exit()
 
         return self.program
 
@@ -2082,7 +2049,7 @@ class CharmAppealCompiler(CharmCompiler):
         self.new_argument_group(optional=False, indent=indent)
 
         if self.processor:
-            self.processor.log_enter(f"compile {callable}")
+            self.processor.log.enter(f"compile {callable}")
 
         # if want_prints:
         #     print(f"[cc]")
@@ -2090,7 +2057,7 @@ class CharmAppealCompiler(CharmCompiler):
         #     print(f"[cc]")
 
         if self.processor:
-            self.processor.log_event("parameter grouper")
+            self.processor.log("parameter grouper")
         def signature(p):
             cls = self.appeal.map_to_converter(p)
             signature = cls.get_signature(p)
@@ -2105,7 +2072,7 @@ class CharmAppealCompiler(CharmCompiler):
         #     print(f"[cc]")
 
         if self.processor:
-            self.processor.log_exit()
+            self.processor.log.exit()
 
         self.add_to_parent_a = add_to_parent_a
 
@@ -2465,7 +2432,7 @@ class CharmAppealCompiler(CharmCompiler):
         is_degenerate is a boolean, True if this entire subtree is "degenerate".
         """
         if self.processor:
-            self.processor.log_enter(f"compile parameter {parameter.name}")
+            self.processor.log.enter(f"compile parameter {parameter.name}")
 
         # if want_prints:
         #     print(f"[cc] {indent}compile_parameter {parameter}")
@@ -2662,7 +2629,7 @@ class CharmAppealCompiler(CharmCompiler):
         spill_options()
 
         if self.processor:
-            self.processor.log_exit()
+            self.processor.log.exit()
 
         return add_to_parent_a, is_degenerate
 
@@ -2692,7 +2659,7 @@ class CharmMappingCompiler(CharmCompiler):
         super().__init__(appeal, processor, indent=indent, name=name)
 
         if self.processor:
-            self.processor.log_enter(f"compile {name}")
+            self.processor.log.enter(f"compile {name}")
 
         # if want_prints:
         #     print(f"[cm]")
@@ -2737,8 +2704,7 @@ class CharmMappingCompiler(CharmCompiler):
         #     print(f"[cm]")
 
         if self.processor:
-            self.processor.log_exit()
-            self.processor.log_event("no, really, exiting mapping compiler")
+            self.processor.log.exit()
 
     # a "parent's name" can be a special value CONSUME
 
@@ -2748,7 +2714,7 @@ class CharmMappingCompiler(CharmCompiler):
             (child_converter_key, is_degenerate)
         """
         if self.processor:
-            self.processor.log_enter(f"compile parameter {parameter.name}")
+            self.processor.log.enter(f"compile parameter {parameter.name}")
 
         # if want_prints:
         #     print(f"[cm] {indent}compile_parameter {parameter=}")
@@ -2882,7 +2848,7 @@ class CharmMappingCompiler(CharmCompiler):
             # if want_prints:
             #     print(f"[cm] {indent} {p=} {p_cls=} {p_converter=} {p_callable=}")
             if p_cls is SimpleTypeConverterStr:
-                self.root_a.lookup_to_o(p.name, required=required)
+                a.lookup_to_o(p.name, required=required)
             else:
                 nested_prologue = CharmAssembler()
 
@@ -2925,14 +2891,119 @@ class CharmMappingCompiler(CharmCompiler):
             a.append(label_done)
 
         if self.processor:
-            self.processor.log_exit()
+            self.processor.log.exit()
 
-        return converter_key, is_degenerate and is_child_degenerate
+        return converter_key, is_degenerate
 
 
 
-# class CharmIteratorCompiler(CharmCompiler):
-#     pass
+class CharmIteratorCompiler(CharmCompiler):
+
+    def __init__(self, appeal, processor, callable, *, indent='', name=''):
+        name = name or callable.__name__
+        super().__init__(appeal, processor, indent=indent, name=name)
+
+        if self.processor:
+            self.processor.log.enter(f"compile {name}")
+
+        # if want_prints:
+        #     print(f"[cm]")
+        #     print(f"[cm] {indent}Compiling '{self.name}'")
+        #     print(f"[cm]")
+
+        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
+        self.root_a = CharmAssembler(name)
+
+        cls = self.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+
+        child_key = self.compile_parameter(parameter, indent)
+
+        if self.processor:
+            self.processor.log.exit()
+
+    def compile_parameter(self, parameter, indent, depth=0):
+        """
+        returns 2-tuple
+            (child_converter_key, is_degenerate)
+        """
+        if self.processor:
+            self.processor.log.enter(f"compile parameter {parameter.name}")
+
+        # if want_prints:
+        #     print(f"[cm] {indent}compile_parameter {parameter=}")
+        #     indent += "    "
+        #     required = "yes" if parameter.default is empty else "no"
+        #     print(f"[cm] {indent}required? {required}")
+        #     print(f"[cm] {indent}depth {depth}")
+        #     print(f"[cm]")
+
+        # the official and *only correct* way
+        # to produce a converter from a parameter.
+        cls = self.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+
+        signature = cls.get_signature(parameter)
+        parameters = signature.parameters
+
+        # if want_prints:
+        #     print(f"[cm] {indent}cls={cls}")
+        #     if not parameters:
+        #         print(f"[cm] {indent}signature=()")
+        #     else:
+        #         print(f"[cm] {indent}signature=(")
+        #         for _k, _v in parameters.items():
+        #             print(f"[cm] {indent}    {_v},")
+        #         print(f"[cm] {indent}    )")
+        #     print(f"[cm]")
+
+        # if want_prints:
+        #     print(f"[cm] {indent}len(parameters)={len(parameters)}")
+        #     print(f"[cm]")
+
+        converter_key = self.next_converter_key()
+
+        a = self.root_a
+
+        a.create_converter(parameter=parameter, key=converter_key)
+        is_degenerate = (not depth) and (len(parameters) < 2)
+
+        for p in parameters.values():
+            annotation = dereference_annotated(p.annotation)
+            if not is_legal_annotation(annotation):
+                raise AppealConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
+
+            # FIXME it's lame to do this here,
+            # you need to rewrite compile_parameter so it
+            # always recurses for positional parameters
+            p_cls = self.root.map_to_converter(p)
+            p_converter = p_cls(p, self.appeal)
+            p_callable = p_converter.callable
+
+            required = p.default is not empty
+
+            # if want_prints:
+            #     print(f"[cm] {indent} {p=} {p_cls=} {p_converter=} {p_callable=}")
+            if p_cls is SimpleTypeConverterStr:
+                a.next_to_o(required=required, is_oparg=True)
+            else:
+                child_key, is_child_degenerate = self.compile_parameter(p, indent + "    ", depth + 1)
+                a.load_o(child_key)
+
+            a.load_converter(converter_key)
+            a.append_to_converter_args(parameter=p, discretionary=False)
+
+            is_degenerate = is_degenerate and is_child_degenerate
+
+            # if want_prints:
+            #     print(f"[cm]")
+
+        if self.processor:
+            self.processor.log.exit()
+
+        return converter_key, is_degenerate
 
 
 
@@ -3555,7 +3626,7 @@ class CharmInterpreter(CharmBaseInterpreter):
         #         f.write(s + "\n")
 
         if self.processor:
-            self.processor.log_enter(f"interpreter {self.program}")
+            self.processor.log.enter(f"interpreter {self.program}")
 
         iterator = self.iterator
         mapping = self.mapping
@@ -3975,15 +4046,6 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     print_registers(flag=old_flag)
                     continue
 
-                if op.op == opcode.test_is_o_str:
-                    # if want_prints:
-                    #     old_flag = self.flag
-                    self.flag = isinstance(self.o, str)
-                    # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} test_is_o_str")
-                    #     print_registers(flag=old_flag)
-                    continue
-
                 if op.op == opcode.test_is_o_mapping:
                     # if want_prints:
                     #     old_flag = self.flag
@@ -4268,6 +4330,10 @@ class CharmInterpreter(CharmBaseInterpreter):
                         )
 
                     if (not is_positional_argument) and isinstance(a, str):
+                        # Only do these checks if a is actually a str.
+                        # (If it's a float from a TOML file or something,
+                        # it can't be an option, now can it!)
+
                         # If the argument doesn't start with a dash,
                         # it can't be an option, therefore it must be a positional argument.
                         doesnt_start_with_a_dash = not a.startswith("-")
@@ -4525,7 +4591,7 @@ class CharmInterpreter(CharmBaseInterpreter):
         #     print()
 
         if self.processor:
-            self.processor.log_exit()
+            self.processor.log.exit()
 
         if self.aborted:
             return None
@@ -4739,10 +4805,10 @@ class Converter:
         """
         Append o directly to our args_converters list.
 
-        If o is a string, also unqueue ourselves
+        If o is not a Converter, also unqueue ourselves
         (and recursively all our parents too).
 
-        If o is not a string, and we or one of our parents
+        If o is a Converter, and we or one of our parents
         is discretionary, ask o to notify us if it gets
         a string positional argument appended to it,
         or if one of its options is invoked.
@@ -4750,7 +4816,7 @@ class Converter:
         # print(f">> {self=} appended to {parent=}\n")
         self.args_converters.append(o)
 
-        if isinstance(o, str):
+        if not isinstance(o, Converter):
             self.unqueue()
         else:
             assert not o.queued
@@ -4807,16 +4873,16 @@ class Converter:
     def convert(self, processor):
         for iterable in (self.args_converters, self.kwargs_converters.values()):
             for converter in iterable:
-                if converter and not isinstance(converter, str):
+                if converter and isinstance(converter, Converter):
                     converter.convert(processor)
 
         try:
             for converter in self.args_converters:
-                if converter and not isinstance(converter, str):
+                if converter and isinstance(converter, Converter):
                     converter = converter.execute(processor)
                 self.args.append(converter)
             for name, converter in self.kwargs_converters.items():
-                if converter and not isinstance(converter, str):
+                if converter and isinstance(converter, Converter):
                     converter = converter.execute(processor)
                 self.kwargs[name] = converter
         except ValueError as e:
@@ -6828,7 +6894,7 @@ class Appeal:
 
     def analyze(self, processor):
         if processor:
-            processor.log_event(f"analyze _global")
+            processor.log(f"analyze _global")
         self._analyze_attribute("_global", processor)
 
     def _parse_attribute(self, name, processor):
@@ -6847,7 +6913,7 @@ class Appeal:
 
     def parse(self, processor):
         callable = getattr(self, "_global")
-        processor.log_event(f"parse _global")
+        processor.log(f"parse _global")
 
         self._parse_attribute("_global", processor)
 
@@ -6862,7 +6928,7 @@ class Appeal:
                 raise AppealUsageError("no command specified.")
             return
 
-        processor.log_enter(f"parsing commands")
+        processor.log.enter(f"parsing commands")
         if self.commands:
             # okay, we have arguments waiting, and there are commands defined.
             for command_name in processor.iterator:
@@ -6881,15 +6947,15 @@ class Appeal:
             leftovers = " ".join(shlex.quote(s) for s in processor.iterator)
             raise AppealUsageError(f"leftover cmdline arguments! {leftovers!r}")
 
-        processor.log_exit()
+        processor.log.exit()
 
     def convert(self, processor):
-        processor.log_event("convert start")
+        processor.log("convert start")
         for command in processor.commands:
             command.convert(processor)
 
     def execute(self, processor):
-        processor.log_event("execute start")
+        processor.log("execute start")
         result = None
         for command in processor.commands:
             result = command.execute(processor)
@@ -6918,165 +6984,13 @@ class Processor:
         self.preparers = []
         self.reset()
 
-
     def reset(self):
         self.events = []
         self.iterator = None
         self.mapping = None
         self.commands = []
         self.result = None
-
-    class Log:
-        """
-        Simple logging class.
-
-        Allows nesting, which is just a presentation thing.
-
-        Iterate over the object using log.iterator(),
-        which yields info you can present however you like.
-
-        Internally, all times are stored relative to
-        logging start time.
-        Writing this any other way was madness.
-        (You're dealing with 15-digit numbers that change
-        randomly in the last... seven? digits.  You'll go blind!)
-        """
-
-        def __init__(self, name=None, *, parent=None, logging_start=None):
-            start = event_clock()
-
-            if logging_start is None:
-                logging_start = start
-
-            self.logging_start = logging_start
-
-            start = start - self.logging_start
-
-            if name:
-                assert parent, "don't give your root Log instance a name"
-
-            self.name = name
-            self.events = []
-            self.parent = parent
-            self.start = self.end = start
-
-            # *sigh* a hack.
-            self.waiting = None
-
-        def log(self, event):
-            t = event_clock() - self.logging_start
-            self.events.append((event, t))
-            self.end = t
-
-        def enter(self, name):
-            print(f">><<>> ENTER {name} {event_clock()}")
-            logger = Processor.Log(name, parent=self, logging_start=self.logging_start)
-            self.events.append(logger)
-            return logger
-
-        def exit(self):
-            print(f">><<>> EXIT {self.name} {event_clock()}")
-            self.end = event_clock() - self.logging_start
-            return self.parent
-
-        def iterator(self, depth=0):
-            """
-            yields 4-tuple:
-                (depth, start_time, elapsed_time, event)
-            start_time resets to 0 every time depth increments
-            start_time then restores the previous value every time depth decrements
-            """
-
-            # "waiting" is a tuple waiting to be yielded.
-            # it's only three elements because it doesn't have elapsed time.
-            # also, start_time is absolute.  we don't make it relative
-            # until just before yielding.
-            end = self.end or (event_clock() - self.logging_start)
-
-            if self.name:
-                waiting = (depth - 1, self.start, "start " + self.name)
-            else:
-                waiting = None
-
-            for o in self.events:
-                # print(f">>{depth * 4 * ' '}O {o=}")
-                if isinstance(o, Processor.Log):
-                    # print(f">>{depth * 4 * ' '}  '{o.name}' {o.start=} {o.end=} {o.end - o.start=}")
-                    if waiting:
-                        waiting_depth, waiting_start, waiting_event = waiting
-                        waiting_elapsed = o.start - waiting_start
-                        # print(f">>{depth * 4 * ' '}  before yield from {waiting=}")
-                        # print(f">>{depth * 4 * ' '}  {o.start=}")
-                        yield (waiting_depth, waiting_start, waiting_elapsed, waiting_event)
-
-                    yield from o.iterator(depth=depth + 1)
-                    waiting = o.waiting
-                    o.waiting = None
-                    # print(f">>{depth * 4 * ' '}  child's {waiting=}")
-                    continue
-
-                event, start = o
-                # print(f">>{depth * 4 * ' '}  {start=}")
-                # print(f">>{depth * 4 * ' '}  {event=}")
-
-                if waiting:
-                    # print(f">>{depth * 4 * ' '}  normal event {waiting=}")
-                    waiting_depth, waiting_start, waiting_event = waiting
-                    waiting_elapsed = start - waiting_start
-                    yield (waiting_depth, waiting_start, waiting_elapsed, waiting_event)
-
-                waiting = (depth, start, event)
-                # print(f">>{depth * 4 * ' '}  set {waiting=}")
-
-            if self.name:
-                if waiting:
-                    # print(f">>{depth * 4 * ' '}  final {waiting=}")
-                    # print(f">>{depth * 4 * ' '}  {self.name=}")
-                    # print(f">>{depth * 4 * ' '}  {self.start=}")
-                    # print(f">>{depth * 4 * ' '}  {end=}")
-                    waiting_depth, waiting_start, waiting_event = waiting
-                    waiting_elapsed = end - waiting_start
-                    # print(f">>{depth * 4 * ' '}  yielding {(waiting_depth, 0, waiting_elapsed, waiting_event)}")
-                    yield (waiting_depth, waiting_start, waiting_elapsed, waiting_event)
-
-                self.waiting = (depth - 1, end, "end " + self.name)
-                # print(f">>{depth * 4 * ' '}  END waiting={self.waiting}")
-
-    def log_start(self):
-        self.logger = logger = Processor.Log()
-        self.log_event = logger.log
-        self.logger.events.append(('log start', 0))
-
-    def log_enter(self, event):
-        logger = self.logger.enter(event)
-        self.logger = logger
-        self.log_event = logger.log
-
-    def log_exit(self):
-        self.logger = logger = self.logger.exit()
-        self.log_event = logger.log
-
-    def print_log(self):
-        time_spacer = " " * 12
-        def format_time(t):
-            if t is None:
-                return time_spacer
-            seconds = t // 1000000000
-            nanoseconds = t - seconds
-            return f"{seconds:02}.{nanoseconds:09}"
-
-        print()
-        print("[event log]")
-        print(f"  start         elapsed       event")
-        print(f"  ------------  ------------  -------------")
-
-        formatted = []
-        for depth, start, elapsed, event in self.logger.iterator():
-            indent = "  " * depth
-            print(f"  {format_time(start)}  {format_time(elapsed)}  {indent}{event}")
-        start = start + elapsed
-        print(f"  {format_time(start)}  {format_time(0)}  {indent}log end")
-
+        self.log = big.Log()
 
     def preparer(self, preparer):
         if not callable(preparer):
@@ -7094,8 +7008,7 @@ class Processor:
 
     def __call__(self, sequence=None, mapping=None):
         self.reset()
-        self.log_start()
-        self.log_event("process start")
+        self.log("process start")
 
         self.sequence = sequence
         iterator = sequence
@@ -7137,7 +7050,7 @@ class Processor:
         appeal.parse(self)
         appeal.convert(self)
         result = self.result = appeal.execute(self)
-        self.log_event("process complete")
+        self.log("process complete")
         # if want_prints:
         #     self.print_log()
         return result
