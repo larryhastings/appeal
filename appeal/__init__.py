@@ -1862,7 +1862,7 @@ class CharmAssembler:
                 optional = op.optional
                 if op.repeating:
                     total.maximum = math.inf
-                # if want_prints:
+                # if 1 and want_prints:
                 #     nc()
             elif op.op == opcode.next_to_o:
                 if not optional:
@@ -2465,8 +2465,7 @@ class CharmAppealCompiler(CharmCompiler):
         #         print(f"[cc] {indent}    )")
         #     print(f"[cc]")
 
-        # is_degenerate only applies to depth > 1.
-        is_degenerate = (not depth) and (len(parameters) < 2)
+        is_degenerate = (depth > 0) and (len(parameters) < 2)
 
         # if want_prints:
         #     print(f"[cc] {indent}is_degenerate={is_degenerate}")
@@ -2708,7 +2707,7 @@ class CharmMappingCompiler(CharmCompiler):
 
     # a "parent's name" can be a special value CONSUME
 
-    def compile_parameter(self, parameter, indent, depth=0):
+    def compile_parameter(self, parameter, indent, *, degenerate_name=None, depth=0):
         """
         returns 2-tuple
             (child_converter_key, is_degenerate)
@@ -2722,6 +2721,7 @@ class CharmMappingCompiler(CharmCompiler):
         #     required = "yes" if parameter.default is empty else "no"
         #     print(f"[cm] {indent}required? {required}")
         #     print(f"[cm] {indent}depth {depth}")
+        #     print(f"[cm] {indent}degenerate_name {degenerate_name!r}")
         #     print(f"[cm]")
 
         # the official and *only correct* way
@@ -2826,7 +2826,12 @@ class CharmMappingCompiler(CharmCompiler):
             # process arguments
             a.append(label_process_arguments)
 
-        is_degenerate = (not depth) and (len(parameters) < 2)
+        is_degenerate = (depth > 0) and (len(parameters) < 2)
+        if not is_degenerate:
+            degenerate_name = None
+
+        # if want_prints:
+        #     print(f"[cm] {indent} {is_degenerate=} (so far) {depth=} {len(parameters)=}")
 
         ##
         ## can we pass degenerate DOWN?
@@ -2848,13 +2853,14 @@ class CharmMappingCompiler(CharmCompiler):
             # if want_prints:
             #     print(f"[cm] {indent} {p=} {p_cls=} {p_converter=} {p_callable=}")
             if p_cls is SimpleTypeConverterStr:
-                a.lookup_to_o(p.name, required=required)
+                a.lookup_to_o(degenerate_name or p.name, required=required)
+                # always degenerate
             else:
                 nested_prologue = CharmAssembler()
 
                 a.append(nested_prologue)
 
-                child_key, is_child_degenerate = self.compile_parameter(p, indent + "    ", depth + 1)
+                child_key, is_child_degenerate = self.compile_parameter(p, indent + "    ", depth=depth + 1, degenerate_name=degenerate_name or p.name)
 
                 nested = p_callable not in self.root.unnested_converters
                 if nested and (not is_child_degenerate):
@@ -2865,11 +2871,11 @@ class CharmMappingCompiler(CharmCompiler):
                     a.pop_mapping()
 
                 a.load_o(child_key)
+                is_degenerate = is_degenerate and is_child_degenerate
 
             a.load_converter(converter_key)
             a.set_in_converter_kwargs(p.name)
 
-            is_degenerate = is_degenerate and is_child_degenerate
 
             # if want_prints:
             #     print(f"[cm]")
@@ -2893,6 +2899,8 @@ class CharmMappingCompiler(CharmCompiler):
         if self.processor:
             self.processor.log.exit()
 
+        # if want_prints:
+        #     print(f"[cm] {indent}compile_parameter({parameter}) returning {converter_key=} {is_degenerate=}")
         return converter_key, is_degenerate
 
 
@@ -2923,7 +2931,7 @@ class CharmIteratorCompiler(CharmCompiler):
         if self.processor:
             self.processor.log.exit()
 
-    def compile_parameter(self, parameter, indent, depth=0):
+    def compile_parameter(self, parameter, indent, *, depth=0):
         """
         returns 2-tuple
             (child_converter_key, is_degenerate)
@@ -2989,7 +2997,7 @@ class CharmIteratorCompiler(CharmCompiler):
             if p_cls is SimpleTypeConverterStr:
                 a.next_to_o(required=required, is_oparg=True)
             else:
-                child_key, is_child_degenerate = self.compile_parameter(p, indent + "    ", depth + 1)
+                child_key, is_child_degenerate = self.compile_parameter(p, indent + "    ", depth=depth + 1)
                 a.load_o(child_key)
 
             a.load_converter(converter_key)
@@ -4944,7 +4952,7 @@ class SimpleTypeConverter(Converter):
         self.queued = None
         self.args_queue = collections.deque()
         self.args_converters = []
-        # don't set kwargs_converters, let it esplody!
+        self.kwargs_converters = {}
 
         self.options_values = {}
         self.help_options = {}
@@ -4954,12 +4962,17 @@ class SimpleTypeConverter(Converter):
         return f"<{self.__class__.__name__} {self.callable} args_converters={self.args_converters} value={self.value}>"
 
     def convert(self, processor):
-        if not self.args_converters:
+        argument_count = (len(self.args_converters) + len(self.kwargs_converters))
+        assert 0 <= argument_count <= 1
+        if not argument_count:
             # explicitly allow "make -j"
             if self.default is not empty:
                 return self.default
             raise AppealUsageError(f"no argument supplied for {self}, we should have raised an error earlier huh.")
         try:
+            if self.kwargs_converters:
+                for v in self.kwargs_converters.values():
+                    self.args_converters.append(v)
             self.value = self.callable(self.args_converters[0])
         except ValueError as e:
             raise AppealUsageError(f"invalid value {self.args_converters[0]} for {self.name}, must be {self.callable.__name__}")
@@ -7052,7 +7065,7 @@ class Processor:
         result = self.result = appeal.execute(self)
         self.log("process complete")
         # if want_prints:
-        #     self.print_log()
+        #     self.log.print()
         return result
 
     def main(self, args=None, kwargs=None):
