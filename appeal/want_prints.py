@@ -137,7 +137,7 @@ for info, line in lines:
 
     # start block
     if comment:
-        assert stripped == if_want_prints
+        assert stripped == if_want_prints, f"failed on line {info.line_number}: expected '{if_want_prints}' but got '{stripped}'"
         append(block_indent + comment_string + if_want_prints)
         continue
 
