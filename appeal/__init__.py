@@ -862,7 +862,7 @@ class CharmInstructionTestIsOStrOrBytes(CharmInstruction): # CharmInstructionNoA
     def __repr__(self):
         return f"<test_is_o_str_or_bytes>"
 
-next_label_id = serial_number_generator(prefix='label').__next__
+next_label_id = serial_number_generator(prefix='label-').__next__
 
 class CharmInstructionLabel(CharmInstruction):
     """
@@ -912,7 +912,7 @@ class CharmInstructionJumpToLabel(CharmInstruction): # CharmInstructionLabelBase
 
     def __repr__(self):
         label = f" label={self.label!r}" if self.label else ""
-        return f"<jump_to_label {label}>"
+        return f"<jump_to_label{label}>"
 
 
 class CharmInstructionBranchOnFlagToLabel(CharmInstruction):
@@ -1873,6 +1873,10 @@ class CharmAssembler:
         for sublist in self.lists():
             opcodes.extend(sublist)
 
+        if not (opcodes and (opcodes[-1].op == opcode.end)):
+            opcodes.append(CharmInstructionEnd())
+        end_op = opcodes[-1]
+
         labels = {}
         fixups = []
 
@@ -1888,10 +1892,9 @@ class CharmAssembler:
 
         labels_seen = set()
 
-        # if 0:
+        # if 1:
         #     print()
-        #     print("STEP 1")
-        #     print(f"{len(opcodes)=}")
+        #     print("[assemble step 1 - {len(opcodes)} opcodes]")
         #     for i, op in enumerate(opcodes):
         #         print(f">> {i:02} | {op}")
 
@@ -1937,10 +1940,9 @@ class CharmAssembler:
 
             index += 1
 
-        # if 0:
+        # if 1:
         #     print()
-        #     print("STEP 2")
-        #     print(f"{len(opcodes)=}")
+        #     print("[assemble step 2 - {len(opcodes)} opcodes]")
         #     for i, op in enumerate(opcodes):
         #         print(f">> {i:02} | {op}")
 
@@ -1963,10 +1965,9 @@ class CharmAssembler:
             opcodes[index] = replacement
             fixup_ops.append(replacement)
 
-        # if 0:
+        # if 1:
         #     print()
-        #     print("STEP 3")
-        #     print(f"{len(opcodes)=}")
+        #     print("[assemble step 3 - {len(opcodes)} opcodes]")
         #     for i, op in enumerate(opcodes):
         #         print(f">> {i:02} | {op}")
 
@@ -2104,10 +2105,6 @@ class CharmAssembler:
                 #     nc()
 
             index += 1
-
-        # add end instruction
-        end_op = CharmInstructionEnd()
-        opcodes.append(end_op)
 
         program = CharmProgram(self.name)
         program.opcodes = opcodes
@@ -2785,7 +2782,6 @@ class CharmAppealCompiler(CharmCompiler):
 
             spill_options()
 
-
             if cls is SimpleTypeConverterStr:
                 # if want_prints:
                 #     print(f"[cc] {indent}    simple str converter, next_to_o and append.")
@@ -2911,7 +2907,7 @@ class CharmMappingCompiler(CharmCompiler):
         multioption = issubclass(cls, MultiOption)
         unnested_requested = callable in self.root.unnested_converters
         nested = not (force_unnested or unnested_requested or multioption)
-        required = parameter.default is not empty
+        required = parameter.default is empty
         force_non_recursive = False
 
         if not is_degenerate:
@@ -2970,10 +2966,10 @@ class CharmMappingCompiler(CharmCompiler):
 
         if multioption:
             assert not nested
-            label_analyze_iterated_value = Label('multioption, analyze iterated value')
-            label_o_is_a_mapping = Label('multioption, o is a mapping')
-            label_pop_mapping = Label('multioption, pop mapping')
-            label_pop_iterator = Label('multioption, pop iterator')
+            label_analyze_iterated_value = Label(f'{parameter.name}: multioption, analyze iterated value')
+            label_o_is_a_mapping = Label(f'{parameter.name}: multioption, o is a mapping')
+            label_pop_mapping = Label(f'{parameter.name}: multioption, pop mapping')
+            label_pop_iterator = Label(f'{parameter.name}: multioption, pop iterator')
 
             # created converter, goto test is o a mapping.
             a.jump_to_label(label_analyze_iterated_value)
@@ -3003,23 +2999,29 @@ class CharmMappingCompiler(CharmCompiler):
                 a.push_mapping()
 
         elif nested:
-            label_o_is_a_mapping = CharmInstructionLabel("nested, o is a mapping")
-            label_process_arguments = CharmInstructionLabel("nested, process arguments")
+            label_o_is_a_mapping = CharmInstructionLabel(f"{parameter.name}: nested, o is a mapping")
+            label_process_arguments = CharmInstructionLabel(f"{parameter.name}: nested, process arguments")
             name = degenerate_name or parameter.name
             get_argument_to_o(a, name, required)
             a.test_is_o_mapping()
             a.push_flag()
             a.branch_on_flag_to_label(label_o_is_a_mapping)
-            a.pushback_o_to_iterator()
+            if not by_name:
+                a.pushback_o_to_iterator()
             a.jump_to_label(label_process_arguments)
             a.append(label_o_is_a_mapping)
             a.push_mapping()
             a.append(label_process_arguments)
 
         for child in parameters.values():
+            if child.kind is VAR_POSITIONAL:
+                raise AppealConfigurationError(f"{callable.__name__}: parameter *{child.name} is unsupported for CharmMappingCompiler")
+            if child.kind is VAR_KEYWORD:
+                raise AppealConfigurationError(f"{callable.__name__}: parameter **{child.name} is unsupported for CharmMappingCompiler")
+
             child_annotation = dereference_annotated(child.annotation)
             if not is_legal_annotation(child_annotation):
-                raise AppealConfigurationError(f"{callable.__name__}: parameter {child.name!r} annotation is {child_annotation}, which you can't use directly, you must call it")
+                raise AppealConfigurationError(f"{callable.__name__}: parameter {child.name} annotation is {child_annotation}, which you can't use directly, you must call it")
 
             # FIXME it's lame to do this again here,
             # you should rewrite compile_parameter so it
@@ -3029,18 +3031,18 @@ class CharmMappingCompiler(CharmCompiler):
             child_callable = child_converter.callable
             child_multioption = issubclass(child_cls, MultiOption)
 
-            required = child.default is not empty
+            child_required = child.default is empty
 
             # if want_prints:
             #     print(f"[cm] {indent} {child=} {child_cls=} {child_converter=} {child_callable=} {child_multioption=}")
             if child_cls is SimpleTypeConverterStr:
                 name = degenerate_name or child.name
-                get_argument_to_o(a, name, required)
+                get_argument_to_o(a, name, child_required)
             else:
                 if child_multioption:
                     name = degenerate_name or child.name
                     label_o_is_iterable = CharmInstructionLabel(f"child {child.name}, o is iterable")
-                    get_argument_to_o(a, name, required)
+                    get_argument_to_o(a, name, child_required)
                     a.test_is_o_iterable()
                     a.branch_on_flag_to_label(label_o_is_iterable)
                     a.abort("value in o is not iterable")
@@ -3077,7 +3079,7 @@ class CharmMappingCompiler(CharmCompiler):
             a.append(label_done)
             a.forget_converters()
         elif nested:
-            label_done = CharmInstructionLabel("nested, done")
+            label_done = CharmInstructionLabel(f"{parameter.name}: nested, done")
             a.pop_flag()
             a.branch_on_not_flag_to_label(label_done)
             a.pop_mapping()
@@ -3112,13 +3114,17 @@ class CharmIteratorCompiler(CharmCompiler):
         cls = self.root.map_to_converter(parameter)
         converter = cls(parameter, self.appeal)
         callable = converter.callable
+        self.label_done = CharmInstructionLabel('done')
 
         child_key = self.compile_parameter(parameter, indent)
+
+        self.root_a.append(self.label_done)
+        self.root_a.end()
 
         if self.processor:
             self.processor.log.exit()
 
-    def compile_parameter(self, parameter, indent, *, depth=0):
+    def compile_parameter(self, parameter, indent, *, depth=0, force_not_required = False):
         """
         returns 2-tuple
             (child_converter_key, is_degenerate)
@@ -3165,30 +3171,48 @@ class CharmIteratorCompiler(CharmCompiler):
         a.create_converter(parameter=parameter, key=converter_key)
         is_degenerate = (not depth) and (len(parameters) < 2)
 
-        for p in parameters.values():
-            annotation = dereference_annotated(p.annotation)
-            if not is_legal_annotation(annotation):
+        for child in parameters.values():
+            child_annotation = dereference_annotated(child.annotation)
+            if not is_legal_annotation(child_annotation):
                 raise AppealConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
+
+            if child.kind is KEYWORD_ONLY:
+                raise AppealConfigurationError("{callable.__name__}: keyword-only parameter {parameter.name!r} is unsupported for CharmIteratorCompiler")
+            if child.kind is VAR_KEYWORD:
+                raise AppealConfigurationError("{callable.__name__}: parameter **{parameter.name!r} is unsupported for CharmIteratorCompiler")
+            var_positional = child.kind is VAR_POSITIONAL
+
 
             # FIXME it's lame to do this here,
             # you need to rewrite compile_parameter so it
             # always recurses for positional parameters
-            p_cls = self.root.map_to_converter(p)
-            p_converter = p_cls(p, self.appeal)
-            p_callable = p_converter.callable
+            child_cls = self.root.map_to_converter(child)
+            child_converter = child_cls(child, self.appeal)
+            child_callable = child_converter.callable
 
-            required = p.default is not empty
+            if var_positional:
+                required = False
+                label_remember = CharmInstructionLabel('remember')
+                a.jump_to_label(label_remember)
+                label_again = a.label('again')
+                a.forget_converters()
+                a.append(label_remember)
+                a.remember_converters()
+            else:
+                required = (child.default is empty) and (not force_not_required)
 
             # if want_prints:
             #     print(f"[cm] {indent} {p=} {p_cls=} {p_converter=} {p_callable=}")
-            if p_cls is SimpleTypeConverterStr:
+            if child_cls is SimpleTypeConverterStr:
                 a.next_to_o(required=required, is_oparg=True)
+                if not required:
+                    a.branch_on_not_flag_to_label(self.label_done)
             else:
-                child_key, child_is_degenerate = self.compile_parameter(p, indent + "    ", depth=depth + 1)
+                child_key, child_is_degenerate = self.compile_parameter(child, indent + "    ", depth=depth + 1, force_not_required=not required)
                 a.load_o(child_key)
 
             a.load_converter(converter_key)
-            a.append_to_converter_args(parameter=p, discretionary=False)
+            a.append_to_converter_args(parameter=child, discretionary=False)
 
             is_degenerate = is_degenerate and child_is_degenerate
 
