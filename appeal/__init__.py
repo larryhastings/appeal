@@ -7275,6 +7275,87 @@ class Appeal:
         processor = self.processor()
         processor.main(args, kwargs)
 
+    def read_mapping(self, callable, mapping):
+        processor = self.processor()
+
+        cc = CharmMappingCompiler(self, processor, callable)
+        program = cc.assemble()
+
+        # why permit a Sequence here?
+        # if callable is a MultiOption,
+        # we start with iteration
+        if isinstance(mapping, Mapping):
+            processor.mapping = mapping
+        elif isinstance(mapping, Iterable):
+            processor.iterator = mapping
+        else:
+            raise TypeError("mapping must be a Mapping (or an Iterable)")
+        interpreter = CharmInterpreter(processor, program)
+
+        converter = interpreter()
+
+        converter.convert(processor)
+        return converter.execute(processor)
+
+    def read_iterable(self, callable, iterable):
+        processor = self.processor()
+
+        compiler = CharmIteratorCompiler
+        cc = compiler(self, processor, callable)
+        program = cc.assemble()
+
+        processor.log.enter("iterable parse")
+        results = []
+        for row in iterable:
+            if not row:
+                continue
+
+            processor.iterator = row
+            interpreter = CharmInterpreter(processor, program)
+            converter = interpreter()
+
+            converter.convert(processor)
+            result = converter.execute(processor)
+            results.append(result)
+        processor.log.exit()
+
+        return results
+
+    def read_csv(self, callable, csv_reader, *, first_row_map=None):
+        processor = self.processor()
+
+        if first_row_map:
+            compiler = CharmMappingCompiler
+        else:
+            compiler = CharmIteratorCompiler
+        cc = compiler(self, processor, callable)
+        program = cc.assemble()
+
+        headings = next(csv_reader)
+        if first_row_map:
+            keys = [first_row_map.get(key, key) for key in headings]
+
+        processor.log.enter("csv parse")
+        results = []
+        for row in csv_reader:
+            if not row:
+                continue
+
+            if first_row_map:
+                d = {key: value for key, value in zip(keys, row)}
+                processor.mapping = d
+            else:
+                processor.iterator = row
+            interpreter = CharmInterpreter(processor, program)
+            converter = interpreter()
+
+            converter.convert(processor)
+            result = converter.execute(processor)
+            results.append(result)
+        processor.log.exit()
+
+        return results
+
 
 class Processor:
     def __init__(self, appeal):
@@ -7360,3 +7441,4 @@ class Processor:
             print("Error:", str(e))
             self.appeal.usage(usage=True)
             sys.exit(-1)
+
