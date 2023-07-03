@@ -3202,7 +3202,7 @@ class CharmIteratorCompiler(CharmCompiler):
                 required = (child.default is empty) and (not force_not_required)
 
             # if want_prints:
-            #     print(f"[cm] {indent} {p=} {p_cls=} {p_converter=} {p_callable=}")
+            #     print(f"[cm] {indent} {child=} {child_cls=} {child_converter=} {child_callable=}")
             if child_cls is SimpleTypeConverterStr:
                 a.next_to_o(required=required, is_oparg=True)
                 if not required:
@@ -3215,6 +3215,9 @@ class CharmIteratorCompiler(CharmCompiler):
             a.append_to_converter_args(parameter=child, discretionary=False)
 
             is_degenerate = is_degenerate and child_is_degenerate
+
+            if var_positional:
+                a.jump_to_label(label_again)
 
             # if want_prints:
             #     print(f"[cm]")

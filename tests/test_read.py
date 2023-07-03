@@ -345,6 +345,14 @@ class AkaliSkinVote:
     vote_All_Star: vote
     vote_Prestige_K_DA: vote
 
+def akali_skin_vote_fn(
+    voter_id: str,
+    vote_time: datestamp,
+    poll_id: str,
+    *votes: vote):
+    return (AkaliSkinVote, voter_id, vote_time, poll_id, votes)
+
+
 class TestReadCSV(unittest.TestCase):
 
     def setUp(self):
@@ -378,6 +386,33 @@ class TestReadCSV(unittest.TestCase):
         results = app.read_csv(AkaliSkinVote, self.csv_reader)
         self.assertEqual(len(results), 669)
         self.assertEqual(results[0], self.row0)
+
+    def test_read_csv_var_positional(self):
+        app = appeal.Appeal()
+        results = app.read_csv(akali_skin_vote_fn, self.csv_reader)
+        self.assertEqual(len(results), 669)
+        row0 = akali_skin_vote_fn(
+            '9szh13efc4',
+            datetime.datetime(2022, 8, 10, 9, 25, 51),
+            '4tyx27ks',
+            4,
+            3,
+            3,
+            3,
+            2,
+            4,
+            5,
+            2,
+            3,
+            5,
+            4,
+            5,
+            2,
+            1,
+            4,
+            5)
+
+        self.assertEqual(results[0], row0)
 
     def test_read_csv_by_name(self):
         first_row_map = {
