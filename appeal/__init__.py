@@ -1328,12 +1328,13 @@ class CharmInstructionNextToO(CharmInstruction):
     it in the 'o' register, and False if it did not (and
     <required> is false).
     """
-    __slots__ = ['required', 'is_oparg']
+    __slots__ = ['required', 'is_oparg', 'usage_name']
 
-    def __init__(self, required, is_oparg):
+    def __init__(self, required, is_oparg, usage_name):
         self.op = opcode.next_to_o
         self.required = required
         self.is_oparg = is_oparg
+        self.usage_name = usage_name
 
     def __repr__(self):
         return f"<next_to_o required={self.required} is_oparg={self.is_oparg}>"
@@ -1713,10 +1714,11 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def next_to_o(self, required=False, is_oparg=False):
+    def next_to_o(self, required=False, is_oparg=False, usage_name=''):
         op = CharmInstructionNextToO(
             required=required,
             is_oparg=is_oparg,
+            usage_name=usage_name,
             )
         self._append_opcode(op)
         return op
@@ -2255,7 +2257,7 @@ class CharmAppealCompiler(CharmCompiler):
         pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
         pgi = pg.iter_all()
 
-        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent)
+        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent, name)
 
         if want_prints:
             print(f"[cc] {indent}compilation of {parameter} complete.")
@@ -2454,7 +2456,7 @@ class CharmAppealCompiler(CharmCompiler):
                 print(f"[cc] {indent}hand-coded program for simple str")
             a = CharmAssembler(program_name)
             a.set_group(self.next_argument_group_id(), optional=False)
-            a.next_to_o(required=True, is_oparg=True)
+            a.next_to_o(required=True, is_oparg=True, usage_name=usage_name)
             add_to_self_a = cc = a
         else:
             annotation = dereference_annotated(parameter.annotation)
@@ -2610,7 +2612,7 @@ class CharmAppealCompiler(CharmCompiler):
 
         return mapped_options
 
-    def compile_parameter(self, parameter, pgi, depth, indent):
+    def compile_parameter(self, parameter, pgi, depth, indent, usage_name):
         """
         returns add_to_self_a, is_degenerate
 
@@ -2761,7 +2763,9 @@ class CharmAppealCompiler(CharmCompiler):
             #     usage = usage_parameter = parameter_name
 
             # usage = positionals.get(parameter_name, usage)
-            usage = "-x"
+            # usage = "-x"
+            if not is_degenerate:
+                usage_name = parameter_name
 
             # only create new groups here if it's an optional group
             # (we pre-create the initial, required group)
@@ -2786,7 +2790,7 @@ class CharmAppealCompiler(CharmCompiler):
                 if want_prints:
                     print(f"[cc] {indent}    simple str converter, next_to_o and append.")
                 required = pgi_parameter.required
-                self.body_a.next_to_o(required=required, is_oparg=isinstance(self, CharmOptionCompiler))
+                self.body_a.next_to_o(required=required, is_oparg=isinstance(self, CharmOptionCompiler), usage_name=usage_name)
                 if not required:
                     label2 = CharmInstructionLabel(f'{callable.__name__}.{parameter_name}: exit after optional argument')
                     self.body_a.branch_on_flag_to_label(label2)
@@ -2799,7 +2803,7 @@ class CharmAppealCompiler(CharmCompiler):
                 if want_prints:
                     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
-                add_to_self_a, is_degenerate_subtree = self.compile_parameter(p, pgi, depth + 1, indent + "    ")
+                add_to_self_a, is_degenerate_subtree = self.compile_parameter(p, pgi, depth + 1, indent + "    ", usage_name)
                 is_degenerate = is_degenerate and is_degenerate_subtree
 
             add_to_self_a.load_converter(key=converter_key)
@@ -2933,7 +2937,7 @@ class CharmMappingCompiler(CharmCompiler):
             if by_name:
                 a.lookup_to_o(name, required=required)
             else:
-                a.next_to_o(required=required, is_oparg=True)
+                a.next_to_o(required=required, is_oparg=True, usage_name=name)
 
         if multioption:
             by_name = False
@@ -2949,7 +2953,7 @@ class CharmMappingCompiler(CharmCompiler):
             # do we have a value to process with the multioption?
             # if not, goto done.
             a.append(label_next)
-            a.next_to_o(required=False, is_oparg=True)
+            a.next_to_o(required=False, is_oparg=True, usage_name=parameter.name)
             a.branch_on_not_flag_to_label(label_done)
 
             # we do.  push o, so we can examine it later.
@@ -3228,7 +3232,7 @@ class CharmIteratorCompiler(CharmCompiler):
             if want_prints:
                 print(f"[cm] {indent} {child=} {child_cls=} {child_converter=} {child_callable=}")
             if child_cls is SimpleTypeConverterStr:
-                a.next_to_o(required=required, is_oparg=True)
+                a.next_to_o(required=required, is_oparg=True, usage_name=child.name)
                 if not required:
                     a.branch_on_not_flag_to_label(self.label_done)
             else:
@@ -3566,15 +3570,15 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
         program_id_to_option[op.program.id].append(op)
 
     def flush_options():
-        for program_id, op_list in program_id_to_option.items():
+        for program_id, ops in program_id_to_option.items():
             options = []
-            for op in op_list:
+            for op in ops:
                 options.append(denormalize_option(op.option))
             full_name = f"{op.key}.{op.parameter.name}"
             option_value = "|".join(options)
             option_values[full_name] = option_value
 
-            usage.append(" [")
+            usage.append("[")
             usage.append(option_value)
 
             usage.append(" ")
@@ -3584,38 +3588,38 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
                 # this option had no arguments, we don't want the space
                 usage.pop()
 
-            usage.append("]")
+            usage.append("] ")
+        program_id_to_option.clear()
 
-    last_op = None
     first_argument_in_group = True
     for ip, op in ci:
-        # print(f"op={op}")
-        if ((last_op == opcode.map_option)
-            and (op.op != last_op)):
-            flush_options()
+        print(f"[{ip:03}] {op}")
 
         if op.op == opcode.map_option:
             add_option(op)
-        elif op.op == opcode.set_group:
+            continue
+        if program_id_to_option:
+            flush_options()
+
+        if op.op == opcode.set_group:
             if op.optional:
                 usage.append(" [")
                 closing_brackets.append("]")
                 if op.repeating:
                     closing_brackets.append("... ")
             first_argument_in_group = True
-        elif op.op == opcode.append_to_converter_args:
-            usage.append(" *garbage, usage is broken* ")
-                # if op.usage:
-                #     if first_argument_in_group:
-                #         first_argument_in_group = False
-                #     else:
-                #         usage.append(" ")
-                #     full_name = f"{op.usage_parameter}"
-                #     arguments_values[full_name] = op.usage
-                #     usage.append(formatter(op.usage))
-        last_op = op
+            continue
 
-    flush_options()
+        if op.op == opcode.next_to_o:
+            if first_argument_in_group:
+                first_argument_in_group = False
+            else:
+                usage.append(" ")
+            usage.append(formatter(op.usage_name))
+            continue
+
+    if program_id_to_option:
+        flush_options()
 
 
 def charm_usage(program, *, formatter=str):
@@ -4591,7 +4595,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                         if want_prints:
                             print(f"{self.cmdline_prefix}")
-                            print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg}")
+                            print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg} | usage_name={op.usage_name}")
                             print(f"{self.opcodes_prefix} {self.ip_spacer} iterator exhausted.")
                             if end_gracefully:
                                 result = "end gracefully"
@@ -4695,7 +4699,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                         if want_prints:
                             print(f"{self.cmdline_prefix}")
-                            print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg}")
+                            print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg} | usage_name={op.usage_name}")
                             print(f"{self.opcodes_prefix} {prefix} got '{a}'")
                             print_registers(o=old_o, group=old_group)
 
