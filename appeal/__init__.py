@@ -2456,7 +2456,7 @@ class CharmAppealCompiler(CharmCompiler):
             #     print(f"[cc] {indent}hand-coded program for simple str")
             a = CharmAssembler(program_name)
             a.set_group(self.next_argument_group_id(), optional=False)
-            a.next_to_o(required=True, is_oparg=True, usage_name=usage_name)
+            a.next_to_o(required=True, is_oparg=True, usage_name=parameter.name)
             add_to_self_a = cc = a
         else:
             annotation = dereference_annotated(parameter.annotation)
@@ -2595,8 +2595,9 @@ class CharmAppealCompiler(CharmCompiler):
 
                     if option not in self.ag_options:
                         self.ag_options.add(option)
+                        self.ag_duplicate_options.add(option)
                         destination = self.ag_options_a
-                    elif self.ag_duplicate_options_a:
+                    elif self.ag_duplicate_options_a is not None:
                         if option in self.ag_duplicate_options:
                             raise AppealConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no command-line arguments between definitions)")
                         destination = self.ag_duplicate_options_a
@@ -2645,6 +2646,8 @@ class CharmAppealCompiler(CharmCompiler):
 
         signature = cls.get_signature(parameter)
         parameters = signature.parameters
+
+        _, _, positionals = self.appeal.root.fn_database_lookup(callable)
 
         # if want_prints:
         #     print(f"[cc] {indent}cls={cls}")
@@ -2766,6 +2769,10 @@ class CharmAppealCompiler(CharmCompiler):
             # usage = "-x"
             if not is_degenerate:
                 usage_name = parameter_name
+            # handle @app.parameter name override
+            override = positionals.get(parameter_name)
+            if override:
+                usage_name = override
 
             # only create new groups here if it's an optional group
             # (we pre-create the initial, required group)
@@ -2799,6 +2806,7 @@ class CharmAppealCompiler(CharmCompiler):
 
                 discretionary = False
                 add_to_self_a = self.body_a
+                self.reset_duplicate_options_a()
             else:
                 # if want_prints:
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
@@ -2811,8 +2819,6 @@ class CharmAppealCompiler(CharmCompiler):
                 parameter=parameter_name,
                 discretionary=discretionary,
                 )
-
-            self.reset_duplicate_options_a()
 
             if p.kind == VAR_POSITIONAL:
                 group.repeating = True
@@ -3593,7 +3599,7 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
 
     first_argument_in_group = True
     for ip, op in ci:
-        print(f"[{ip:03}] {op}")
+        # print(f"[{ip:03}] {op}")
 
         if op.op == opcode.map_option:
             add_option(op)
@@ -3657,7 +3663,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
         self.appeal = processor.appeal
         i = processor.iterator
-        if i:
+        if i and not isinstance(i, big.PushbackIterator):
             i = big.PushbackIterator(i)
         self.iterator = i
         self.mapping = processor.mapping
@@ -4560,69 +4566,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                 #         print_loop_start = False
 
                 if not iterator:
-                    if op:
-                        # iterator is exhausted, and we still have a
-                        # consume_parameter instruction waiting to be executed.
-
-                        # if want_prints:
-                        #     old_flag = self.flag
-                        #     old_o = o
-
-                        # HACK
-                        #
-                        # if this is the first consume_argument instruction
-                        # in an optional group, it isn't *really* required.
-                        # if the iterator is exhausted, and this is marked
-                        # required, exit gracefully instead of aborting.
-                        #
-                        # why is this a hack?
-                        # we *should* figure this out in the compiler,
-                        # and generate these instructions to handle it:
-                        #
-                        #     ...
-                        #     next_to_o(required=False)
-                        #     branch_on_flag label_x
-                        #     end
-                        #   label_x:
-                        #     ...
-                        #
-                        if op.required:
-                            end_gracefully = self.group.optional and (not self.group.laden)
-                        else:
-                            self.o = None
-                            self.flag = False
-                            end_gracefully = False
-
-                        # if want_prints:
-                        #     print(f"{self.cmdline_prefix}")
-                        #     print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg} | usage_name={op.usage_name}")
-                        #     print(f"{self.opcodes_prefix} {self.ip_spacer} iterator exhausted.")
-                        #     if end_gracefully:
-                        #         result = "end gracefully"
-                        #     elif op.required:
-                        #         result = "abort"
-                        #     else:
-                        #         result = "continue"
-                        #     print_registers(o=old_o, flag=old_flag, extras=[('result', sentinel, result)])
-
-                        if op.required:
-                            if end_gracefully:
-                                # if want_prints:
-                                #     print(f"{self.opcodes_prefix} {prefix} ending.")
-                                self.unwind()
-                            else:
-                                # if want_prints:
-                                #     print(f"{self.opcodes_prefix} {prefix} aborting.")
-                                return self.abort()
-
-                        # consider the instruction executed.
-                        op = False
-
-                    # if we reach here,
-                    # either there was no outstanding instruction,
-                    # or there was one and we executed it.
-                    # break out of loop two and go back up to the top.
-                    # (if we're no longer running, we'll finish from there.)
+                    self.unwind()
                     break
 
                 for a in iterator:
@@ -5748,7 +5692,7 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
 
         start and stop are like the start and stop
             arguments for range(), except values
-            can be less-than *or equal* to stop.
+            can be less-than *or equal to* stop.
 
         type is the type for the value.  If unspecified,
             it defaults to builtins.type(start).
@@ -5786,12 +5730,8 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
 
 
 
-def no_arguments_callable(): pass
-no_arguments_signature = inspect.signature(no_arguments_callable)
-
-
-# this function isn't published as one of the _to_converter callables
-def simple_type_to_converter(parameter, callable):
+# utility function, not published as one of the _to_converter callables
+def _simple_type_to_converter(parameter, callable):
     cls = simple_type_signatures.get(callable)
     if not cls:
         return None
@@ -5809,7 +5749,7 @@ def type_to_converter(parameter):
     annotation = dereference_annotated(parameter.annotation)
     if not isinstance(annotation, type):
         return None
-    cls = simple_type_to_converter(parameter, annotation)
+    cls = _simple_type_to_converter(parameter, annotation)
     if cls:
         return cls
     if issubclass(annotation, SingleOption):
@@ -5832,7 +5772,7 @@ def inferred_type_to_converter(parameter):
         return None
     inferred_type = type(parameter.default)
     # print(f"inferred_type_to_converter(parameter={parameter})")
-    cls = simple_type_to_converter(parameter, inferred_type)
+    cls = _simple_type_to_converter(parameter, inferred_type)
     # print(f"  inferred_type={inferred_type} cls={cls}")
     if cls:
         return cls
@@ -6337,12 +6277,16 @@ class Appeal:
         return app_class, command_method
 
 
-    def argument(self, parameter, *, usage=None):
-        def argument(callable):
+    def parameter(self, parameter, *, usage=None):
+        p = parameter
+        def parameter(callable):
             _, _, positionals = self.fn_database_lookup(callable)
-            positionals[parameter] = usage
+            positionals[p] = usage
             return callable
-        return argument
+        return parameter
+
+    # old--and incorrect!--name
+    argument = parameter
 
     def option_signature(self, option):
         """

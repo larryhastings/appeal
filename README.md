@@ -1361,7 +1361,7 @@ What's really going on here is that, from Appeal's perspective,
 happens to be mapped to a command.  So anything you can do
 with a command function, you can do with a converter too.
 A converter can define options, it can be decorated with
-`app.option()` (or `app.argument()` which we haven't
+`app.option()` (or `app.parameter()` which we haven't
 discussed yet), it can have accept any kind of parameter defined
 by Python, and any parameter can use (almost) any converter.
 And those converters can recursively use other converters.
@@ -1670,12 +1670,12 @@ mapped inside this `Appeal` instance *with a different signature.*
 (Doesn't modify `callable` in any way.)
 
 
-`Appeal.argument(self, parameter_name, *, usage=None)`
+`Appeal.parameter(self, parameter_name, *, usage=None)`
 
 Used as a decorator.  Returns a callable that accepts a single
 parameter `callable`, which must be a callable.
 
-Allos for configuration of a positional (or positional-or-keyword)
+Allows for configuration of a positional (or positional-or-keyword)
 parameter on a command function or converter.  `parameter_name` is the
 name of the parameter; it must be a parameter of the decorated `callable`.
 
@@ -2022,6 +2022,11 @@ boundary conditions.  You probably won't even notice the change.
   For example, if you use option `-x`, but that's a child
   option mapped by `--parent`, the message would say
   `-x can't be used here, it must be used immediately after --parent`.
+
+* Renamed `Appeal.argument` to `Appeal.parameter`.
+  This was one of those "what was I *thinking?"* moments.
+  The function affects the parameter, not the argument.
+  The old name still works but will be removed before 1.0.
 
 * `short_option_concatenated_oparg` is now more strictly
   enforced: it's only permitted for short options that have

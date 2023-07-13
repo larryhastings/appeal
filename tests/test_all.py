@@ -982,8 +982,8 @@ class SmokeTests(AppealTestsBase):
 
     def bind_two_or_more_files(self):
         command(two_or_more_files)
-        app.argument("file2", usage="file")(two_or_more_files)
-        app.argument("files", usage="file")(two_or_more_files)
+        app.parameter("file2", usage="file")(two_or_more_files)
+        app.parameter("files", usage="file")(two_or_more_files)
 
     def test_two_or_more_files_usage(self):
         self.bind_two_or_more_files()
