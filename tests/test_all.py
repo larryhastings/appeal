@@ -1501,6 +1501,8 @@ class SmokeTests(AppealTestsBase):
             )
         self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
 
+    def test_str_i_f_2(self):
+        command(str_i_f)
         # regression test:
         # when printing usage, we used to print the name of the last program
         # we'd called, regardless of whether or not it was currently running.
@@ -1512,12 +1514,16 @@ class SmokeTests(AppealTestsBase):
             )
         self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
 
+    def test_str_i_f_1(self):
+        command(str_i_f)
         e = self.assert_process_raises(
             "str_i_f abc 1 --option x",
             appeal.AppealUsageError,
             )
         self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
 
+    def test_str_i_f_4(self):
+        command(str_i_f)
         e = self.assert_process_raises(
             "str_i_f abc 1 --option",
             appeal.AppealUsageError,

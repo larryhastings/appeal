@@ -3394,6 +3394,9 @@ class CharmProgramIterator:
         if not self:
             raise RuntimeError(f"Jumped outside current program, ip={self.ip}, len(program)={self.length}")
 
+    def end(self):
+        self.ip = self.length
+
 
 class CharmBaseInterpreter:
     """
@@ -4566,7 +4569,11 @@ class CharmInterpreter(CharmBaseInterpreter):
                 #         print_loop_start = False
 
                 if not iterator:
-                    self.unwind()
+                    # we need a positional argument, but we don't have one.
+                    # stop processing; we'll figure out if there was an error below.
+                    if self.ip:
+                        self.ip.end()
+                    self.call_stack.clear()
                     break
 
                 for a in iterator:
@@ -4825,8 +4832,6 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     print_registers(extras=[('pushed context', sentinel, self.call_stack[-1])])
 
                     break
-
-        self.unwind()
 
         satisfied = True
         if self.group:
