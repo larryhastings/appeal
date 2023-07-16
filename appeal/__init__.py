@@ -535,43 +535,41 @@ class opcode(enum.Enum):
     end = 1
     abort = 2
     jump = 3
-    indirect_jump = 35
-    branch_on_flag = 4
-    branch_on_not_flag = 5
-    literal_to_o = 77
-    wrap_o_with_iterator = 118
-    label_to_o = 78
-    address = 36
-    test_is_o_true = 6
-    test_is_o_none = 7
-    test_is_o_empty = 8
-    test_is_o_iterable = 9
-    test_is_o_mapping = 11
-    test_is_o_str_or_bytes = 99
-    call = 12
-    create_converter = 13
-    load_converter = 14
-    load_o = 15
-    converter_to_o = 16
-    push_o = 17
-    pop_o = 18
-    peek_o = 30
-    push_flag = 88
-    pop_flag = 89
-    push_mapping = 19
-    pop_mapping = 20
-    push_iterator = 21
-    pushback_o_to_iterator = 888
-    pop_iterator = 22
-    append_to_converter_args = 23
-    set_in_converter_kwargs = 24
-    map_option = 25
-    next_to_o = 26
-    lookup_to_o = 27
-    flush_multioption = 28
-    remember_converters = 1211
-    forget_converters = 1213
-    set_group = 29
+    indirect_jump = 4
+    branch_on_flag = 5
+    branch_on_not_flag = 6
+    literal_to_o = 7
+    wrap_o_with_iterator = 8
+    test_is_o_true = 9
+    test_is_o_none = 10
+    test_is_o_empty = 11
+    test_is_o_iterable = 12
+    test_is_o_mapping = 13
+    test_is_o_str_or_bytes = 14
+    call = 15
+    create_converter = 16
+    load_converter = 17
+    load_o = 18
+    converter_to_o = 19
+    push_o = 20
+    pop_o = 21
+    peek_o = 22
+    push_flag = 23
+    pop_flag = 24
+    push_mapping = 25
+    pop_mapping = 26
+    push_iterator = 27
+    pushback_o_to_iterator = 28
+    pop_iterator = 29
+    append_to_converter_args = 30
+    set_in_converter_kwargs = 31
+    map_option = 32
+    next_to_o = 33
+    lookup_to_o = 34
+    flush_multioption = 35
+    remember_converters = 36
+    forget_converters = 37
+    set_group = 38
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
@@ -583,6 +581,7 @@ class opcode(enum.Enum):
     jump_to_label = 203
     branch_on_flag_to_label = 204
     branch_on_not_flag_to_label = 205
+    label_to_o = 206
 
 # cpp
 
@@ -1049,7 +1048,7 @@ class CharmInstructionConverterToO(CharmInstruction): # CharmInstructionKeyBase
 
 class CharmInstructionAppendToConverterArgs(CharmInstruction):
     """
-    append_to_converter_args <parameter> <discretionary>
+    append_to_converter_args <parameter> <discretionary> <usage>
 
     Takes a reference to the value in the 'o' register
     and appends it to 'converter.args'.
@@ -1062,17 +1061,28 @@ class CharmInstructionAppendToConverterArgs(CharmInstruction):
     If True, this argument may or may not be used,
     depending on what values we process at runtime.
     If False, this argument is mandatory.
+
+    <usage> is a 2-tuple:
+        (usage_full_name, usage_name)
+    usage_full_name is a string of the form:
+        "{callable}.{parameter_name}"
+    This is the actual name of the parameter from
+    the actual callable.
+
+    usage_name is a string, the name of the
+    parameter as it should appear in usage documentation.
     """
 
-    __slots__ = ['parameter', 'discretionary']
+    __slots__ = ['parameter', 'discretionary', 'usage']
 
-    def __init__(self, parameter, discretionary):
+    def __init__(self, parameter, discretionary, usage):
         self.op = opcode.append_to_converter_args
         self.parameter = parameter
         self.discretionary = discretionary
+        self.usage = usage
 
     def __repr__(self):
-        return f"<append_to_converter_args parameter={self.parameter} discretionary={self.discretionary}>"
+        return f"<append_to_converter_args parameter={self.parameter} discretionary={self.discretionary} usage={self.usage}>"
 
 class CharmInstructionSetInConverterKwargs(CharmInstruction):
     """
@@ -1273,11 +1283,13 @@ class CharmInstructionMapOption(CharmInstruction):
 
     <key> and <parameter> are used in generating
     usage information.  <key> is the converter key
-    for the converter, and <parameter> is the
+    for the converter (callable) which accepts a keyword-only
+    parameter that will be filled by this option,
+    and <parameter> is the keyword-only
     parameter accepted by that converter which this
     option fills.  (The value returned by this program
     becomes the argument for <parameter> when calling
-    the callable in <converter>.)
+    the callable in <parameter.annotation>.)
     """
     __slots__ = ['option', 'program', 'key', 'parameter', 'group']
 
@@ -1328,13 +1340,12 @@ class CharmInstructionNextToO(CharmInstruction):
     it in the 'o' register, and False if it did not (and
     <required> is false).
     """
-    __slots__ = ['required', 'is_oparg', 'usage_name']
+    __slots__ = ['required', 'is_oparg']
 
-    def __init__(self, required, is_oparg, usage_name):
+    def __init__(self, required, is_oparg):
         self.op = opcode.next_to_o
         self.required = required
         self.is_oparg = is_oparg
-        self.usage_name = usage_name
 
     def __repr__(self):
         return f"<next_to_o required={self.required} is_oparg={self.is_oparg}>"
@@ -1632,10 +1643,11 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def append_to_converter_args(self, parameter, discretionary):
+    def append_to_converter_args(self, parameter, discretionary, usage):
         op = CharmInstructionAppendToConverterArgs(
             parameter = parameter,
             discretionary = discretionary,
+            usage = usage,
             )
         self._append_opcode(op)
         return op
@@ -1714,11 +1726,10 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def next_to_o(self, required=False, is_oparg=False, usage_name=''):
+    def next_to_o(self, required=False, is_oparg=False):
         op = CharmInstructionNextToO(
             required=required,
             is_oparg=is_oparg,
-            usage_name=usage_name,
             )
         self._append_opcode(op)
         return op
@@ -2449,6 +2460,9 @@ class CharmAppealCompiler(CharmCompiler):
         #     print(f"[cc]")
 
         cls = self.appeal.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+
         if cls is SimpleTypeConverterStr:
             # hand-coded program to handle this option that takes
             # a single required str argument.
@@ -2456,7 +2470,7 @@ class CharmAppealCompiler(CharmCompiler):
             #     print(f"[cc] {indent}hand-coded program for simple str")
             a = CharmAssembler(program_name)
             a.set_group(self.next_argument_group_id(), optional=False)
-            a.next_to_o(required=True, is_oparg=True, usage_name=parameter.name)
+            a.next_to_o(required=True, is_oparg=True)
             add_to_self_a = cc = a
         else:
             annotation = dereference_annotated(parameter.annotation)
@@ -2797,7 +2811,7 @@ class CharmAppealCompiler(CharmCompiler):
                 # if want_prints:
                 #     print(f"[cc] {indent}    simple str converter, next_to_o and append.")
                 required = pgi_parameter.required
-                self.body_a.next_to_o(required=required, is_oparg=isinstance(self, CharmOptionCompiler), usage_name=usage_name)
+                self.body_a.next_to_o(required=required, is_oparg=isinstance(self, CharmOptionCompiler))
                 if not required:
                     label2 = CharmInstructionLabel(f'{callable.__name__}.{parameter_name}: exit after optional argument')
                     self.body_a.branch_on_flag_to_label(label2)
@@ -2815,9 +2829,13 @@ class CharmAppealCompiler(CharmCompiler):
                 is_degenerate = is_degenerate and is_degenerate_subtree
 
             add_to_self_a.load_converter(key=converter_key)
+
+            usage_full_name = (f"{callable.__name__}.{p.name}", usage_name)
+            usage = (f"{callable.__name__}.{p.name}", usage_name)
             add_to_self_a.append_to_converter_args(
                 parameter=parameter_name,
                 discretionary=discretionary,
+                usage=usage,
                 )
 
             if p.kind == VAR_POSITIONAL:
@@ -3098,7 +3116,7 @@ class CharmMappingCompiler(CharmCompiler):
             if child_write_to_kwargs:
                 a.set_in_converter_kwargs(child.name)
             else:
-                a.append_to_converter_args(parameter=child, discretionary=False)
+                a.append_to_converter_args(parameter=child, discretionary=False, usage=None)
 
             # if want_prints:
             #     print(f"[cm]")
@@ -3246,7 +3264,7 @@ class CharmIteratorCompiler(CharmCompiler):
                 a.load_o(child_key)
 
             a.load_converter(converter_key)
-            a.append_to_converter_args(parameter=child, discretionary=False)
+            a.append_to_converter_args(parameter=child, discretionary=False, usage=None)
 
             is_degenerate = is_degenerate and child_is_degenerate
 
@@ -3571,9 +3589,11 @@ class CharmBaseInterpreter:
         self._stop()
 
 
-def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, option_values):
+def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_values, option_values):
     ci = CharmBaseInterpreter(program)
     program_id_to_option = collections.defaultdict(list)
+
+    key_to_callable = {}
 
     def add_option(op):
         program_id_to_option[op.program.id].append(op)
@@ -3581,9 +3601,17 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
     def flush_options():
         for program_id, ops in program_id_to_option.items():
             options = []
+            key = None
             for op in ops:
                 options.append(denormalize_option(op.option))
-            full_name = f"{op.key}.{op.parameter.name}"
+                # these are grouped by program_id, so, op.key will
+                # be the same for all of them
+                if key is None:
+                    key = op.key
+                else:
+                    assert key == op.key, f"expected identical keys, but {key=} != {op.key=}"
+            callable = key_to_callable[key]
+            full_name = f"{callable.__name__}.{op.parameter.name}"
             option_value = "|".join(options)
             option_values[full_name] = option_value
 
@@ -3592,7 +3620,7 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
 
             usage.append(" ")
             old_len_usage = len(usage)
-            _charm_usage(op.program, usage, closing_brackets, formatter, arguments_values, option_values)
+            _charm_usage(appeal, op.program, usage, closing_brackets, formatter, arguments_values, option_values)
             if len(usage) == old_len_usage:
                 # this option had no arguments, we don't want the space
                 usage.pop()
@@ -3601,8 +3629,19 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
         program_id_to_option.clear()
 
     first_argument_in_group = True
+    add_to_usage = False
+
     for ip, op in ci:
         # print(f"[{ip:03}] {op}")
+
+        if op.op == opcode.create_converter:
+            # the official and *only correct* way
+            # to produce a converter from a parameter.
+            cls = appeal.map_to_converter(op.parameter)
+            converter = cls(op.parameter, appeal)
+            callable = converter.callable
+            key_to_callable[op.key] = callable
+            continue
 
         if op.op == opcode.map_option:
             add_option(op)
@@ -3619,27 +3658,39 @@ def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, 
             first_argument_in_group = True
             continue
 
-        if op.op == opcode.next_to_o:
+        # if op.op == opcode.next_to_o:
+        #     add_to_usage = True
+        #     continue
+
+        # if (op.op == opcode.set_in_converter_kwargs) and add_to_usage:
+        #     add_to_usage = False
+        #     continue
+
+        # if (op.op == opcode.append_to_converter_args) and add_to_usage:
+        if op.op == opcode.append_to_converter_args:
             if first_argument_in_group:
                 first_argument_in_group = False
             else:
                 usage.append(" ")
-            usage.append(formatter(op.usage_name))
+            usage_full_name, usage_name = op.usage
+            usage.append(formatter(usage_name))
+            arguments_values[usage_full_name] = usage_name
+            add_to_usage = False
             continue
 
     if program_id_to_option:
         flush_options()
 
 
-def charm_usage(program, *, formatter=str):
+def charm_usage(appeal, program, *, formatter=str):
     usage = []
     closing_brackets = []
     arguments_values = {}
     option_values = {}
-    _charm_usage(program, usage, closing_brackets, formatter, arguments_values, option_values)
+    _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_values, option_values)
     usage.extend(closing_brackets)
-    # print(f"arguments_values={arguments_values}")
-    # print(f"option_values={option_values}")
+    print(f"arguments_values={arguments_values}")
+    print(f"option_values={option_values}")
     return "".join(usage).strip(), arguments_values, option_values
 
 
@@ -6409,7 +6460,7 @@ class Appeal:
         fn_name = callable.__name__
 
         formatter = self.root.format_positional_parameter
-        usage_str, arguments_values, options_values = charm_usage(self._global_program, formatter=formatter)
+        usage_str, arguments_values, options_values = charm_usage(self.root, self._global_program, formatter=formatter)
 
         if commands:
             if usage_str and (not usage_str[-1].isspace()):
