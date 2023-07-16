@@ -391,13 +391,11 @@ class SmokeTests(AppealTestsBase):
         command(test)
         text = capture_stdout('help test')
         self.assertIn("Simple test command function.", text)
-        self.assertIn(" str1 ", text)
+        self.assertIn("test [-g|--gloop [-i|--intfloat [-v|--verbose] x_int y_float] gloopstr] str1 str2 [optional_int]", text)
         self.assertIn("A string!", text)
-        self.assertIn("-g|--gloop", text)
         self.assertIn("grab-bag", text)
         self.assertIn("for a in code:", text)
         self.assertIn("fifth section.", text)
-
 
     def test_test_1(self):
         command(test)

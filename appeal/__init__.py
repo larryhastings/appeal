@@ -3658,24 +3658,24 @@ def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_
             first_argument_in_group = True
             continue
 
-        # if op.op == opcode.next_to_o:
-        #     add_to_usage = True
-        #     continue
+        if op.op == opcode.next_to_o:
+            add_to_usage = True
+            continue
 
-        # if (op.op == opcode.set_in_converter_kwargs) and add_to_usage:
-        #     add_to_usage = False
-        #     continue
-
-        # if (op.op == opcode.append_to_converter_args) and add_to_usage:
-        if op.op == opcode.append_to_converter_args:
-            if first_argument_in_group:
-                first_argument_in_group = False
-            else:
-                usage.append(" ")
-            usage_full_name, usage_name = op.usage
-            usage.append(formatter(usage_name))
-            arguments_values[usage_full_name] = usage_name
+        if (op.op == opcode.set_in_converter_kwargs) and add_to_usage:
             add_to_usage = False
+            continue
+
+        if op.op == opcode.append_to_converter_args:
+            usage_full_name, usage_name = op.usage
+            arguments_values[usage_full_name] = usage_name
+            if add_to_usage:
+                add_to_usage = False
+                if first_argument_in_group:
+                    first_argument_in_group = False
+                else:
+                    usage.append(" ")
+                usage.append(formatter(usage_name))
             continue
 
     if program_id_to_option:
@@ -3689,8 +3689,8 @@ def charm_usage(appeal, program, *, formatter=str):
     option_values = {}
     _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_values, option_values)
     usage.extend(closing_brackets)
-    print(f"arguments_values={arguments_values}")
-    print(f"option_values={option_values}")
+    # print(f"arguments_values={arguments_values}")
+    # print(f"option_values={option_values}")
     return "".join(usage).strip(), arguments_values, option_values
 
 
