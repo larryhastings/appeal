@@ -391,13 +391,11 @@ class SmokeTests(AppealTestsBase):
         command(test)
         text = capture_stdout('help test')
         self.assertIn("Simple test command function.", text)
-        self.assertIn(" str1 ", text)
+        self.assertIn("test [-g|--gloop [-i|--intfloat [-v|--verbose] x_int y_float] gloopstr] str1 str2 [optional_int]", text)
         self.assertIn("A string!", text)
-        self.assertIn("-g|--gloop", text)
         self.assertIn("grab-bag", text)
         self.assertIn("for a in code:", text)
         self.assertIn("fifth section.", text)
-
 
     def test_test_1(self):
         command(test)
@@ -982,8 +980,8 @@ class SmokeTests(AppealTestsBase):
 
     def bind_two_or_more_files(self):
         command(two_or_more_files)
-        app.argument("file2", usage="file")(two_or_more_files)
-        app.argument("files", usage="file")(two_or_more_files)
+        app.parameter("file2", usage="file")(two_or_more_files)
+        app.parameter("files", usage="file")(two_or_more_files)
 
     def test_two_or_more_files_usage(self):
         self.bind_two_or_more_files()
@@ -1501,6 +1499,8 @@ class SmokeTests(AppealTestsBase):
             )
         self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
 
+    def test_str_i_f_2(self):
+        command(str_i_f)
         # regression test:
         # when printing usage, we used to print the name of the last program
         # we'd called, regardless of whether or not it was currently running.
@@ -1512,12 +1512,16 @@ class SmokeTests(AppealTestsBase):
             )
         self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
 
+    def test_str_i_f_1(self):
+        command(str_i_f)
         e = self.assert_process_raises(
             "str_i_f abc 1 --option x",
             appeal.AppealUsageError,
             )
         self.assertEqual(str(e), "str_i_f requires 2 arguments in this argument group.")
 
+    def test_str_i_f_4(self):
+        command(str_i_f)
         e = self.assert_process_raises(
             "str_i_f abc 1 --option",
             appeal.AppealUsageError,

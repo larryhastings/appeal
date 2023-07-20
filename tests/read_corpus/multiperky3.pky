@@ -1,0 +1,28 @@
+a = yes it's a
+b = oh my it's b
+c = """
+
+    c has a whole bunch of text!
+    it's multi-line!
+       this line is indented!
+
+    """
+d = " I think d is quoted! "
+
+e = [
+      [
+      1
+      2
+      ]
+
+      [
+      3
+      4
+      ]
+
+      [
+      5
+      6
+      ]
+
+   ]

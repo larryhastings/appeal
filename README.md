@@ -1361,7 +1361,7 @@ What's really going on here is that, from Appeal's perspective,
 happens to be mapped to a command.  So anything you can do
 with a command function, you can do with a converter too.
 A converter can define options, it can be decorated with
-`app.option()` (or `app.argument()` which we haven't
+`app.option()` (or `app.parameter()` which we haven't
 discussed yet), it can have accept any kind of parameter defined
 by Python, and any parameter can use (almost) any converter.
 And those converters can recursively use other converters.
@@ -1538,6 +1538,318 @@ command function.
 for your Appeal instance's global command.)
 
 
+## Appeal's latest superpower: reading config files
+
+Appeal allows for friction-free command-line APIs.  You write your
+command function, point Appeal at it, and whoosh! now you've got a
+command-line interface.  But there are other interfaces users may
+want to use to configure your program.  Now Appeal can work with
+those too.
+
+For example, your program may read configuration from environment
+variables.  Some programs launch an editor; for example `git` will
+open an editor when committing a revision.  Traditionally on
+UNIX-based platforms this is configurable using two environment
+variables, `VISUAL` and `EDITOR` in that order of preference.
+
+Appeal doesn't need to add explicit support for environment variables,
+as Python already has an easy-to-use interface.  For example, here's
+how to support the environment variables configuring your editor:
+
+However, many programs also support a configuration file, also called
+an "rc file"  on UNIX.  By convention settings in such a config file
+usually take precedence over environment variables.  For example, you
+can configure what editor `git` uses for commits with a value called
+`core.editor` stored in a config file.
+
+As of 0.6, Appeal has support for reading data from configuration
+files.  Note that Appeal doesn't read the data files itself; you
+already have a library for that.  Instead, Appeal has a generic
+mechanism for reading data from either an iterable or a mapping--
+either a list or a dict.
+
+The first step is to read in the values from the configuration file,
+and produce a dict or dict-like object.  You can use any library
+you like.  For example, the [`tomli`](https://pypi.org/project/tomli/) library
+works well for [TOML files.](https://en.wikipedia.org/wiki/TOML)
+JSON and YAML parsers also work nicely.  And this facility works
+*especially* well with my [`Perky`](https://pypi.org/project/perky/)
+file format.  Though that's just a coincidence, as they were designed
+separately, years apart.  Honest!
+
+(You can also use `configparser` to read your INI config file,
+but this doesn't mesh well with Appeal's model.  Better support
+for reading INI files is a possible future direction for Appeal.)
+
+Once you've got a dictionary containing your configuration information,
+you can get Appeal to read from it using a single method call:
+
+```Python
+    Appeal.read_mapping(self, callable, mapping)
+```
+
+Simply pass in the callable you want called, and the mapping--the dict--you
+read from your config file.  Appeal will read the names of the callable's
+parameters, pull values out of the mapping using those names, and pass those
+values in to a call to the callable.
+
+Of course, any mapping will work.  But this method works particularly
+well with classes decorated with `dataclasses.dataclass`.  In just a few
+lines, you can define a class to contain your configuration information,
+read it out of a file, and populate the class with values of all the correct
+types!
+
+In a lot of ways, this works very similarly to Appeal when it's processing
+a command-line.  For example:
+
+* Appeal will use the annotations and default values to convert
+  the values from the dictionary into the correct types.
+* Parameters with default values are optional; parameters without
+  default values are required.
+
+But there are differences too:
+
+* You can use positional-only, positional-or-keyword,
+  or keyword-only arguments.  However, var-positional
+  (`*args`) and var-keyword (`**kwargs`) are unsupported.
+
+
+Let's bring all of this together with an example.  Let's say we're
+writing a hypothetical program that may launch an editor.  Our
+sophisticated program has *five* ways to decide what program
+to run for the editor.  In decreasing order of importance:
+
+* Command-line options '-e' and '--editor' specify the
+  editor to use for this instnace.
+* The config file `~/.myprogramrc` is a Perky file, and it
+  can contain an `editor` value.
+* If the user has set an `VISUAL` environment variable, use that.
+* If the user has set an `EDITOR` environment variable, use that.
+* The default value is `/usr/bin/vi`.
+
+Here's sample Python code implementing those semantics:
+
+```Python
+    default_editor = os.environ.get("VISUAL",
+        os.environ.get("EDITOR", "/usr/bin/vi"))
+    @dataclasses.dataclass
+    class ConfigFile:
+        editor:str=default_editor
+
+    d = perky.load(os.path.expanduser("~/.myprogramrc"))
+    app = appeal.Appeal()
+    config_file = app.read_mapping(ConfigFile, d)
+
+    @app.global_command()
+    def global_command(*, editor=config_file.editor):
+        print(f"editor = {editor}")
+
+    app.main()
+```
+
+Note: using `os.path.expanduser` and a hard-coded filename
+like this is no longer considered best practice.  You should use 
+[`platformdirs`](https://pypi.org/project/platformdirs/) to
+define the paths to your config files.
+
+### Nesting
+
+Appeal's config file reader supports reading values from nested dicts.
+This maps directly onto nested function calls in annotations.  If an
+annotation takes two or more parameters, the name of the parameter
+with that annotation will be used as the name of the nested dict.
+
+Since that probably wasn't clear--sorry!--an example would probably help.
+Consider this example dictionary:
+
+```Python
+    d = {
+        'a': 33,
+        'b': {
+            'verbose': True,
+            'color': 'blue',
+        },
+    }
+```
+
+Here the value of `'b'` is a nested dict.  If we want Appeal to read
+a dict with this shape, it will have to descend into that nested dict.
+Appeal does that by default when a parameter has an annotation, and
+the annotation takes two or more parameters.  Here's sample Python
+showing how to read this dict using Appeal:
+
+```Python
+    def read_b(verbose=False, color='black'):
+        return (verbose, color)
+
+    def config_file(a: int, b: read_b):
+        return (a, b)
+```
+
+Because `read_b` is an annotation taking multiple parameters,
+Appeal will assume the value of `'b'` is a nested dict,
+and will get the values of `'verbose'` and `'color'` from
+that dict.
+
+If you don't want this behavior, you can disable it by
+decorating the annotation function with the `unnested`
+method on the Appeal object.  If we change the code to
+the following:
+
+```Python
+    @app.unnested()
+    def read_b(verbose=False, color='black'):
+        return (verbose, color)
+
+    def config_file(a: int, b: read_b):
+        return (a, b)
+```
+
+Appeal *won't* descend into a nested dict named `'b'`.
+In this case the dictionary would have to be be completely
+flat, like this:
+
+```Python
+    d = { 'a': 33, 'verbose': True, 'color': 'blue' }
+```
+
+### Iterables
+
+Appeal can also read from iterables inside the dictionary.
+The parameter that accepts an iterable should be annotated
+with a subclass of `MultiOption`.  Appeal will instantiate
+the `MultiOption` and use the MultiOption protocol to
+fill the object.
+
+For example, if your config file dict looked like this:
+
+```Python
+    d = {
+        'color': 'blue',
+        'lines': [
+            'line 1',
+            'here is line 2',
+            'and finally, line 3',
+            ]
+    }
+```
+
+Appeal could map it to this callable:
+
+```Python
+    @dataclasses.dataclass
+    class ConfigFile:
+        lines: appeal.accumulator
+        color:str = ''
+```
+
+If the `MultiOption` option takes multiple parameters,
+then the list must contain dictionaries.  For example,
+this Python code:
+
+```Python
+    class Resolutions(appeal.Multioption):
+        def init(self, default=None):
+            self.default = default
+            self.values = None
+
+        def option(self, width:int, height:int, depth:int):
+            if self.values is None:
+                self.values = []
+            self.values.append((width, height, depth))
+
+        def render(self):
+            if self.values is None:
+                return self.default
+            return self.values
+
+    @dataclasses.dataclass
+    class ConfigFile:
+        resolutions: Resolutions
+        color:str = ''
+```
+
+Would be able to read this mapping:
+
+```Python
+    d = {
+        'color': 'orange',
+        'resolutions': [
+            {'width': 1280, 'height': 1024, 'depth': 24},
+            {'width': 1600, 'height': 1200, 'depth': 16},
+        ],
+    }
+```
+
+
+### `read_iterable`
+
+In addition to Appeal's `read_mapping` method, Appeal
+also supports a `read_iterable` method.  The API is
+almost identical:
+
+```Python
+    Appeal.read_iterable(callable, iterable)
+```
+
+However this function is much simpler.  The iterable
+should itself be an iterable of iterables.  Appeal will
+call the callable you specify once for every nested
+iterable.  The result will be appended to a list, and
+`read_iterable` will return that list.
+
+As always, Appeal will handle converting values using
+the annotations you specify.  Unlike `read_mapping`,
+here you may pass in a function accepting `*args`,
+in which case Appeal will process an arbitrary number
+of trailing arguments.  Also unlike `read_mapping`,
+there's no support for testing--neither nested dictionaties
+nor (further) nested lists.  (Like when processing the
+command-line, when reading values from the iterable,
+nested annotations get flattened.)
+
+### CSV files
+
+Finally, Appeal has special support for reading CSV files.  This may
+seem like an odd thing to support--nobody uses CSV files as config
+files.  But CSV files were the proof-of-concept for Appeal's config
+file support, and it's proved useful in another project, so for
+now it's staying in.  There's a special method for reading CSV
+files:
+
+```Python
+    Appeal.read_csv(self, callable, csv_reader, *, first_row_map=None)
+```
+
+You pass in your callable, and a fresh `csv.reader` object.  Appeal
+will read the rows out of the `CSV` object, passing in the strings into
+the `callable`, and append the result to a list.  The return value is
+that list.
+
+If `first_row_map` is false, `read_csv` will ignore the first line of
+the CSV file (the "column names" line) and pass in the values from the
+CSV file by position.  If `first_row_map` is true, `read_csv` will use
+the rows from the first line of the CSV file as keys in a dictionary,
+populate the values with each subsequent row, and will pass the
+arguments by name.
+
+In other words, if `first_row_map` is false, Appeal calls
+
+```Python
+    callable(*row)
+```
+
+for every line after the first line in the CSV file.  And if `first_row_map`
+is true, Appeal calls
+
+```Python
+    d = {key: value for key, value in zip(column_headers, row)}
+    callable(**d)
+```
+
+for every line after the first line in the CSV file.
+
+
 ## API Reference
 
 `Appeal(help=True, version=None, positional_argument_usage_format="{name}", default_options=default_options)`
@@ -1670,12 +1982,12 @@ mapped inside this `Appeal` instance *with a different signature.*
 (Doesn't modify `callable` in any way.)
 
 
-`Appeal.argument(self, parameter_name, *, usage=None)`
+`Appeal.parameter(self, parameter_name, *, usage=None)`
 
 Used as a decorator.  Returns a callable that accepts a single
 parameter `callable`, which must be a callable.
 
-Allos for configuration of a positional (or positional-or-keyword)
+Allows for configuration of a positional (or positional-or-keyword)
 parameter on a command function or converter.  `parameter_name` is the
 name of the parameter; it must be a parameter of the decorated `callable`.
 
@@ -2022,6 +2334,11 @@ boundary conditions.  You probably won't even notice the change.
   For example, if you use option `-x`, but that's a child
   option mapped by `--parent`, the message would say
   `-x can't be used here, it must be used immediately after --parent`.
+
+* Renamed `Appeal.argument` to `Appeal.parameter`.
+  This was one of those "what was I *thinking?"* moments.
+  The function affects the parameter, not the argument.
+  The old name still works but will be removed before 1.0.
 
 * `short_option_concatenated_oparg` is now more strictly
   enforced: it's only permitted for short options that have

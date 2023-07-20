@@ -1,0 +1,22 @@
+a = yes it's a
+b = oh my it's b
+c = """
+
+    c has a whole bunch of text!
+    it's multi-line!
+       this line is indented!
+
+    """
+d = " I think d is quoted! "
+
+e = [
+   {
+   sparx = Hey Spyro!
+   spyro = Hey Sparx!
+   }
+
+   {
+   sparx = Spyro I hate you!
+   spyro = Hey Sparx go jump in a lake and drown!
+   }
+   ]

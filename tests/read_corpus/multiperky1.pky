@@ -1,0 +1,42 @@
+{
+a = yes it's a
+b = oh my it's b
+c = """
+
+    c has a whole bunch of text!
+    it's multi-line!
+       this line is indented!
+
+    """
+d = " I think d is quoted! "
+
+e = {
+   darth = Join me
+   vader = And together we will rule the galaxy
+}
+
+spyro = Race you to Dragon Shores!
+sparx = Bzzzz, bzz-bzzzzz-bz-bz-BZZZZZ-bzz-bzz!
+}
+
+{
+a = SECOND yes it's a
+b = SECOND oh my it's b
+c = """
+
+    SECOND
+    c has a whole bunch of text!
+    it's multi-line!
+       this line is indented!
+
+    """
+d = " SECOND I think d is quoted! "
+
+e = {
+   darth = SECOND Join me
+   vader = SECOND And together we will rule the galaxy
+}
+
+spyro = SECOND Race you to Dragon Shores!
+sparx = SECOND Bzzzz, bzz-bzzzzz-bz-bz-BZZZZZ-bzz-bzz!
+}

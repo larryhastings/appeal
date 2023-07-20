@@ -1,0 +1,12 @@
+a = "yes it's a"
+b = "oh my it's b"
+c = "c has a whole bunch of text!\nit's multi-line!\nthis line is indented!"
+d = 3.14159
+
+spyro = "Race you to Dragon Shores!"
+sparx = "Bzzzz, bzz-bzzzzz-bz-bz-BZZZZZ-bzz-bzz!"
+
+[e]
+   darth = "Join me"
+   vader = "And together we will rule the galaxy"
+

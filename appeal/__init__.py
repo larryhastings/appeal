@@ -39,7 +39,8 @@ import base64
 import big.all as big
 from big.itertools import PushbackIterator
 import builtins
-import collections
+import collections.abc
+from collections.abc import Iterable, Iterator, Mapping
 import enum
 import functools
 import inspect
@@ -82,14 +83,6 @@ KEYWORD_ONLY = inspect.Parameter.KEYWORD_ONLY
 VAR_KEYWORD = inspect.Parameter.VAR_KEYWORD
 empty = inspect.Parameter.empty
 
-try:
-    # new in 3.7
-    from time import monotonic_ns as event_clock
-except ImportError:
-    from time import perf_counter
-
-    def event_clock():
-        return int(perf_counter() * 1000000000.0)
 
 # new in 3.8
 shlex_join = getattr(shlex, 'join', None)
@@ -343,11 +336,10 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##        (if you have two parameters annotated with int_float,
 ##        these two instances get different converter keys.)
 ##    converter
-##        a reference to a converter (or None).
-##        the current converter context.
-##        conceptually an indirect register like SP or a segment register,
-##          you index through it to reference things.
-##          specifically:
+##        the current converter context.  a reference to a converter (or None).
+##        conceptually an indirect register like SP or a segment register.
+##        you index through it to interact with the attributes of a converter,
+##        specifically:
 ##              args
 ##                positional arguments, accessed with an index (-1 permitted).
 ##              kwargs
@@ -356,23 +348,29 @@ def partial_rebind_positional(partial, placeholder, instance):
 ##          or, create converters and store (and possibly later retrieve)
 ##          converter objects in these attributes.
 ##    o
-##        a reference to a converter, a string, or None.
 ##        a general-purpose register.
-##        contains the result of create_converter, pop_converter,
-##        consume_positional, and load_converter.
-##    total
-##        argument counter object (or None).
-##        argument counts for this entire command function (so far).
+##        a reference to a converter, a string, or None.
+##    flag
+##        a boolean register.
+##        contains the result of o_is_* instructions.
 ##    group
 ##        argument counter object (or None).
 ##        local argument counts just for this argument group.
+##    iterator
+##        An iterator yielding objects (e.g. strings from the command-line).
+##        You can get the next object using next_to_o.
+##        There's also an iterator_stack, and you can push new iterators
+##        (e.g. to iterate over a list from a Perky file).
+##    mapping
+##        A dict-like object mapping strings to value.
+##        You can get a value with lookup_to_o.
 ##
-## the interpreter has a stack.  it's used to push/pop all registers
-## except ip (which is pushed/popped separately).
+## the interpreter has a stack.  it's used to push/pop registers
+## when making a "call".
 
 
 ## argument counter objects have these fields:
-##    count = how many arguments we've consumed
+##    count = how many arguments we've added to this group
 ##    minimum = the minimum "arguments" needed
 ##    maximum = the maximum "arguments" permissible
 ##    optional = flag, is this an optional group?
@@ -462,21 +460,44 @@ print('class opcode(enum.Enum):')
 
 print_enum('''
     invalid
+    end
+    abort
     jump
-    branch_on_o
+    indirect_jump
+    branch_on_flag
+    branch_on_not_flag
+    literal_to_o
+    wrap_o_with_iterator
+    test_is_o_true
+    test_is_o_none
+    test_is_o_empty
+    test_is_o_iterable
+    test_is_o_mapping
+    test_is_o_str_or_bytes
     call
     create_converter
     load_converter
     load_o
     converter_to_o
-    append_to_args
-    add_to_kwargs
+    push_o
+    pop_o
+    peek_o
+    push_flag
+    pop_flag
+    push_mapping
+    pop_mapping
+    push_iterator
+    pushback_o_to_iterator
+    pop_iterator
+    append_to_converter_args
+    set_in_converter_kwargs
     map_option
-    consume_positional
-    get_keyword
+    next_to_o
+    lookup_to_o
     flush_multioption
+    remember_converters
+    forget_converters
     set_group
-    end
 
 ''')
 
@@ -491,7 +512,9 @@ print_enum('''
     comment
     label
     jump_to_label
-    branch_on_o_to_label
+    branch_on_flag_to_label
+    branch_on_not_flag_to_label
+    label_to_o
 ''', i=200)
 
 print()
@@ -509,21 +532,44 @@ print()
 
 class opcode(enum.Enum):
     invalid = 0
-    jump = 1
-    branch_on_o = 2
-    call = 3
-    create_converter = 4
-    load_converter = 5
-    load_o = 6
-    converter_to_o = 7
-    append_to_args = 8
-    add_to_kwargs = 9
-    map_option = 10
-    consume_positional = 11
-    get_keyword = 12
-    flush_multioption = 13
-    set_group = 14
-    end = 15
+    end = 1
+    abort = 2
+    jump = 3
+    indirect_jump = 4
+    branch_on_flag = 5
+    branch_on_not_flag = 6
+    literal_to_o = 7
+    wrap_o_with_iterator = 8
+    test_is_o_true = 9
+    test_is_o_none = 10
+    test_is_o_empty = 11
+    test_is_o_iterable = 12
+    test_is_o_mapping = 13
+    test_is_o_str_or_bytes = 14
+    call = 15
+    create_converter = 16
+    load_converter = 17
+    load_o = 18
+    converter_to_o = 19
+    push_o = 20
+    pop_o = 21
+    peek_o = 22
+    push_flag = 23
+    pop_flag = 24
+    push_mapping = 25
+    pop_mapping = 26
+    push_iterator = 27
+    pushback_o_to_iterator = 28
+    pop_iterator = 29
+    append_to_converter_args = 30
+    set_in_converter_kwargs = 31
+    map_option = 32
+    next_to_o = 33
+    lookup_to_o = 34
+    flush_multioption = 35
+    remember_converters = 36
+    forget_converters = 37
+    set_group = 38
 
     # these are removed by the peephole optimizer.
     # the interpreter never sees them.
@@ -533,7 +579,9 @@ class opcode(enum.Enum):
     comment = 201
     label = 202
     jump_to_label = 203
-    branch_on_o_to_label = 204
+    branch_on_flag_to_label = 204
+    branch_on_not_flag_to_label = 205
+    label_to_o = 206
 
 # cpp
 
@@ -564,7 +612,40 @@ class CharmInstructionNoOp(CharmInstruction): # CharmInstructionNoArgBase
         self.op = opcode.no_op
 
     def __repr__(self):
-        return f"<no-op>"
+        return f"<no_op>"
+
+
+class CharmInstructionEnd(CharmInstruction):
+    """
+    end
+
+    Exits the current program.
+    """
+
+    __slots__ = ['name', 'id']
+
+    def __init__(self):
+        self.op = opcode.end
+
+    def __repr__(self):
+        return f"<end>"
+
+
+class CharmInstructionAbort(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    abort
+
+    Aborts processing with an error.
+    """
+
+    __slots__ = ['message']
+
+    def __init__(self, message):
+        self.op = opcode.abort
+        self.message = message
+
+    def __repr__(self):
+        return f"<abort>"
 
 
 class CharmInstructionJump(CharmInstruction): # CharmInstructionAddressBase
@@ -585,11 +666,26 @@ class CharmInstructionJump(CharmInstruction): # CharmInstructionAddressBase
         return f"<jump address={self.address}>"
 
 
-class CharmInstructionBranchOnO(CharmInstruction): # CharmInstructionAddressBase
+class CharmInstructionIndirectJump(CharmInstruction): # CharmInstructionAddressBase
     """
-    branch_on_o <address>
+    indirect_jump
 
-    If the 'o' register is a true value,
+    Sets the 'ip' register to the value in the 'o' register.
+    The value must be an integer.
+    """
+
+    def __init__(self):
+        self.op = opcode.indirect_jump
+
+    def __repr__(self):
+        return f"<indirect_jump>"
+
+
+class CharmInstructionBranchOnFlag(CharmInstruction): # CharmInstructionAddressBase
+    """
+    branch_on_flag <address>
+
+    If the 'flag' register is True,
     sets the 'ip' register to <address>.
     <address> is an integer.
     """
@@ -597,14 +693,175 @@ class CharmInstructionBranchOnO(CharmInstruction): # CharmInstructionAddressBase
     __slots__ = ['address']
 
     def __init__(self, address):
-        self.op = opcode.branch_on_o
+        self.op = opcode.branch_on_flag
         self.address = address
 
     def __repr__(self):
-        return f"<branch_on_o address={self.address}>"
+        return f"<branch_on_flag address={self.address}>"
 
+class CharmInstructionBranchOnNotFlag(CharmInstruction): # CharmInstructionAddressBase
+    """
+    branch_on_not_flag <address>
 
-next_label_id = serial_number_generator(prefix='label').__next__
+    If the 'flag' register is False,
+    sets the 'ip' register to <address>.
+    <address> is an integer.
+    """
+
+    __slots__ = ['address']
+
+    def __init__(self, address):
+        self.op = opcode.branch_on_not_flag
+        self.address = address
+
+    def __repr__(self):
+        return f"<branch_on_not_flag address={self.address}>"
+
+class CharmInstructionLiteralToO(CharmInstruction): # CharmInstructionAddressBase
+    """
+    literal_to_o
+
+    Sets the 'o' register to a precompiled literal value.
+    """
+
+    __slots__ = ['value']
+
+    def __init__(self, value):
+        self.op = opcode.literal_to_o
+        self.value = value
+
+    def __repr__(self):
+        return f"<literal_to_o value={repr(self.value)}>"
+
+class CharmInstructionWrapOWithIterator(CharmInstruction): # CharmInstructionAddressBase
+    """
+    wrap_o_with_iterator
+
+    Replaces the value in the 'o' register with an iterator
+    which yields that value.
+
+    In other words:
+        o = iter( (o,) )
+    """
+
+    def __init__(self):
+        self.op = opcode.wrap_o_with_iterator
+
+    def __repr__(self):
+        return f"<wrap_o_with_iterator>"
+
+class CharmInstructionTestIsOTrue(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_true
+
+    If the 'o' register contains a true value,
+    set the 'flag' register to True,
+    otherwise set the 'flag' register to False.
+
+    In other words:
+        flag = bool(o)
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_true
+
+    def __repr__(self):
+        return f"<test_is_o_true>"
+
+class CharmInstructionTestIsONone(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_none
+
+    If the 'o' register contains None,
+    set the 'flag' register to True,
+    otherwise set the 'flag' register to False.
+
+    In other words:
+        flag = o == None
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_none
+
+    def __repr__(self):
+        return f"<test_is_o_none>"
+
+class CharmInstructionTestIsOEmpty(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_empty
+
+    If the 'o' register contains inspect.Parameter.Empty,
+    set the 'flag' register to True,
+    otherwise set the 'flag' register to False.
+
+    In other words:
+        flag = o == inspect.Parameter.empty
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_empty
+
+    def __repr__(self):
+        return f"<test_is_o_empty>"
+
+class CharmInstructionTestIsOIterable(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_iterable
+
+    If the 'o' register contains an instance
+    of an collections.abc.Iterable object, set the 'flag'
+    register to True, otherwise set it to False.
+
+    In other words:
+        flag = isinstance(o, collections.abc.Iterable)
+
+    Note that str objects and most Mapping objects (e.g. dict)
+    are iterable.  You may want to test for those first.
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_iterable
+
+    def __repr__(self):
+        return f"<test_is_o_iterable>"
+
+class CharmInstructionTestIsOMapping(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_mapping
+
+    If the 'o' register contains an instance
+    of an collections.abc.Mapping object, set the 'flag'
+    register to True, otherwise set it to False.
+
+    In other words:
+        flag = isinstance(o, collections.abc.Mapping)
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_mapping
+
+    def __repr__(self):
+        return f"<test_is_o_mapping>"
+
+class CharmInstructionTestIsOStrOrBytes(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    test_is_o_str_or_bytes
+
+    If the 'o' register contains an instance
+    of a str or bytes object, set the 'flag'
+    register to True, otherwise set it to False.
+
+    In other words:
+        flag = isinstance(o, (str, bytes))
+    """
+
+    def __init__(self):
+        self.op = opcode.test_is_o_str_or_bytes
+
+    def __repr__(self):
+        return f"<test_is_o_str_or_bytes>"
+
+next_label_id = serial_number_generator(prefix='label-').__next__
 
 class CharmInstructionLabel(CharmInstruction):
     """
@@ -628,9 +885,8 @@ class CharmInstructionLabel(CharmInstruction):
         self.label = label
 
     def __repr__(self):
-        opcode = str(self.op).rpartition('.')[2]
         label = f" label={self.label!r}" if self.label else ""
-        return f"<{opcode} id={self.id}{label}>"
+        return f"<label id={self.id}{label}>"
 
     def __hash__(self):
         return hash(self.id)
@@ -655,14 +911,14 @@ class CharmInstructionJumpToLabel(CharmInstruction): # CharmInstructionLabelBase
 
     def __repr__(self):
         label = f" label={self.label!r}" if self.label else ""
-        return f"<jump-to-label {label}>"
+        return f"<jump_to_label{label}>"
 
 
-class CharmInstructionBranchOnOToLabel(CharmInstruction):
+class CharmInstructionBranchOnFlagToLabel(CharmInstruction):
     """
-    branch_on_o_to_label <label>
+    branch_on_flag_to_label <label>
 
-    If the 'o' register is a true value,
+    If the 'flag' register is True,
     sets the 'ip' register to point to the instruction
     after the instance of the <label> instruction in the
     current program.
@@ -674,13 +930,54 @@ class CharmInstructionBranchOnOToLabel(CharmInstruction):
     __slots__ = ['label']
 
     def __init__(self, label):
-        self.op = opcode.branch_on_o_to_label
+        self.op = opcode.branch_on_flag_to_label
         self.label = label
 
     def __repr__(self):
         label = f" label={self.label!r}" if self.label else ""
-        return f"<branch-on-o-to-label {label}>"
+        return f"<branch_on_flag_to_label {label}>"
 
+
+class CharmInstructionBranchOnNotFlagToLabel(CharmInstruction):
+    """
+    branch_on_not_flag_to_label <label>
+
+    If the 'flag' register is False,
+    sets the 'ip' register to point to the instruction
+    after the instance of the <label> instruction in the
+    current program.
+
+    label and *_to_label are both pseudo-instructions.
+    They're removed by a pass in the peephole optimizer.
+    """
+
+    __slots__ = ['label']
+
+    def __init__(self, label):
+        self.op = opcode.branch_on_not_flag_to_label
+        self.label = label
+
+    def __repr__(self):
+        label = f" label={self.label!r}" if self.label else ""
+        return f"<branch_on_not_flag_to_label {label}>"
+
+class CharmInstructionLabelToO(CharmInstruction): # CharmInstructionAddressBase
+    """
+    label_to_o
+
+    Sets the 'o' register to the address of a label.
+    Is converted by the assembler into a literal_to_o instruction.
+    """
+
+    __slots__ = ['label']
+
+    def __init__(self, label):
+        self.op = opcode.label_to_o
+        self.label = label
+
+    def __repr__(self):
+        label = f" label={self.label!r}" if self.label else ""
+        return f"<label_to_o {label}>"
 
 class CharmInstructionCreateConverter(CharmInstruction):
     """
@@ -700,7 +997,7 @@ class CharmInstructionCreateConverter(CharmInstruction):
         self.key = key
 
     def __repr__(self):
-        return f"<create_converter parameter={parameter!r} key={self.key}>"
+        return f"<create_converter parameter={self.parameter!r} key={self.key}>"
 
 class CharmInstructionLoadConverter(CharmInstruction): # CharmInstructionKeyBase
     """
@@ -734,7 +1031,7 @@ class CharmInstructionLoadO(CharmInstruction): # CharmInstructionKeyBase
         self.key = key
 
     def __repr__(self):
-        return f"<load_converter key={self.key}>"
+        return f"<load_o key={self.key}>"
 
 class CharmInstructionConverterToO(CharmInstruction): # CharmInstructionKeyBase
     """
@@ -749,9 +1046,9 @@ class CharmInstructionConverterToO(CharmInstruction): # CharmInstructionKeyBase
     def __repr__(self):
         return f"<converter_to_o>"
 
-class CharmInstructionAppendToArgs(CharmInstruction):
+class CharmInstructionAppendToConverterArgs(CharmInstruction):
     """
-    append_to_args <parameter> <discretionary>
+    append_to_converter_args <parameter> <discretionary> <usage>
 
     Takes a reference to the value in the 'o' register
     and appends it to 'converter.args'.
@@ -764,21 +1061,32 @@ class CharmInstructionAppendToArgs(CharmInstruction):
     If True, this argument may or may not be used,
     depending on what values we process at runtime.
     If False, this argument is mandatory.
+
+    <usage> is a 2-tuple:
+        (usage_full_name, usage_name)
+    usage_full_name is a string of the form:
+        "{callable}.{parameter_name}"
+    This is the actual name of the parameter from
+    the actual callable.
+
+    usage_name is a string, the name of the
+    parameter as it should appear in usage documentation.
     """
 
-    __slots__ = ['parameter', 'discretionary']
+    __slots__ = ['parameter', 'discretionary', 'usage']
 
-    def __init__(self, parameter, discretionary):
-        self.op = opcode.append_to_args
+    def __init__(self, parameter, discretionary, usage):
+        self.op = opcode.append_to_converter_args
         self.parameter = parameter
         self.discretionary = discretionary
+        self.usage = usage
 
     def __repr__(self):
-        return f"<append_to_args parameter={self.parameter} discretionary={self.discretionary}>"
+        return f"<append_to_converter_args parameter={self.parameter} discretionary={self.discretionary} usage={self.usage}>"
 
-class CharmInstructionAddToKwargs(CharmInstruction):
+class CharmInstructionSetInConverterKwargs(CharmInstruction):
     """
-    add_to_kwargs <name>
+    set_in_converter_kwargs <name>
 
     Takes a reference to the object currently in
     the 'o' register and stores it in 'converter.kwargs[<name>]'.
@@ -790,11 +1098,176 @@ class CharmInstructionAddToKwargs(CharmInstruction):
     __slots__ = ['name']
 
     def __init__(self, name):
-        self.op = opcode.add_to_kwargs
+        self.op = opcode.set_in_converter_kwargs
         self.name = name
 
     def __repr__(self):
-        return f"<add_to_kwargs name={self.name}>"
+        return f"<set_in_converter_kwargs name={self.name}>"
+
+class CharmInstructionPushO(CharmInstruction):
+    """
+    push_o
+
+    Pushes the value currently in the 'o' register
+    onto to the 'data' stack.
+    """
+
+    def __init__(self):
+        self.op = opcode.push_o
+
+    def __repr__(self):
+        return f"<push_o>"
+
+class CharmInstructionPopO(CharmInstruction):
+    """
+    pop_o
+
+    Pops the top value from the 'data' stack and
+    sets it as the value of 'o''.
+
+    If the 'data' stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.pop_o
+
+    def __repr__(self):
+        return f"<pop_o>"
+
+class CharmInstructionPeekO(CharmInstruction):
+    """
+    peek_o
+
+    Gets the top value from the 'data' stack (without popping)
+    and sets it as the value of 'o'.
+
+    If the 'data' stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.peek_o
+
+    def __repr__(self):
+        return f"<peek_o>"
+
+class CharmInstructionPushFlag(CharmInstruction):
+    """
+    push_o
+
+    Pushes the value currently in the 'flag' register
+    onto to the 'data' stack.
+    """
+
+    def __init__(self):
+        self.op = opcode.push_flag
+
+    def __repr__(self):
+        return f"<push_flag>"
+
+class CharmInstructionPopFlag(CharmInstruction):
+    """
+    pop_o
+
+    Pops the top value from the 'data' stack and
+    sets it as the value of 'flag'.
+
+    If the 'data' stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.pop_flag
+
+    def __repr__(self):
+        return f"<pop_flag>"
+
+class CharmInstructionPushMapping(CharmInstruction):
+    """
+    push_mapping
+
+    Pushes the current mapping dict onto the mapping
+    stack, then takes a reference to the object currently
+    in the 'o' register and sets it as the new mapping dict.
+
+    If 'o' is not isinstance(o, collections.abc.Mapping)
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.push_mapping
+
+    def __repr__(self):
+        return f"<push_mapping>"
+
+class CharmInstructionPopMapping(CharmInstruction):
+    """
+    pop_mapping
+
+    Pops the top value from the mapping stack and
+    sets it as the current mapping dict, overwriting
+    the reference to the current mapping dict.
+
+    If the mapping stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.pop_mapping
+
+    def __repr__(self):
+        return f"<pop_mapping>"
+
+class CharmInstructionPushIterator(CharmInstruction):
+    """
+    push_iterator
+
+    Pushes the current iterator onto the iterator stack,
+    then takes a reference to the object currently in the
+    'o' register and sets it as the new iterator.
+
+    If 'o' is not isinstance(o, collections.abc.Iterator)
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.push_iterator
+
+    def __repr__(self):
+        return f"<push_iterator>"
+
+class CharmInstructionPushbackOToIterator(CharmInstruction):
+    """
+    pushback_o_to_iterator
+
+    Pushes the value in the 'o' register back on the
+    iterator.
+    """
+
+    def __init__(self):
+        self.op = opcode.pushback_o_to_iterator
+
+    def __repr__(self):
+        return f"<pushback_o_to_iterator>"
+
+class CharmInstructionPopIterator(CharmInstruction):
+    """
+    pop_iterator
+
+    Pops the top value from the iterator stack and
+    sets it as the current iterator, overwriting
+    the reference to the current iterator.
+
+    If the iterator stack is empty,
+    you must abort processing and produce an error.
+    """
+
+    def __init__(self):
+        self.op = opcode.pop_iterator
+
+    def __repr__(self):
+        return f"<pop_iterator>"
 
 class CharmInstructionMapOption(CharmInstruction):
     """
@@ -810,11 +1283,13 @@ class CharmInstructionMapOption(CharmInstruction):
 
     <key> and <parameter> are used in generating
     usage information.  <key> is the converter key
-    for the converter, and <parameter> is the
+    for the converter (callable) which accepts a keyword-only
+    parameter that will be filled by this option,
+    and <parameter> is the keyword-only
     parameter accepted by that converter which this
     option fills.  (The value returned by this program
     becomes the argument for <parameter> when calling
-    the callable in <converter>.)
+    the callable in <parameter.annotation>.)
     """
     __slots__ = ['option', 'program', 'key', 'parameter', 'group']
 
@@ -829,13 +1304,12 @@ class CharmInstructionMapOption(CharmInstruction):
     def __repr__(self):
         return f"<map_option option={self.option!r} program={self.program} key={self.key} parameter={self.parameter} key={self.key} group={self.group}>"
 
-class CharmInstructionConsumePositional(CharmInstruction):
+class CharmInstructionNextToO(CharmInstruction):
     """
-    consume_positional <is_oparg> <required>
+    next_to_o <required> <is_oparg>
 
-    Consumes the next value from the positional arguments
-    iterator and stores it in the 'o' register.
-    If no more values are available, abort the program.
+    Consume the next value from the iterator
+    and store it in the 'o' register.
 
     <is_oparg> is a boolean flag:
         * If <is_oparg> is True, you're consuming an oparg.
@@ -853,51 +1327,57 @@ class CharmInstructionConsumePositional(CharmInstruction):
           and then consume that argument to satisfy this
           instruction.
 
-    <required> is also a boolean flag:
+    <required> is also a boolean flag, and is only considered
+    when the iterator is exhausted.
         * If <required> is True, this argument is required.
-          If there's no string to fill it from the
-          command-line, you should raise a usage exception.
-        * If <required> is False, this argument isn't required.
-          If there's no string to fill it from the
-          command-line, that's fine, you should consider
-          processing a success and exit.
+          If the iterator is exhausted, abort processing and
+          raise a usage exception.
+        * If <required> is False, this argument isn't
+          required.  If the iterator is exhausted, 'o'
+          is set to None and 'flag' to False.
+
+    'flag' is set to True if this consumed a value and set
+    it in the 'o' register, and False if it did not (and
+    <required> is false).
     """
     __slots__ = ['required', 'is_oparg']
 
     def __init__(self, required, is_oparg):
-        self.op = opcode.consume_positional
+        self.op = opcode.next_to_o
         self.required = required
         self.is_oparg = is_oparg
 
     def __repr__(self):
-        return f"<consume_positional required={self.required} is_oparg={self.is_oparg}>"
+        return f"<next_to_o required={self.required} is_oparg={self.is_oparg}>"
 
-class CharmInstructionGetKeyword(CharmInstruction):
+class CharmInstructionLookupToO(CharmInstruction):
     """
-    get_keyword <key> <required>
+    lookup_to_o <key> <required>
 
-    Retrieves a value from the keyword arguments dict,
+    Retrieves the value named <key> from the mapping
     and stores it in the 'o' register.
 
     <key> is the key used to look up the value.
 
     <required> is a boolean flag:
-        * If <required> is True, this argument is required.
-          If there's no string to fill it from the
-          command-line, abort processing and raise a usage
-          exception.
-        * If <required> is False, this argument isn't
-          required.  'o' will be set to None.
+        * If <required> is True, this value is required.
+          If <key> is not currently mapped, you must abort
+          processing and raise a usage exception.
+        * If <required> is False, this value isn't
+          required.  'o' will be set to empty.
+
+    'flag' is set to True if the lookup succeeded,
+    and False if the lookup failed (and <required> is false).
     """
     __slots__ = ['key', 'required']
 
     def __init__(self, key, required):
-        self.op = opcode.get_keyword
+        self.op = opcode.lookup_to_o
         self.key = key
         self.required = required
 
     def __repr__(self):
-        return f"<get_keyword key={self.key} required={self.required}>"
+        return f"<lookup_to_o key={self.key} required={self.required}>"
 
 
 class CharmInstructionFlushMultioption(CharmInstruction): # CharmInstructionNoArgBase
@@ -914,6 +1394,48 @@ class CharmInstructionFlushMultioption(CharmInstruction): # CharmInstructionNoAr
     def __repr__(self):
         return f"<flush_multioption>"
 
+class CharmInstructionRememberConverters(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    remember_converters
+
+    Start tracking the converters created from this
+    point forward, until flush_mulitoption is invoked.
+
+    A bit of a hack--a bugfix for a design flaw.
+    The problem is with MappingCompiler: when you flush a
+    multioption, we should start fresh and recreate
+    all its child converters.  Most of the time we'll
+    create fresh converters automatically.  But if a child
+    converter is also a multioption, the bytecode we
+    generate detects whether or not the converter already
+    exists.
+
+    The correct fix for this will probably involve maintaining
+    a converter *stack*.  Either that, or, make MappingCompiler
+    use separate programs for multioptions, like AppealCompiler
+    does.
+    """
+
+    def __init__(self):
+        self.op = opcode.remember_converters
+
+    def __repr__(self):
+        return f"<remember_converters>"
+
+
+class CharmInstructionForgetConverters(CharmInstruction): # CharmInstructionNoArgBase
+    """
+    forget_converters
+
+    "forget" all remembered
+    converters--delete them from "converters".
+    """
+
+    def __init__(self):
+        self.op = opcode.forget_converters
+
+    def __repr__(self):
+        return f"<forget_converters>"
 
 class CharmInstructionSetGroup(CharmInstruction):
     """
@@ -937,26 +1459,6 @@ class CharmInstructionSetGroup(CharmInstruction):
     def __repr__(self):
         return f"<set_group id={self.id} group={self.group.summary()} optional={self.optional} repeating={self.repeating}>"
 
-class CharmInstructionEnd(CharmInstruction):
-    """
-    end
-
-    Marks the end of a program.  A no-op, exists only
-    to provide some context when reading the trace from
-    a running interpreter.
-    """
-
-    __slots__ = ['name', 'id']
-
-    def __init__(self, name, *, id=None):
-        self.op = opcode.end
-        self.id = id
-        self.name = name
-
-    def __repr__(self):
-        return f"<end id={self.id} name={self.name!r}>"
-
-
 class CharmProgram:
 
     next_id = serial_number_generator(prefix="program-").__next__
@@ -968,9 +1470,12 @@ class CharmProgram:
 
         self.opcodes = []
 
-        # pairs of (index in opcode table, comment)
-        # note that one instruction can have multiple comments.
-        self.comments = []
+        # maps line number to list of comments
+        self.comments = {}
+
+        # same as self.comments, but for labels
+        # (presentation is slightly different)
+        self.labels = {}
 
         # maps option to its parent option (if any)
         # used for usage
@@ -1056,6 +1561,16 @@ class CharmAssembler:
 
     # opcodes
 
+    def abort(self, message):
+        op = CharmInstructionAbort(message)
+        self._append_opcode(op)
+        return op
+
+    def end(self):
+        op = CharmInstructionEnd()
+        self._append_opcode(op)
+        return op
+
     def no_op(self):
         op = CharmInstructionNoOp()
         self._append_opcode(op)
@@ -1073,6 +1588,26 @@ class CharmAssembler:
 
     def jump_to_label(self, label):
         op = CharmInstructionJumpToLabel(label)
+        self._append_opcode(op)
+        return op
+
+    def indirect_jump(self):
+        op = CharmInstructionIndirectJump()
+        self._append_opcode(op)
+        return op
+
+    def literal_to_o(self, value):
+        op = CharmInstructionLiteralToO(value)
+        self._append_opcode(op)
+        return op
+
+    def wrap_o_with_iterator(self):
+        op = CharmInstructionWrapOWithIterator()
+        self._append_opcode(op)
+        return op
+
+    def label_to_o(self, label):
+        op = CharmInstructionLabelToO(label)
         self._append_opcode(op)
         return op
 
@@ -1108,18 +1643,69 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def append_to_args(self, parameter, discretionary):
-        op = CharmInstructionAppendToArgs(
+    def append_to_converter_args(self, parameter, discretionary, usage):
+        op = CharmInstructionAppendToConverterArgs(
             parameter = parameter,
             discretionary = discretionary,
+            usage = usage,
             )
         self._append_opcode(op)
         return op
 
-    def add_to_kwargs(self, name):
-        op = CharmInstructionAddToKwargs(
+    def set_in_converter_kwargs(self, name):
+        op = CharmInstructionSetInConverterKwargs(
             name=name,
             )
+        self._append_opcode(op)
+        return op
+
+    def push_o(self):
+        op = CharmInstructionPushO()
+        self._append_opcode(op)
+        return op
+
+    def pop_o(self):
+        op = CharmInstructionPopO()
+        self._append_opcode(op)
+        return op
+
+    def peek_o(self):
+        op = CharmInstructionPeekO()
+        self._append_opcode(op)
+        return op
+
+    def push_flag(self):
+        op = CharmInstructionPushFlag()
+        self._append_opcode(op)
+        return op
+
+    def pop_flag(self):
+        op = CharmInstructionPopFlag()
+        self._append_opcode(op)
+        return op
+
+    def push_mapping(self):
+        op = CharmInstructionPushMapping()
+        self._append_opcode(op)
+        return op
+
+    def pop_mapping(self):
+        op = CharmInstructionPopMapping()
+        self._append_opcode(op)
+        return op
+
+    def push_iterator(self):
+        op = CharmInstructionPushIterator()
+        self._append_opcode(op)
+        return op
+
+    def pushback_o_to_iterator(self):
+        op = CharmInstructionPushbackOToIterator()
+        self._append_opcode(op)
+        return op
+
+    def pop_iterator(self):
+        op = CharmInstructionPopIterator()
         self._append_opcode(op)
         return op
 
@@ -1140,16 +1726,16 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def consume_positional(self, required=False, is_oparg=False):
-        op = CharmInstructionConsumePositional(
+    def next_to_o(self, required=False, is_oparg=False):
+        op = CharmInstructionNextToO(
             required=required,
             is_oparg=is_oparg,
             )
         self._append_opcode(op)
         return op
 
-    def get_keyword(self, key, required=False):
-        op = CharmInstructionGetKeyword(
+    def lookup_to_o(self, key, required=False):
+        op = CharmInstructionLookupToO(
             key=key,
             required=required,
             )
@@ -1161,8 +1747,53 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def branch_on_o_to_label(self, label):
-        op = CharmInstructionBranchOnOToLabel(label=label)
+    def remember_converters(self):
+        op = CharmInstructionRememberConverters()
+        self._append_opcode(op)
+        return op
+
+    def forget_converters(self):
+        op = CharmInstructionForgetConverters()
+        self._append_opcode(op)
+        return op
+
+    def branch_on_flag_to_label(self, label):
+        op = CharmInstructionBranchOnFlagToLabel(label=label)
+        self._append_opcode(op)
+        return op
+
+    def branch_on_not_flag_to_label(self, label):
+        op = CharmInstructionBranchOnNotFlagToLabel(label=label)
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_true(self):
+        op = CharmInstructionTestIsOTrue()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_none(self):
+        op = CharmInstructionTestIsONone()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_empty(self):
+        op = CharmInstructionTestIsOEmpty()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_iterable(self):
+        op = CharmInstructionTestIsOIterable()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_mapping(self):
+        op = CharmInstructionTestIsOMapping()
+        self._append_opcode(op)
+        return op
+
+    def test_is_o_str_or_bytes(self):
+        op = CharmInstructionTestIsOStrOrBytes()
         self._append_opcode(op)
         return op
 
@@ -1255,6 +1886,10 @@ class CharmAssembler:
         for sublist in self.lists():
             opcodes.extend(sublist)
 
+        if not (opcodes and (opcodes[-1].op == opcode.end)):
+            opcodes.append(CharmInstructionEnd())
+        end_op = opcodes[-1]
+
         labels = {}
         fixups = []
 
@@ -1262,13 +1897,19 @@ class CharmAssembler:
         group = None
         optional = False
 
-        converter = None
-        o = None
-        option = None
-        stack = []
-        groups = []
-
+        # we store these as [index, s] lists initially
+        # then boil them down into dicts mapping index to lists of strings
+        # why? so we can fixup the indexes when we delete opcodes later
         external_comments = []
+        external_labels = []
+
+        labels_seen = set()
+
+        # if 1:
+        #     print()
+        #     print("[assemble step 1 - {len(opcodes)} opcodes]")
+        #     for i, op in enumerate(opcodes):
+        #         print(f">> {i:02} | {op}")
 
         index = 0
         while index < len(opcodes):
@@ -1277,7 +1918,7 @@ class CharmAssembler:
             # handle comments
             if op.op == opcode.comment:
                 if comments == CharmAssembler.EXTERNAL:
-                    external_comments.append((index, op.comment))
+                    external_comments.append([index, op.comment])
                     del opcodes[index]
                 elif comments == CharmAssembler.STRIP:
                     del opcodes[index]
@@ -1288,17 +1929,21 @@ class CharmAssembler:
             # remove labels
             if op.op == opcode.label:
                 if op in labels:
-                    raise AppealConfigurationError(f"label used twice: {op}")
+                    raise AppealConfigurationError(f"label instruction used twice: {op}")
+                if op.label in labels_seen:
+                    raise AppealConfigurationError(f"label description used twice: '{op.label}'")
+                labels_seen.add(op.label)
                 labels[op] = index
+                external_labels.append([index, op.label])
                 del opcodes[index]
-                # forget current registers,
-                # who knows what state the interpreter
-                # will be in when we jump here.
-                converter = o = None
                 continue
             elif op.op == opcode.jump_to_label:
                 fixups.append(index)
-            elif op.op == opcode.branch_on_o_to_label:
+            elif op.op == opcode.branch_on_flag_to_label:
+                fixups.append(index)
+            elif op.op == opcode.branch_on_not_flag_to_label:
+                fixups.append(index)
+            elif op.op == opcode.label_to_o:
                 fixups.append(index)
 
             # remove no_ops
@@ -1306,71 +1951,173 @@ class CharmAssembler:
                 del opcodes[index]
                 continue
 
-            # compute total and group values
-            elif op.op == opcode.set_group:
-                group = op.group
-                optional = op.optional
-                if op.repeating:
-                    total.maximum = math.inf
-            elif op.op == opcode.consume_positional:
-                if not optional:
-                    total.minimum += 1
-                total.maximum += 1
-
-                assert group
-                group.minimum += 1
-                group.maximum += 1
-
-                o = '(string value)'
-
-            # discard redundant load_converter and load_o ops
-            # using dataflow analysis
-            elif op.op == opcode.load_converter:
-                if converter == op.key:
-                    del opcodes[index]
-                    continue
-                converter = op.key
-            elif op.op == opcode.load_o:
-                if o == op.key:
-                    del opcodes[index]
-                    continue
-                o = op.key
-            elif op.op == opcode.converter_to_o:
-                if o == converter:
-                    del opcodes[index]
-                    continue
-                o = converter
-            elif op.op == opcode.create_converter:
-                o = op.key
-
             index += 1
+
+        # if 1:
+        #     print()
+        #     print("[assemble step 2 - {len(opcodes)} opcodes]")
+        #     for i, op in enumerate(opcodes):
+        #         print(f">> {i:02} | {op}")
 
         # now process jump fixups:
         # replace *_to_label ops with absolute jump ops
         replacement_op = {
             opcode.jump_to_label: CharmInstructionJump,
-            opcode.branch_on_o_to_label: CharmInstructionBranchOnO,
+            opcode.branch_on_flag_to_label: CharmInstructionBranchOnFlag,
+            opcode.branch_on_not_flag_to_label: CharmInstructionBranchOnNotFlag,
+            opcode.label_to_o: CharmInstructionLiteralToO,
         }
+        jump_ops = { opcode.jump_to_label, opcode.jump }
+        fixup_ops = []
         for index in fixups:
             op = opcodes[index]
             address = labels.get(op.label)
             if address is None:
                 raise AppealConfigurationError(f"unknown label {op.label}")
-            opcodes[index] = replacement_op[op.op](address)
+            replacement = replacement_op[op.op](address)
+            opcodes[index] = replacement
+            fixup_ops.append(replacement)
 
+        # if 1:
+        #     print()
+        #     print("[assemble step 3 - {len(opcodes)} opcodes]")
+        #     for i, op in enumerate(opcodes):
+        #         print(f">> {i:02} | {op}")
+
+        jump_targets = set()
         # and *now* do a jump-to-jump peephole optimization
         # (I don't know if Appeal *can* actually generate jump-to-jumps)
         for index in fixups:
-            op = opcodes[index]
             while True:
-                op2 = opcodes[op.address]
-                if op2.op != opcode.jump:
+                op = opcodes[index]
+                op_attr = 'value' if op.op == opcode.literal_to_o else 'address'
+                address = getattr(op, op_attr)
+                # print(f"fixing up {op=}, at {index=}, {address=}")
+                op2 = opcodes[address]
+                if op2.op not in jump_ops:
+                    jump_targets.add(address)
                     break
-                op.address = op2.address
+                setattr(op, op_attr, op2.address)
 
-        # add end instruction
-        end_op = CharmInstructionEnd(self.name)
-        opcodes.append(end_op)
+        jump_targets = list(jump_targets)
+        jump_targets.sort(reverse=True)
+
+        # remove redundant load_converter,
+        # load_o, and converter_to_o ops
+
+        class Unknown:
+            def __repr__(self):
+                return "<Unknown>"
+
+        unknown = Unknown()
+        converter = unknown
+        o = unknown
+        stack = []
+        groups = []
+
+        def reset_registers():
+            # if 1 and want_prints:
+            #     print("*reset!* jump target!")
+            nonlocal converter
+            nonlocal o
+
+            converter = unknown
+            o = unknown
+
+        # if 1 and want_prints:
+        #     print("\nremoving redundant loads\n")
+        #     def print_op():
+        #         print(f"[{index:02}] {converter=} {o=} {op}", end=' ')
+
+        #     def nc():
+        #         print("no change")
+
+        def remove_op():
+            # if 1 and want_prints:
+            #     print(f" >>> deleting! redundant. <<<")
+            del opcodes[index]
+            for i in range(len(jump_targets)):
+                assert jump_targets[i] > index
+                jump_targets[i] -= 1
+            for op in fixup_ops:
+                op_attr = 'value' if op.op == opcode.literal_to_o else 'address'
+                address = getattr(op, op_attr)
+                if address > index:
+                    setattr(op, op_attr, address - 1)
+            for parent in (external_comments, external_labels):
+                for l in parent:
+                    if l[0] > index:
+                        l[0] -= 1
+
+        # if 1 and want_prints:
+        #     print("jump targets ", jump_targets)
+        index = 0
+        while index < len(opcodes):
+            if jump_targets and (jump_targets[-1] == index):
+                jump_targets.pop()
+                reset_registers()
+
+            op = opcodes[index]
+
+            # compute total and group values
+            # if 1 and want_prints:
+            #     print_op()
+            if op.op == opcode.set_group:
+                group = op.group
+                optional = op.optional
+                if op.repeating:
+                    total.maximum = math.inf
+                # if 1 and want_prints:
+                #     nc()
+            elif op.op == opcode.next_to_o:
+                if not optional:
+                    total.minimum += 1
+                total.maximum += 1
+
+                if group:
+                    group.minimum += 1
+                    group.maximum += 1
+
+                o = '(string value)'
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
+            elif op.op == opcode.lookup_to_o:
+                o = unknown
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
+            # discard redundant load_converter and load_o ops
+            # using dataflow analysis
+            elif op.op == opcode.load_converter:
+                if converter == op.key:
+                    remove_op()
+                    continue
+                converter = op.key
+                # if 1 and want_prints:
+                #     print(f"converter -> {converter}")
+            elif op.op == opcode.load_o:
+                if o == op.key:
+                    remove_op()
+                    continue
+                o = op.key
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
+            elif op.op == opcode.converter_to_o:
+                if o == converter:
+                    remove_op()
+                    continue
+                o = converter
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
+            elif op.op == opcode.create_converter:
+                o = op.key
+                # if 1 and want_prints:
+                #     print(f"o -> {o}")
+            else:
+                pass
+                # if 1 and want_prints:
+                #     nc()
+
+            index += 1
 
         program = CharmProgram(self.name)
         program.opcodes = opcodes
@@ -1379,7 +2126,17 @@ class CharmAssembler:
         program.total = total
         program.option_to_child_options = self.option_to_child_options
         program.option_to_parent_options = self.option_to_parent_options
-        program.comments = external_comments
+
+        comments = defaultdict(list)
+        for index, comment in external_comments:
+            comments[index].append(comment)
+        program.comments = comments
+
+        labels = defaultdict(list)
+        for index, label in external_labels:
+            labels[index].append(label)
+        program.labels = labels
+
         return program
 
 
@@ -1391,7 +2148,7 @@ class CharmCompiler:
     * CharmCommandCompiler compiles an Appeal "command".
     * CharmOptionCompiler compiles an "option" for an Appeal "command".
     * CharmMappingCompiler compiles a reader for a mapping.
-    * CharmIterableCompiler compiles a reader for an iterable.
+    * CharmIteratorCompiler compiles a reader for an iterator.
 
     In general the workflow is like this:
 
@@ -1416,6 +2173,8 @@ class CharmCompiler:
         self.name = name
         self.indent = indent
 
+        self.root_a = CharmAssembler(self.name)
+
         self.next_converter_key = serial_number_generator(prefix=self.next_compilation_id() + '_k-').__next__
 
     @staticmethod
@@ -1430,22 +2189,95 @@ class CharmCompiler:
                 continue
             break
 
+        # in Python 3.11, inspect.Parameter won't allow you to use
+        # 'lambda' (or '<lambda>') as a parameter name.  And we aren't
+        # doing that... not *really*.  It's not a *real* Parameter,
+        # we just use one of those because of the way _compile recurses.
+        # But if we're compiling a lambda function, we create a
+        # Parameter out of the function's name, which is '<lambda>',
+        # and, well... we gotta use *something*.  (hope this works!)
+
         parameter = inspect.Parameter("___fake_name___", kind, annotation=callable, default=default)
         parameter._name = parameter_name
         return parameter
+
+    def clean_up_argument_group(self):
+        pass
+
 
     def assemble(self):
         """
         Assembles all the instructions together to produce a final program.
         """
+        if self.processor and self.processor.log:
+            self.processor.log.enter(f"assemble {self.name}")
 
         self.clean_up_argument_group()
 
         self.program = self.root_a.assemble()
+
+        if self.processor and self.processor.log:
+            self.processor.log.exit()
+
         return self.program
 
 
 class CharmAppealCompiler(CharmCompiler):
+
+    def __init__(self, appeal, processor, parameter, *, indent='', name=''):
+        name = name or parameter.name
+        super().__init__(appeal, processor, indent=indent, name=name)
+        self.command_converter_key = None
+
+        # The compiler is effectively two passes.
+        #
+        # First, we iterate over the annotation tree generating instructions.
+        # These go into discrete "assemblers" which are carefully ordered in
+        # the self.assemblers list.
+        #
+        # Second, we root_a.finalize(), which assembles the final program.
+
+        callable = dereference_annotated(parameter.annotation)
+        default = parameter.default
+
+        indent = self.indent
+
+        # options defined in the current argument group
+        self.ag_a = self.ag_initialize_a = None
+        self.ag_options_a = self.ag_duplicate_options_a = None
+        self.ag_options = set()
+        self.ag_duplicate_options = set()
+        self.next_argument_group_id = serial_number_generator(prefix=f"{name} ag-").__next__
+
+        self.new_argument_group(optional=False, indent=indent)
+
+        if self.processor:
+            self.processor.log.enter(f"compile {callable}")
+
+        # if want_prints:
+        #     print(f"[cc]")
+        #     print(f"[cc] {indent}Compiling '{self.name}'")
+        #     print(f"[cc]")
+
+        if self.processor:
+            self.processor.log("parameter grouper")
+        def signature(p):
+            cls = self.appeal.map_to_converter(p)
+            signature = cls.get_signature(p)
+            return signature
+        pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
+        pgi = pg.iter_all()
+
+        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent, name)
+
+        # if want_prints:
+        #     print(f"[cc] {indent}compilation of {parameter} complete.")
+        #     print(f"[cc]")
+
+        if self.processor:
+            self.processor.log.exit()
+
+        self.add_to_parent_a = add_to_parent_a
 
     def clean_up_argument_group(self, indent=''):
         if self.ag_a:
@@ -1492,7 +2324,7 @@ class CharmAppealCompiler(CharmCompiler):
         #     instructions for options that *have* been mapped before
         #     in this argument group.  Initially this is None, and
         #     then we create a fresh one after emitting every
-        #     consume_positional opcode.
+        #     next_to_o opcode.
         #
         # What's this about duplicate options?  It's Appeal trying
         # to be a nice guy, to bend over backwards and allow crazy
@@ -1538,7 +2370,7 @@ class CharmAppealCompiler(CharmCompiler):
         # Appeal permits this because it isn't actually ambiguous.
         # It permits you to map the same option twice in one argument
         # group *provided that* it can intelligently map the duplicate
-        # option after a consume_positional opcode--between positional
+        # option after a next_to_o opcode--between positional
         # parameters.  So usage looks like this:
         #
         #     base [-v] a b c [-o] d e f [-o] d e f
@@ -1573,7 +2405,7 @@ class CharmAppealCompiler(CharmCompiler):
         ag_a.append(a)
 
         # initially in an argument group we don't allow duplicate options.
-        # you can only have duplicates after the first consume_positional
+        # you can only have duplicates after the first next_to_o
         # opcode in an argument group.
         self.ag_duplicate_options_a = None
         self.ag_duplicate_options.clear()
@@ -1587,7 +2419,7 @@ class CharmAppealCompiler(CharmCompiler):
         can get mapped.
 
         Call this immediately after you append a positional argument
-        (append_to_args).  Every time.
+        (append_to_converter_args).  Every time.
         """
         if self.ag_duplicate_options:
             self.ag_duplicate_options.clear()
@@ -1628,6 +2460,9 @@ class CharmAppealCompiler(CharmCompiler):
         #     print(f"[cc]")
 
         cls = self.appeal.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+
         if cls is SimpleTypeConverterStr:
             # hand-coded program to handle this option that takes
             # a single required str argument.
@@ -1635,7 +2470,7 @@ class CharmAppealCompiler(CharmCompiler):
             #     print(f"[cc] {indent}hand-coded program for simple str")
             a = CharmAssembler(program_name)
             a.set_group(self.next_argument_group_id(), optional=False)
-            a.consume_positional(required=True, is_oparg=True)
+            a.next_to_o(required=True, is_oparg=True)
             add_to_self_a = cc = a
         else:
             annotation = dereference_annotated(parameter.annotation)
@@ -1764,20 +2599,21 @@ class CharmAppealCompiler(CharmCompiler):
 
                 cc, add_to_self_a = self.compile_option(program_name, parameter, indent)
                 add_to_self_a.load_converter(key=key)
-                add_to_self_a.add_to_kwargs(name=parameter.name)
+                add_to_self_a.set_in_converter_kwargs(name=parameter.name)
                 program = cc.assemble()
 
                 for option in options:
                     # option doesn't have to be unique in this argument group,
-                    # but it must be unique per consumed argument.
-                    # (you can't define the same option twice without at least one consume_positional between.)
+                    # but it must be unique per command-line argument.
+                    # (you can't define the same option twice without at least one next_to_o between.)
 
                     if option not in self.ag_options:
                         self.ag_options.add(option)
+                        self.ag_duplicate_options.add(option)
                         destination = self.ag_options_a
-                    elif self.ag_duplicate_options_a:
+                    elif self.ag_duplicate_options_a is not None:
                         if option in self.ag_duplicate_options:
-                            raise AppealConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no arguments consumed in between definitions)")
+                            raise AppealConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no command-line arguments between definitions)")
                         destination = self.ag_duplicate_options_a
                         self.ag_duplicate_options.add(option)
                     else:
@@ -1791,7 +2627,7 @@ class CharmAppealCompiler(CharmCompiler):
 
         return mapped_options
 
-    def compile_parameter(self, parameter, pgi, depth, indent):
+    def compile_parameter(self, parameter, pgi, depth, indent, usage_name):
         """
         returns add_to_self_a, is_degenerate
 
@@ -1803,7 +2639,7 @@ class CharmAppealCompiler(CharmCompiler):
         is_degenerate is a boolean, True if this entire subtree is "degenerate".
         """
         if self.processor:
-            self.processor.log_enter_context(f"compile parameter {parameter.name}")
+            self.processor.log.enter(f"compile parameter {parameter.name}")
 
         # if want_prints:
         #     print(f"[cc] {indent}compile_parameter {parameter}")
@@ -1825,6 +2661,8 @@ class CharmAppealCompiler(CharmCompiler):
         signature = cls.get_signature(parameter)
         parameters = signature.parameters
 
+        _, _, positionals = self.appeal.root.fn_database_lookup(callable)
+
         # if want_prints:
         #     print(f"[cc] {indent}cls={cls}")
         #     if not parameters:
@@ -1836,8 +2674,7 @@ class CharmAppealCompiler(CharmCompiler):
         #         print(f"[cc] {indent}    )")
         #     print(f"[cc]")
 
-        # is_degenerate only applies to depth > 1.
-        is_degenerate = (not depth) and (len(parameters) < 2)
+        is_degenerate = (depth > 0) and (len(parameters) < 2)
 
         # if want_prints:
         #     print(f"[cc] {indent}is_degenerate={is_degenerate}")
@@ -1859,7 +2696,8 @@ class CharmAppealCompiler(CharmCompiler):
 
             assert self.command_converter_key
             load_o_op = self.ag_initialize_a.load_o(key=self.command_converter_key)
-            self.ag_initialize_a.branch_on_o_to_label(label_flush_multioption)
+            self.ag_initialize_a.test_is_o_true()
+            self.ag_initialize_a.branch_on_flag_to_label(label_flush_multioption)
         # else:
         #     assert not issubclass(cls, MultiOption), f"{cls=} IS a MultiOption"
 
@@ -1873,7 +2711,9 @@ class CharmAppealCompiler(CharmCompiler):
             self.ag_initialize_a.jump_to_label(label_after_multioption)
             self.ag_initialize_a.append(label_flush_multioption)
             self.ag_initialize_a.flush_multioption()
+            self.ag_initialize_a.forget_converters()
             self.ag_initialize_a.append(label_after_multioption)
+            self.ag_initialize_a.remember_converters()
 
         # we need to delay mapping options sometimes.
         #
@@ -1928,6 +2768,7 @@ class CharmAppealCompiler(CharmCompiler):
 
             if p.kind == VAR_POSITIONAL:
                 label = self.body_a.label("var_positional")
+                self.body_a.remember_converters()
                 index = -1
             else:
                 index = i
@@ -1939,7 +2780,13 @@ class CharmAppealCompiler(CharmCompiler):
             #     usage = usage_parameter = parameter_name
 
             # usage = positionals.get(parameter_name, usage)
-            usage = "-x"
+            # usage = "-x"
+            if not is_degenerate:
+                usage_name = parameter_name
+            # handle @app.parameter name override
+            override = positionals.get(parameter_name)
+            if override:
+                usage_name = override
 
             # only create new groups here if it's an optional group
             # (we pre-create the initial, required group)
@@ -1960,30 +2807,40 @@ class CharmAppealCompiler(CharmCompiler):
 
             spill_options()
 
-
             if cls is SimpleTypeConverterStr:
                 # if want_prints:
-                #     print(f"[cc] {indent}    simple str converter, consume_positional and append.")
-                self.body_a.consume_positional(required=pgi_parameter.required, is_oparg=isinstance(self, CharmOptionCompiler))
+                #     print(f"[cc] {indent}    simple str converter, next_to_o and append.")
+                required = pgi_parameter.required
+                self.body_a.next_to_o(required=required, is_oparg=isinstance(self, CharmOptionCompiler))
+                if not required:
+                    label2 = CharmInstructionLabel(f'{callable.__name__}.{parameter_name}: exit after optional argument')
+                    self.body_a.branch_on_flag_to_label(label2)
+                    self.body_a.end()
+                    self.body_a.append(label2)
+
                 discretionary = False
                 add_to_self_a = self.body_a
+                self.reset_duplicate_options_a()
             else:
                 # if want_prints:
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
-                add_to_self_a, is_degenerate_subtree = self.compile_parameter(p, pgi, depth + 1, indent + "    ")
+                add_to_self_a, is_degenerate_subtree = self.compile_parameter(p, pgi, depth + 1, indent + "    ", usage_name)
                 is_degenerate = is_degenerate and is_degenerate_subtree
 
             add_to_self_a.load_converter(key=converter_key)
-            add_to_self_a.append_to_args(
+
+            usage_full_name = (f"{callable.__name__}.{p.name}", usage_name)
+            usage = (f"{callable.__name__}.{p.name}", usage_name)
+            add_to_self_a.append_to_converter_args(
                 parameter=parameter_name,
                 discretionary=discretionary,
+                usage=usage,
                 )
-
-            self.reset_duplicate_options_a()
 
             if p.kind == VAR_POSITIONAL:
                 group.repeating = True
+                self.body_a.forget_converters()
                 self.body_a.jump_to_label(label)
 
             # if want_prints:
@@ -1992,76 +2849,9 @@ class CharmAppealCompiler(CharmCompiler):
         spill_options()
 
         if self.processor:
-            self.processor.log_exit_context()
+            self.processor.log.exit()
 
         return add_to_parent_a, is_degenerate
-
-    def __init__(self, appeal, processor, parameter, *, indent='', name=''):
-        name = name or parameter.name
-        super().__init__(appeal, processor, indent=indent, name=name)
-        self.command_converter_key = None
-
-        # The compiler is effectively two passes.
-        #
-        # First, we iterate over the annotation tree generating instructions.
-        # These go into discrete "assemblers" which are carefully ordered in
-        # the self.assemblers list.
-        #
-        # Second, we root_a.finalize(), which assembles the final program.
-
-        callable = dereference_annotated(parameter.annotation)
-        default = parameter.default
-
-        indent = self.indent
-
-        self.root_a = CharmAssembler(self.name)
-
-        # options defined in the current argument group
-        self.ag_a = self.ag_initialize_a = None
-        self.ag_options_a = self.ag_duplicate_options_a = None
-        self.ag_options = set()
-        self.ag_duplicate_options = set()
-        self.next_argument_group_id = serial_number_generator(prefix=f"{name} ag-").__next__
-
-        self.new_argument_group(optional=False, indent=indent)
-
-        self.name_to_callable = {}
-
-        if self.processor:
-            self.processor.log_enter_context(f"compile {callable}")
-
-        # if want_prints:
-        #     print(f"[cc]")
-        #     print(f"[cc] {indent}Compiling '{self.name}'")
-        #     print(f"[cc]")
-
-        # in Python 3.11, inspect.Parameter won't allow you to use
-        # 'lambda' (or '<lambda>') as a parameter name.  And we aren't
-        # doing that... not *really*.  It's not a *real* Parameter,
-        # we just use one of those because of the way _compile recurses.
-        # But if we're compiling a lambda function, we create a
-        # Parameter out of the function's name, which is '<lambda>',
-        # and, well... we gotta use *something*.  (hope this works!)
-
-        if self.processor:
-            self.processor.log_event("parameter grouper")
-        def signature(p):
-            cls = self.appeal.map_to_converter(p)
-            signature = cls.get_signature(p)
-            return signature
-        pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
-        pgi = pg.iter_all()
-
-        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent)
-
-        # if want_prints:
-        #     print(f"[cc] {indent}compilation of {parameter} complete.")
-        #     print(f"[cc]")
-
-        if self.processor:
-            self.processor.log_exit_context()
-
-        self.add_to_parent_a = add_to_parent_a
 
 
 class CharmCommandCompiler(CharmAppealCompiler):
@@ -2081,11 +2871,413 @@ class CharmOptionCompiler(CharmAppealCompiler):
     pass
 
 
-class CharmMappingCompiler(CharmCompiler):
-    pass
 
-class CharmIterableCompiler(CharmCompiler):
-    pass
+class CharmMappingCompiler(CharmCompiler):
+
+    def __init__(self, appeal, processor, callable, *, indent='', name=''):
+        name = name or callable.__name__
+        super().__init__(appeal, processor, indent=indent, name=name)
+
+        if self.processor:
+            self.processor.log.enter(f"compile {name}")
+
+        # if want_prints:
+        #     print(f"[cm]")
+        #     print(f"[cm] {indent}Compiling '{self.name}'")
+        #     print(f"[cm]")
+
+        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
+        self.compile_parameter(parameter, indent, force_unnested=True)
+
+        self.root_a.end()
+
+        if self.processor:
+            self.processor.log.exit()
+
+    # a "parent's name" can be a special value CONSUME
+
+    def compile_parameter(self, parameter, indent, *, by_name=True, degenerate_name=None, depth=0, degenerate_multioption=False, force_unnested=False):
+        """
+        returns 2-tuple
+            (child_converter_key, is_degenerate)
+        """
+        if self.processor:
+            self.processor.log.enter(f"compile parameter {parameter.name}")
+
+        # if want_prints:
+        #     print(f"[cm] {indent}compile_parameter {parameter=}")
+        #     indent += "    "
+        #     required = "yes" if parameter.default is empty else "no"
+        #     print(f"[cm] {indent}by_name {by_name!r}")
+        #     print(f"[cm] {indent}degenerate_name {degenerate_name!r}")
+        #     print(f"[cm] {indent}degenerate_multioption {degenerate_multioption!r}")
+        #     print(f"[cm] {indent}depth {depth}")
+        #     print(f"[cm] {indent}required? {required}")
+        #     print(f"[cm]")
+
+        # the official and *only correct* way
+        # to produce a converter from a parameter.
+        cls = self.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+
+        signature = cls.get_signature(parameter)
+        parameters = signature.parameters
+
+        if not len(parameters):
+            raise AppealConfigurationError("Sorry, can't process a converter that takes no parameters here")
+
+        converter_key = self.next_converter_key()
+        a = self.root_a
+
+        only_one_parameter = len(parameters) == 1
+        is_degenerate = (depth > 0) and only_one_parameter
+        multioption = issubclass(cls, MultiOption)
+        unnested_requested = callable in self.root.unnested_converters
+        nested = not (force_unnested or unnested_requested or multioption)
+        required = parameter.default is empty
+        force_non_recursive = False
+
+        if not is_degenerate:
+            degenerate_name = None
+
+        # if want_prints:
+        #     print(f"[cm] {indent}cls={cls}")
+        #     if not parameters:
+        #         print(f"[cm] {indent}signature=()")
+        #     else:
+        #         print(f"[cm] {indent}signature=(")
+        #         for _k, _v in parameters.items():
+        #             print(f"[cm] {indent}    {_v},")
+        #         print(f"[cm] {indent}    )")
+        #     print(f"[cm] {indent}is_degenerate={is_degenerate}")
+        #     print(f"[cm] {indent}multioption={multioption}")
+        #     print(f"[cm] {indent}nested={nested} (force_unnested={force_unnested}, callable in self.root.unnested_converters = {callable in self.root.unnested_converters})")
+        #     print(f"[cm] {indent}only_one_parameter={only_one_parameter}")
+        #     print(f"[cm] {indent}required={required}")
+        #     print(f"[cm]")
+
+        def get_argument_to_o(a, name, required):
+            if by_name:
+                a.lookup_to_o(name, required=required)
+            else:
+                a.next_to_o(required=required, is_oparg=True, usage_name=name)
+
+        if multioption:
+            by_name = False
+
+            label_prefix = f'[mo] {parameter.name}: '
+            def Label(s):
+                return CharmInstructionLabel(label_prefix + s)
+
+            label_next = Label('multioption, next')
+            label_done = Label(f'multioption, done')
+            label_flush = Label('multioption, flush')
+
+            # do we have a value to process with the multioption?
+            # if not, goto done.
+            a.append(label_next)
+            a.next_to_o(required=False, is_oparg=True, usage_name=parameter.name)
+            a.branch_on_not_flag_to_label(label_done)
+
+            # we do.  push o, so we can examine it later.
+            # has the converter been created?  if so, goto flush,
+            # else create it.
+            a.push_o()
+            a.load_o(key=converter_key)
+            a.branch_on_flag_to_label(label_flush)
+
+            # converter hasn't been created yet.
+            # and... why, lookee here!
+
+        a.create_converter(parameter=parameter, key=converter_key)
+
+        if multioption:
+            assert not nested
+            label_analyze_iterated_value = Label(f'{parameter.name}: multioption, analyze iterated value')
+            label_o_is_a_mapping = Label(f'{parameter.name}: multioption, o is a mapping')
+            label_pop_mapping = Label(f'{parameter.name}: multioption, pop mapping')
+            label_pop_iterator = Label(f'{parameter.name}: multioption, pop iterator')
+
+            # created converter, goto test is o a mapping.
+            a.jump_to_label(label_analyze_iterated_value)
+
+            # converter already existed, flush.
+            a.append(label_flush)
+            a.flush_multioption()
+            a.forget_converters()
+
+            a.append(label_analyze_iterated_value)
+            a.pop_o()
+            a.remember_converters()
+
+            if only_one_parameter:
+                a.wrap_o_with_iterator()
+                a.push_iterator()
+                by_name = False
+            else:
+                # is o a mapping?
+                a.test_is_o_mapping()
+                a.branch_on_flag_to_label(label_o_is_a_mapping)
+                a.abort("MultiOption {callable.__name__} requires multiple parameters, iterable only yielded an individual object")
+
+                # o is a mapping.  push it to mapping stack and process arguments.
+                a.append(label_o_is_a_mapping)
+                by_name = True
+                a.push_mapping()
+
+        elif nested:
+            label_o_is_a_mapping = CharmInstructionLabel(f"{parameter.name}: nested, o is a mapping")
+            label_process_arguments = CharmInstructionLabel(f"{parameter.name}: nested, process arguments")
+            name = degenerate_name or parameter.name
+            get_argument_to_o(a, name, required)
+            a.test_is_o_mapping()
+            a.push_flag()
+            a.branch_on_flag_to_label(label_o_is_a_mapping)
+            if not by_name:
+                a.pushback_o_to_iterator()
+            a.jump_to_label(label_process_arguments)
+            a.append(label_o_is_a_mapping)
+            a.push_mapping()
+            a.append(label_process_arguments)
+
+        for child in parameters.values():
+            if child.kind is VAR_POSITIONAL:
+                raise AppealConfigurationError(f"{callable.__name__}: parameter *{child.name} is unsupported for CharmMappingCompiler")
+            if child.kind is VAR_KEYWORD:
+                raise AppealConfigurationError(f"{callable.__name__}: parameter **{child.name} is unsupported for CharmMappingCompiler")
+
+            child_annotation = dereference_annotated(child.annotation)
+            if not is_legal_annotation(child_annotation):
+                raise AppealConfigurationError(f"{callable.__name__}: parameter {child.name} annotation is {child_annotation}, which you can't use directly, you must call it")
+
+            # FIXME it's lame to do this again here,
+            # you should rewrite compile_parameter so it
+            # always recurses for positional parameters
+            child_cls = self.root.map_to_converter(child)
+            child_converter = child_cls(child, self.appeal)
+            child_callable = child_converter.callable
+            child_multioption = issubclass(child_cls, MultiOption)
+
+            child_required = child.default is empty
+            child_discretionary = not child_required
+            child_write_to_kwargs = (child.kind is KEYWORD_ONLY) or ((child.kind is POSITIONAL_OR_KEYWORD) and child_discretionary)
+
+            label_got_value = CharmInstructionLabel(f"child {child.name}, got value")
+
+            # if want_prints:
+            #     print(f"[cm] {indent} {child=} {child_cls=} {child_converter=} {child_callable=} {child_multioption=}")
+            if child_cls is SimpleTypeConverterStr:
+                name = degenerate_name or child.name
+                get_argument_to_o(a, name, child_required)
+
+                label_got_value = CharmInstructionLabel(f"child {child.name}, got value")
+                a.branch_on_flag_to_label(label_got_value)
+                if child_discretionary:
+                    a.literal_to_o(child.default)
+                else:
+                    a.abort("{child.name} is required but was not set in the mapping")
+                a.append(label_got_value)
+
+            else:
+                if child_multioption:
+                    name = degenerate_name or child.name
+                    label_o_is_iterable = CharmInstructionLabel(f"child {child.name}, o is iterable")
+                    get_argument_to_o(a, name, child_required)
+
+                    a.branch_on_flag_to_label(label_got_value)
+                    if child_discretionary:
+                        a.literal_to_o(child.default)
+                    else:
+                        a.abort("{child.name} is required but was not available")
+                    a.append(label_got_value)
+
+                    a.test_is_o_iterable()
+                    a.branch_on_flag_to_label(label_o_is_iterable)
+                    a.abort("value in o is not iterable")
+                    a.append(label_o_is_iterable)
+                    a.push_iterator()
+
+                child_key, child_is_degenerate = self.compile_parameter(child, indent + "    ", depth=depth + 1, by_name=by_name, degenerate_name=degenerate_name or child.name)
+                # if want_prints:
+                #     print(f"[cm] {indent} {child_key=} {child_is_degenerate=}")
+
+                if child_multioption:
+                    # if want_prints:
+                    #     print(f"[cm] {indent} generate push / pop iterator (child_multioption)")
+                    a.pop_iterator()
+                    # I think multioptions can't be degenerate.
+                    is_degenerate = False
+
+                a.load_o(child_key)
+                is_degenerate = is_degenerate and child_is_degenerate
+
+            a.load_converter(converter_key)
+            if child_write_to_kwargs:
+                a.set_in_converter_kwargs(child.name)
+            else:
+                a.append_to_converter_args(parameter=child, discretionary=False, usage=None)
+
+            # if want_prints:
+            #     print(f"[cm]")
+
+        if multioption:
+            # okay.  we processed arguments.
+            if only_one_parameter:
+                a.pop_iterator()
+            else:
+                a.pop_mapping()
+            a.jump_to_label(label_next)
+            a.append(label_done)
+            a.forget_converters()
+        elif nested:
+            label_done = CharmInstructionLabel(f"{parameter.name}: nested, done")
+            a.pop_flag()
+            a.branch_on_not_flag_to_label(label_done)
+            a.pop_mapping()
+            a.append(label_done)
+
+        if self.processor:
+            self.processor.log.exit()
+
+        # if want_prints:
+        #     print(f"[cm] {indent}compile_parameter({parameter}) returning {converter_key=} {is_degenerate=}")
+        return converter_key, is_degenerate
+
+
+
+class CharmIteratorCompiler(CharmCompiler):
+
+    def __init__(self, appeal, processor, callable, *, indent='', name=''):
+        name = name or callable.__name__
+        super().__init__(appeal, processor, indent=indent, name=name)
+
+        if self.processor:
+            self.processor.log.enter(f"compile {name}")
+
+        # if want_prints:
+        #     print(f"[cm]")
+        #     print(f"[cm] {indent}Compiling '{self.name}'")
+        #     print(f"[cm]")
+
+        parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
+        self.root_a = CharmAssembler(name)
+
+        cls = self.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+        self.label_done = CharmInstructionLabel('done')
+
+        child_key = self.compile_parameter(parameter, indent)
+
+        self.root_a.append(self.label_done)
+        self.root_a.end()
+
+        if self.processor:
+            self.processor.log.exit()
+
+    def compile_parameter(self, parameter, indent, *, depth=0, force_not_required = False):
+        """
+        returns 2-tuple
+            (child_converter_key, is_degenerate)
+        """
+        if self.processor:
+            self.processor.log.enter(f"compile parameter {parameter.name}")
+
+        # if want_prints:
+        #     print(f"[cm] {indent}compile_parameter {parameter=}")
+        #     indent += "    "
+        #     required = "yes" if parameter.default is empty else "no"
+        #     print(f"[cm] {indent}required? {required}")
+        #     print(f"[cm] {indent}depth {depth}")
+        #     print(f"[cm]")
+
+        # the official and *only correct* way
+        # to produce a converter from a parameter.
+        cls = self.root.map_to_converter(parameter)
+        converter = cls(parameter, self.appeal)
+        callable = converter.callable
+
+        signature = cls.get_signature(parameter)
+        parameters = signature.parameters
+
+        # if want_prints:
+        #     print(f"[cm] {indent}cls={cls}")
+        #     if not parameters:
+        #         print(f"[cm] {indent}signature=()")
+        #     else:
+        #         print(f"[cm] {indent}signature=(")
+        #         for _k, _v in parameters.items():
+        #             print(f"[cm] {indent}    {_v},")
+        #         print(f"[cm] {indent}    )")
+        #     print(f"[cm]")
+
+        # if want_prints:
+        #     print(f"[cm] {indent}len(parameters)={len(parameters)}")
+        #     print(f"[cm]")
+
+        converter_key = self.next_converter_key()
+
+        a = self.root_a
+
+        a.create_converter(parameter=parameter, key=converter_key)
+        is_degenerate = (not depth) and (len(parameters) < 2)
+
+        for child in parameters.values():
+            child_annotation = dereference_annotated(child.annotation)
+            if not is_legal_annotation(child_annotation):
+                raise AppealConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
+
+            if child.kind is KEYWORD_ONLY:
+                raise AppealConfigurationError("{callable.__name__}: keyword-only parameter {parameter.name!r} is unsupported for CharmIteratorCompiler")
+            if child.kind is VAR_KEYWORD:
+                raise AppealConfigurationError("{callable.__name__}: parameter **{parameter.name!r} is unsupported for CharmIteratorCompiler")
+            var_positional = child.kind is VAR_POSITIONAL
+
+
+            # FIXME it's lame to do this here,
+            # you need to rewrite compile_parameter so it
+            # always recurses for positional parameters
+            child_cls = self.root.map_to_converter(child)
+            child_converter = child_cls(child, self.appeal)
+            child_callable = child_converter.callable
+
+            if var_positional:
+                required = False
+                label_remember = CharmInstructionLabel('remember')
+                a.jump_to_label(label_remember)
+                label_again = a.label('again')
+                a.forget_converters()
+                a.append(label_remember)
+                a.remember_converters()
+            else:
+                required = (child.default is empty) and (not force_not_required)
+
+            # if want_prints:
+            #     print(f"[cm] {indent} {child=} {child_cls=} {child_converter=} {child_callable=}")
+            if child_cls is SimpleTypeConverterStr:
+                a.next_to_o(required=required, is_oparg=True, usage_name=child.name)
+                if not required:
+                    a.branch_on_not_flag_to_label(self.label_done)
+            else:
+                child_key, child_is_degenerate = self.compile_parameter(child, indent + "    ", depth=depth + 1, force_not_required=not required)
+                a.load_o(child_key)
+
+            a.load_converter(converter_key)
+            a.append_to_converter_args(parameter=child, discretionary=False, usage=None)
+
+            is_degenerate = is_degenerate and child_is_degenerate
+
+            if var_positional:
+                a.jump_to_label(label_again)
+
+            # if want_prints:
+            #     print(f"[cm]")
+
+        if self.processor:
+            self.processor.log.exit()
+
+        return converter_key, is_degenerate
 
 
 
@@ -2095,8 +3287,9 @@ def charm_print(program, indent=''):
     seen = set((program.id,))
     specially_formatted_opcodes = set((opcode.comment, opcode.label))
 
-    comments = list(program.comments)
-    comments.reverse()
+    comments = program.comments
+    labels = program.labels
+
     while programs:
         if print_divider:
             print("________________")
@@ -2111,16 +3304,27 @@ def charm_print(program, indent=''):
         print(program)
         print_leading_blank_line = False
         comment_prefix = f"{indent}{' ':{width}}# "
+        label_prefix = f"{indent}{' ':{width}}: "
         for i, op in enumerate(program):
             prefix = f"{indent}{i:0{width}}| "
 
-            if comments and (comments[-1][0] == i):
-                while comments and (comments[-1][0] == i):
-                    _, comment = comments.pop()
-                    if print_leading_blank_line:
-                        print(empty_line)
-                    print(f"{comment_prefix}{comment}")
-                    print_leading_blank_line = True
+            print_blank = True
+            c = comments.get(i, ())
+            for comment in c:
+                if print_blank:
+                    print(indent2)
+                    print_blank = False
+                print(f"{comment_prefix}{comment}")
+                print_leading_blank_line = False
+
+            print_blank = True
+            l = labels.get(i, ())
+            for label in l:
+                if print_blank:
+                    print(indent2)
+                    print_blank = False
+                print(f"{label_prefix}{label}")
+                print_leading_blank_line = False
 
             # specialized opcode printers
             if op.op in specially_formatted_opcodes:
@@ -2155,6 +3359,11 @@ def charm_print(program, indent=''):
                     continue
                 if slot == "callable":
                     value = value.__name__ if value is not None else value
+                elif slot == "address":
+                    assert value is not None
+                    label_names = ", ".join(f"'{s}'" for s in labels.get(value, ()))
+                    assert label_names, f"didn't have any labels for index {value=}, {labels=}"
+                    value = f"{value} # {label_names}"
                 elif value == empty:
                     value = "(empty)"
                 elif isinstance(value, ArgumentGroup):
@@ -2203,6 +3412,9 @@ class CharmProgramIterator:
         if not self:
             raise RuntimeError(f"Jumped outside current program, ip={self.ip}, len(program)={self.length}")
 
+    def end(self):
+        self.ip = self.length
+
 
 class CharmBaseInterpreter:
     """
@@ -2217,6 +3429,12 @@ class CharmBaseInterpreter:
         self.name = name
         self.call_stack = []
 
+        self.iterator = None
+        self.iterator_stack = []
+
+        self.mapping = None
+        self.mapping_stack = []
+
         assert program
 
         # registers
@@ -2228,11 +3446,18 @@ class CharmBaseInterpreter:
 
         self.converter = None
         self.o = None
+        self.data_stack = []
+
+        self.flag = False
         self.group = None
 
         self.converters = {}
+        self.converter_keys = None
+        self.converter_keys_stack = []
+
         self.groups = []
 
+        self.aborted = False
 
     def repr_ip(self, ip=None):
         s = "--"
@@ -2261,14 +3486,26 @@ class CharmBaseInterpreter:
         return None
 
     def repr_converter(self, converter):
-        if self.converters:
-            width = math.floor(math.log10(len(self.converters)) + 1)
-            return repr([self.converter_to_key(converter)]) + "=" + repr(converter)
+        if isinstance(converter, str) and self.converters:
+            key = self.converter_to_key(converter)
+            if key:
+                width = math.floor(math.log10(len(self.converters)) + 1)
+                return f"[{key}]={converter!r}"
         return repr(converter)
+
+    def remember_converters(self):
+        self.converter_keys_stack.append(self.converter_keys)
+        self.converter_keys = set()
+
+    def forget_converters(self):
+        for key in self.converter_keys:
+            assert key in self.converters
+            del self.converters[key]
+        self.converter_keys = self.converter_keys_stack.pop()
 
     @big.BoundInnerClass
     class CharmProgramStackEntry:
-        __slots__ = ['interpreter', 'ip', 'program', 'converter', 'o', 'group', 'groups']
+        __slots__ = ['interpreter', 'ip', 'program', 'converter', 'o', 'flag', 'group', 'groups']
 
         def __init__(self, interpreter):
             self.interpreter = interpreter
@@ -2276,6 +3513,7 @@ class CharmBaseInterpreter:
             self.program = interpreter.program
             self.converter = interpreter.converter
             self.o = interpreter.o
+            self.flag = interpreter.flag
             self.group = interpreter.group
             self.groups = interpreter.groups
 
@@ -2285,12 +3523,12 @@ class CharmBaseInterpreter:
             interpreter.program = self.program
             interpreter.converter = self.converter
             interpreter.o = self.o
+            interpreter.flag = self.flag
             interpreter.group = self.group
             interpreter.groups = self.groups
 
         def __repr__(self):
-            return f"<CharmProgramStackEntry ip={self.ip} program={self.program.name!r} converter={self.converter} o={self.o} group={self.group.summary() if self.group else 'None'} groups=[{len(self.groups)}]>"
-
+            return f"<CharmProgramStackEntry ip={self.ip} program={self.program.name!r} converter={self.converter} o={self.o} flag={self.flag} group={self.group.summary() if self.group else 'None'} groups=[{len(self.groups)}]>"
 
     def __iter__(self):
         return self
@@ -2304,7 +3542,7 @@ class CharmBaseInterpreter:
                 op = self.ip.__next__()
                 return ip, op
             except StopIteration as e:
-                self.finish()
+                self.end()
                 continue
 
     # def __bool__(self):
@@ -2325,100 +3563,150 @@ class CharmBaseInterpreter:
         self.ip = CharmProgramIterator(program)
         self.groups = []
         self.converter = self.o = self.group = None
+        self.flag = False
 
-    def finish(self):
+    def end(self):
         if self.call_stack:
             cpse = self.call_stack.pop()
             cpse.restore()
         else:
             self.ip = None
 
-    def abort(self):
+    def _stop(self):
         self.ip = None
         self.call_stack.clear()
 
+    def abort(self, message=''):
+        # print("ABORT MESSAGE:", message)
+        raise RuntimeError("ABORT MESSAGE: " + message)
+        self._stop()
+        self.aborted = True
+        return None
+
     def unwind(self):
         while self.call_stack:
-            self.finish()
-        self.abort()
+            self.end()
+        self._stop()
 
 
-
-
-def _charm_usage(program, usage, closing_brackets, formatter, arguments_values, option_values):
+def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_values, option_values):
     ci = CharmBaseInterpreter(program)
     program_id_to_option = collections.defaultdict(list)
+
+    key_to_callable = {}
 
     def add_option(op):
         program_id_to_option[op.program.id].append(op)
 
     def flush_options():
-        for program_id, op_list in program_id_to_option.items():
+        for program_id, ops in program_id_to_option.items():
             options = []
-            for op in op_list:
+            key = None
+            for op in ops:
                 options.append(denormalize_option(op.option))
-            full_name = f"{op.key}.{op.parameter.name}"
+                # these are grouped by program_id, so, op.key will
+                # be the same for all of them
+                if key is None:
+                    key = op.key
+                else:
+                    assert key == op.key, f"expected identical keys, but {key=} != {op.key=}"
+            callable = key_to_callable[key]
+            full_name = f"{callable.__name__}.{op.parameter.name}"
             option_value = "|".join(options)
             option_values[full_name] = option_value
 
-            usage.append(" [")
+            usage.append("[")
             usage.append(option_value)
 
             usage.append(" ")
             old_len_usage = len(usage)
-            _charm_usage(op.program, usage, closing_brackets, formatter, arguments_values, option_values)
+            _charm_usage(appeal, op.program, usage, closing_brackets, formatter, arguments_values, option_values)
             if len(usage) == old_len_usage:
                 # this option had no arguments, we don't want the space
                 usage.pop()
 
-            usage.append("]")
+            usage.append("] ")
+        program_id_to_option.clear()
 
-    last_op = None
     first_argument_in_group = True
+    add_to_usage = False
+
     for ip, op in ci:
-        # print(f"op={op}")
-        if ((last_op == opcode.map_option)
-            and (op.op != last_op)):
-            flush_options()
+        # print(f"[{ip:03}] {op}")
+
+        if op.op == opcode.create_converter:
+            # the official and *only correct* way
+            # to produce a converter from a parameter.
+            cls = appeal.map_to_converter(op.parameter)
+            converter = cls(op.parameter, appeal)
+            callable = converter.callable
+            key_to_callable[op.key] = callable
+            continue
 
         if op.op == opcode.map_option:
             add_option(op)
-        elif op.op == opcode.set_group:
+            continue
+        if program_id_to_option:
+            flush_options()
+
+        if op.op == opcode.set_group:
             if op.optional:
                 usage.append(" [")
                 closing_brackets.append("]")
                 if op.repeating:
                     closing_brackets.append("... ")
             first_argument_in_group = True
-        elif op.op == opcode.append_to_args:
-            # append_to_args can only be after one of those two opcodes!
-            # if last_op.op in (opcode.consume_positional, opcode.load_o):
-            usage.append(" *garbage, usage is broken* ")
-                # if op.usage:
-                #     if first_argument_in_group:
-                #         first_argument_in_group = False
-                #     else:
-                #         usage.append(" ")
-                #     full_name = f"{op.usage_parameter}"
-                #     arguments_values[full_name] = op.usage
-                #     usage.append(formatter(op.usage))
-        last_op = op
+            continue
 
-    flush_options()
+        if op.op == opcode.next_to_o:
+            add_to_usage = True
+            continue
+
+        if (op.op == opcode.set_in_converter_kwargs) and add_to_usage:
+            add_to_usage = False
+            continue
+
+        if op.op == opcode.append_to_converter_args:
+            usage_full_name, usage_name = op.usage
+            arguments_values[usage_full_name] = usage_name
+            if add_to_usage:
+                add_to_usage = False
+                if first_argument_in_group:
+                    first_argument_in_group = False
+                else:
+                    usage.append(" ")
+                usage.append(formatter(usage_name))
+            continue
+
+    if program_id_to_option:
+        flush_options()
 
 
-def charm_usage(program, *, formatter=str):
+def charm_usage(appeal, program, *, formatter=str):
     usage = []
     closing_brackets = []
     arguments_values = {}
     option_values = {}
-    _charm_usage(program, usage, closing_brackets, formatter, arguments_values, option_values)
+    _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_values, option_values)
     usage.extend(closing_brackets)
     # print(f"arguments_values={arguments_values}")
     # print(f"option_values={option_values}")
     return "".join(usage).strip(), arguments_values, option_values
 
 
+
+from abc import ABCMeta, abstractmethod
+def _check_methods(C, *methods):
+    mro = C.__mro__
+    for method in methods:
+        for B in mro:
+            if method in B.__dict__:
+                if B.__dict__[method] is None:
+                    return NotImplemented
+                break
+        else:
+            return NotImplemented
+    return True
 
 
 class CharmInterpreter(CharmBaseInterpreter):
@@ -2428,8 +3716,11 @@ class CharmInterpreter(CharmBaseInterpreter):
         self.program = program
 
         self.appeal = processor.appeal
-        self.argi = processor.argi
-        self.kwargs = processor.kwargs
+        i = processor.iterator
+        if i and not isinstance(i, big.PushbackIterator):
+            i = big.PushbackIterator(i)
+        self.iterator = i
+        self.mapping = processor.mapping
 
         self.command_converter_key = None
 
@@ -2624,6 +3915,9 @@ class CharmInterpreter(CharmBaseInterpreter):
         def __setitem__(self, option, value):
             self.options[option] = value
 
+
+
+
     def __call__(self):
         (
         option_space_oparg,
@@ -2632,8 +3926,17 @@ class CharmInterpreter(CharmBaseInterpreter):
         short_option_concatenated_oparg,
         ) = self.appeal.root.option_parsing_semantics
 
-        argi = self.argi
-        kwargs = self.kwargs
+        # def print(s=None):
+        #     if not s:
+        #         return
+        #     with open("/tmp/xyz", "at") as f:
+        #         f.write(s + "\n")
+
+        if self.processor:
+            self.processor.log.enter(f"interpreter {self.program}")
+
+        iterator = self.iterator
+        mapping = self.mapping
 
         id_to_group = {}
 
@@ -2680,7 +3983,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
             (Why *changed* instead of *changing*?
             That made it easier to copy with the
-            two-phase loop and printing consume_positional.)
+            two-phase loop and printing next_to_o.)
             """
             nonlocal register_width
 
@@ -2700,8 +4003,11 @@ class CharmInterpreter(CharmBaseInterpreter):
             for t in (
                 ('converter', None, self.repr_converter),
                 ('o', None, self.repr_converter),
+                ('flag', None, lambda value: str(bool(value))),
                 ('group', None, lambda value: value.summary() if value else repr(value) ),
                 ('groups', None, lambda value: str([group.id for group in value])),
+                ('iterator', None, str),
+                ('mapping', None, lambda value: 'None' if value is None else " ".join(k for k in value.keys())),
                 ('options group', 'options.token', format_options_group),
                 ):
                 name, attr, format = t
@@ -2741,11 +4047,18 @@ class CharmInterpreter(CharmBaseInterpreter):
                 else:
                     print(f"{self.opcodes_prefix} {name:>{total_register_width}} |    {new}")
 
-        while self.running() or argi:
+        while self.running() or iterator:
             # if want_prints:
             #     print(f'{self.opcodes_prefix}')
             #     print(charm_separator_line)
-            #     print(f"{self.opcodes_prefix} command-line: {shlex_join(list(reversed(argi.stack)))}")
+            #     if iterator is not None:
+            #         try:
+            #             printable_iterator = shlex_join(list(reversed(iterator.stack)))
+            #         except TypeError:
+            #             printable_iterator = repr(iterator)
+            #     else:
+            #         printable_iterator = "None"
+            #     print(f"{self.opcodes_prefix} iterator: {printable_iterator}")
 
             # The main interpreter loop.
             #
@@ -2754,7 +4067,7 @@ class CharmInterpreter(CharmBaseInterpreter):
             # In the first part, we iterate over bytecodes until either
             #    * we finish the program, or
             #    * we must consume a command-line argument
-            #      (we encounter a "consume_positional" bytecode).
+            #      (we encounter a "next_to_o" bytecode).
             # If we finish the program, obviously, we're done.
             # If we must consume a command-line argument, we proceed
             # to the second "part".
@@ -2783,42 +4096,53 @@ class CharmInterpreter(CharmBaseInterpreter):
                 #     prefix = f"[{self.repr_ip(ip)}]"
 
                 if op.op == opcode.load_converter:
-                    converter = self.converters.get(op.key, None)
-                    old_converter = self.converter
+                    # if want_prints:
+                    #     old_converter = self.converter
+                    #     old_flag = self.flag
+                    converter = self.converters.get(op.key, sentinel)
+                    if converter is sentinel:
+                        converter = None
+                        self.flag = False
+                    else:
+                        self.flag = True
                     self.converter = converter
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} load_converter | key {op.key}")
-                    #     print_registers(converter=old_converter)
+                    #     print_registers(converter=old_converter, flag=old_flag)
                     continue
 
                 if op.op == opcode.load_o:
-                    o = self.converters.get(op.key, None)
-                    old_o = self.o
+                    # if want_prints:
+                    #     old_o = self.o
+                    #     old_flag = self.flag
+                    o = self.converters.get(op.key, sentinel)
+                    if o is sentinel:
+                        o = None
+                        self.flag = False
+                    else:
+                        self.flag = True
                     self.o = o
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} load_o | key {op.key}")
-                    #     print_registers(o=old_o)
+                    #     print_registers(o=old_o, flag=old_flag)
                     continue
 
                 if op.op == opcode.converter_to_o:
-                    old_o = self.o
+                    # if want_prints:
+                    #     old_o = self.o
                     self.o = self.converter
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} converter_to_o")
                     #     print_registers(o=old_o)
                     continue
 
-                if op.op == opcode.consume_positional:
-                    if not argi:
-                        # if want_prints:
-                        #     print(f"{self.opcodes_prefix} {prefix} consume_positional | no more arguments, aborting program.")
-                        self.abort()
+                if op.op == opcode.next_to_o:
                     # proceed to second part of interpreter loop
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} consume_positional | switching from loop part 1 to loop part 2")
+                    #     print(f"{self.opcodes_prefix} {prefix} next_to_o | switching from loop part 1 to loop part 2")
                     break
 
-                if op.op == opcode.append_to_args:
+                if op.op == opcode.append_to_converter_args:
                     o = self.o
                     converter = self.converter
                     # if want_prints:
@@ -2828,27 +4152,27 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     else:
                     #         field_name = "args_converters"
                     #         new = converter.args_converters
-                    #     old = new.copy()
+                    #     old = list(new.copy())
 
                     # either queue or append o as indicated
                     (converter.queue_converter if op.discretionary else converter.append_converter)(o)
 
                     # if want_prints:
                     #     discretionary = "yes" if op.discretionary else "no"
-                    #     print(f"{self.opcodes_prefix} {prefix} append_to_args | parameter {op.parameter} | discretionary? {discretionary}")
+                    #     print(f"{self.opcodes_prefix} {prefix} append_to_converter_args | parameter {op.parameter} | discretionary? {discretionary}")
                     #     new = list(new)
                     #     print_registers(extras = [
                     #         (f'{self.converter_to_key(converter)}.{field_name}', old, new),
                     #         ])
                     continue
 
-                if op.op == opcode.add_to_kwargs:
+                if op.op == opcode.set_in_converter_kwargs:
                     name = op.name
                     converter = self.converter
                     o = self.o
 
-                    existing = converter.kwargs_converters.get(name)
-                    if existing:
+                    existing = converter.kwargs_converters.get(name, sentinel)
+                    if existing is not sentinel:
                         if not ((existing == o) and isinstance(existing, MultiOption)):
                             raise AppealUsageError(f"{program.name} specified more than once.")
                         # we're setting the kwarg to the value it's already set to,
@@ -2862,27 +4186,36 @@ class CharmInterpreter(CharmBaseInterpreter):
                     converter.unqueue()
                     converter.kwargs_converters[name] = o
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} add_to_kwargs | name {op.name}")
+                    #     print(f"{self.opcodes_prefix} {prefix} set_in_converter_kwargs | name {op.name}")
                     #     print_registers(extras = [
                     #         (f'{self.converter_to_key(converter)}.kwargs_converters', old, new),
                     #         ])
 
                     continue
 
-                if op.op == opcode.get_keyword:
-                    value = kwargs.get(op.key, sentinel)
-                    if value == sentinel:
-                        if op.required:
-                            # if want_prints:
-                            #     print(f"{self.opcodes_prefix} {prefix} get_keyword | key={op.key!r} not set, required={op.required}, aborting.")
-                            self.abort()
+                if op.op == opcode.lookup_to_o:
+                    # if want_prints:
+                    #     old_o = self.o
+                    #     old_flag = self.flag
+
+                    value = mapping.get(op.key, sentinel)
+                    if value != sentinel:
+                        self.flag = True
+                        abort = False
+                    else:
+                        self.flag = False
+                        abort = op.required
                         value = None
 
-                    old_o = self.o
                     self.o = value
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} get_keyword")
-                    #     print_registers(o=old_o)
+                    #     required_yes_no = "yes" if op.required else "no"
+                    #     print(f"{self.opcodes_prefix} {prefix} lookup_to_o | key='{op.key}' | required? {required_yes_no}")
+                    #     abort_yes_no = "yes" if abort else "no"
+                    #     print_registers(o=old_o, flag=old_flag, extras=[('abort?', sentinel, abort_yes_no)])
+
+                    if abort:
+                        return self.abort()
                     continue
 
                 if op.op == opcode.flush_multioption:
@@ -2890,6 +4223,20 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.o.flush()
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} flush_multioption")
+                    #     print_registers()
+                    continue
+
+                if op.op == opcode.remember_converters:
+                    self.remember_converters()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} remember_converters")
+                    #     print_registers()
+                    continue
+
+                if op.op == opcode.forget_converters:
+                    self.forget_converters()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} forget_converters")
                     #     print_registers()
                     continue
 
@@ -2927,6 +4274,9 @@ class CharmInterpreter(CharmBaseInterpreter):
                             command_converter = converter
                             self.command_converter_key = op.key
 
+                        if self.converter_keys is not None:
+                            self.converter_keys.add(op.key)
+
                         # if want_prints:
                         #     print(f"{self.opcodes_prefix} {prefix} create_converter | cls {cls.__name__} | parameter {op.parameter.name} | key {op.key}")
                         #     print_registers(o=old_o)
@@ -2935,7 +4285,10 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                 if op.op == opcode.set_group:
                     # if want_prints:
-                    #     old_group = self.group
+                    #     if self.group is None:
+                    #         old_group = None
+                    #     else:
+                    #         old_group = self.group
                     #     old_groups = self.groups.copy()
                     self.group = group = op.group.copy()
                     self.groups.append(group)
@@ -2952,13 +4305,214 @@ class CharmInterpreter(CharmBaseInterpreter):
                     self.ip.jump(op.address)
                     continue
 
-                if op.op == opcode.branch_on_o:
+                if op.op == opcode.indirect_jump:
                     # if want_prints:
-                    #     branch = "yes" if self.o else "no"
-                    #     print(f"{self.opcodes_prefix} {prefix} branch_on_o | o? {branch} | address {op.address}")
+                    #     print(f"{self.opcodes_prefix} {prefix} indirect_jump")
                     #     print_registers()
-                    if self.o:
+                    self.ip.jump(self.o)
+                    continue
+
+                if op.op == opcode.branch_on_flag:
+                    # if want_prints:
+                    #     branch = "yes" if self.flag else "no"
+                    #     print(f"{self.opcodes_prefix} {prefix} branch_on_flag | branch? {branch} | address {op.address}")
+                    #     print_registers()
+                    if self.flag:
                         self.ip.jump(op.address)
+                    continue
+
+                if op.op == opcode.branch_on_not_flag:
+                    # if want_prints:
+                    #     branch = "yes" if (not self.flag) else "no"
+                    #     print(f"{self.opcodes_prefix} {prefix} branch_on_not_flag | branch? {branch} | address {op.address}")
+                    #     print_registers()
+                    if not self.flag:
+                        self.ip.jump(op.address)
+                    continue
+
+                if op.op == opcode.test_is_o_true:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = bool(self.o)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} test_is_o_true")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_none:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = self.o == None
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} test_is_o_none")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_empty:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = self.o == empty
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} test_is_o_empty")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_iterable:
+                    # if want_prints:
+                    #     old_flag = self.flag
+
+                    # self.flag = isinstance(self.o, Iterator)
+                    self.flag = isinstance(self.o, Iterable)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} test_is_o_iterable")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_mapping:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = isinstance(self.o, Mapping)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} test_is_o_mapping")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.test_is_o_str_or_bytes:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    self.flag = isinstance(self.o, (str, bytes))
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} test_is_o_str_or_bytes")
+                    #     print_registers(flag=old_flag)
+                    continue
+
+                if op.op == opcode.push_o:
+                    # if want_prints:
+                    #     old_data_stack = self.data_stack.copy()
+                    self.data_stack.append(self.o)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} push_o")
+                    #     print_registers(extras=[('data stack', old_data_stack, self.data_stack)])
+                    continue
+
+                if op.op == opcode.pop_o:
+                    # if want_prints:
+                    #     old_o = self.o
+                    #     old_data_stack = self.data_stack.copy()
+                    self.o = self.data_stack.pop()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} pop_o")
+                    #     print_registers(o=old_o, extras=[('data stack', old_data_stack, self.data_stack)])
+                    continue
+
+                if op.op == opcode.peek_o:
+                    # if want_prints:
+                    #     old_o = self.o
+                    self.o = self.data_stack[-1]
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} peek_o")
+                    #     print_registers(o=old_o)
+                    continue
+
+                if op.op == opcode.push_flag:
+                    # if want_prints:
+                    #     old_data_stack = self.data_stack.copy()
+                    self.data_stack.append(self.flag)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} push_flag")
+                    #     print_registers(extras=[('data stack', old_data_stack, self.data_stack)])
+                    continue
+
+                if op.op == opcode.pop_flag:
+                    # if want_prints:
+                    #     old_flag = self.flag
+                    #     old_data_stack = self.data_stack.copy()
+                    self.flag = self.data_stack.pop()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} pop_flag")
+                    #     print_registers(o=old_o, extras=[('data stack', old_data_stack, self.data_stack)])
+                    continue
+
+                if op.op == opcode.literal_to_o:
+                    # if want_prints:
+                    #     old_o = self.o
+                    self.o = op.value
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} literal_to_o | value={repr(op.value)}")
+                    #     print_registers(o=old_o)
+                    continue
+
+                if op.op == opcode.wrap_o_with_iterator:
+                    # if want_prints:
+                    #     old_o = self.o
+                    self.o = iter((self.o,))
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} wrap_o_with_iterator")
+                    #     print_registers(o=old_o)
+                    continue
+
+                if op.op == opcode.push_mapping:
+                    if not isinstance(self.o, Mapping):
+                        self.abort(f'object in o is not a Mapping, o={o}')
+                    # if want_prints:
+                    #     old_mapping_stack = self.mapping_stack.copy()
+                    self.mapping_stack.append(self.mapping)
+                    self.mapping = mapping = self.o
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} push_mapping")
+                    #     print_registers(extras=[('mapping stack', old_mapping_stack, self.mapping_stack)])
+                    continue
+
+                if op.op == opcode.pop_mapping:
+                    # if want_prints:
+                    #     old_mapping = self.mapping
+                    #     old_mapping_stack = self.mapping_stack.copy()
+                    self.mapping = mapping = self.mapping_stack.pop()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} pop_mapping")
+                    #     print_registers(mapping=old_mapping, extras=[('mapping stack', old_mapping_stack, self.mapping_stack)])
+                    continue
+
+                if op.op == opcode.push_iterator:
+                    if not isinstance(self.o, Iterable):
+                        self.abort(f'object in o is not an Iterator, o={self.o}')
+                    # if want_prints:
+                    #     old_iterator = self.iterator
+                    #     old_iterator_stack = self.iterator_stack.copy()
+                    self.iterator_stack.append(self.iterator)
+                    iterator = big.PushbackIterator(self.o)
+
+                    # if want_prints:
+                    #     # allow us to print the remaining contents of the iterator
+                    #     # by examining its stack
+                    #     l = list(iterator)
+                    #     l.reverse()
+                    #     iterator.stack.extend(l)
+                    #     iterator.i = None
+
+                    self.iterator = iterator
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} push_iterator")
+                    #     print_registers(iterator=old_iterator, extras=[('iterator stack', old_iterator_stack, self.iterator_stack)])
+                    continue
+
+                if op.op == opcode.pushback_o_to_iterator:
+                    if self.iterator is None:
+                        self.abort(f'iterator not set')
+                    self.iterator.push(self.o)
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} pushback_o_to_iterator")
+                    #     print_registers()
+                    continue
+
+                if op.op == opcode.pop_iterator:
+                    # if want_prints:
+                    #     old_iterator = self.iterator
+                    #     old_iterator_stack = self.iterator_stack.copy()
+                    self.iterator = iterator = self.iterator_stack.pop()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} pop_iterator")
+                    #     print_registers(iterator=old_iterator, extras=[('iterator stack', old_iterator_stack, self.iterator_stack)])
                     continue
 
                 if op.op == opcode.comment:
@@ -2966,10 +4520,31 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     print(f"{self.opcodes_prefix} {prefix} # {op.comment!r}")
                     continue
 
+                if op.op == opcode.no_op:
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} no_op")
+                    continue
+
                 if op.op == opcode.end:
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} end | id {op.id} | name {op.name!r}")
+                    #     cpse = self.CharmProgramStackEntry()
+                    self.end()
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} end")
+                    #     print_registers(
+                    #         converter=cpse.converter,
+                    #         o=cpse.o,
+                    #         flag=cpse.flag,
+                    #         group=cpse.group,
+                    #         groups=cpse.groups,
+                    #         )
+                    continue
+
+                if op.op == opcode.abort:
+                    # if want_prints:
+                    #     print(f"{self.opcodes_prefix} {prefix} abort | message '{op.message}'")
                     #     print_registers()
+                    self.abort(op.message)
                     continue
 
                 if op.op == opcode.create_converter:
@@ -2981,314 +4556,368 @@ class CharmInterpreter(CharmBaseInterpreter):
                 # we finished the program
                 # if want_prints:
                 #     print(f"{self.opcodes_prefix} ")
-                #     print(f"{self.opcodes_prefix} finished.")
+                #     if self.aborted:
+                #         print(f"{self.opcodes_prefix} aborted!")
+                #     else:
+                #         print(f"{self.opcodes_prefix} ended.")
                 #     print(f"{self.opcodes_prefix} ")
                 op = None
 
+            if self.aborted:
+                break
 
-            # Second "part" of the loop: consume a command-line argument.
+
+            # Second "part" of the loop: consume a positional argument from the command-line.
             #
             # We've either paused or finished the program.
             #   If we've paused, it's because the program wants us
             #     to consume an argument.  In that case op
-            #     will be a 'consume_positional' op.
+            #     will be a 'next_to_o' op.
             #   If we've finished the program, op will be None.
-            assert (op == None) or (op.op == opcode.consume_positional), f"op={op}, expected either None or consume_positional"
+            assert (op == None) or (op.op == opcode.next_to_o), f"op={op}, expected either None or next_to_o"
 
-            # Technically we loop over argi, but in practice
-            # we usually only consume one argument at a time.
+            # Technically we *loop* over iterator.
+            # But in practice we usually only consume one argument at a time.
             #
-            # for a in argi:
+            # for a in iterator:
             #    * if a is an option (or options),
             #      push that program (programs) and resume
             #      the charm interpreter.
             #    * if a is the special value '--', remember
             #      that all subsequent command-line arguments
             #      can no longer be options, and continue to
-            #      the next a in argi.  (this is the only case
+            #      the next a in iterator.  (this is the only case
             #      in which we'll consume more than one argument
             #      in this loop.)
             #    * else a is a positional argument.
-            #      * if op is consume_positional, consume it and
+            #      * if op is next_to_o, consume it and
             #        resume the charm interpreter.
             #      * else, hmm, we have a positional argument
             #        we don't know what to do with.  the program
-            #        is done, and we don't have a consume_positional
-            #        to give it to.  so push it back onto argi
+            #        is done, and we don't have a next_to_o
+            #        to give it to.  so push it back onto iterator
             #        and exit.  (hopefully the argument is the
             #        name of a command/subcomand.)
 
-            print_loop_start = True
+            # if want_prints:
+            #     print_loop_start = True
 
-            for a in argi:
+            stay_in_loop_two = True
+
+            while stay_in_loop_two:
                 # if want_prints:
                 #     if print_loop_start:
+                #         if iterator is not None:
+                #             try:
+                #                 printable_iterator = shlex_join(list(reversed(iterator.stack)))
+                #             except TypeError:
+                #                 printable_iterator = repr(iterator)
+                #         else:
+                #             printable_iterator = "None"
                 #         print(f"{self.cmdline_prefix} ")
-                #         print(f"{self.cmdline_prefix} loop part 2: consume argument(s): op={op} cmdline: {shlex_join(list(reversed(argi.stack)))}")
+                #         print(f"{self.cmdline_prefix} loop part 2: consume argument(s): op={op} iterator: {printable_iterator}")
                 #         print(f"{self.cmdline_prefix} ")
                 #         print_loop_start = False
-                #     print(f"{self.cmdline_prefix} argument: {a!r}  remaining: {shlex_join(list(reversed(argi.stack)))}")
-                #     print(f"{self.cmdline_prefix}")
 
-                # Is this command-line argument a "positional argument", or an "option"?
-                # In this context, a "positional argument" can be either a conventional
-                # positional argument on the command-line, or an "oparg".
+                if not iterator:
+                    # we need a positional argument, but we don't have one.
+                    # stop processing; we'll figure out if there was an error below.
+                    if self.ip:
+                        self.ip.end()
+                    self.call_stack.clear()
+                    break
 
-                # If force_positional is true, we encountered "--" on the command-line.
-                # This forces Appeal to ignore dashes and process all subsequent
-                # arguments as positional arguments.
-
-                # If the argument doesn't start with a dash,
-                # it can't be an option, therefore it must be a positional argument.
-                doesnt_start_with_a_dash = not a.startswith("-")
-
-                # If the argument is a single dash, it isn't an option,
-                # it's a positional argument.  This is an old UNIX idiom;
-                # if you were expecting a filename and you got "-", you should
-                # use the appropriate stdio file (stdin/stdout) there.
-                is_a_single_dash = a == "-"
-
-                # If we're consuming opargs, we ignore leading dashes,
-                # and all arguments are forced to be opargs
-                # until we've consume all the opargs we need.
-                is_oparg = op and (op.op == opcode.consume_positional) and op.is_oparg
-
-                is_positional_argument = (
-                    force_positional
-                    or doesnt_start_with_a_dash
-                    or is_a_single_dash
-                    or is_oparg
-                    )
-
-                if is_positional_argument:
-                    if not op:
-                        # if want_prints:
-                        #     print(f"{self.cmdline_prefix}  positional argument we don't want.")
-                        #     print(f"{self.cmdline_prefix}  maybe somebody else will consume it.")
-                        #     print(f"{self.cmdline_prefix}  exit.")
-                        argi.push(a)
-                        return self.converters[self.command_converter_key]
-
-                    # set register "o" to our string and return to running bytecodes.
+                for a in iterator:
                     # if want_prints:
-                    #     old_o = self.o
-                    #     old_group = self.group.copy()
-                    self.o = a
-                    if self.group:
-                        self.group.count += 1
-                        self.group.laden = True
+                    #     try:
+                    #         printable_iterator = shlex_join(list(reversed(iterator.stack)))
+                    #     except TypeError:
+                    #         printable_iterator = repr(iterator)
+                    #     print(f"{self.cmdline_prefix} argument: {a!r}  remaining: {printable_iterator}")
+                    #     print(f"{self.cmdline_prefix}")
 
-                    if not is_oparg:
-                        self.options.unmap_all_child_options()
+                    # Is this command-line argument a "positional argument", or an "option"?
+                    # In this context, a "positional argument" can be either a conventional
+                    # positional argument on the command-line, or an "oparg".
+
+                    # If force_positional is true, we encountered "--" on the command-line.
+                    # This forces Appeal to ignore dashes and process all subsequent
+                    # arguments as positional arguments.
+
+                    # If we're consuming opargs, we ignore leading dashes,
+                    # and all arguments are forced to be opargs
+                    # until we've consume all the opargs we need.
+                    is_oparg = op and (op.op == opcode.next_to_o) and op.is_oparg
+
+                    is_positional_argument = (
+                        force_positional
+                        or is_oparg
+                        )
+
+                    if (not is_positional_argument) and isinstance(a, str):
+                        # Only do these checks if a is actually a str.
+                        # (If it's a float from a TOML file or something,
+                        # it can't be an option, now can it!)
+
+                        # If the argument doesn't start with a dash,
+                        # it can't be an option, therefore it must be a positional argument.
+                        doesnt_start_with_a_dash = not a.startswith("-")
+
+                        # If the argument is a single dash, it isn't an option,
+                        # it's a positional argument.  This is an old UNIX idiom;
+                        # if you were expecting a filename and you got "-", you should
+                        # use the appropriate stdio file (stdin/stdout) there.
+                        is_a_single_dash = a == "-"
+
+                        is_positional_argument = (
+                            doesnt_start_with_a_dash
+                            or is_a_single_dash
+                            )
+
+                    if is_positional_argument:
+                        if not op:
+                            # if want_prints:
+                            #     print(f"{self.cmdline_prefix}  positional argument we don't want.")
+                            #     print(f"{self.cmdline_prefix}  maybe somebody else will consume it someday.")
+                            #     print(f"{self.cmdline_prefix}  exit.")
+                            iterator.push(a)
+                            return self.converters[self.command_converter_key]
+
+                        # set register "o" to our string and return to running bytecodes.
+                        # if want_prints:
+                        #     old_o = self.o
+                        #     if self.group is None:
+                        #         old_group = None
+                        #     else:
+                        #         old_group = self.group.copy()
+                        self.o = a
+                        self.flag = True
+                        if self.group:
+                            self.group.count += 1
+                            self.group.laden = True
+
+                        if not is_oparg:
+                            self.options.unmap_all_child_options()
+
+                        # if want_prints:
+                        #     print(f"{self.cmdline_prefix}")
+                        #     print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg} | usage_name={op.usage_name}")
+                        #     print(f"{self.opcodes_prefix} {prefix} got '{a}'")
+                        #     print_registers(o=old_o, group=old_group)
+
+                        stay_in_loop_two = False
+                        break
+
+                    if not option_space_oparg:
+                        raise AppealConfigurationError("oops, currently the only supported value of option_space_oparg is True")
+
+                    if a == "--":
+                        # we shouldn't be able to reach this twice.
+                        # if the user specifies -- twice on the command-line,
+                        # the first time turns of option processing, which means
+                        # it should be impossible to get here.
+                        assert not force_positional
+                        force_positional = self.appeal.root.force_positional = True
+                        # if want_prints:
+                        #     print(f"{self.cmdline_prefix}  '--', force_positional=True")
+                        continue
+
+                    # it's an option!
+                    double_dash = a.startswith("--")
+                    pushed_remainder = False
+
+                    # split_value is the value we "split" from the option string.
+                    # In these example, split_value is 'X':
+                    #     --option=X
+                    #     -o=X
+                    # and, if o takes exactly one optional argument,
+                    # and short_option_concatenated_oparg is true:
+                    #     -oX
+                    # If none of these syntaxes (syntices?) is used,
+                    # split_value is None.
+                    #
+                    # Literally we handle it by splitting it off,
+                    # then pushing it *back* onto iterator, so the option
+                    # program can consume it.  Thus we actually transform
+                    # all the above examples into
+                    #     -o X
+                    #
+                    # Note: split_value can be an empty string!
+                    #     -f=
+                    # So, simply checking truthiness is insufficient.
+                    # You *must* check "if split_value is None".
+                    split_value = None
+
+                    try_to_split_value = double_dash or short_option_equals_oparg
+                    if try_to_split_value:
+                        a, equals, _split_value = a.partition("=")
+                        if equals:
+                            split_value = _split_value
+                    else:
+                        split_value = None
+
+                    if double_dash:
+                        option = a
+                        program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
+                    else:
+                        ## In Appeal,
+                        ##      % python3 myscript foo -abcde
+                        ## must be EXACTLY EQUIVALENT TO
+                        ##      % python3 myscript foo -a -b -c -d -e
+                        ##
+                        ## The best way to handle this is to transform the former
+                        ## into the latter.  Every time we encounter a single-dash
+                        ## option, consume just the first letter, and if the rest
+                        ## is more options, reconstruct the remaining short options
+                        ## and push it onto the 'iterator' pushback iterator.
+                        ## For example, if -a is an option that accepts no opargs,
+                        ## we transform
+                        ##      % python3 myscript foo -abcde
+                        ## into
+                        ##      % python3 myscript foo -a -bcde
+                        ## and then handle "-a".
+                        ##
+                        ## What about options that take opargs?  Except for
+                        ## the special case of short_option_concatenated_oparg,
+                        ## options that take opargs have to be the last short option.
+
+                        # strip off this short option by itself:
+                        option = a[1]
+                        program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
+
+                        # handle the remainder.
+                        remainder = a[2:]
+                        if remainder:
+                            if maximum_arguments == 0:
+                                # more short options.  push them back onto iterator.
+                                pushed_remainder = True
+                                remainder = "-" + remainder
+                                iterator.push(remainder)
+                                # if want_prints:
+                                #     print(f"{self.cmdline_prefix} isolating '-{option}', pushing remainder '{remainder}' back onto iterator")
+                            elif maximum_arguments >= 2:
+                                if minimum_arguments == maximum_arguments:
+                                    number_of_arguments = maximum_arguments
+                                else:
+                                    number_of_arguments = f"{minimum_arguments} to {maximum_arguments}"
+                                raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} takes {number_of_arguments} arguments, it must be last")
+                            # in the remaining cases, we know maximum_arguments is 1
+                            elif short_option_concatenated_oparg and (minimum_arguments == 0):
+                                # Support short_option_concatenated_oparg.
+                                #
+                                # If a short option takes *exactly* one *optional*
+                                # oparg, you can smash the option and the oparg together.
+                                # For example, if short option "-f" takes exactly one
+                                # optional oparg, and you want to supplythe oparg "guava",
+                                # you can do
+                                #    -f=guava
+                                #    -f guava
+                                # and in ONLY THIS CASE
+                                #    -fguava
+                                #
+                                # Technically POSIX doesn't allow us to support this:
+                                #    -f guava
+                                #
+                                # On the other hand, there's a *long list* of things
+                                # POSIX doesn't allow us to support:
+                                #
+                                #    * short options with '=' (split_value, e.g. '-f=guava')
+                                #    * long options
+                                #    * subcommands
+                                #    * options that take multiple opargs
+                                #
+                                # So, clearly, exact POSIX compliance is not of
+                                # paramount importance to Appeal.
+                                #
+                                # Get with the times, you musty old fogeys!
+
+                                if split_value is not None:
+                                    raise AppealUsageError(f"-{option}{remainder}={split_value} isn't allowed, -{option} must be last because it takes an argument")
+                                split_value = remainder
+                            else:
+                                assert minimum_arguments == maximum_arguments == 1
+                                raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} must be last because it takes an argument")
+
+                    laden_group = id_to_group[group_id]
+
+                    denormalized_option = denormalize_option(option)
+                    # if want_prints:
+                    #     print(f"{self.cmdline_prefix} option {denormalized_option}")
+                    #     print(f"{self.cmdline_prefix} {self.ip_spacer} program={program}")
+                    #     print(f"{self.cmdline_prefix} {self.ip_spacer} group={laden_group.summary()}")
+                    #     print(f"{self.cmdline_prefix}")
+
+                    # mark argument group as having had stuff done in it.
+                    laden_group.laden = True
+
+                    # we have an option to run.
+                    # the existing next_to_o op will have to wait.
+                    if op:
+                        assert op.op == opcode.next_to_o
+                        self.rewind_one_instruction()
+                        op = None
+
+                    # throw away child options mapped below our option's sibling.
+                    self.options.pop_until_group(token)
+
+                    # and push a fresh options dict.
+                    self.options.push()
+
+                    if split_value is not None:
+                        if maximum_arguments != 1:
+                            if maximum_arguments == 0:
+                                raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} doesn't take an argument")
+                            if maximum_arguments >= 2:
+                                raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} takes multiple arguments")
+                        iterator.push(split_value)
+                        # if want_prints:
+                        #     print(f"{self.cmdline_prefix} {self.ip_spacer} pushing split value {split_value!r} back onto iterator")
+
+                    # self.push_context()
+                    self.call(program)
+                    stay_in_loop_two = False
 
                     # if want_prints:
                     #     print(f"{self.cmdline_prefix}")
-                    #     print(f"{self.opcodes_prefix} {prefix} consume_positional")
-                    #     print_registers(o=old_o, group=old_group)
+                    #     print(f"{self.cmdline_prefix} call program={program}")
+                    #     print_registers(extras=[('pushed context', sentinel, self.call_stack[-1])])
 
                     break
 
-                if not option_space_oparg:
-                    raise AppealConfigurationError("oops, currently the only supported value of option_space_oparg is True")
-
-                if a == "--":
-                    # we shouldn't be able to reach this twice.
-                    # if the user specifies -- twice on the command-line,
-                    # the first time turns of option processing, which means
-                    # it should be impossible to get here.
-                    assert not force_positional
-                    force_positional = self.appeal.root.force_positional = True
-                    # if want_prints:
-                    #     print(f"{self.cmdline_prefix}  '--', force_positional=True")
-                    continue
-
-                # it's an option!
-                double_dash = a.startswith("--")
-                pushed_remainder = False
-
-                # split_value is the value we "split" from the option string.
-                # In these example, split_value is 'X':
-                #     --option=X
-                #     -o=X
-                # and, if o takes exactly one optional argument,
-                # and short_option_concatenated_oparg is true:
-                #     -oX
-                # If none of these syntaxes (syntices?) is used,
-                # split_value is None.
-                #
-                # Literally we handle it by splitting it off,
-                # then pushing it *back* onto argi, so the option
-                # program can consume it.  Thus we actually transform
-                # all the above examples into
-                #     -o X
-                #
-                # Note: split_value can be an empty string!
-                #     -f=
-                # So, simply checking truthiness is insufficient.
-                # You *must* check "if split_value is None".
-                split_value = None
-
-                try_to_split_value = double_dash or short_option_equals_oparg
-                if try_to_split_value:
-                    a, equals, _split_value = a.partition("=")
-                    if equals:
-                        split_value = _split_value
-                else:
-                    split_value = None
-
-                if double_dash:
-                    option = a
-                    program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
-                else:
-                    ## In Appeal,
-                    ##      % python3 myscript foo -abcde
-                    ## must be EXACTLY EQUIVALENT TO
-                    ##      % python3 myscript foo -a -b -c -d -e
-                    ##
-                    ## The best way to handle this is to transform the former
-                    ## into the latter.  Every time we encounter a single-dash
-                    ## option, consume just the first letter, and if the rest
-                    ## is more options, reconstruct the remaining short options
-                    ## and push it onto the argi pushback iterator.  For example,
-                    ## if -a is an option that accepts no opargs, we transform
-                    ##      % python3 myscript foo -abcde
-                    ## into
-                    ##      % python3 myscript foo -a -bcde
-                    ## and then handle "-a".
-                    ##
-                    ## What about options that take opargs?  Except for
-                    ## the special case of short_option_concatenated_oparg,
-                    ## options that take opargs have to be the last short option.
-
-                    # strip off this short option by itself:
-                    option = a[1]
-                    program, group_id, minimum_arguments, maximum_arguments, token = self.options[option]
-
-                    # handle the remainder.
-                    remainder = a[2:]
-                    if remainder:
-                        if maximum_arguments == 0:
-                            # more short options.  push them back onto argi.
-                            pushed_remainder = True
-                            remainder = "-" + remainder
-                            argi.push(remainder)
-                            # if want_prints:
-                            #     print(f"{self.cmdline_prefix} isolating '-{option}', pushing remainder '{remainder}' back onto argi")
-                        elif maximum_arguments >= 2:
-                            if minimum_arguments == maximum_arguments:
-                                number_of_arguments = maximum_arguments
-                            else:
-                                number_of_arguments = f"{minimum_arguments} to {maximum_arguments}"
-                            raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} takes {number_of_arguments} arguments, it must be last")
-                        # in the remaining cases, we know maximum_arguments is 1
-                        elif short_option_concatenated_oparg and (minimum_arguments == 0):
-                            # Support short_option_concatenated_oparg.
-                            #
-                            # If a short option takes *exactly* one *optional*
-                            # oparg, you can smash the option and the oparg together.
-                            # For example, if short option "-f" takes exactly one
-                            # optional oparg, and you want to supplythe oparg "guava",
-                            # you can do
-                            #    -f=guava
-                            #    -f guava
-                            # and in ONLY THIS CASE
-                            #    -fguava
-                            #
-                            # Technically POSIX doesn't allow us to support this:
-                            #    -f guava
-                            #
-                            # On the other hand, there's a *long list* of things
-                            # POSIX doesn't allow us to support:
-                            #
-                            #    * short options with '=' (split_value, e.g. '-f=guava')
-                            #    * long options
-                            #    * subcommands
-                            #    * options that take multiple opargs
-                            #
-                            # So, clearly, exact POSIX compliance is not of
-                            # paramount importance to Appeal.
-                            #
-                            # Get with the times, you musty old fogeys!
-
-                            if split_value is not None:
-                                raise AppealUsageError(f"-{option}{remainder}={split_value} isn't allowed, -{option} must be last because it takes an argument")
-                            split_value = remainder
-                        else:
-                            assert minimum_arguments == maximum_arguments == 1
-                            raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} must be last because it takes an argument")
-
-                laden_group = id_to_group[group_id]
-
-                denormalized_option = denormalize_option(option)
-                # if want_prints:
-                #     print(f"{self.cmdline_prefix} option {denormalized_option}")
-                #     print(f"{self.cmdline_prefix} {self.ip_spacer} program={program}")
-                #     print(f"{self.cmdline_prefix} {self.ip_spacer} group={laden_group.summary()}")
-                #     print(f"{self.cmdline_prefix}")
-
-                # mark argument group as having had stuff done in it.
-                laden_group.laden = True
-
-                # we have an option to run.
-                # the existing consume_positional op will have to wait.
-                if op:
-                    assert op.op == opcode.consume_positional
-                    self.rewind_one_instruction()
-                    op = None
-
-                # throw away child options mapped below our option's sibling.
-                self.options.pop_until_group(token)
-
-                # and push a fresh options dict.
-                self.options.push()
-
-                if split_value is not None:
-                    if maximum_arguments != 1:
-                        if maximum_arguments == 0:
-                            raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} doesn't take an argument")
-                        if maximum_arguments >= 2:
-                            raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} takes multiple arguments")
-                    argi.push(split_value)
-                    # if want_prints:
-                    #     print(f"{self.cmdline_prefix} {self.ip_spacer} pushing split value {split_value!r} back onto argi")
-
-                # if want_prints:
-                #     print(f"{self.cmdline_prefix}")
-                #     print(f"{self.cmdline_prefix} call program={program}")
-
-                # self.push_context()
-                self.call(program)
-                break
-
-        self.unwind()
-
         satisfied = True
-        ag = self.group
-        assert ag
+        if self.group:
+            ag = self.group
+            assert ag
 
-        if not ag.satisfied():
-            if ag.minimum == ag.maximum:
-                plural = "" if ag.minimum == 1 else "s"
-                middle = f"{ag.minimum} argument{plural}"
-            else:
-                middle = f"at least {ag.minimum} arguments but no more than {ag.maximum} arguments"
-            program = self.program
-            message = f"{program.name} requires {middle} in this argument group."
-            raise AppealUsageError(message)
+            if not ag.satisfied():
+                if ag.minimum == ag.maximum:
+                    plural = "" if ag.minimum == 1 else "s"
+                    middle = f"{ag.minimum} argument{plural}"
+                else:
+                    middle = f"at least {ag.minimum} arguments but no more than {ag.maximum} arguments"
+                program = self.program
+                message = f"{program.name} requires {middle} in this argument group."
+                raise AppealUsageError(message)
 
         # if want_prints:
         #     print(f"{self.opcodes_prefix}")
         #     print(f"{self.opcodes_prefix} ending parse.")
         #     finished_state = "did not finish" if self else "finished"
         #     print(f"{self.opcodes_prefix}      program {finished_state}.")
-        #     if argi:
-        #         print(f"{self.opcodes_prefix}      remaining cmdline: {list(reversed(argi.stack))}")
+        #     if iterator:
+        #         print(f"{self.opcodes_prefix}      remaining cmdline: {list(reversed(iterator.stack))}")
         #     else:
         #         print(f"{self.opcodes_prefix}      cmdline was completely consumed.")
 
         # if want_prints:
         #     print(charm_separator_line)
         #     print()
+
+        if self.processor:
+            self.processor.log.exit()
+
+        if self.aborted:
+            return None
 
         return self.converters[self.command_converter_key]
 
@@ -3303,6 +4932,7 @@ class Converter:
 
     A Converter
     """
+    callable = None
     def __init__(self, parameter, appeal):
         self.parameter = parameter
         self.appeal = appeal
@@ -3402,8 +5032,8 @@ class Converter:
     ## For example:
     ##   * the first actual positional argument is optional
     ##   * it's nested three levels deep in the annotation tree
-    ##   * we have command-line arguments waiting in argi but
-    ##     the next argument is an option, and we don't know
+    ##   * we have command-line arguments waiting in iterator
+    ##     but the next argument is an option, and we don't know
     ##     how many opargs it wants to consume until we run it
     ##
     ## Or:
@@ -3499,10 +5129,10 @@ class Converter:
         """
         Append o directly to our args_converters list.
 
-        If o is a string, also unqueue ourselves
+        If o is not a Converter, also unqueue ourselves
         (and recursively all our parents too).
 
-        If o is not a string, and we or one of our parents
+        If o is a Converter, and we or one of our parents
         is discretionary, ask o to notify us if it gets
         a string positional argument appended to it,
         or if one of its options is invoked.
@@ -3510,7 +5140,7 @@ class Converter:
         # print(f">> {self=} appended to {parent=}\n")
         self.args_converters.append(o)
 
-        if isinstance(o, str):
+        if not isinstance(o, Converter):
             self.unqueue()
         else:
             assert not o.queued
@@ -3567,16 +5197,16 @@ class Converter:
     def convert(self, processor):
         for iterable in (self.args_converters, self.kwargs_converters.values()):
             for converter in iterable:
-                if converter and not isinstance(converter, str):
+                if converter and isinstance(converter, Converter):
                     converter.convert(processor)
 
         try:
             for converter in self.args_converters:
-                if converter and not isinstance(converter, str):
+                if converter and isinstance(converter, Converter):
                     converter = converter.execute(processor)
                 self.args.append(converter)
             for name, converter in self.kwargs_converters.items():
-                if converter and not isinstance(converter, str):
+                if converter and isinstance(converter, Converter):
                     converter = converter.execute(processor)
                 self.kwargs[name] = converter
         except ValueError as e:
@@ -3638,22 +5268,31 @@ class SimpleTypeConverter(Converter):
         self.queued = None
         self.args_queue = collections.deque()
         self.args_converters = []
-        # don't set kwargs_converters, let it esplody!
+        self.kwargs_converters = {}
 
         self.options_values = {}
         self.help_options = {}
         self.help_arguments = {}
 
     def __repr__(self):
-        return f"<{self.__class__.__name__} {self.callable} args_converters={self.args_converters} value={self.value}>"
+        return f"<{self.__class__.__name__} {self.callable} args_converters={self.args_converters} kwargs_converters={self.kwargs_converters} value={self.value}>"
 
     def convert(self, processor):
-        if not self.args_converters:
+        # if 1:
+        if self.value is not None:
+            raise RuntimeError("why a second time, fool")
+        argument_count = (len(self.args_converters) + len(self.kwargs_converters))
+        assert 0 <= argument_count <= 1, f"{self.__class__.__name__}: {argument_count=}, should be 0 or 1, {self.args_converters=} {self.kwargs_converters=}"
+        if not argument_count:
             # explicitly allow "make -j"
             if self.default is not empty:
                 return self.default
             raise AppealUsageError(f"no argument supplied for {self}, we should have raised an error earlier huh.")
         try:
+            if self.kwargs_converters:
+                for v in self.kwargs_converters.values():
+                    self.args_converters.append(v)
+                self.kwargs_converters.clear()
             self.value = self.callable(self.args_converters[0])
         except ValueError as e:
             raise AppealUsageError(f"invalid value {self.args_converters[0]} for {self.name}, must be {self.callable.__name__}")
@@ -4109,7 +5748,7 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
 
         start and stop are like the start and stop
             arguments for range(), except values
-            can be less-than *or equal* to stop.
+            can be less-than *or equal to* stop.
 
         type is the type for the value.  If unspecified,
             it defaults to builtins.type(start).
@@ -4147,15 +5786,8 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
 
 
 
-def no_arguments_callable(): pass
-no_arguments_signature = inspect.signature(no_arguments_callable)
-
-
-
-
-
-# this function isn't published as one of the _to_converter callables
-def simple_type_to_converter(parameter, callable):
+# utility function, not published as one of the _to_converter callables
+def _simple_type_to_converter(parameter, callable):
     cls = simple_type_signatures.get(callable)
     if not cls:
         return None
@@ -4173,7 +5805,7 @@ def type_to_converter(parameter):
     annotation = dereference_annotated(parameter.annotation)
     if not isinstance(annotation, type):
         return None
-    cls = simple_type_to_converter(parameter, annotation)
+    cls = _simple_type_to_converter(parameter, annotation)
     if cls:
         return cls
     if issubclass(annotation, SingleOption):
@@ -4196,7 +5828,7 @@ def inferred_type_to_converter(parameter):
         return None
     inferred_type = type(parameter.default)
     # print(f"inferred_type_to_converter(parameter={parameter})")
-    cls = simple_type_to_converter(parameter, inferred_type)
+    cls = _simple_type_to_converter(parameter, inferred_type)
     # print(f"  inferred_type={inferred_type} cls={cls}")
     if cls:
         return cls
@@ -4496,6 +6128,8 @@ class Appeal:
                 inferred_type_to_converter,
                 sequence_to_converter,
                 ]
+
+            self.unnested_converters = set()
         else:
             self.root = self.parent.root
 
@@ -4551,6 +6185,12 @@ class Appeal:
         if not a:
             a = Appeal(name=name, parent=self)
         return a
+
+    def unnested(self):
+        def unnested(fn):
+            self.root.unnested_converters.add(fn)
+            return fn
+        return unnested
 
     def __call__(self, callable):
         assert callable and builtins.callable(callable)
@@ -4693,12 +6333,16 @@ class Appeal:
         return app_class, command_method
 
 
-    def argument(self, parameter, *, usage=None):
-        def argument(callable):
+    def parameter(self, parameter, *, usage=None):
+        p = parameter
+        def parameter(callable):
             _, _, positionals = self.fn_database_lookup(callable)
-            positionals[parameter] = usage
+            positionals[p] = usage
             return callable
-        return argument
+        return parameter
+
+    # old--and incorrect!--name
+    argument = parameter
 
     def option_signature(self, option):
         """
@@ -4816,7 +6460,7 @@ class Appeal:
         fn_name = callable.__name__
 
         formatter = self.root.format_positional_parameter
-        usage_str, arguments_values, options_values = charm_usage(self._global_program, formatter=formatter)
+        usage_str, arguments_values, options_values = charm_usage(self.root, self._global_program, formatter=formatter)
 
         if commands:
             if usage_str and (not usage_str[-1].isspace()):
@@ -4879,7 +6523,7 @@ class Appeal:
                 ci.converter = ci.converters[op.key]
                 continue
 
-            if (op.op == opcode.append_to_args) and last_op and (last_op.op == opcode.consume_positional):
+            if (op.op == opcode.append_to_converter_args) and last_op and (last_op.op == opcode.next_to_o):
                 ci.converter['parameters'][op.parameter] = op.usage
                 continue
 
@@ -5575,12 +7219,11 @@ class Appeal:
             # if want_prints:
             #     print()
             setattr(self, program_attr, program)
-            # print(f"compiled program for {name}, {program}")
         return program
 
     def analyze(self, processor):
         if processor:
-            processor.log_event(f"analyze _global")
+            processor.log(f"analyze _global")
         self._analyze_attribute("_global", processor)
 
     def _parse_attribute(self, name, processor):
@@ -5592,16 +7235,18 @@ class Appeal:
 
         interpreter = CharmInterpreter(processor, program)
         converter = interpreter()
+        if converter == None:
+            raise AppealUsageError("unknown error")
         processor.commands.append(converter)
         return converter
 
     def parse(self, processor):
         callable = getattr(self, "_global")
-        processor.log_event(f"parse _global")
+        processor.log(f"parse _global")
 
         self._parse_attribute("_global", processor)
 
-        if not processor.argi:
+        if not processor.iterator:
             # if there are no arguments waiting here,
             # then they didn't want to run a command.
             # if any commands are defined, and they didn't specify one,
@@ -5612,10 +7257,10 @@ class Appeal:
                 raise AppealUsageError("no command specified.")
             return
 
-        processor.log_enter_context(f"parsing commands")
+        processor.log.enter(f"parsing commands")
         if self.commands:
             # okay, we have arguments waiting, and there are commands defined.
-            for command_name in processor.argi:
+            for command_name in processor.iterator:
                 sub_appeal = self.commands.get(command_name)
                 if not sub_appeal:
                     # partial spelling check would go here, e.g. "sta" being short for "status"
@@ -5624,22 +7269,22 @@ class Appeal:
                 # the recursive Appeal.parse call will append.
                 sub_appeal.analyze(processor)
                 sub_appeal.parse(processor)
-                if not (self.repeat and processor.argi):
+                if not (self.repeat and processor.iterator):
                     break
 
-        if processor.argi:
-            leftovers = " ".join(shlex.quote(s) for s in processor.argi)
+        if processor.iterator:
+            leftovers = " ".join(shlex.quote(s) for s in processor.iterator)
             raise AppealUsageError(f"leftover cmdline arguments! {leftovers!r}")
 
-        processor.log_exit_context()
+        processor.log.exit()
 
     def convert(self, processor):
-        processor.log_event("convert start")
+        processor.log("convert start")
         for command in processor.commands:
             command.convert(processor)
 
     def execute(self, processor):
-        processor.log_event("execute start")
+        processor.log("execute start")
         result = None
         for command in processor.commands:
             result = command.execute(processor)
@@ -5661,6 +7306,87 @@ class Appeal:
         processor = self.processor()
         processor.main(args, kwargs)
 
+    def read_mapping(self, callable, mapping):
+        processor = self.processor()
+
+        cc = CharmMappingCompiler(self, processor, callable)
+        program = cc.assemble()
+
+        # why permit a Sequence here?
+        # if callable is a MultiOption,
+        # we start with iteration
+        if isinstance(mapping, Mapping):
+            processor.mapping = mapping
+        elif isinstance(mapping, Iterable):
+            processor.iterator = mapping
+        else:
+            raise TypeError("mapping must be a Mapping (or an Iterable)")
+        interpreter = CharmInterpreter(processor, program)
+
+        converter = interpreter()
+
+        converter.convert(processor)
+        return converter.execute(processor)
+
+    def read_iterable(self, callable, iterable):
+        processor = self.processor()
+
+        compiler = CharmIteratorCompiler
+        cc = compiler(self, processor, callable)
+        program = cc.assemble()
+
+        processor.log.enter("iterable parse")
+        results = []
+        for row in iterable:
+            if not row:
+                continue
+
+            processor.iterator = row
+            interpreter = CharmInterpreter(processor, program)
+            converter = interpreter()
+
+            converter.convert(processor)
+            result = converter.execute(processor)
+            results.append(result)
+        processor.log.exit()
+
+        return results
+
+    def read_csv(self, callable, csv_reader, *, first_row_map=None):
+        processor = self.processor()
+
+        if first_row_map:
+            compiler = CharmMappingCompiler
+        else:
+            compiler = CharmIteratorCompiler
+        cc = compiler(self, processor, callable)
+        program = cc.assemble()
+
+        headings = next(csv_reader)
+        if first_row_map:
+            keys = [first_row_map.get(key, key) for key in headings]
+
+        processor.log.enter("csv parse")
+        results = []
+        for row in csv_reader:
+            if not row:
+                continue
+
+            if first_row_map:
+                d = {key: value for key, value in zip(keys, row)}
+                processor.mapping = d
+            else:
+                processor.iterator = row
+            interpreter = CharmInterpreter(processor, program)
+            converter = interpreter()
+
+            converter.convert(processor)
+            result = converter.execute(processor)
+            results.append(result)
+        processor.log.exit()
+
+        return results
+
 
 class Processor:
     def __init__(self, appeal):
@@ -5668,136 +7394,13 @@ class Processor:
         self.preparers = []
         self.reset()
 
-
     def reset(self):
         self.events = []
-        self.argi = None
+        self.iterator = None
+        self.mapping = None
         self.commands = []
         self.result = None
-
-    class Log:
-        def __init__(self, name=None, *, parent=None):
-            start = event_clock()
-
-            if name:
-                assert parent, "don't give your root Log instance a name"
-
-            self.name = name
-            self.events = []
-            self.parent = parent
-            self.start = self.end = start
-
-            # *sigh* a hack.
-            self.waiting = None
-
-        def log(self, event):
-            t = event_clock()
-            self.events.append((event, t))
-            self.end = t
-
-        def enter(self, name):
-            logger = Processor.Log(name, parent=self)
-            self.events.append(logger)
-
-        def exit(self):
-            self.end = event_clock()
-            return self.parent
-
-        def iterator(self, depth=0, logging_start=None):
-            """
-            yields 4-tuple:
-                (depth, start_time, elapsed_time, event)
-            start_time resets to 0 every time depth increments
-            start_time then restores the previous value every time depth decrements
-            """
-
-            # any time variable that doesn't start with "relative_"
-            # is an absolute time.
-            if not depth:
-                assert logging_start == None
-                logging_start = self.start
-            else:
-                assert logging_start != None
-
-            previous_start = self.start
-
-            if self.name:
-                waiting = [depth - 1, self.start - logging_start, None, "start " + self.name]
-            else:
-                waiting = None
-
-            for o in self.events:
-                if isinstance(o, Processor.Log):
-                    if waiting:
-                        previous_elapsed = o.start - previous_start
-                        waiting[2] = previous_elapsed
-                        yield waiting
-
-                    yield from o.iterator(depth=depth + 1, logging_start=logging_start)
-                    waiting = o.waiting
-                    o.waiting = None
-                    previous_start = o.end
-                    continue
-
-                event, start = o
-                relative_start = start - logging_start
-
-                if waiting:
-                    previous_elapsed = start - previous_start
-                    waiting[2] = previous_elapsed
-                    yield waiting
-                    waiting = None
-
-                waiting = [depth, relative_start, None, event]
-                previous_start = start
-
-            if waiting:
-                delta = self.end - previous_start
-                if delta:
-                    waiting[2] = delta
-                yield tuple(waiting)
-
-            if self.name:
-                total_elapsed = self.end - self.start
-                yield (depth - 1, None, total_elapsed, self.name + " subtotal")
-
-                relative_start = self.end - logging_start
-                elapsed = self.end - previous_start
-                self.waiting = [depth - 1, relative_start, None, "end " + self.name]
-
-    def log_start(self):
-        self.logger = logger = Processor.Log()
-        self.log_event = logger.log
-
-    def log_enter_context(self, event):
-        logger = self.Log(event, parent=self.logger)
-        self.logger.events.append(logger)
-        self.logger = logger
-        self.log_event = logger.log
-
-    def log_exit_context(self):
-        self.logger = logger = self.logger.exit()
-        self.log_event = logger.log
-
-    def print_log(self):
-        time_spacer = " " * 12
-        def format_time(t):
-            if t is None:
-                return time_spacer
-            seconds = t // 1000000000
-            nanoseconds = t - seconds
-            return f"{seconds:02}.{nanoseconds:09}"
-
-        print()
-        print("[event log]")
-        print(f"  start         elapsed       event")
-        print(f"  ------------  ------------  -------------")
-
-        formatted = []
-        for depth, start, elapsed, event in self.logger.iterator():
-            indent = "  " * depth
-            print(f"  {format_time(start)}  {format_time(elapsed)}  {indent}{event}")
-
+        self.log = big.Log()
 
     def preparer(self, preparer):
         if not callable(preparer):
@@ -5813,30 +7416,35 @@ class Processor:
                 pass
         return fn
 
-    def __call__(self, args=None, kwargs=None):
+    def __call__(self, sequence=None, mapping=None):
         self.reset()
-        self.log_start()
-        self.log_event("process start")
+        self.log("process start")
 
-        self.args = args
-        if args is not None:
-            self.argi = argi = PushbackIterator(args)
+        self.sequence = sequence
+        iterator = sequence
+        if (iterator is not None) and (not isinstance(sequence, PushbackIterator)):
+            iterator = PushbackIterator(iterator)
+        self.iterator = iterator
 
-        self.kwargs = kwargs
+        self.mapping = mapping
 
         # if want_prints:
-        #     argi.stack.extend(reversed(args))
-        #     argi.i = None
+        #     # allow us to print the remaining contents of the iterator
+        #     # by examining its stack
+        #     l = list(iterator)
+        #     l.reverse()
+        #     iterator.stack.extend(l)
+        #     iterator.i = None
 
         appeal = self.appeal
         if appeal.support_version:
-            if (len(args) == 1) and args[0] in ("-v", "--version"):
+            if (len(sequence) == 1) and sequence[0] in ("-v", "--version"):
                 return appeal.version()
             if appeal.commands and (not "version" in appeal.commands):
                 appeal.command()(appeal.version)
 
         if appeal.support_help:
-            if (len(args) == 1) and args[0] in ("-h", "--help"):
+            if (len(sequence) == 1) and sequence[0] in ("-h", "--help"):
                 return appeal.help()
             if appeal.commands and (not "help" in appeal.commands):
                 appeal.command()(appeal.help)
@@ -5852,15 +7460,16 @@ class Processor:
         appeal.parse(self)
         appeal.convert(self)
         result = self.result = appeal.execute(self)
-        self.log_event("process complete")
+        self.log("process complete")
         # if want_prints:
-        #     self.print_log()
+        #     self.log.print()
         return result
 
-    def main(self, args=None):
+    def main(self, args=None, kwargs=None):
         try:
-            sys.exit(self(args=args))
+            sys.exit(self(sequence=args, mapping=kwargs))
         except AppealUsageError as e:
             print("Error:", str(e))
             self.appeal.usage(usage=True)
             sys.exit(-1)
+

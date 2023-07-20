@@ -24,3 +24,6 @@ dependencies = [
 
 [project.urls]
 Source = "https://github.com/larryhastings/appeal/"
+
+[project.optional-dependencies]
+dev = ['perky', 'tomli']

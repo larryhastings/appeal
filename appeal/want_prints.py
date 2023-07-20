@@ -137,12 +137,12 @@ for info, line in lines:
 
     # start block
     if comment:
-        assert stripped == if_want_prints
+        assert stripped == if_want_prints, f"failed on line {info.line_number}: expected '{if_want_prints}' but got '{stripped}'"
         append(block_indent + comment_string + if_want_prints)
         continue
 
     # uncomment
-    assert comment_string in line
+    assert comment_string in line, f"failed on line {info.line_number}: expected {comment_string=} in {line=} but none was found"
     block_indent, octothorpe, line = line.partition(comment_string)
     assert octothorpe
     # append("## START BLOCK")
