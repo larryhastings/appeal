@@ -2297,11 +2297,16 @@ Restrictions on Appeal command functions:
 
 **0.6**
 
-Rewrote options handling.  Appeal's options semantics are now much
-stricter and more regular, but most of what changed was about obscure
-boundary conditions.  You probably won't even notice the change.
+A huge upgrade!
 
-* The big change: Appeal now early-maps options.  (See issue #3.)
+* A new feature: Appeal can now read configuration files!
+  Check out the new APIs `Appeal.read_mapping`,
+  `Appeal.read_iterable`, and even `Appeal.read_csv`.
+  This was a massive undertaking and involved a big
+  overhaul of the compiler.
+
+* The biggest change to existing behavior: Appeal now
+  early-maps options.  (See issue #3.)
   In short: when options are only defined in an optional group,
   they get provisionally mapped (made available) *before* the first
   argument in that group.  Using that option enters the group just
