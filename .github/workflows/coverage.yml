@@ -32,9 +32,9 @@ jobs:
       run: |
         coverage run tests/test_all.py
         coverage html -i
-        echo "```" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
         coverage report -i >> $GITHUB_STEP_SUMMARY
-        echo "```" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
     - name: Upload htmlcov
       uses: actions/upload-artifact@v3
       with:
