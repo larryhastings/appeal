@@ -16,6 +16,9 @@ permissions:
 
 jobs:
   test:
+    strategy:
+      matrix:
+        version: [6, 7, 8, 9, 10, 11]
 
     runs-on: ubuntu-latest
 
@@ -24,7 +27,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v3
       with:
-        python-version: '3.x'
+        python-version: '3.${{ matrix.version }}'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade flit
