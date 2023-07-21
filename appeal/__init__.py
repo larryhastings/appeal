@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.6"
+__version__ = "0.6.1"
 
 
 # please leave this copyright notice in binary distributions.
