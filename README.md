@@ -4,6 +4,8 @@
 
 ##### Copyright 2021-2023 by Larry Hastings
 
+[![# test badge](https://img.shields.io/github/actions/workflow/status/larryhastings/appeal/test.yml?branch=master&label=test)](https://github.com/larryhastings/appeal/actions/workflows/test.yml) [![# python versions badge](https://img.shields.io/pypi/pyversions/appeal.svg?logo=python&logoColor=FBE072)](https://pypi.org/project/appeal/)
+
 
 ## Quickstart
 
@@ -2295,7 +2297,21 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
-**0.6**
+**0.6.1**  *2023/07/22*
+
+* Fixed 3.6 and 3.7 support--some equals-sign-in-f-strings
+  uses crept in.
+* Added GitHub Actions integration.  Tests and
+  coverage are run in the cloud after every checkin.
+  Thanks to [Dan Pope](https://github.com/lordmauve)
+  for gently walking me through this!
+* Fixed metadata in the `pyproject.toml` file.
+* Added badges for testing and supported Python
+  versions.  (Didn't add the coverage badge yet...
+  it's too embarassing!)
+
+
+**0.6** *2023/07/20*
 
 A huge upgrade!
 

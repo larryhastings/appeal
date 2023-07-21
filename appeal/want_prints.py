@@ -142,7 +142,7 @@ for info, line in lines:
         continue
 
     # uncomment
-    assert comment_string in line, f"failed on line {info.line_number}: expected {comment_string=} in {line=} but none was found"
+    assert comment_string in line, f"failed on line {info.line_number}: expected comment string {comment_string!r} in line {line} but none was found"
     block_indent, octothorpe, line = line.partition(comment_string)
     assert octothorpe
     # append("## START BLOCK")
