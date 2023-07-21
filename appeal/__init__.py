@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.6"
+__version__ = "0.6.1"
 
 
 # please leave this copyright notice in binary distributions.
@@ -3362,7 +3362,7 @@ def charm_print(program, indent=''):
                 elif slot == "address":
                     assert value is not None
                     label_names = ", ".join(f"'{s}'" for s in labels.get(value, ()))
-                    assert label_names, f"didn't have any labels for index {value=}, {labels=}"
+                    assert label_names, f"didn't have any labels for index value={value!r}, labels={labels!r}"
                     value = f"{value} # {label_names}"
                 elif value == empty:
                     value = "(empty)"
@@ -3609,7 +3609,7 @@ def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_
                 if key is None:
                     key = op.key
                 else:
-                    assert key == op.key, f"expected identical keys, but {key=} != {op.key=}"
+                    assert key == op.key, f"expected identical keys, but key {key!r} != op.key {op.key!r}"
             callable = key_to_callable[key]
             full_name = f"{callable.__name__}.{op.parameter.name}"
             option_value = "|".join(options)
@@ -5212,7 +5212,7 @@ class Converter:
         except ValueError as e:
             # we can examine "converter", the exception must have
             # happened in an execute call.
-            raise AppealUsageError(f"invalid value something something {converter=}, {dir(converter)=} {converter.args=}")
+            raise AppealUsageError(f"invalid value something something converter {converter!r}, converter.args={converter.args!r}")
 
     def execute(self, processor):
         executor = processor.execute_preparers(self.callable)
@@ -5282,7 +5282,7 @@ class SimpleTypeConverter(Converter):
         if self.value is not None:
             raise RuntimeError("why a second time, fool")
         argument_count = (len(self.args_converters) + len(self.kwargs_converters))
-        assert 0 <= argument_count <= 1, f"{self.__class__.__name__}: {argument_count=}, should be 0 or 1, {self.args_converters=} {self.kwargs_converters=}"
+        assert 0 <= argument_count <= 1, f"{self.__class__.__name__}: argument_count={argument_count!r}, should be 0 or 1, self.args_converters={self.args_converters!r} self.kwargs_converters={self.kwargs_converters!r}"
         if not argument_count:
             # explicitly allow "make -j"
             if self.default is not empty:
