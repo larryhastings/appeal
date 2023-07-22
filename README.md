@@ -396,7 +396,7 @@ app.main()
 
 Now the `fgrep` command-line usage looks like this:
 
-    usage: script.py fgrep [-c|--color str] [-n|--number int] [-i|--ignore_case] pattern [str]...
+    usage: script.py fgrep [-c|--color] [-n|--number int] [-i|--ignore-case] pattern [filenames]...
 
 Again, a lot just happened.
 
