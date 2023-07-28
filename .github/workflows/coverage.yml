@@ -1,7 +1,6 @@
 name: Run coverage
 
-on:
-  push:
+on: [push, pull_request, workflow_dispatch]
 
 permissions:
   contents: read
