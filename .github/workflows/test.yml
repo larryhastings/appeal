@@ -2,6 +2,8 @@ name: Run tests
 
 on:
   push:
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -13,7 +15,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Set up Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v4
       with:
         python-version: '3.x'
     - name: Install dependencies
@@ -40,7 +42,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Set up Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v4
       with:
         python-version: '${{ matrix.version }}'
         allow-prereleases: true
