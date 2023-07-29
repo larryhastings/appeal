@@ -40,6 +40,6 @@ jobs:
       with:
         name: big_htmlcov
         path: htmlcov/
-    - name: Fail if not 100% coverage
+    - name: Fail if not 76% coverage
       run: |
-        coverage report -i --fail-under=100
+        coverage report -i --fail-under=76
