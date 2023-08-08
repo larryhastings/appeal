@@ -1064,25 +1064,26 @@ class CharmInstructionAppendToConverterArgs(CharmInstruction):
 
     <usage> is a 2-tuple:
         (usage_full_name, usage_name)
-    usage_full_name is a string of the form:
-        "{callable}.{parameter_name}"
-    This is the actual name of the parameter from
-    the actual callable.
 
-    usage_name is a string, the name of the
-    parameter as it should appear in usage documentation.
+        usage_full_name is a string of the form:
+            "{callable}.{parameter_name}"
+        This is the actual name of the parameter from
+        the actual callable.
+
+        usage_name is a string, the name of the
+        parameter as it should appear in usage documentation.
     """
 
     __slots__ = ['parameter', 'discretionary', 'usage']
 
-    def __init__(self, parameter, discretionary, usage):
+    def __init__(self, parameter, usage, discretionary):
         self.op = opcode.append_to_converter_args
         self.parameter = parameter
-        self.discretionary = discretionary
         self.usage = usage
+        self.discretionary = discretionary
 
     def __repr__(self):
-        return f"<append_to_converter_args parameter={self.parameter} discretionary={self.discretionary} usage={self.usage}>"
+        return f"<append_to_converter_args parameter={self.parameter} usage={self.usage} discretionary={self.discretionary}>"
 
 class CharmInstructionSetInConverterKwargs(CharmInstruction):
     """
@@ -1092,17 +1093,19 @@ class CharmInstructionSetInConverterKwargs(CharmInstruction):
     the 'o' register and stores it in 'converter.kwargs[<name>]'.
     (Here 'converter' is the 'converter' register.)
 
-    <name> is a string.
+    <parameter> and <usage> are the same as for
+    CharmInstructionAppendToConverterArgs.
     """
 
-    __slots__ = ['name']
+    __slots__ = ['parameter', 'usage']
 
-    def __init__(self, name):
+    def __init__(self, parameter, usage):
         self.op = opcode.set_in_converter_kwargs
-        self.name = name
+        self.parameter = parameter
+        self.usage = usage
 
     def __repr__(self):
-        return f"<set_in_converter_kwargs name={self.name}>"
+        return f"<set_in_converter_kwargs parameter={self.parameter} usage={self.usage}>"
 
 class CharmInstructionPushO(CharmInstruction):
     """
@@ -1652,9 +1655,10 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def set_in_converter_kwargs(self, name):
+    def set_in_converter_kwargs(self, parameter, usage):
         op = CharmInstructionSetInConverterKwargs(
-            name=name,
+            parameter = parameter,
+            usage = usage,
             )
         self._append_opcode(op)
         return op
@@ -2599,7 +2603,9 @@ class CharmAppealCompiler(CharmCompiler):
 
                 cc, add_to_self_a = self.compile_option(program_name, parameter, indent)
                 add_to_self_a.load_converter(key=key)
-                add_to_self_a.set_in_converter_kwargs(name=parameter.name)
+
+                usage = (f"{callable.__name__}.{parameter.name}", parameter.name)
+                add_to_self_a.set_in_converter_kwargs(parameter=parameter, usage=usage)
                 program = cc.assemble()
 
                 for option in options:
@@ -2834,8 +2840,8 @@ class CharmAppealCompiler(CharmCompiler):
             usage = (f"{callable.__name__}.{p.name}", usage_name)
             add_to_self_a.append_to_converter_args(
                 parameter=parameter_name,
-                discretionary=discretionary,
                 usage=usage,
+                discretionary=discretionary,
                 )
 
             if p.kind == VAR_POSITIONAL:
@@ -3114,9 +3120,9 @@ class CharmMappingCompiler(CharmCompiler):
 
             a.load_converter(converter_key)
             if child_write_to_kwargs:
-                a.set_in_converter_kwargs(child.name)
+                a.set_in_converter_kwargs(parameter=child, usage=None)
             else:
-                a.append_to_converter_args(parameter=child, discretionary=False, usage=None)
+                a.append_to_converter_args(parameter=child, usage=None, discretionary=False)
 
             # if want_prints:
             #     print(f"[cm]")
@@ -3264,7 +3270,7 @@ class CharmIteratorCompiler(CharmCompiler):
                 a.load_o(child_key)
 
             a.load_converter(converter_key)
-            a.append_to_converter_args(parameter=child, discretionary=False, usage=None)
+            a.append_to_converter_args(parameter=child, usage=None, discretionary=False)
 
             is_degenerate = is_degenerate and child_is_degenerate
 
@@ -3595,6 +3601,10 @@ def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_
 
     key_to_callable = {}
 
+    # how do we detect that a append_to_converter_args or set_to_converter_kwargs
+    # is a leaf node vs an interior node?
+    # next_to_o sets add_to_usage to True, and the opcodes between next_to_o
+    # and append_... or set_... all appear in this set.
     def add_option(op):
         program_id_to_option[op.program.id].append(op)
 
@@ -3629,10 +3639,12 @@ def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_
         program_id_to_option.clear()
 
     first_argument_in_group = True
-    add_to_usage = False
+    add_to_usage = True
+
+    branches_taken = set()
 
     for ip, op in ci:
-        # print(f"[{ip:03}] {op}")
+        # print(f"[{ip:03}] {op}   {add_to_usage=}")
 
         if op.op == opcode.create_converter:
             # the official and *only correct* way
@@ -3658,23 +3670,52 @@ def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_
             first_argument_in_group = True
             continue
 
+        # This hard-coded strategy for how to handle
+        # branching in the usage interpreter works
+        # because we don't do much branching.  If we
+        # start using it more, we'll need to do something
+        # more sophisticated.
+        #
+        # Ideas:
+        #   * make custom opcodes for specific branches
+        #     (multioption, var_positional)
+        #   * add a hint to the opcode that says "branch"
+        #     or "don't branch" when doing usage / docs.
+        #     or maybe two flags:
+        #         * branch first time? true/false
+        #         * branch second and all subsequent times? true/false
+
+        if op.op == opcode.branch_on_flag:
+            # branch the first time,
+            # don't branch afterwards
+            if ip not in branches_taken:
+                branches_taken.add(ip)
+                ci.ip.jump(op.address)
+            continue
+
+        if op.op == opcode.branch_on_not_flag:
+            # don't branch the first time,
+            # branch thereafter
+            if ip not in branches_taken:
+                branches_taken.add(ip)
+            else:
+                ci.ip.jump(op.address)
+            continue
+
         if op.op == opcode.next_to_o:
             add_to_usage = True
             continue
 
-        if (op.op == opcode.set_in_converter_kwargs) and add_to_usage:
-            add_to_usage = False
-            continue
-
-        if op.op == opcode.append_to_converter_args:
-            usage_full_name, usage_name = op.usage
-            arguments_values[usage_full_name] = usage_name
+        if op.op in (opcode.append_to_converter_args, opcode.set_in_converter_kwargs):
             if add_to_usage:
                 add_to_usage = False
-                if first_argument_in_group:
-                    first_argument_in_group = False
-                else:
-                    usage.append(" ")
+                usage_full_name, usage_name = op.usage
+                arguments_values[usage_full_name] = usage_name
+                if op.op == opcode.append_to_converter_args:
+                    if first_argument_in_group:
+                        first_argument_in_group = False
+                    else:
+                        usage.append(" ")
                 usage.append(formatter(usage_name))
             continue
 
@@ -4167,7 +4208,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     continue
 
                 if op.op == opcode.set_in_converter_kwargs:
-                    name = op.name
+                    name = op.parameter.name
                     converter = self.converter
                     o = self.o
 
@@ -4186,7 +4227,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     converter.unqueue()
                     converter.kwargs_converters[name] = o
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} set_in_converter_kwargs | name {op.name}")
+                    #     print(f"{self.opcodes_prefix} {prefix} set_in_converter_kwargs | parameter {op.parameter} | usage {op.usage}")
                     #     print_registers(extras = [
                     #         (f'{self.converter_to_key(converter)}.kwargs_converters', old, new),
                     #         ])
@@ -4701,7 +4742,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                         # if want_prints:
                         #     print(f"{self.cmdline_prefix}")
-                        #     print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg} | usage_name={op.usage_name}")
+                        #     print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg}")
                         #     print(f"{self.opcodes_prefix} {prefix} got '{a}'")
                         #     print_registers(o=old_o, group=old_group)
 
@@ -5922,6 +5963,10 @@ class SpecialSection:
         self.topics = {}
         self.topics_seen = set()
 
+    def __repr__(self):
+        fields = [f"{key}={value!r}" for key, value in self.__dict__.items()]
+        contents = " ".join(fields)
+        return f"<SpecialSection {contents}>"
 
 
 unspecified = object()
@@ -6511,9 +6556,11 @@ class Appeal:
 
         two_lists = lambda: ([], [])
         mapped_options = collections.defaultdict(two_lists)
+        # add_to_usage = False
+        branches_taken = set()
 
         for ip, op in ci:
-            # print(f"## [{ip:>3}] op={op}")
+            # print(f"## [{ip:>3}] op={op} add_to_usage={add_to_usage}")
             if op.op == opcode.create_converter:
                 c = {'parameter': op.parameter, 'parameters': {}, 'options': collections.defaultdict(list)}
                 ci.converters[op.key] = ci.o = c
@@ -6523,11 +6570,43 @@ class Appeal:
                 ci.converter = ci.converters[op.key]
                 continue
 
-            if (op.op == opcode.append_to_converter_args) and last_op and (last_op.op == opcode.next_to_o):
+            if op.op == opcode.next_to_o:
+                add_to_usage = True
+                continue
+
+            if op.op in (opcode.append_to_converter_args, opcode.set_in_converter_kwargs):
+                sys.stderr.write(f">> APP {op=}\n")
+                sys.stderr.flush()
+                # if add_to_usage:
+                #     add_to_usage = False
+                #     ci.converter['parameters'][op.parameter] = op.usage
                 ci.converter['parameters'][op.parameter] = op.usage
                 continue
 
+            # see comment in charm_usage about
+            # the hard-coded branching strategies
+            # used here.
+            if op.op == opcode.branch_on_flag:
+                # branch the first time,
+                # don't branch afterwards
+                if ip not in branches_taken:
+                    branches_taken.add(ip)
+                    ci.ip.jump(op.address)
+                continue
+
+            if op.op == opcode.branch_on_not_flag:
+                # don't branch the first time,
+                # branch thereafter
+                if ip not in branches_taken:
+                    branches_taken.add(ip)
+                else:
+                    ci.ip.jump(op.address)
+                continue
+
             if op.op == opcode.map_option:
+                # sys.stderr.write(f">> MAP {op=}\n")
+                # sys.stderr.flush()
+                # assert not add_to_usage
                 parameter = c['parameter']
                 program = op.program
 
@@ -6544,6 +6623,7 @@ class Appeal:
                 continue
 
             if op.op == opcode.end:
+                # assert not add_to_usage
                 option_depth -= 1
                 continue
 
@@ -6572,6 +6652,8 @@ class Appeal:
             values_callable_index[callable] = len(values)
             #              callable, signature, depth, positional_children, option_children
             values.append([callable, signature, 0,     positional_children, option_children])
+            sys.stderr.write(f"THINGY {values[-1]}\n\n")
+            sys.stderr.flush()
             kids = (positional_children | option_children)
             children[callable] = kids
 
@@ -6939,11 +7021,14 @@ class Appeal:
                     name = "(unknown callable)"
 
                 try:
+                    sys.stderr.write(f"\n\n{special_section=}\n\n")
+                    sys.stderr.write(f"\n\n{special_section.topic_names=}\n\n")
+                    sys.stderr.flush()
                     topic = key.format_map(special_section.topic_names)
                 except KeyError as e:
-                    raise AppealConfigurationError(f"{name}: docstring section {special_section.name} has unknown topic {key!r}")
+                    raise AppealConfigurationError(f"{name}: docstring section {special_section.name} has unknown topic {key!r}") from None
                 if topic in special_section.topics_seen:
-                    raise AppealConfigurationError(f"{name}: docstring section {special_section.name} topic {key!r} defined twice")
+                    raise AppealConfigurationError(f"{name}: docstring section {special_section.name} topic {key!r} defined twice") from None
                 special_section.topics_seen.add(topic)
                 definition = []
                 if trailing:
