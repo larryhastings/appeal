@@ -2297,6 +2297,22 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
+**0.6.2**  *2023/10/12*
+
+* Presentation change: if you run a program without arguments,
+  runs no-argument `help` instead of `usage`.  This prints out
+  both usage information and a list of commands, which seems more
+  useful.  That's how most modern programs do it (e.g. `git`, `hg`).
+* Minor API change: renamed Appeal's custom exceptions, to
+  remove the word `Appeal`.  So, for example, `AppealUsageError`
+  is now simply `UsageError`.  I added aliases so the old names
+  still work; I'll remove them eventually, but I promise to
+  keep the old names around for at least one year.
+* Fixed usage generation, added tests.
+* Fixed a bug where using a "simple type" (e.g. bool, float)
+  as an annotation for an option would cause Appeal help to
+  raise an exception.  Fixes #15.
+
 **0.6.1**  *2023/07/22*
 
 * Fixed 3.6 and 3.7 support--some equals-sign-in-f-strings

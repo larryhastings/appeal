@@ -25,6 +25,28 @@
 
 
 import builtins
+
+def make_stdout_capture():
+    text = []
+    actual_print = builtins.print
+
+    def captured_print(*a, end="\n", sep=" "):
+        t = sep.join([str(o) for o in a])
+        t += end
+        text.append(t)
+
+    def start():
+        builtins.print = captured_print
+        return captured_print
+
+    def end():
+        builtins.print = actual_print
+        result = "".join(text)
+        return result
+
+    return start, captured_print, end
+
+
 import collections
 import math
 import os.path
@@ -56,20 +78,14 @@ appeal_dir = preload_local_appeal()
 import appeal
 
 
+
 app = command = process = None
 
 def capture_stdout(cmdline):
-    text = []
-    def print_capture(*a, end="\n", sep=" "):
-        t = sep.join([str(o) for o in a])
-        t += end
-        text.append(t)
-    actual_print = builtins.print
-    builtins.print = print_capture
+    start, captured_print, end = make_stdout_capture()
+    start()
     process(shlex.split(cmdline))
-    builtins.print = actual_print
-    text = "".join(text)
-    return text
+    return end()
 
 
 
@@ -344,6 +360,8 @@ def earlier_int_float1(i1:int, f1:float, *, verbose=False):
 
 def earlier(a, b:earlier_int_float1, c:earlier_int_float2=(earlier_int_float2, 0, 0.0, False)):
     return (earlier, a, b, c)
+
+
 
 
 class AppealTestsBase(unittest.TestCase):
@@ -1353,13 +1371,6 @@ class SmokeTests(AppealTestsBase):
             )
 
 
-
-# def multiple_groups_child(child_a, child_b, child_c=None, *, flag=False, color:int_float_verbose=(0, 0.0, False)):
-#     return (multiple_groups_child, child_a, child_b, child_c, flag, color)
-
-# def multiple_groups(a, b:multiple_groups_child=(multiple_groups_child, None, None, None, False, (0, 0.0, False)), c:multiple_groups_child=(multiple_groups_child, None, None, None, False, (0, 0.0, False)), d=''):
-#     return (mixed, a, b, c, d)
-
     def test_mixed_groups_1(self):
         command(multiple_groups)
         self.assert_process(
@@ -1640,6 +1651,43 @@ class SmokeTests(AppealTestsBase):
             (c, 'xx', 'yy', 55)
             )
 
+
+class NewStyleTests(AppealTestsBase):
+    ##
+    ## Experimenting with a new style of writing tests here.
+    ## Currently, if you have a failing test, it takes a little
+    ## work to extract it from the test harness.  So I'm experimenting
+    ## with writing them in such a way that there's virtually
+    ##
+
+    def test_generate_docs_for_option_with_simple_type(self):
+        import appeal
+        import sys
+        import os.path
+        app = appeal.Appeal()
+
+        @app.command()
+        def nuttall(*, verbose: bool = False):
+            """
+            Demo function, first line.
+            """
+            if verbose:
+                print(f"verbose={verbose}")
+
+        start, captured_print, end = make_stdout_capture()
+        start()
+        app.help()
+        text = end()
+        if 0:
+            assertIn = self.assertIn
+        else:
+            def assertIn(needle, haystack):
+                assert needle in haystack, f"{needle!r} not in {haystack!r}"
+
+        assertIn(f"usage: {os.path.basename(sys.argv[0])} command", text)
+        assertIn("Commands:", text)
+        assertIn("nuttall", text)
+        assertIn("Demo function, first line.", text)
 
 
 ##

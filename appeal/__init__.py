@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 
 
 # please leave this copyright notice in binary distributions.
@@ -171,24 +171,31 @@ def denormalize_option(option):
 class AppealBaseException(Exception):
     pass
 
-class AppealConfigurationError(AppealBaseException):
+class ConfigurationError(AppealBaseException):
     """
     Raised when the Appeal API is used improperly.
     """
     pass
 
-class AppealUsageError(AppealBaseException):
+
+class UsageError(AppealBaseException):
     """
     Raised when Appeal processes an invalid command-line.
     """
     pass
 
-class AppealCommandError(AppealBaseException):
+class CommandError(AppealBaseException):
     """
     Raised when an Appeal command function returns a
     result indicating an error.
     """
     pass
+
+# old names
+AppealConfigurationError = ConfigurationError
+AppealUsageError = UsageError
+AppealCommandError = CommandError
+
 
 class Preparer:
     pass
@@ -1064,25 +1071,26 @@ class CharmInstructionAppendToConverterArgs(CharmInstruction):
 
     <usage> is a 2-tuple:
         (usage_full_name, usage_name)
-    usage_full_name is a string of the form:
-        "{callable}.{parameter_name}"
-    This is the actual name of the parameter from
-    the actual callable.
 
-    usage_name is a string, the name of the
-    parameter as it should appear in usage documentation.
+        usage_full_name is a string of the form:
+            "{callable}.{parameter_name}"
+        This is the actual name of the parameter from
+        the actual callable.
+
+        usage_name is a string, the name of the
+        parameter as it should appear in usage documentation.
     """
 
     __slots__ = ['parameter', 'discretionary', 'usage']
 
-    def __init__(self, parameter, discretionary, usage):
+    def __init__(self, parameter, usage, discretionary):
         self.op = opcode.append_to_converter_args
         self.parameter = parameter
-        self.discretionary = discretionary
         self.usage = usage
+        self.discretionary = discretionary
 
     def __repr__(self):
-        return f"<append_to_converter_args parameter={self.parameter} discretionary={self.discretionary} usage={self.usage}>"
+        return f"<append_to_converter_args parameter={self.parameter} usage={self.usage} discretionary={self.discretionary}>"
 
 class CharmInstructionSetInConverterKwargs(CharmInstruction):
     """
@@ -1092,17 +1100,19 @@ class CharmInstructionSetInConverterKwargs(CharmInstruction):
     the 'o' register and stores it in 'converter.kwargs[<name>]'.
     (Here 'converter' is the 'converter' register.)
 
-    <name> is a string.
+    <parameter> and <usage> are the same as for
+    CharmInstructionAppendToConverterArgs.
     """
 
-    __slots__ = ['name']
+    __slots__ = ['parameter', 'usage']
 
-    def __init__(self, name):
+    def __init__(self, parameter, usage):
         self.op = opcode.set_in_converter_kwargs
-        self.name = name
+        self.parameter = parameter
+        self.usage = usage
 
     def __repr__(self):
-        return f"<set_in_converter_kwargs name={self.name}>"
+        return f"<set_in_converter_kwargs parameter={self.parameter} usage={self.usage}>"
 
 class CharmInstructionPushO(CharmInstruction):
     """
@@ -1652,9 +1662,10 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def set_in_converter_kwargs(self, name):
+    def set_in_converter_kwargs(self, parameter, usage):
         op = CharmInstructionSetInConverterKwargs(
-            name=name,
+            parameter = parameter,
+            usage = usage,
             )
         self._append_opcode(op)
         return op
@@ -1929,9 +1940,9 @@ class CharmAssembler:
             # remove labels
             if op.op == opcode.label:
                 if op in labels:
-                    raise AppealConfigurationError(f"label instruction used twice: {op}")
+                    raise ConfigurationError(f"label instruction used twice: {op}")
                 if op.label in labels_seen:
-                    raise AppealConfigurationError(f"label description used twice: '{op.label}'")
+                    raise ConfigurationError(f"label description used twice: '{op.label}'")
                 labels_seen.add(op.label)
                 labels[op] = index
                 external_labels.append([index, op.label])
@@ -1973,7 +1984,7 @@ class CharmAssembler:
             op = opcodes[index]
             address = labels.get(op.label)
             if address is None:
-                raise AppealConfigurationError(f"unknown label {op.label}")
+                raise ConfigurationError(f"unknown label {op.label}")
             replacement = replacement_op[op.op](address)
             opcodes[index] = replacement
             fixup_ops.append(replacement)
@@ -2268,7 +2279,7 @@ class CharmAppealCompiler(CharmCompiler):
         pg = argument_grouping.ParameterGrouper(callable, default, signature=signature)
         pgi = pg.iter_all()
 
-        add_to_parent_a, is_degenerate = self.compile_parameter(parameter, pgi, 0, indent, name)
+        add_to_parent_a, degenerate_append_op = self.compile_parameter(parameter, pgi, 0, indent, name)
 
         # if want_prints:
         #     print(f"[cc] {indent}compilation of {parameter} complete.")
@@ -2475,7 +2486,7 @@ class CharmAppealCompiler(CharmCompiler):
         else:
             annotation = dereference_annotated(parameter.annotation)
             if not is_legal_annotation(annotation):
-                raise AppealConfigurationError(f"precompile_option(): parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
+                raise ConfigurationError(f"precompile_option(): parameter {parameter.name!r} annotation is {parameter.annotation}, which you can't use directly, you must call it")
 
             # if want_prints:
             #     print(f"[cc] {indent}<< recurse on option >>")
@@ -2503,7 +2514,7 @@ class CharmAppealCompiler(CharmCompiler):
         for parameter in parameters.values():
             if parameter.kind == KEYWORD_ONLY:
                 if parameter.default == empty:
-                    raise AppealConfigurationError(f"x: keyword-only argument {parameter.name} doesn't have a default value")
+                    raise ConfigurationError(f"x: keyword-only argument {parameter.name} doesn't have a default value")
                 mappings = kw_parameters.get(parameter.name, None)
                 if not mappings:
                     annotation = dereference_annotated(parameter.annotation)
@@ -2526,7 +2537,7 @@ class CharmAppealCompiler(CharmCompiler):
         kw_parameters_unseen = set(kw_parameters) - set(all_kwonly_names)
         if kw_parameters_unseen:
             if not var_keyword:
-                raise AppealConfigurationError(f"x: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
+                raise ConfigurationError(f"x: there are options that must go into **kwargs, but this callable doesn't accept **kwargs.  options={kw_parameters_unseen}")
             # avoid randomness
             kw_parameters_unseen = list(kw_parameters_unseen)
             kw_parameters_unseen.sort()
@@ -2599,7 +2610,10 @@ class CharmAppealCompiler(CharmCompiler):
 
                 cc, add_to_self_a = self.compile_option(program_name, parameter, indent)
                 add_to_self_a.load_converter(key=key)
-                add_to_self_a.set_in_converter_kwargs(name=parameter.name)
+
+                # usage = (f"{callable.__name__}.{parameter.name}", parameter.name)
+                usage = None
+                add_to_self_a.set_in_converter_kwargs(parameter=parameter, usage=usage)
                 program = cc.assemble()
 
                 for option in options:
@@ -2613,11 +2627,11 @@ class CharmAppealCompiler(CharmCompiler):
                         destination = self.ag_options_a
                     elif self.ag_duplicate_options_a is not None:
                         if option in self.ag_duplicate_options:
-                            raise AppealConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no command-line arguments between definitions)")
+                            raise ConfigurationError(f"multiple definitions of option {denormalize_option(option)} are ambiguous (no command-line arguments between definitions)")
                         destination = self.ag_duplicate_options_a
                         self.ag_duplicate_options.add(option)
                     else:
-                        raise AppealConfigurationError(f"argument group initialized with multiple definitions of option {denormalize_option(option)}, ambiguous")
+                        raise ConfigurationError(f"argument group initialized with multiple definitions of option {denormalize_option(option)}, ambiguous")
 
                     # if want_prints:
                     #     print(f"[cc] {indent}option={option}")
@@ -2674,10 +2688,12 @@ class CharmAppealCompiler(CharmCompiler):
         #         print(f"[cc] {indent}    )")
         #     print(f"[cc]")
 
-        is_degenerate = (depth > 0) and (len(parameters) < 2)
+        # is *this* function degenerate?
+        # we're gonna build that up from a bunch of tests, starting with:
+        zero_or_one_parameters = (len(parameters) < 2)
 
         # if want_prints:
-        #     print(f"[cc] {indent}is_degenerate={is_degenerate}")
+        #     print(f"[cc] {indent}zero_or_one_parameters={zero_or_one_parameters}")
         #     print(f"[cc] {indent}len(parameters)={len(parameters)}")
         #     print(f"[cc]")
 
@@ -2747,11 +2763,20 @@ class CharmAppealCompiler(CharmCompiler):
         # default use the usage information from the parameter from the root parameter
         # of that degenerate converter tree--in this case, the parameter "abc" from
         # the function "foo".
+        #
+        # The new modern way Appeal deals with this: it only sets usage on
+        # append_to_converter_args opcodes that should appear in usage.
+        # either that parameter is a leaf node, or it's the top of a
+        # degenerate converter tree.
 
         # if want_prints:
         #     print(f"[cc] {indent}compile positional parameters")
         #     print(f"[cc]")
         #     indent += "    "
+
+        parameter_is_degenerate = True
+        degenerate_append_op = None
+        op = None
 
         for i, (parameter_name, p) in enumerate(parameters.items()):
             if not p.kind in maps_to_positional:
@@ -2759,7 +2784,7 @@ class CharmAppealCompiler(CharmCompiler):
 
             annotation = dereference_annotated(p.annotation)
             if not is_legal_annotation(annotation):
-                raise AppealConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
+                raise ConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
 
             # FIXME it's lame to do this here,
             # you need to rewrite compile_parameter so it
@@ -2773,20 +2798,8 @@ class CharmAppealCompiler(CharmCompiler):
             else:
                 index = i
 
-            # if is_degenerate:
-            #     usage_parameter = usage = None
-            # else:
-            #     usage_callable = callable
-            #     usage = usage_parameter = parameter_name
-
-            # usage = positionals.get(parameter_name, usage)
-            # usage = "-x"
-            if not is_degenerate:
-                usage_name = parameter_name
             # handle @app.parameter name override
-            override = positionals.get(parameter_name)
-            if override:
-                usage_name = override
+            usage_name = positionals.get(parameter_name) or parameter_name
 
             # only create new groups here if it's an optional group
             # (we pre-create the initial, required group)
@@ -2796,6 +2809,8 @@ class CharmAppealCompiler(CharmCompiler):
             #     printable_default = "(empty)" if p.default is empty else repr(p.default)
             #
             #     print(f"[cc] {indent}positional parameter {i}: p={p}")
+            #     print(f"[cc] {indent}    p.name={p.name!r}")
+            #     print(f"[cc] {indent}    usage_name={usage_name!r}")
             #     print(f"[cc] {indent}    p.kind={p.kind!s}")
             #     print(f"[cc] {indent}    annotation={annotation.__name__}")
             #     print(f"[cc] {indent}    default={printable_default} cls={cls}")
@@ -2825,17 +2840,25 @@ class CharmAppealCompiler(CharmCompiler):
                 # if want_prints:
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
-                add_to_self_a, is_degenerate_subtree = self.compile_parameter(p, pgi, depth + 1, indent + "    ", usage_name)
-                is_degenerate = is_degenerate and is_degenerate_subtree
+                add_to_self_a, degenerate_append_op = self.compile_parameter(p, pgi, depth + 1, indent + "    ", usage_name)
+                parameter_is_degenerate = (degenerate_append_op != None)
 
             add_to_self_a.load_converter(key=converter_key)
 
-            usage_full_name = (f"{callable.__name__}.{p.name}", usage_name)
-            usage = (f"{callable.__name__}.{p.name}", usage_name)
-            add_to_self_a.append_to_converter_args(
+            # if this parameter is degenerate, let it have usage
+            # (but remove the usage from its child, if any)
+            if parameter_is_degenerate:
+                usage_full_name = f"{callable.__name__}.{p.name}"
+                usage = (usage_full_name, usage_name)
+                if degenerate_append_op:
+                    degenerate_append_op.usage = None
+            else:
+                usage = None
+
+            op = add_to_self_a.append_to_converter_args(
                 parameter=parameter_name,
-                discretionary=discretionary,
                 usage=usage,
+                discretionary=discretionary,
                 )
 
             if p.kind == VAR_POSITIONAL:
@@ -2851,7 +2874,8 @@ class CharmAppealCompiler(CharmCompiler):
         if self.processor:
             self.processor.log.exit()
 
-        return add_to_parent_a, is_degenerate
+        degenerate_append_op = op if (zero_or_one_parameters and parameter_is_degenerate) else None
+        return add_to_parent_a, degenerate_append_op
 
 
 class CharmCommandCompiler(CharmAppealCompiler):
@@ -2925,7 +2949,7 @@ class CharmMappingCompiler(CharmCompiler):
         parameters = signature.parameters
 
         if not len(parameters):
-            raise AppealConfigurationError("Sorry, can't process a converter that takes no parameters here")
+            raise ConfigurationError("Sorry, can't process a converter that takes no parameters here")
 
         converter_key = self.next_converter_key()
         a = self.root_a
@@ -3043,13 +3067,13 @@ class CharmMappingCompiler(CharmCompiler):
 
         for child in parameters.values():
             if child.kind is VAR_POSITIONAL:
-                raise AppealConfigurationError(f"{callable.__name__}: parameter *{child.name} is unsupported for CharmMappingCompiler")
+                raise ConfigurationError(f"{callable.__name__}: parameter *{child.name} is unsupported for CharmMappingCompiler")
             if child.kind is VAR_KEYWORD:
-                raise AppealConfigurationError(f"{callable.__name__}: parameter **{child.name} is unsupported for CharmMappingCompiler")
+                raise ConfigurationError(f"{callable.__name__}: parameter **{child.name} is unsupported for CharmMappingCompiler")
 
             child_annotation = dereference_annotated(child.annotation)
             if not is_legal_annotation(child_annotation):
-                raise AppealConfigurationError(f"{callable.__name__}: parameter {child.name} annotation is {child_annotation}, which you can't use directly, you must call it")
+                raise ConfigurationError(f"{callable.__name__}: parameter {child.name} annotation is {child_annotation}, which you can't use directly, you must call it")
 
             # FIXME it's lame to do this again here,
             # you should rewrite compile_parameter so it
@@ -3114,9 +3138,9 @@ class CharmMappingCompiler(CharmCompiler):
 
             a.load_converter(converter_key)
             if child_write_to_kwargs:
-                a.set_in_converter_kwargs(child.name)
+                a.set_in_converter_kwargs(parameter=child, usage=None)
             else:
-                a.append_to_converter_args(parameter=child, discretionary=False, usage=None)
+                a.append_to_converter_args(parameter=child, usage=None, discretionary=False)
 
             # if want_prints:
             #     print(f"[cm]")
@@ -3226,12 +3250,12 @@ class CharmIteratorCompiler(CharmCompiler):
         for child in parameters.values():
             child_annotation = dereference_annotated(child.annotation)
             if not is_legal_annotation(child_annotation):
-                raise AppealConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
+                raise ConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
 
             if child.kind is KEYWORD_ONLY:
-                raise AppealConfigurationError("{callable.__name__}: keyword-only parameter {parameter.name!r} is unsupported for CharmIteratorCompiler")
+                raise ConfigurationError("{callable.__name__}: keyword-only parameter {parameter.name!r} is unsupported for CharmIteratorCompiler")
             if child.kind is VAR_KEYWORD:
-                raise AppealConfigurationError("{callable.__name__}: parameter **{parameter.name!r} is unsupported for CharmIteratorCompiler")
+                raise ConfigurationError("{callable.__name__}: parameter **{parameter.name!r} is unsupported for CharmIteratorCompiler")
             var_positional = child.kind is VAR_POSITIONAL
 
 
@@ -3264,7 +3288,7 @@ class CharmIteratorCompiler(CharmCompiler):
                 a.load_o(child_key)
 
             a.load_converter(converter_key)
-            a.append_to_converter_args(parameter=child, discretionary=False, usage=None)
+            a.append_to_converter_args(parameter=child, usage=None, discretionary=False)
 
             is_degenerate = is_degenerate and child_is_degenerate
 
@@ -3629,10 +3653,12 @@ def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_
         program_id_to_option.clear()
 
     first_argument_in_group = True
-    add_to_usage = False
+
+    branches_taken = set()
 
     for ip, op in ci:
-        # print(f"[{ip:03}] {op}")
+        # if want_prints:
+        #     print(f"_charm_usage [{ip:03}] {op}")
 
         if op.op == opcode.create_converter:
             # the official and *only correct* way
@@ -3658,23 +3684,49 @@ def _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_
             first_argument_in_group = True
             continue
 
-        if op.op == opcode.next_to_o:
-            add_to_usage = True
+        # This hard-coded strategy for how to handle
+        # branching in the usage interpreter works
+        # because we don't do much branching.  If we
+        # start using it more, we'll need to do something
+        # more sophisticated.
+        #
+        # Ideas:
+        #   * make custom opcodes for specific branches
+        #     (multioption, var_positional)
+        #   * add a hint to the opcode that says "branch"
+        #     or "don't branch" when doing usage / docs.
+        #     or maybe two flags:
+        #         * branch first time? true/false
+        #         * branch second and all subsequent times? true/false
+
+        if op.op == opcode.branch_on_flag:
+            # branch the first time,
+            # don't branch afterwards
+            if ip not in branches_taken:
+                branches_taken.add(ip)
+                ci.ip.jump(op.address)
             continue
 
-        if (op.op == opcode.set_in_converter_kwargs) and add_to_usage:
-            add_to_usage = False
+        if op.op == opcode.branch_on_not_flag:
+            # don't branch the first time,
+            # branch thereafter
+            if ip not in branches_taken:
+                branches_taken.add(ip)
+            else:
+                ci.ip.jump(op.address)
             continue
 
-        if op.op == opcode.append_to_converter_args:
-            usage_full_name, usage_name = op.usage
-            arguments_values[usage_full_name] = usage_name
-            if add_to_usage:
-                add_to_usage = False
-                if first_argument_in_group:
-                    first_argument_in_group = False
-                else:
-                    usage.append(" ")
+        if op.op in (opcode.append_to_converter_args, opcode.set_in_converter_kwargs):
+            if op.usage:
+                usage_full_name, usage_name = op.usage
+                # if want_prints:
+                #     print(f">>>> arguments_values[{usage_full_name!r}] = {usage_name!r}")
+                arguments_values[usage_full_name] = usage_name
+                if op.op == opcode.append_to_converter_args:
+                    if first_argument_in_group:
+                        first_argument_in_group = False
+                    else:
+                        usage.append(" ")
                 usage.append(formatter(usage_name))
             continue
 
@@ -3689,8 +3741,9 @@ def charm_usage(appeal, program, *, formatter=str):
     option_values = {}
     _charm_usage(appeal, program, usage, closing_brackets, formatter, arguments_values, option_values)
     usage.extend(closing_brackets)
-    # print(f"arguments_values={arguments_values}")
-    # print(f"option_values={option_values}")
+    # if want_prints:
+    #     print(f"arguments_values={arguments_values}")
+    #     print(f"option_values={option_values}")
     return "".join(usage).strip(), arguments_values, option_values
 
 
@@ -3906,7 +3959,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                         message = f"{denormalize_option(option)} can't be used here, it must be used immediately after {parent_options}"
                     else:
                         message = f"unknown option {denormalize_option(option)}"
-                    raise AppealUsageError(message) from None
+                    raise UsageError(message) from None
 
             program, group_id = t
             total = program.total
@@ -4167,14 +4220,14 @@ class CharmInterpreter(CharmBaseInterpreter):
                     continue
 
                 if op.op == opcode.set_in_converter_kwargs:
-                    name = op.name
+                    name = op.parameter.name
                     converter = self.converter
                     o = self.o
 
                     existing = converter.kwargs_converters.get(name, sentinel)
                     if existing is not sentinel:
                         if not ((existing == o) and isinstance(existing, MultiOption)):
-                            raise AppealUsageError(f"{program.name} specified more than once.")
+                            raise UsageError(f"{program.name} specified more than once.")
                         # we're setting the kwarg to the value it's already set to,
                         # and it's a multioption.  it's fine, we just ignore it.
                         continue
@@ -4186,7 +4239,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     converter.unqueue()
                     converter.kwargs_converters[name] = o
                     # if want_prints:
-                    #     print(f"{self.opcodes_prefix} {prefix} set_in_converter_kwargs | name {op.name}")
+                    #     print(f"{self.opcodes_prefix} {prefix} set_in_converter_kwargs | parameter {op.parameter} | usage {op.usage}")
                     #     print_registers(extras = [
                     #         (f'{self.converter_to_key(converter)}.kwargs_converters', old, new),
                     #         ])
@@ -4550,7 +4603,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                 if op.op == opcode.create_converter:
                     raise RuntimeError("huh? we should have handled all create_converter opcodes already.")
 
-                raise AppealConfigurationError(f"unhandled opcode | op {op}")
+                raise ConfigurationError(f"unhandled opcode | op {op}")
 
             else:
                 # we finished the program
@@ -4701,7 +4754,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                         # if want_prints:
                         #     print(f"{self.cmdline_prefix}")
-                        #     print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg} | usage_name={op.usage_name}")
+                        #     print(f"{self.opcodes_prefix} {prefix} next_to_o | required={op.required} | is_oparg={op.is_oparg}")
                         #     print(f"{self.opcodes_prefix} {prefix} got '{a}'")
                         #     print_registers(o=old_o, group=old_group)
 
@@ -4709,7 +4762,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                         break
 
                     if not option_space_oparg:
-                        raise AppealConfigurationError("oops, currently the only supported value of option_space_oparg is True")
+                        raise ConfigurationError("oops, currently the only supported value of option_space_oparg is True")
 
                     if a == "--":
                         # we shouldn't be able to reach this twice.
@@ -4800,7 +4853,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                                     number_of_arguments = maximum_arguments
                                 else:
                                     number_of_arguments = f"{minimum_arguments} to {maximum_arguments}"
-                                raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} takes {number_of_arguments} arguments, it must be last")
+                                raise UsageError(f"-{option}{remainder} isn't allowed, -{option} takes {number_of_arguments} arguments, it must be last")
                             # in the remaining cases, we know maximum_arguments is 1
                             elif short_option_concatenated_oparg and (minimum_arguments == 0):
                                 # Support short_option_concatenated_oparg.
@@ -4832,11 +4885,11 @@ class CharmInterpreter(CharmBaseInterpreter):
                                 # Get with the times, you musty old fogeys!
 
                                 if split_value is not None:
-                                    raise AppealUsageError(f"-{option}{remainder}={split_value} isn't allowed, -{option} must be last because it takes an argument")
+                                    raise UsageError(f"-{option}{remainder}={split_value} isn't allowed, -{option} must be last because it takes an argument")
                                 split_value = remainder
                             else:
                                 assert minimum_arguments == maximum_arguments == 1
-                                raise AppealUsageError(f"-{option}{remainder} isn't allowed, -{option} must be last because it takes an argument")
+                                raise UsageError(f"-{option}{remainder} isn't allowed, -{option} must be last because it takes an argument")
 
                     laden_group = id_to_group[group_id]
 
@@ -4866,9 +4919,9 @@ class CharmInterpreter(CharmBaseInterpreter):
                     if split_value is not None:
                         if maximum_arguments != 1:
                             if maximum_arguments == 0:
-                                raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} doesn't take an argument")
+                                raise UsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} doesn't take an argument")
                             if maximum_arguments >= 2:
-                                raise AppealUsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} takes multiple arguments")
+                                raise UsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} takes multiple arguments")
                         iterator.push(split_value)
                         # if want_prints:
                         #     print(f"{self.cmdline_prefix} {self.ip_spacer} pushing split value {split_value!r} back onto iterator")
@@ -4897,7 +4950,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     middle = f"at least {ag.minimum} arguments but no more than {ag.maximum} arguments"
                 program = self.program
                 message = f"{program.name} requires {middle} in this argument group."
-                raise AppealUsageError(message)
+                raise UsageError(message)
 
         # if want_prints:
         #     print(f"{self.opcodes_prefix}")
@@ -5212,7 +5265,7 @@ class Converter:
         except ValueError as e:
             # we can examine "converter", the exception must have
             # happened in an execute call.
-            raise AppealUsageError(f"invalid value something something converter {converter!r}, converter.args={converter.args!r}")
+            raise UsageError(f"invalid value something something converter {converter!r}, converter.args={converter.args!r}")
 
     def execute(self, processor):
         executor = processor.execute_preparers(self.callable)
@@ -5222,7 +5275,7 @@ class Converter:
 class InferredConverter(Converter):
     def __init__(self, parameter, appeal):
         if not parameter.default:
-            raise AppealConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
+            raise ConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=type(parameter.default), default=parameter.default)
         super().__init__(p2, appeal)
 
@@ -5287,7 +5340,7 @@ class SimpleTypeConverter(Converter):
             # explicitly allow "make -j"
             if self.default is not empty:
                 return self.default
-            raise AppealUsageError(f"no argument supplied for {self}, we should have raised an error earlier huh.")
+            raise UsageError(f"no argument supplied for {self}, we should have raised an error earlier huh.")
         try:
             if self.kwargs_converters:
                 for v in self.kwargs_converters.values():
@@ -5295,7 +5348,7 @@ class SimpleTypeConverter(Converter):
                 self.kwargs_converters.clear()
             self.value = self.callable(self.args_converters[0])
         except ValueError as e:
-            raise AppealUsageError(f"invalid value {self.args_converters[0]} for {self.name}, must be {self.callable.__name__}")
+            raise UsageError(f"invalid value {self.args_converters[0]} for {self.name}, must be {self.callable.__name__}")
 
 
     def execute(self, processor):
@@ -5341,7 +5394,7 @@ class BaseOption(Converter):
 class InferredOption(BaseOption):
     def __init__(self, parameter, appeal):
         if not parameter.default:
-            raise AppealConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
+            raise ConfigurationError(f"empty {type(parameter.default)} used as default, so we can't infer types")
         p2 = inspect.Parameter(parameter.name, kind=parameter.kind, annotation=type(parameter.default), default=parameter.default)
         super().__init__(p2, appeal)
 
@@ -5379,7 +5432,7 @@ def strip_first_argument_from_signature(signature):
     # by the language.  though I think no-argument super() might depend on it.)
     parameters = collections.OrderedDict(signature.parameters)
     if not parameters:
-        raise AppealConfigurationError(f"strip_first_argument_from_signature: was passed zero-argument signature {signature}")
+        raise ConfigurationError(f"strip_first_argument_from_signature: was passed zero-argument signature {signature}")
     for name, p in parameters.items():
         break
     del parameters[name]
@@ -5614,7 +5667,7 @@ class accumulator(MultiOption, metaclass=AccumulatorMeta):
 class MappingMeta(ABCMeta):
     def __getitem__(cls, t):
         if not ((isinstance(t, (tuple, list))) and (len(t) >= 2)):
-            raise AppealConfigurationError("MappingMeta[] must have at least two types")
+            raise ConfigurationError("MappingMeta[] must have at least two types")
         if len(t) == 2:
             return cls.__getitem_key_single__(t[0], t[1])
         return cls.__getitem_key_iterable__(t[0], t[1:])
@@ -5625,7 +5678,7 @@ class MappingMeta(ABCMeta):
 
             def option(self, key:k, value:v):
                 if key in self.dict:
-                    raise AppealUsageError("defined {key} more than once")
+                    raise UsageError("defined {key} more than once")
                 self.dict[key] = value
         return accumulator
 
@@ -5638,7 +5691,7 @@ class MappingMeta(ABCMeta):
 
             def option(self, key, *values):
                 if key in self.dict:
-                    raise AppealUsageError("defined {key} more than once")
+                    raise UsageError("defined {key} more than once")
                 if type(values) != iterable_type:
                     values = iterable_type(values)
                 self.dict[key] = values
@@ -5680,7 +5733,7 @@ class mapping(MultiOption, metaclass=MappingMeta):
 
     def option(self, key:str, value:str):
         if key in self.dict:
-            raise AppealUsageError("defined {key} more than once")
+            raise UsageError("defined {key} more than once")
         self.dict[key] = value
 
     def render(self):
@@ -5700,7 +5753,7 @@ def split(*separators, strip=False):
     from the beginning and end of the string.
     """
     if not all((s and isinstance(s, str)) for s in separators):
-        raise AppealConfigurationError("split(): every separator must be a non-empty string")
+        raise ConfigurationError("split(): every separator must be a non-empty string")
 
     def split(str):
         return list(big.multisplit(str, separators, strip=strip))
@@ -5722,7 +5775,7 @@ def validate(*values, type=None):
     returns value.  Otherwise reports a usage error.
     """
     if not values:
-        raise AppealConfigurationError("validate() called without any values.")
+        raise ConfigurationError("validate() called without any values.")
     if type == None:
         type = builtins.type(values[0])
     failed = []
@@ -5731,12 +5784,12 @@ def validate(*values, type=None):
             failed.append(value)
     if failed:
         failed = " ".join(repr(x) for x in failed)
-        raise AppealConfigurationError("validate() called with these non-homogeneous values {failed}")
+        raise ConfigurationError("validate() called with these non-homogeneous values {failed}")
 
     values_set = set(values)
     def validate(value:type):
         if value not in values_set:
-            raise AppealUsageError(f"illegal value {value!r}, should be one of {' '.join(repr(v) for v in values)}")
+            raise UsageError(f"illegal value {value!r}, should be one of {' '.join(repr(v) for v in values)}")
         return value
     return validate
 
@@ -5776,7 +5829,7 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
         in_range = start <= value <= stop
         if not in_range:
             if not clamp:
-                raise AppealUsageError(f"illegal value {value}, should be {start} <= value < {stop}")
+                raise UsageError(f"illegal value {value}, should be {start} <= value < {stop}")
             if value >= stop:
                 value = stop
             else:
@@ -5864,7 +5917,7 @@ def _default_option(option, appeal, callable, parameter_name, annotation, defaul
 def default_short_option(appeal, callable, parameter_name, annotation, default):
     option = parameter_name_to_short_option(parameter_name)
     if not _default_option(option, appeal, callable, parameter_name, annotation, default):
-        raise AppealConfigurationError(f"couldn't add default option {option} for {callable} parameter {parameter_name}")
+        raise ConfigurationError(f"couldn't add default option {option} for {callable} parameter {parameter_name}")
 
 
 def default_long_option(appeal, callable, parameter_name, annotation, default):
@@ -5873,7 +5926,7 @@ def default_long_option(appeal, callable, parameter_name, annotation, default):
     option = parameter_name_to_long_option(parameter_name)
     if not _default_option(option,
         appeal, callable, parameter_name, annotation, default):
-        raise AppealConfigurationError(f"couldn't add default option {option} for {callable} parameter {parameter_name}")
+        raise ConfigurationError(f"couldn't add default option {option} for {callable} parameter {parameter_name}")
 
 def default_options(appeal, callable, parameter_name, annotation, default):
     # print(f"default_options(appeal={appeal}, callable={callable}, parameter_name={parameter_name}, annotation={annotation}, default={default})")
@@ -5886,7 +5939,7 @@ def default_options(appeal, callable, parameter_name, annotation, default):
             appeal, callable, parameter_name, annotation, default)
         added_an_option = added_an_option or worked
     if not added_an_option:
-        raise AppealConfigurationError(f"Couldn't add any default options for {callable} parameter {parameter_name}")
+        raise ConfigurationError(f"Couldn't add any default options for {callable} parameter {parameter_name}")
 
 
 def unbound_callable(callable):
@@ -5922,6 +5975,10 @@ class SpecialSection:
         self.topics = {}
         self.topics_seen = set()
 
+    def __repr__(self):
+        fields = [f"{key}={value!r}" for key, value in self.__dict__.items()]
+        contents = " ".join(fields)
+        return f"<SpecialSection {contents}>"
 
 
 unspecified = object()
@@ -6204,7 +6261,7 @@ class Appeal:
 
     def global_command(self):
         if self.root != self:
-            raise AppealConfigurationError("only the root Appeal instance can have a global command")
+            raise ConfigurationError("only the root Appeal instance can have a global command")
         return self.__call__
 
     def default_command(self):
@@ -6386,7 +6443,7 @@ class Appeal:
         """
 
         if not options:
-            raise AppealConfigurationError(f"Appeal.option: no options specified")
+            raise ConfigurationError(f"Appeal.option: no options specified")
 
         normalized_options = []
         for option in options:
@@ -6394,7 +6451,7 @@ class Appeal:
                 and option.startswith("-")
                 and (((len(option) == 2) and option[1].isalnum())
                     or ((len(option) >= 4) and option.startswith("--")))):
-                raise AppealConfigurationError(f"Appeal.option: {option!r} is not a legal option")
+                raise ConfigurationError(f"Appeal.option: {option!r} is not a legal option")
             normalized = normalize_option(option)
             normalized_options.append((normalized, option))
 
@@ -6403,7 +6460,7 @@ class Appeal:
         # print(f"@option annotation={annotation} default={default}")
         cls = self.root.map_to_converter(parameter)
         if cls is None:
-            raise AppealConfigurationError(f"Appeal.option: could not determine Converter for annotation={annotation} default={default}")
+            raise ConfigurationError(f"Appeal.option: could not determine Converter for annotation={annotation} default={default}")
         annotation_signature = cls.get_signature(parameter)
         # annotation_signature = callable_signature(annotation)
 
@@ -6421,7 +6478,7 @@ class Appeal:
                     existing_signature = existing_entry[0]
                     if annotation_signature != existing_signature:
                         option2, callable2, parameter2, = existing_entry[1]
-                        raise AppealConfigurationError(f"{denormalized_option} is already defined on {callable2} parameter {parameter2!r} with a different signature!")
+                        raise ConfigurationError(f"{denormalized_option} is already defined on {callable2} parameter {parameter2!r} with a different signature!")
                 options[option] = entry
                 mappings.append(entry)
                 option_signature_entry = [annotation_signature, entry]
@@ -6492,7 +6549,7 @@ class Appeal:
         #
         # this isn't too hard.  the only complication is that
         # we should use the deepest version of each function.
-        # (so we do the max(depth) thing.)
+        # so we do the max(depth) thing.
         #
         # step 1:
         # produce a list of annotation functions in the tree
@@ -6511,24 +6568,48 @@ class Appeal:
 
         two_lists = lambda: ([], [])
         mapped_options = collections.defaultdict(two_lists)
+        branches_taken = set()
+        converter = None
 
+        spacer = ''
         for ip, op in ci:
-            # print(f"## [{ip:>3}] op={op}")
+            # if want_prints:
+            #     print(f"## {spacer}[{ip:>3}] op={op}")
             if op.op == opcode.create_converter:
-                c = {'parameter': op.parameter, 'parameters': {}, 'options': collections.defaultdict(list)}
-                ci.converters[op.key] = ci.o = c
+                converter = {'parameter': op.parameter, 'parameters': {}, 'options': collections.defaultdict(list)}
+                ci.converters[op.key] = ci.o = converter
                 continue
 
             if op.op == opcode.load_converter:
                 ci.converter = ci.converters[op.key]
                 continue
 
-            if (op.op == opcode.append_to_converter_args) and last_op and (last_op.op == opcode.next_to_o):
+            if op.op in (opcode.append_to_converter_args, opcode.set_in_converter_kwargs):
                 ci.converter['parameters'][op.parameter] = op.usage
                 continue
 
+            # see comment in charm_usage about
+            # the hard-coded branching strategies
+            # used here.
+            if op.op == opcode.branch_on_flag:
+                # branch the first time,
+                # don't branch afterwards
+                if ip not in branches_taken:
+                    branches_taken.add(ip)
+                    ci.ip.jump(op.address)
+                continue
+
+            if op.op == opcode.branch_on_not_flag:
+                # don't branch the first time,
+                # branch thereafter
+                if ip not in branches_taken:
+                    branches_taken.add(ip)
+                else:
+                    ci.ip.jump(op.address)
+                continue
+
             if op.op == opcode.map_option:
-                parameter = c['parameter']
+                parameter = converter['parameter']
                 program = op.program
 
                 # def __init__(self, option, program, callable, parameter, key):
@@ -6540,11 +6621,13 @@ class Appeal:
 
                 converter = ci.converters[op.key]
                 option_depth += 1
+                spacer = '  ' * option_depth
                 ci.call(op.program)
                 continue
 
             if op.op == opcode.end:
                 option_depth -= 1
+                spacer = '  ' * option_depth
                 continue
 
         children = {}
@@ -6553,8 +6636,8 @@ class Appeal:
 
         positional_parameter_kinds = set((POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL))
 
-        for c in reversed_dict_values(ci.converters.values()):
-            parameter = c['parameter']
+        for converter in reversed_dict_values(ci.converters.values()):
+            parameter = converter['parameter']
             callable = dereference_annotated(parameter.annotation)
 
             positional_children = set()
@@ -6570,14 +6653,14 @@ class Appeal:
                     elif p.kind == KEYWORD_ONLY:
                         option_children.add(annotation)
             values_callable_index[callable] = len(values)
-            #              callable, signature, depth, positional_children, option_children
-            values.append([callable, signature, 0,     positional_children, option_children])
+            default_depth = 0
+            values.append([callable, signature, default_depth, positional_children, option_children])
             kids = (positional_children | option_children)
             children[callable] = kids
 
-        # since we iterated over reversed, the last value is c[0]
-        # which means callable is already the root of the whole tree
-        # do dfs to calculate depths
+        # since we iterated over the DFS tree in reversed order,
+        # callable is already the root of the whole tree.
+        # do dfs to calculate depths.
 
         def assign_depth(callable, depth):
             value = values[values_callable_index[callable]]
@@ -6656,14 +6739,34 @@ class Appeal:
         # we'll merge up the child definition and add it.
 
         for callable, signature, depth, positional_children, option_children in values:
-            if callable in simple_type_signatures:
-                continue
-
             # print("_" * 79)
             # print(f"callable={callable} signature={signature} depth={depth} positional_children={positional_children} positional_children={positional_children}")
 
             fn_name = callable.__name__
             prefix = f"{fn_name}."
+
+            arguments_topic_values = {k: v for k, v in arguments_values.items() if k.startswith(prefix)}
+            # arguments_and_opargs_topic_values = {k: v for k, v in arguments_values.items() if k.startswith(prefix)}
+            options_topic_values = {k: v for k, v in options_values.items() if k.startswith(prefix)}
+
+            arguments_topic_definitions = {}
+            # arguments_and_opargs_topic_definitions = {}
+            options_topic_definitions = {}
+
+
+            if callable in simple_type_signatures:
+                fn_to_docs[callable] = (
+                    arguments_topic_definitions,
+                    arguments_topic_values,
+                    # arguments_and_opargs_topic_definitions,
+                    # arguments_and_opargs_topic_values,
+                    options_topic_definitions,
+                    options_topic_values,
+                    positional_children,
+                    option_children,
+                    )
+
+                continue
 
             # if callable == self.callable:
             #     doc = self.docstring or ""
@@ -6674,14 +6777,6 @@ class Appeal:
                 doc = override_doc
             doc.expandtabs()
             doc = textwrap.dedent(doc)
-
-            arguments_topic_values = {k: v for k, v in arguments_values.items() if k.startswith(prefix)}
-            # arguments_and_opargs_topic_values = {k: v for k, v in arguments_values.items() if k.startswith(prefix)}
-            options_topic_values = {k: v for k, v in options_values.items() if k.startswith(prefix)}
-
-            arguments_topic_definitions = {}
-            # arguments_and_opargs_topic_definitions = {}
-            options_topic_definitions = {}
 
             # merge up all the info from our children
             for child in tuple(positional_children):
@@ -6700,6 +6795,8 @@ class Appeal:
                     ):
                     container.update(child_container)
 
+            # print(f"{option_children=}")
+            # print(f"{fn_to_docs=}")
             for child in tuple(option_children):
                 for container, child_container in zip(
                     (
@@ -6808,7 +6905,7 @@ class Appeal:
             #         doc
             #         """.strip().split():
             #         print(f">>> {name}:")
-            #         pprint.pprint(l[name])
+            #         print(l[name])
             #         print()
 
             ##
@@ -6916,7 +7013,7 @@ class Appeal:
                 # topics must be at the (dedented) left column
                 topic_line = line.startswith("{") and (not line.startswith("{{"))
                 if not (topic or topic_line):
-                    raise AppealConfigurationError(f"{self.callable}: docstring section {special_section.name} didn't start with a topic line (one starting with {{parameter/command}})")
+                    raise ConfigurationError(f"{self.callable}: docstring section {special_section.name} didn't start with a topic line (one starting with {{parameter/command}})")
 
                 if not topic_line:
                     # definition line
@@ -6939,11 +7036,17 @@ class Appeal:
                     name = "(unknown callable)"
 
                 try:
+                    # if want_prints:
+                    #     print()
+                    #     print(f"{special_section=}")
+                    #     print()
+                    #     print(f"{special_section.topic_names=}")
+                    #     print()
                     topic = key.format_map(special_section.topic_names)
                 except KeyError as e:
-                    raise AppealConfigurationError(f"{name}: docstring section {special_section.name} has unknown topic {key!r}")
+                    raise ConfigurationError(f"{name}: docstring section {special_section.name} has unknown topic {key!r}") from None
                 if topic in special_section.topics_seen:
-                    raise AppealConfigurationError(f"{name}: docstring section {special_section.name} topic {key!r} defined twice")
+                    raise ConfigurationError(f"{name}: docstring section {special_section.name} topic {key!r} defined twice") from None
                 special_section.topics_seen.add(topic)
                 definition = []
                 if trailing:
@@ -7188,7 +7291,7 @@ class Appeal:
             print(doc_str)
 
     def error(self, s):
-        raise AppealUsageError("error: " + s)
+        raise UsageError("error: " + s)
         print("error:", s)
         print()
         return self.usage(usage=True, summary=True, doc=True)
@@ -7205,7 +7308,7 @@ class Appeal:
         for name in command:
             appeal = appeal.commands.get(name)
             if not appeal:
-                raise AppealUsageError(f'"{name}" is not a legal command.')
+                raise UsageError(f'"{name}" is not a legal command.')
         appeal.usage(usage=True, summary=True, doc=True)
 
     def _analyze_attribute(self, name, processor):
@@ -7236,7 +7339,7 @@ class Appeal:
         interpreter = CharmInterpreter(processor, program)
         converter = interpreter()
         if converter == None:
-            raise AppealUsageError("unknown error")
+            raise UsageError("unknown error")
         processor.commands.append(converter)
         return converter
 
@@ -7254,7 +7357,7 @@ class Appeal:
             # otherwise, that's an error.
             default_converter = self._parse_attribute("_default", processor)
             if (not default_converter) and self.commands:
-                raise AppealUsageError("no command specified.")
+                raise UsageError("no command specified.")
             return
 
         processor.log.enter(f"parsing commands")
@@ -7274,7 +7377,7 @@ class Appeal:
 
         if processor.iterator:
             leftovers = " ".join(shlex.quote(s) for s in processor.iterator)
-            raise AppealUsageError(f"leftover cmdline arguments! {leftovers!r}")
+            raise UsageError(f"leftover cmdline arguments! {leftovers!r}")
 
         processor.log.exit()
 
@@ -7468,8 +7571,9 @@ class Processor:
     def main(self, args=None, kwargs=None):
         try:
             sys.exit(self(sequence=args, mapping=kwargs))
-        except AppealUsageError as e:
-            print("Error:", str(e))
-            self.appeal.usage(usage=True)
+        except UsageError as e:
+            # print("Error:", str(e))
+            # self.appeal.usage(usage=True)
+            self.appeal.help()
             sys.exit(-1)
 
