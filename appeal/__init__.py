@@ -2911,7 +2911,7 @@ class CharmMappingCompiler(CharmCompiler):
         #     print(f"[cm]")
 
         parameter = self.fake_parameter(POSITIONAL_ONLY, callable, empty)
-        self.compile_parameter(parameter, indent, force_unnested=True)
+        self.compile_parameter(parameter, '', indent, force_unnested=True)
 
         self.root_a.end()
 
@@ -2920,7 +2920,7 @@ class CharmMappingCompiler(CharmCompiler):
 
     # a "parent's name" can be a special value CONSUME
 
-    def compile_parameter(self, parameter, indent, *, by_name=True, degenerate_name=None, depth=0, degenerate_multioption=False, force_unnested=False):
+    def compile_parameter(self, parameter, prefix, indent, *, by_name=True, degenerate_name=None, depth=0, degenerate_multioption=False, force_unnested=False):
         """
         returns 2-tuple
             (child_converter_key, is_degenerate)
@@ -3065,7 +3065,7 @@ class CharmMappingCompiler(CharmCompiler):
             a.push_mapping()
             a.append(label_process_arguments)
 
-        for child in parameters.values():
+        for i, child in enumerate(parameters.values()):
             if child.kind is VAR_POSITIONAL:
                 raise ConfigurationError(f"{callable.__name__}: parameter *{child.name} is unsupported for CharmMappingCompiler")
             if child.kind is VAR_KEYWORD:
@@ -3087,7 +3087,8 @@ class CharmMappingCompiler(CharmCompiler):
             child_discretionary = not child_required
             child_write_to_kwargs = (child.kind is KEYWORD_ONLY) or ((child.kind is POSITIONAL_OR_KEYWORD) and child_discretionary)
 
-            label_got_value = CharmInstructionLabel(f"child {child.name}, got value")
+            unique = f"{prefix} {child.name}".strip()
+            label_got_value = CharmInstructionLabel(f"child {unique}, got value")
 
             # if want_prints:
             #     print(f"[cm] {indent} {child=} {child_cls=} {child_converter=} {child_callable=} {child_multioption=}")
@@ -3095,7 +3096,6 @@ class CharmMappingCompiler(CharmCompiler):
                 name = degenerate_name or child.name
                 get_argument_to_o(a, name, child_required)
 
-                label_got_value = CharmInstructionLabel(f"child {child.name}, got value")
                 a.branch_on_flag_to_label(label_got_value)
                 if child_discretionary:
                     a.literal_to_o(child.default)
@@ -3122,7 +3122,7 @@ class CharmMappingCompiler(CharmCompiler):
                     a.append(label_o_is_iterable)
                     a.push_iterator()
 
-                child_key, child_is_degenerate = self.compile_parameter(child, indent + "    ", depth=depth + 1, by_name=by_name, degenerate_name=degenerate_name or child.name)
+                child_key, child_is_degenerate = self.compile_parameter(child, f"{prefix} {i} {child.name}".strip(), indent + "    ", depth=depth + 1, by_name=by_name, degenerate_name=degenerate_name or child.name)
                 # if want_prints:
                 #     print(f"[cm] {indent} {child_key=} {child_is_degenerate=}")
 
@@ -4258,6 +4258,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     else:
                         self.flag = False
                         abort = op.required
+                        message = f"lookup_to_o: key {op.key!r} required but is not set in {mapping}"
                         value = None
 
                     self.o = value
@@ -4268,7 +4269,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     print_registers(o=old_o, flag=old_flag, extras=[('abort?', sentinel, abort_yes_no)])
 
                     if abort:
-                        return self.abort()
+                        return self.abort(message)
                     continue
 
                 if op.op == opcode.flush_multioption:

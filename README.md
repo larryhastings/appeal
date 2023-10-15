@@ -2297,6 +2297,12 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
+**next version** *under development*
+
+* Bugfix for `read_mapping`.  Previously you couldn't have
+  two parameters with the same name anywhere in the annotations
+  tree for a mapping function, and now you can.
+
 **0.6.2**  *2023/10/12*
 
 * Presentation change: if you run a program without arguments,
