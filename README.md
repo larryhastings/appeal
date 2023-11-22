@@ -202,6 +202,7 @@ command options can be long options or short options, too.
 Now let's consider a Python function call:
 
 ```Python
+# the * forces everything after it to be keyword-only arguments
 def fgrep(pattern, filename, *, ignore_case=False):
     ...
 ```
@@ -219,6 +220,12 @@ Python function calls and command-lines also
 both support arguments identified by name.
 A command-line *option* is similar to a Python
 *keyword-only* argument.
+
+Note that a parameter with a default value is only
+a *keyword-only* argument if it's preceded by varargs.
+So, to force *keyword-only* arguments, it might
+be necessary to put a single `*` in the method's
+signature.
 
 This leads us to the fundamental concept behind Appeal.
 With Appeal, you write a Python function, and tell
@@ -1368,7 +1375,7 @@ discussed yet), it can have accept any kind of parameter defined
 by Python, and any parameter can use (almost) any converter.
 And those converters can recursively use other converters.
 
-Realy, anything can be used with anything:
+Really, anything can be used with anything:
 
 * Converters for positional parameters
   can take positional parameters, or keyword-only parameters, or `*args`, or `**kwargs`.
