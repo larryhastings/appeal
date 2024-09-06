@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
-__version__ = "0.6.2"
 
+__version__ = "0.6.3"
+
+import big.all as big
+# __version_tuple__ = big.VersionTuple((0, 6, 3, 'final', 0))
 
 # please leave this copyright notice in binary distributions.
 license = """
@@ -36,7 +39,6 @@ want_prints = 0
 
 from abc import abstractmethod, ABCMeta
 import base64
-import big.all as big
 from big.itertools import PushbackIterator
 import builtins
 import collections.abc
@@ -182,7 +184,9 @@ class UsageError(AppealBaseException):
     """
     Raised when Appeal processes an invalid command-line.
     """
-    pass
+    def __init__(self, *a, **kw):
+        self.converters = []
+        super().__init__(*a, **kw)
 
 class CommandError(AppealBaseException):
     """
@@ -3770,8 +3774,8 @@ class CharmInterpreter(CharmBaseInterpreter):
 
         self.appeal = processor.appeal
         i = processor.iterator
-        if i and not isinstance(i, big.PushbackIterator):
-            i = big.PushbackIterator(i)
+        if i and not isinstance(i, PushbackIterator):
+            i = PushbackIterator(i)
         self.iterator = i
         self.mapping = processor.mapping
 
@@ -4534,7 +4538,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                     #     old_iterator = self.iterator
                     #     old_iterator_stack = self.iterator_stack.copy()
                     self.iterator_stack.append(self.iterator)
-                    iterator = big.PushbackIterator(self.o)
+                    iterator = PushbackIterator(self.o)
 
                     # if want_prints:
                     #     # allow us to print the remaining contents of the iterator
@@ -5249,24 +5253,28 @@ class Converter:
             pass
 
     def convert(self, processor):
-        for iterable in (self.args_converters, self.kwargs_converters.values()):
-            for converter in iterable:
-                if converter and isinstance(converter, Converter):
-                    converter.convert(processor)
-
         try:
-            for converter in self.args_converters:
-                if converter and isinstance(converter, Converter):
-                    converter = converter.execute(processor)
-                self.args.append(converter)
-            for name, converter in self.kwargs_converters.items():
-                if converter and isinstance(converter, Converter):
-                    converter = converter.execute(processor)
-                self.kwargs[name] = converter
-        except ValueError as e:
-            # we can examine "converter", the exception must have
-            # happened in an execute call.
-            raise UsageError(f"invalid value something something converter {converter!r}, converter.args={converter.args!r}")
+            for iterable in (self.args_converters, self.kwargs_converters.values()):
+                for converter in iterable:
+                    if converter and isinstance(converter, Converter):
+                        converter.convert(processor)
+
+            try:
+                for converter in self.args_converters:
+                    if converter and isinstance(converter, Converter):
+                        converter = converter.execute(processor)
+                    self.args.append(converter)
+                for name, converter in self.kwargs_converters.items():
+                    if converter and isinstance(converter, Converter):
+                        converter = converter.execute(processor)
+                    self.kwargs[name] = converter
+            except ValueError as e:
+                # we can examine "converter", the exception must have
+                # happened in an execute call.
+                raise UsageError(f"invalid value something something converter {converter!r}, converter.args={converter.args!r}")
+        except UsageError as ue:
+            ue.converters.insert(0, self)
+            raise ue
 
     def execute(self, processor):
         executor = processor.execute_preparers(self.callable)
@@ -5349,7 +5357,9 @@ class SimpleTypeConverter(Converter):
                 self.kwargs_converters.clear()
             self.value = self.callable(self.args_converters[0])
         except ValueError as e:
-            raise UsageError(f"invalid value {self.args_converters[0]} for {self.name}, must be {self.callable.__name__}")
+            ue = UsageError(f"invalid value {self.args_converters[0]!r} for {self.name}, must be {self.callable.__name__}")
+            ue.converters.append(self)
+            raise ue
 
 
     def execute(self, processor):
@@ -7384,8 +7394,13 @@ class Appeal:
 
     def convert(self, processor):
         processor.log("convert start")
-        for command in processor.commands:
-            command.convert(processor)
+        try:
+            for command in processor.commands:
+                command.convert(processor)
+        except UsageError as ue:
+            ue.converters.insert(0, self)
+            raise ue
+
 
     def execute(self, processor):
         processor.log("execute start")
@@ -7572,9 +7587,24 @@ class Processor:
     def main(self, args=None, kwargs=None):
         try:
             sys.exit(self(sequence=args, mapping=kwargs))
-        except UsageError as e:
-            # print("Error:", str(e))
-            # self.appeal.usage(usage=True)
-            self.appeal.help()
+        except UsageError as ue:
+            print("Error:", str(ue))
+            print()
+
+            _sentinel = object()
+            last_appeal = None
+            last_command = None
+            for o in ue.converters:
+                if isinstance(o, Appeal):
+                    last_appeal = o
+                    last_command = _sentinel
+                elif last_command == _sentinel:
+                    last_command = o
+
+            if last_appeal and (last_command is not _sentinel):
+                last_appeal.help(last_command.callable.__name__)
+            else:
+                # self.appeal.usage(usage=True)
+                self.appeal.help()
             sys.exit(-1)
 

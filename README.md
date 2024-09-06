@@ -202,6 +202,9 @@ command options can be long options or short options, too.
 Now let's consider a Python function call:
 
 ```Python
+#      positional parameters |  keyword-only parameters
+#            |        |      |      |
+#            v        v      |      v
 def fgrep(pattern, filename, *, ignore_case=False):
     ...
 ```
@@ -218,7 +221,15 @@ position.
 Python function calls and command-lines also
 both support arguments identified by name.
 A command-line *option* is similar to a Python
-*keyword-only* argument.
+*keyword-only* parameter.
+
+> In Python, all parameters after `*args` or `*` are
+> keyword-only parameters.  You can only pass in arguments
+> to those parameters by name.  If you called `fgrep`
+> yourself, you could only pass in a value for `ignore_case`
+> like this:
+>
+>     result = fgrep(p, f, ignore_case=True)
 
 This leads us to the fundamental concept behind Appeal.
 With Appeal, you write a Python function, and tell
@@ -1368,7 +1379,7 @@ discussed yet), it can have accept any kind of parameter defined
 by Python, and any parameter can use (almost) any converter.
 And those converters can recursively use other converters.
 
-Realy, anything can be used with anything:
+Really, anything can be used with anything:
 
 * Converters for positional parameters
   can take positional parameters, or keyword-only parameters, or `*args`, or `**kwargs`.
@@ -2299,6 +2310,11 @@ Restrictions on Appeal command functions:
 
 **next version** *under development*
 
+**0.6.3** *2024/09/06*
+
+* Bugfix for usage.  If conversaion fails for a command-line
+  parameter, Appeal now prints a context-specific error,
+  followed by usage for the command that failed.  Fixes #18.
 * Bugfix for `read_mapping`.  Previously you couldn't have
   two parameters with the same name anywhere in the annotations
   tree for a mapping function, and now you can.
