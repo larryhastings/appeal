@@ -226,8 +226,8 @@ A command-line *option* is similar to a Python
 > ***Note:*** In Python, all parameters after `*args` or `*` are
 > keyword-only parameters.  You can only pass in arguments
 > to those parameters by name.  If you called `fgrep`
-> yourself, you could only pass in a value for `ignore_case`
-> like this:
+> yourself in Python, you could only pass in a value for
+> `ignore_case` like this:
 >
 >     result = fgrep(p, f, ignore_case=True)
 
