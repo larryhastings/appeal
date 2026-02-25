@@ -2308,7 +2308,12 @@ Restrictions on Appeal command functions:
 
 ## Changelog
 
-**next version** *under development*
+**0.6.4** *2026/02/24*
+
+* Bugfix: the release of my *big* library, version 0.13,
+  broke a little code.  This is just a bugfix release to
+  make Appeal compatible with the new big, specifically
+  with the new big Log.
 
 **0.6.3** *2024/09/06*
 

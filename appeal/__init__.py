@@ -2,10 +2,10 @@
 
 "A powerful & Pythonic command-line parsing library.  Give your program Appeal!"
 
-__version__ = "0.6.3"
+__version__ = "0.6.4"
 
 import big.all as big
-# __version_tuple__ = big.VersionTuple((0, 6, 3, 'final', 0))
+# __version_tuple__ = big.VersionTuple((0, 6, 4, 'final', 0))
 
 # please leave this copyright notice in binary distributions.
 license = """
