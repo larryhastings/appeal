@@ -75,7 +75,7 @@ def preload_local_appeal():
     return appeal_dir
 
 appeal_dir = preload_local_appeal()
-import appeal
+import appeal.argument_grouping
 
 
 
@@ -2633,6 +2633,90 @@ class ReadmeTests(AppealTestsBase):
             "add f g h",
             "MyApp add self=<MyApp id='dingus'> a='f' b='g' c='h'",
             )
+
+
+class ArgumentGrouperTests(unittest.TestCase):
+
+    def test_everything(self):
+        def test(base, expected):
+            base_command = appeal.argument_grouping.Function(base, collapse_degenerate=True)
+            required, optional = base_command.analyze()
+            # print(f"we got back (required={required}, optional={optional})")
+            optional2 = [[str(p) for p, fn, i in l if (p.leaf or p.var_positional)] for l in optional]
+            optional3 = [o for o in optional2 if o]
+            # for p, fn, i in required:
+            #     print(f">> str(p)={str(p)} p={p} fn={fn} i={i} p.leaf={p.leaf} p.var_positional={p.var_positional}")
+            stringized = f"required={[str(p) for p, fn, i in required if (p.leaf or p.var_positional)]} optional={optional3}"
+            self.assertEqual(stringized, expected)
+
+        def int_float(a:int, b=0.0): pass
+        def base(i_f:int_float, s): pass
+        test(base, "required=['a', 'b', 's'] optional=[]")
+
+        def int_float(i, f): return (i, f)
+        def base(s1="", a:int_float=(0, 0.0), s2=""): pass
+        test(base, "required=[] optional=[['s1'], ['i', 'f'], ['s2']]")
+
+        def int_float(i, f, *, verbose=False): return (i, f, verbose)
+        def base(s1="", a:int_float=(0, 0.0, False), s2=""): pass
+        test(base, "required=[] optional=[['s1'], ['i', 'f'], ['s2']]")
+
+        def int_int(i1: int, i2:int): return (i1, i2)
+        def int_int_float(ii:int_int=(0,0), f="", *, verbose=False): return (ii, f, verbose)
+        def base(s1="", a:int_int_float=(0, 0.0, False), s2=""): pass
+        test(base, "required=[] optional=[['s1'], ['i1', 'i2'], ['f'], ['s2']]")
+
+
+        def     conv_a1(a1w, a1x, a1y="x"): pass
+        def     conv_a2(a2w, a2x, a2y="x"): pass
+        def     conv_a3(a3w, a3x, a3y="x"): pass
+
+        def   conv_a(a1: conv_a1, a2:conv_a2, a3:conv_a3="x"): pass
+
+        def     conv_b1(b1w, b1x, b1y="x"): pass
+        def     conv_b2(b2w, b2x, b2y="x"): pass
+        def     conv_b3(b3w, b3x, b3y="x"): pass
+
+        def   conv_b(b1: conv_b1, b2:conv_b2, b3:conv_b3="x"): pass
+
+        def     conv_c1(c1w, c1x, c1y="x"): pass
+        def     conv_c2(c2w, c2x, c2y="x"): pass
+        def     conv_c3(c3w, c3x, c3y="x"): pass
+        def     conv_c4(c4w, c4x, c4y="x", c4z="x"): pass
+
+        def   conv_c(c1: conv_c1, c2:conv_c2, c3:conv_c3="x", c4:conv_c4="x"): pass
+
+        def base(a:conv_a, b:conv_b, c:conv_c="x"): pass
+        test(base,
+            "required=['a1w', 'a1x', 'a1y', 'a2w', 'a2x', 'a2y', 'a3w', 'a3x', 'a3y', 'b1w', 'b1x', 'b1y', 'b2w', 'b2x'] optional=[['b2y'], ['b3w', 'b3x'], ['b3y'], ['c1w', 'c1x', 'c1y', 'c2w', 'c2x'], ['c2y'], ['c3w', 'c3x'], ['c3y'], ['c4w', 'c4x'], ['c4y'], ['c4z']]")
+
+
+        def y_conv(e, q=0): pass
+
+        def suspicious_configuration(x, y:y_conv, *args): pass
+
+        with self.assertRaises(ValueError):
+            def base(a, b, c:suspicious_configuration, you_wont_see_me): pass
+            test(base, "xyz")
+
+        def base(a, b, c:suspicious_configuration): pass
+        test(base,
+            "required=['a', 'b', 'x', 'e'] optional=[['q'], ['args']]")
+
+
+        def int_float(i:int, f:float, *, verbose=False):
+            return (i, f, "verbose" if verbose else "silent")
+        def base(a="(a default)", s:int_float="(s default)", *args:int_float):
+            print(f"a={a} s={s} args={args}")
+        test(base,
+            "required=[] optional=[['a'], ['i', 'f'], ['args', 'i', 'f']]")
+
+
+        def int_float(i:int, f:float):
+            return (i, f, "verbose" if verbose else "silent")
+        def rip(a:int_float, b:int_float="(s default)", s:int_float="(s default)"): pass
+        test(rip,
+            "required=['i', 'f'] optional=[['i', 'f'], ['i', 'f']]")
 
 
 exit_code = 0

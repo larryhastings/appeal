@@ -8,7 +8,7 @@
 license = """
 appeal/argument_grouping.py
 part of the Appeal software package
-Copyright 2021-2023 by Larry Hastings
+Copyright 2021-2026 by Larry Hastings
 All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a
@@ -366,7 +366,6 @@ class ParameterGrouperIterator:
             self.current_group = ()
             self.required = False
         self.first = True
-        self.var_positional = None
 
     def __repr__(self):
         hex_id = hex(id(self))[2:]
@@ -378,9 +377,7 @@ class ParameterGrouperIterator:
     def __next__(self):
         # print(f"\n()() pgi.next(self={self}) self.only_leaves={self.only_leaves}\n")
         while True:
-            if self.var_positional:
-                return self.var_positional
-            elif self.current_group:
+            if self.current_group:
                 in_required_group = bool(self.required)
                 value = self.current_group.popleft()
             elif self.queue:
@@ -396,7 +393,10 @@ class ParameterGrouperIterator:
             if (self.only_leaves and not (parameter.leaf or parameter.var_positional)):
                 continue
 
-            last = not self.current_group
+            if self.only_leaves and self.current_group:
+                last = not any((p.leaf or p.var_positional) for p, fn, i in self.current_group)
+            else:
+                last = not self.current_group
             gp = GroupedParameter(
                     name = parameter.name,
                     fn = fn.fn,
@@ -410,8 +410,6 @@ class ParameterGrouperIterator:
                     var_positional = parameter.var_positional,
                 )
             self.first = False
-            # if parameter.var_positional:
-            #     self.var_positional = gp
             self.current = gp
             return gp
 
@@ -423,15 +421,23 @@ class ParameterGrouperIterator:
 
 class ParameterGrouper:
     """
-    To use: run
-        pg = ParameterGrouper(fn)
-    on the Python callable that your Command or Option maps to.
+    To use: construct a ParameterGrouper object.
 
-    Then iterate over it:
+        pg = ParameterGrouper(fn)
+
+    fn should be the Python callable that your Command or Option maps to.
+
+    ParameterGrouper isn't super useful by itself.  You really need to
+    iterate over it:
+
         pgi = iter(pg)
 
-    Every time you parse a leaf parameter, next(pgi).
-    You can now use pgi to answer questions:
+    pgi is a ParameterGrouperIterator.  It yields GroupedParameter objects.
+    Each one represents a parameter to a function, telling you about the
+    parameter group that object is in.
+
+    The iterator itself has some state you can examine.  You can use it
+    to answer the following questions:
 
       Q: Have we exhausted the current parameter group?
       A: bool(pgi.current_group)
@@ -449,9 +455,12 @@ class ParameterGrouper:
       Q: Are there more parameters waiting?
       A: bool(pgi)
 
-    You should also examine the object yielded by the iterator:
+    You should of course also examine the object yielded by the iterator:
+
         parameter = next(pgi)
+
     This tells you everything about the parameter:
+
         parameter.parameter        # name
         parameter.fn               # Python function it is a parameter to
         parameter.index            # 0-based index position for this parameter
@@ -465,13 +474,11 @@ class ParameterGrouper:
     will return information on each leaf parameter of the linearized
     tree of converters under fn.
 
-    One quirk of this design (which is easier to live with than to re-think):
-    if you encounter a VAR_POSITIONAL (*args) parameter, it behaves a little strangely.
-        * bool(pgi) will be False.
-        * next(pgi) will always return the VAR_POSITIONAL parameter, no matter how
-          many times you call it.
-        * VAR_POSITIONAL parameters are never required.  However, they *may* have
-          converters!
+    If the "parameter" yielded is a VAR_POSITIONAL (*args) parameter:
+        * It's yielded like any other parameter.
+        * After it's yielded, the iterator is exhausted (bool(pgi) is False).
+        * VAR_POSITIONAL parameters are never *required.*
+          However, they *may* have converters!
     """
     def __init__(self, fn, default=empty, signature=default_signature):
         pgf = Function(fn, default, signature=signature)
@@ -488,138 +495,3 @@ class ParameterGrouper:
     def iter_all(self):
         return ParameterGrouperIterator(self.required, self.optional, only_leaves=False)
 
-
-
-if __name__ == "__main__":
-    import sys
-    want_output = ("-v" in sys.argv) or ("--verbose" in sys.argv) # ironic, no?
-    just_the_number = ("-n" in sys.argv) or ("--number" in sys.argv)
-
-    test_counter = 0
-    fail_counter = 0
-    def test(base, expected, *, want_value_error=False):
-        if want_output:
-            print()
-            print()
-        global test_counter
-        global fail_counter
-        try:
-            base_command = Function(base, collapse_degenerate=True)
-            required, optional = base_command.analyze()
-            # print(f"we got back (required={required}, optional={optional})")
-            optional2 = [[str(p) for p, fn, i in l if (p.leaf or p.var_positional)] for l in optional]
-            optional3 = [o for o in optional2 if o]
-            # for p, fn, i in required:
-            #     print(f">> str(p)={str(p)} p={p} fn={fn} i={i} p.leaf={p.leaf} p.var_positional={p.var_positional}")
-            stringized = f"required={[str(p) for p, fn, i in required if (p.leaf or p.var_positional)]} optional={optional3}"
-            if want_output:
-                print()
-                print(stringized)
-                print()
-                pg = ParameterGrouper(base)
-                for parameter in pg:
-                    print(parameter)
-                    if parameter.var_positional:
-                        print("  (*explicit break, last parameter is var_positional*)")
-                        break
-                print()
-                print("all parameters, including both leaf and interior nodes:")
-                pg = ParameterGrouper(base)
-                for p in pg.iter_all():
-                    print("   ", p)
-                    if p.var_positional:
-                        break
-            failed = stringized != expected
-
-        except ValueError as e:
-            failed = not want_value_error
-            stringized = str(e)
-
-        result = "E" if failed else "."
-        test_counter += 1
-        if not just_the_number:
-            print(result, end='')
-        if failed:
-            fail_counter += 1
-            print(f"\ntest {test_counter} failed:")
-            if want_value_error:
-                print("    expected a ValueError, didn't get one.")
-            else:
-                print("    expected:", expected)
-                print("         got:", stringized)
-
-    def int_float(a:int, b=0.0): pass
-    def base(i_f:int_float, s): pass
-    test(base, "required=['a', 'b', 's'] optional=[]")
-
-    def int_float(i, f): return (i, f)
-    def base(s1="", a:int_float=(0, 0.0), s2=""): pass
-    test(base, "required=[] optional=[['s1'], ['i', 'f'], ['s2']]")
-
-    def int_float(i, f, *, verbose=False): return (i, f, verbose)
-    def base(s1="", a:int_float=(0, 0.0, False), s2=""): pass
-    test(base, "required=[] optional=[['s1'], ['i', 'f'], ['s2']]")
-
-    def int_int(i1: int, i2:int): return (i1, i2)
-    def int_int_float(ii:int_int=(0,0), f="", *, verbose=False): return (ii, f, verbose)
-    def base(s1="", a:int_int_float=(0, 0.0, False), s2=""): pass
-    test(base, "required=[] optional=[['s1'], ['i1', 'i2'], ['f'], ['s2']]")
-
-
-    def     conv_a1(a1w, a1x, a1y="x"): pass
-    def     conv_a2(a2w, a2x, a2y="x"): pass
-    def     conv_a3(a3w, a3x, a3y="x"): pass
-
-    def   conv_a(a1: conv_a1, a2:conv_a2, a3:conv_a3="x"): pass
-
-    def     conv_b1(b1w, b1x, b1y="x"): pass
-    def     conv_b2(b2w, b2x, b2y="x"): pass
-    def     conv_b3(b3w, b3x, b3y="x"): pass
-
-    def   conv_b(b1: conv_b1, b2:conv_b2, b3:conv_b3="x"): pass
-
-    def     conv_c1(c1w, c1x, c1y="x"): pass
-    def     conv_c2(c2w, c2x, c2y="x"): pass
-    def     conv_c3(c3w, c3x, c3y="x"): pass
-    def     conv_c4(c4w, c4x, c4y="x", c4z="x"): pass
-
-    def   conv_c(c1: conv_c1, c2:conv_c2, c3:conv_c3="x", c4:conv_c4="x"): pass
-
-    def base(a:conv_a, b:conv_b, c:conv_c="x"): pass
-    test(base,
-        "required=['a1w', 'a1x', 'a1y', 'a2w', 'a2x', 'a2y', 'a3w', 'a3x', 'a3y', 'b1w', 'b1x', 'b1y', 'b2w', 'b2x'] optional=[['b2y'], ['b3w', 'b3x'], ['b3y'], ['c1w', 'c1x', 'c1y', 'c2w', 'c2x'], ['c2y'], ['c3w', 'c3x'], ['c3y'], ['c4w', 'c4x'], ['c4y'], ['c4z']]")
-
-
-    def y_conv(e, q=0): pass
-
-    def suspicious_configuration(x, y:y_conv, *args): pass
-
-    def base(a, b, c:suspicious_configuration, you_wont_see_me): pass
-    test(base,
-        "xyz", want_value_error=True)
-
-    def base(a, b, c:suspicious_configuration): pass
-    test(base,
-        "required=['a', 'b', 'x', 'e'] optional=[['q'], ['args']]")
-
-
-    def int_float(i:int, f:float, *, verbose=False):
-        return (i, f, "verbose" if verbose else "silent")
-    def base(a="(a default)", s:int_float="(s default)", *args:int_float):
-        print(f"a={a} s={s} args={args}")
-    test(base,
-        "required=[] optional=[['a'], ['i', 'f'], ['args', 'i', 'f']]")
-
-
-    def int_float(i:int, f:float):
-        return (i, f, "verbose" if verbose else "silent")
-    def rip(a:int_float, b:int_float="(s default)", s:int_float="(s default)"): pass
-    test(rip,
-        "required=['i', 'f'] optional=[['i', 'f'], ['i', 'f']]")
-
-    if just_the_number:
-        print(test_counter)
-    else:
-        print("")
-        print(f"{test_counter - fail_counter} out of {test_counter} tests succeeded.")
-    sys.exit(fail_counter)
