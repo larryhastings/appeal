@@ -30,7 +30,7 @@ def make_stdout_capture():
     text = []
     actual_print = builtins.print
 
-    def captured_print(*a, end="\n", sep=" "):
+    def captured_print(*a, end="\n", sep=" ", flush=False):
         t = sep.join([str(o) for o in a])
         t += end
         text.append(t)

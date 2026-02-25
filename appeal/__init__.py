@@ -7519,7 +7519,7 @@ class Processor:
         self.mapping = None
         self.commands = []
         self.result = None
-        self.log = big.Log()
+        self.log = big.Log(None)
 
     def preparer(self, preparer):
         if not callable(preparer):
