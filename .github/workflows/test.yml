@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ["3.6", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12"]
+        version: ["3.6", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
     runs-on: ubuntu-20.04
 

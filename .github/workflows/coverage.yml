@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -40,6 +40,6 @@ jobs:
       with:
         name: big_htmlcov
         path: htmlcov/
-    - name: Fail if not 76% coverage
+    - name: Fail if not 68% coverage
       run: |
         coverage report -i --fail-under=68
