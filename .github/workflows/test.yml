@@ -22,7 +22,7 @@ jobs:
       run: |
         flit build --format wheel
     - name: Upload wheel
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: wheel
         path: dist/*.whl
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-20.04
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -45,7 +45,7 @@ jobs:
         allow-prereleases: true
         cache: pip
     - name: Download wheel
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: wheel
         path: ./

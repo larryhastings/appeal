@@ -36,7 +36,7 @@ jobs:
         coverage report -i >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
     - name: Upload htmlcov
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: big_htmlcov
         path: htmlcov/
