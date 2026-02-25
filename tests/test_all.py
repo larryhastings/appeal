@@ -75,7 +75,9 @@ def preload_local_appeal():
     return appeal_dir
 
 appeal_dir = preload_local_appeal()
-import appeal.argument_grouping
+
+import appeal
+from appeal.argument_grouping import Function, ParameterGrouper
 
 
 
@@ -2639,7 +2641,7 @@ class ArgumentGrouperTests(unittest.TestCase):
 
     def test_everything(self):
         def test(base, expected):
-            base_command = appeal.argument_grouping.Function(base, collapse_degenerate=True)
+            base_command = Function(base, collapse_degenerate=True)
             required, optional = base_command.analyze()
             # print(f"we got back (required={required}, optional={optional})")
             optional2 = [[str(p) for p, fn, i in l if (p.leaf or p.var_positional)] for l in optional]
@@ -2718,6 +2720,52 @@ class ArgumentGrouperTests(unittest.TestCase):
         test(rip,
             "required=['i', 'f'] optional=[['i', 'f'], ['i', 'f']]")
 
+
+    """Regression tests for last_in_group with only_leaves=True.
+
+    Bug: when a group ended with non-leaf parameters that would be
+    skipped by only_leaves iteration, last_in_group was False for
+    the last *visible* leaf, because the code checked whether the
+    deque was empty rather than whether any remaining items would
+    actually be yielded.
+    """
+
+    def test_mixin_pattern(self):
+        """Logger has only keyword-only params, so log is non-leaf
+        with no positional children.  filename is the only leaf
+        in the required group."""
+        class Logger:
+            def __init__(self, *, verbose=False, log_level='info'): pass
+        def mixin(filename, log:Logger): pass
+
+        pg = ParameterGrouper(mixin)
+        leaves = list(pg)
+
+        self.assertEqual(len(leaves), 1)
+        self.assertEqual(leaves[0].name, "filename")
+        self.assertTrue(leaves[0].first_in_group)
+        self.assertTrue(leaves[0].last_in_group)
+
+    def test_non_leaf_trailing_in_required_group(self):
+        """Required group contains [x, y:conv].  y is non-leaf.
+        Iterating leaves-only, x is the only visible member
+        of the required group."""
+        def conv(a='x'): pass
+        def base(x, y:conv): pass
+
+        pg = ParameterGrouper(base)
+        leaves = list(pg)
+
+        self.assertEqual(len(leaves), 2)
+        self.assertEqual(leaves[0].name, "x")
+        self.assertTrue(leaves[0].first_in_group)
+        self.assertTrue(leaves[0].last_in_group)
+        self.assertEqual(leaves[1].name, "a")
+        self.assertTrue(leaves[1].first_in_group)
+        self.assertTrue(leaves[1].last_in_group)
+
+if __name__ == "__main__":
+    unittest.main()
 
 exit_code = 0
 try:
