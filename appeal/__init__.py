@@ -633,7 +633,7 @@ class CharmInstructionEnd(CharmInstruction):
     Exits the current program.
     """
 
-    __slots__ = ['name', 'id']
+    __slots__ = ['id']
 
     def __init__(self):
         self.op = opcode.end
@@ -788,7 +788,7 @@ class CharmInstructionTestIsONone(CharmInstruction): # CharmInstructionNoArgBase
     otherwise set the 'flag' register to False.
 
     In other words:
-        flag = o == None
+        flag = o is None
     """
 
     def __init__(self):
@@ -1354,12 +1354,13 @@ class CharmInstructionNextToO(CharmInstruction):
     it in the 'o' register, and False if it did not (and
     <required> is false).
     """
-    __slots__ = ['required', 'is_oparg']
+    __slots__ = ['required', 'is_oparg', 'usage_name']
 
-    def __init__(self, required, is_oparg):
+    def __init__(self, required, is_oparg, usage_name=None):
         self.op = opcode.next_to_o
         self.required = required
         self.is_oparg = is_oparg
+        self.usage_name = usage_name
 
     def __repr__(self):
         return f"<next_to_o required={self.required} is_oparg={self.is_oparg}>"
@@ -1741,10 +1742,11 @@ class CharmAssembler:
         self._append_opcode(op)
         return op
 
-    def next_to_o(self, required=False, is_oparg=False):
+    def next_to_o(self, required=False, is_oparg=False, usage_name=None):
         op = CharmInstructionNextToO(
             required=required,
             is_oparg=is_oparg,
+            usage_name=usage_name,
             )
         self._append_opcode(op)
         return op
@@ -2845,7 +2847,7 @@ class CharmAppealCompiler(CharmCompiler):
                 #     print(f"[cc] {indent}    << recurse on parameter >>")
                 discretionary = self.is_converter_discretionary(p, cls)
                 add_to_self_a, degenerate_append_op = self.compile_parameter(p, pgi, depth + 1, indent + "    ", usage_name)
-                parameter_is_degenerate = (degenerate_append_op != None)
+                parameter_is_degenerate = (degenerate_append_op is not None)
 
             add_to_self_a.load_converter(key=converter_key)
 
@@ -3047,7 +3049,7 @@ class CharmMappingCompiler(CharmCompiler):
                 # is o a mapping?
                 a.test_is_o_mapping()
                 a.branch_on_flag_to_label(label_o_is_a_mapping)
-                a.abort("MultiOption {callable.__name__} requires multiple parameters, iterable only yielded an individual object")
+                a.abort(f"MultiOption {callable.__name__} requires multiple parameters, iterable only yielded an individual object")
 
                 # o is a mapping.  push it to mapping stack and process arguments.
                 a.append(label_o_is_a_mapping)
@@ -3104,7 +3106,7 @@ class CharmMappingCompiler(CharmCompiler):
                 if child_discretionary:
                     a.literal_to_o(child.default)
                 else:
-                    a.abort("{child.name} is required but was not set in the mapping")
+                    a.abort(f"{child.name} is required but was not set in the mapping")
                 a.append(label_got_value)
 
             else:
@@ -3117,7 +3119,7 @@ class CharmMappingCompiler(CharmCompiler):
                     if child_discretionary:
                         a.literal_to_o(child.default)
                     else:
-                        a.abort("{child.name} is required but was not available")
+                        a.abort(f"{child.name} is required but was not available")
                     a.append(label_got_value)
 
                     a.test_is_o_iterable()
@@ -3254,12 +3256,12 @@ class CharmIteratorCompiler(CharmCompiler):
         for child in parameters.values():
             child_annotation = dereference_annotated(child.annotation)
             if not is_legal_annotation(child_annotation):
-                raise ConfigurationError(f"{callable.__name__}: parameter {p.name!r} annotation is {p.annotation}, which you can't use directly, you must call it")
+                raise ConfigurationError(f"{callable.__name__}: parameter {child.name!r} annotation is {child_annotation}, which you can't use directly, you must call it")
 
             if child.kind is KEYWORD_ONLY:
-                raise ConfigurationError("{callable.__name__}: keyword-only parameter {parameter.name!r} is unsupported for CharmIteratorCompiler")
+                raise ConfigurationError(f"{callable.__name__}: keyword-only parameter {child.name!r} is unsupported for CharmIteratorCompiler")
             if child.kind is VAR_KEYWORD:
-                raise ConfigurationError("{callable.__name__}: parameter **{parameter.name!r} is unsupported for CharmIteratorCompiler")
+                raise ConfigurationError(f"{callable.__name__}: parameter **{child.name!r} is unsupported for CharmIteratorCompiler")
             var_positional = child.kind is VAR_POSITIONAL
 
 
@@ -3411,9 +3413,6 @@ class CharmProgramIterator:
         self.opcodes = program.opcodes
         self.length = len(program)
         self.ip = 0
-
-    def __repr__(self):
-        return f"<{self.__class__.__name__} program={self.program} ip={self.ip}>"
 
     def __repr__(self):
         return f"[{self.program}:{self.ip}]"
@@ -4400,7 +4399,7 @@ class CharmInterpreter(CharmBaseInterpreter):
                 if op.op == opcode.test_is_o_none:
                     # if want_prints:
                     #     old_flag = self.flag
-                    self.flag = self.o == None
+                    self.flag = self.o is None
                     # if want_prints:
                     #     print(f"{self.opcodes_prefix} {prefix} test_is_o_none")
                     #     print_registers(flag=old_flag)
@@ -4511,7 +4510,7 @@ class CharmInterpreter(CharmBaseInterpreter):
 
                 if op.op == opcode.push_mapping:
                     if not isinstance(self.o, Mapping):
-                        self.abort(f'object in o is not a Mapping, o={o}')
+                        self.abort(f'object in o is not a Mapping, o={self.o}')
                     # if want_prints:
                     #     old_mapping_stack = self.mapping_stack.copy()
                     self.mapping_stack.append(self.mapping)
@@ -4632,7 +4631,7 @@ class CharmInterpreter(CharmBaseInterpreter):
             #     to consume an argument.  In that case op
             #     will be a 'next_to_o' op.
             #   If we've finished the program, op will be None.
-            assert (op == None) or (op.op == opcode.next_to_o), f"op={op}, expected either None or next_to_o"
+            assert (op is None) or (op.op == opcode.next_to_o), f"op={op}, expected either None or next_to_o"
 
             # Technically we *loop* over iterator.
             # But in practice we usually only consume one argument at a time.
@@ -4678,6 +4677,19 @@ class CharmInterpreter(CharmBaseInterpreter):
                 #         print_loop_start = False
 
                 if not iterator:
+                    if op and op.op == opcode.next_to_o and not op.required:
+                        # next_to_o(required=False) on an exhausted iterator:
+                        # quietly signal "no value" and resume loop 1.  The
+                        # next instruction (typically branch_on_not_flag)
+                        # reads the flag and handles the no-value case --
+                        # for the multioption-in-mapping path, it jumps to
+                        # label_done where pop_iterator and the parent's
+                        # wiring live.  Mirrors lookup_to_o's "key not found,
+                        # required=False" branch in loop 1.
+                        self.o = None
+                        self.flag = False
+                        stay_in_loop_two = False
+                        break
                     # we need a positional argument, but we don't have one.
                     # stop processing; we'll figure out if there was an error below.
                     if self.ip:
@@ -4924,9 +4936,9 @@ class CharmInterpreter(CharmBaseInterpreter):
                     if split_value is not None:
                         if maximum_arguments != 1:
                             if maximum_arguments == 0:
-                                raise UsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} doesn't take an argument")
+                                raise UsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalized_option}doesn't take an argument")
                             if maximum_arguments >= 2:
-                                raise UsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalize_option} takes multiple arguments")
+                                raise UsageError(f"{denormalized_option}={split_value} isn't allowed, because {denormalized_option}takes multiple arguments")
                         iterator.push(split_value)
                         # if want_prints:
                         #     print(f"{self.cmdline_prefix} {self.ip_spacer} pushing split value {split_value!r} back onto iterator")
@@ -5595,14 +5607,14 @@ def counter(*, max=None, step=1):
             self.count = default
             if not step:
                 raise AssertInternalError("counter(): step value cannot be 0")
-            if max == None:
+            if max is None:
                 max = math.inf if step > 0 else (-math.inf)
             self.max = max
             self.step = step
 
         def option(self):
-            callable = min if self.step > 0 else max
-            self.count = callable(self.count + step, self.max)
+            callable = builtins.min if self.step > 0 else builtins.max
+            self.count = callable(self.count + self.step, self.max)
 
         def render(self):
             return self.count
@@ -5689,7 +5701,7 @@ class MappingMeta(ABCMeta):
 
             def option(self, key:k, value:v):
                 if key in self.dict:
-                    raise UsageError("defined {key} more than once")
+                    raise UsageError(f"defined {key} more than once")
                 self.dict[key] = value
         return accumulator
 
@@ -5702,7 +5714,7 @@ class MappingMeta(ABCMeta):
 
             def option(self, key, *values):
                 if key in self.dict:
-                    raise UsageError("defined {key} more than once")
+                    raise UsageError(f"defined {key} more than once")
                 if type(values) != iterable_type:
                     values = iterable_type(values)
                 self.dict[key] = values
@@ -5744,7 +5756,7 @@ class mapping(MultiOption, metaclass=MappingMeta):
 
     def option(self, key:str, value:str):
         if key in self.dict:
-            raise UsageError("defined {key} more than once")
+            raise UsageError(f"defined {key} more than once")
         self.dict[key] = value
 
     def render(self):
@@ -5767,7 +5779,7 @@ def split(*separators, strip=False):
         raise ConfigurationError("split(): every separator must be a non-empty string")
 
     def split(str):
-        return list(big.multisplit(str, separators, strip=strip))
+        return list(big.multisplit(str, separators or None, strip=strip))
     return split
 
 
@@ -5787,7 +5799,7 @@ def validate(*values, type=None):
     """
     if not values:
         raise ConfigurationError("validate() called without any values.")
-    if type == None:
+    if type is None:
         type = builtins.type(values[0])
     failed = []
     for value in values:
@@ -5795,7 +5807,7 @@ def validate(*values, type=None):
             failed.append(value)
     if failed:
         failed = " ".join(repr(x) for x in failed)
-        raise ConfigurationError("validate() called with these non-homogeneous values {failed}")
+        raise ConfigurationError(f"validate() called with these non-homogeneous values {failed}")
 
     values_set = set(values)
     def validate(value:type):
@@ -6335,7 +6347,7 @@ class Appeal:
                 fn2 = self.wrap(fn)
                 self.appeal.default_command()(fn2)
                 return fn
-            return global_command
+            return default_command
 
         def bind(self, instance):
             rebinder = partial_rebind_method if self.bind_method else partial_rebind_positional
@@ -7303,9 +7315,6 @@ class Appeal:
 
     def error(self, s):
         raise UsageError("error: " + s)
-        print("error:", s)
-        print()
-        return self.usage(usage=True, summary=True, doc=True)
 
     def version(self):
         print(self.support_version)
@@ -7349,7 +7358,7 @@ class Appeal:
 
         interpreter = CharmInterpreter(processor, program)
         converter = interpreter()
-        if converter == None:
+        if converter is None:
             raise UsageError("unknown error")
         processor.commands.append(converter)
         return converter

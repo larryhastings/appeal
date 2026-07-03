@@ -77,6 +77,15 @@ def preload_local_appeal():
 appeal_dir = preload_local_appeal()
 
 import appeal
+
+# atest adds bare-assert introspection and a runner that returns control
+# to us instead of exiting.  Run by path (python tests/test_all.py) it's a
+# sibling ("import atest"); run as a module (python -m tests.test_all) it's
+# in the tests package.  Support both spellings.
+try:
+    import atest
+except ImportError:
+    from tests import atest
 from appeal.argument_grouping import Function, ParameterGrouper
 
 
@@ -86,8 +95,14 @@ app = command = process = None
 def capture_stdout(cmdline):
     start, captured_print, end = make_stdout_capture()
     start()
-    process(shlex.split(cmdline))
-    return end()
+    # end() restores builtins.print; it MUST run even if process() raises
+    # (which it does in every assertRaises test), or the print swap leaks
+    # and silently eats all subsequent output.
+    try:
+        process(shlex.split(cmdline))
+    finally:
+        result = end()
+    return result
 
 
 
@@ -2764,26 +2779,703 @@ class ArgumentGrouperTests(unittest.TestCase):
         self.assertTrue(leaves[1].first_in_group)
         self.assertTrue(leaves[1].last_in_group)
 
+class BugfixRegressionTests(AppealTestsBase):
+    #
+    # Regression tests for bugs found during code review (Feb 2026).
+    # Most of these bugs lived on error paths that Appeal's own test
+    # suite never exercised, which is why they went unnoticed.
+    #
+
+    def setUp(self):
+        self.app = appeal.Appeal(version="0.5")
+
+    def test_counter_negative_step(self):
+        # counter() with a negative step used to crash.  option() computed
+        # "min if self.step > 0 else max", and in the negative case "max"
+        # resolved to the (float) max parameter rather than the builtin,
+        # producing a non-callable.
+        app = self.app
+        @app.command()
+        def cmd(*, v:appeal.counter(step=-1)=0):
+            return v
+        self.assertEqual(app.process(shlex.split("cmd -v -v")), -2)
+
+    def test_no_argument_option_given_value(self):
+        # Specifying "=value" on an option that takes no oparg used to put
+        # the repr of the denormalize_option *function* into the error
+        # message instead of the option name.
+        app = self.app
+        @app.command()
+        def cmd(*, flag=False):
+            return flag
+        with self.assertRaises(appeal.AppealUsageError) as cm:
+            app.process(shlex.split("cmd --flag=x"))
+        msg = str(cm.exception)
+        self.assertIn("--flag", msg)
+        self.assertNotIn("<function", msg)
+
+    def test_mapping_duplicate_key_message(self):
+        # The "defined ... more than once" message wasn't an f-string, so it
+        # printed the literal "{key}" rather than the offending key.
+        app = self.app
+        @app.command()
+        def cmd(*, define:appeal.mapping={}):
+            return define
+        with self.assertRaises(appeal.AppealUsageError) as cm:
+            app.process(shlex.split("cmd --define key one --define key two"))
+        msg = str(cm.exception)
+        self.assertIn("key", msg)
+        self.assertNotIn("{key}", msg)
+
+    def test_validate_non_homogeneous_message(self):
+        # validate()'s non-homogeneous error message wasn't an f-string, so
+        # it printed the literal "{failed}" rather than the offending values.
+        with self.assertRaises(appeal.ConfigurationError) as cm:
+            appeal.validate(int, "notatype")
+        msg = str(cm.exception)
+        self.assertIn("notatype", msg)
+        self.assertNotIn("{failed}", msg)
+
+
+class ConfigFileReadingTests(AppealTestsBase):
+    #
+    # Coverage + regression tests for the 0.6 config-file reading API
+    # (read_mapping / read_iterable / read_csv) and the Charm mapping and
+    # iterator compilers behind them.
+    #
+    # These paths were almost entirely uncovered.  read_iterable, read_csv
+    # in positional mode, and read_mapping with a MultiOption all shipped
+    # broken: the mapping/iterator compilers called next_to_o() with a
+    # usage_name= keyword the assembler method never accepted.
+    #
+
+    def setUp(self):
+        self.app = appeal.Appeal(version="0.5")
+
+    # ---- read_mapping ----
+
+    def test_read_mapping_flat_and_convert(self):
+        def cfg(a:int, b:str='x'):
+            return (a, b)
+        self.assertEqual(self.app.read_mapping(cfg, {'a': '5', 'b': 'hi'}), (5, 'hi'))
+
+    def test_read_mapping_default_used(self):
+        def cfg(a:int, b:str='x'):
+            return (a, b)
+        self.assertEqual(self.app.read_mapping(cfg, {'a': 7}), (7, 'x'))
+
+    def test_read_mapping_missing_required(self):
+        def cfg(a:int, b:str='x'):
+            return (a, b)
+        with self.assertRaises(Exception) as cm:
+            self.app.read_mapping(cfg, {'b': 'only'})
+        self.assertIn("a", str(cm.exception))
+
+    def test_read_mapping_nested(self):
+        def read_b(verbose=False, color='black'):
+            return (verbose, color)
+        def cfg(a:int, b:read_b):
+            return (a, b)
+        self.assertEqual(
+            self.app.read_mapping(cfg, {'a': 33, 'b': {'verbose': True, 'color': 'blue'}}),
+            (33, (True, 'blue')),
+            )
+
+    def test_read_mapping_unnested(self):
+        app = self.app
+        @app.unnested()
+        def read_b(verbose=False, color='black'):
+            return (verbose, color)
+        def cfg(a:int, b:read_b):
+            return (a, b)
+        self.assertEqual(
+            app.read_mapping(cfg, {'a': 1, 'verbose': True, 'color': 'red'}),
+            (1, (True, 'red')),
+            )
+
+    # ---- read_iterable ----
+
+    def test_read_iterable_basic(self):
+        def row(a:int, b:str):
+            return (a, b)
+        self.assertEqual(
+            self.app.read_iterable(row, [['1', 'x'], ['2', 'y']]),
+            [(1, 'x'), (2, 'y')],
+            )
+
+    def test_read_iterable_skips_empty_rows(self):
+        def row(a:int, b:str):
+            return (a, b)
+        self.assertEqual(
+            self.app.read_iterable(row, [['1', 'x'], [], ['2', 'y']]),
+            [(1, 'x'), (2, 'y')],
+            )
+
+    def test_read_iterable_var_positional(self):
+        def row(first, *rest:int):
+            return (first, rest)
+        self.assertEqual(
+            self.app.read_iterable(row, [['a', '1', '2', '3']]),
+            [('a', (1, 2, 3))],
+            )
+
+    # ---- read_csv ----
+
+    def test_read_csv_positional(self):
+        import csv, io
+        def row(a:int, b:str):
+            return (a, b)
+        reader = csv.reader(io.StringIO("h1,h2\n1,x\n2,y\n"))
+        # first row is consumed as headings and ignored in positional mode
+        self.assertEqual(self.app.read_csv(row, reader), [(1, 'x'), (2, 'y')])
+
+    def test_read_csv_mapping(self):
+        import csv, io
+        def row(a:int, b:str):
+            return (a, b)
+        reader = csv.reader(io.StringIO("a,b\n10,foo\n20,bar\n"))
+        self.assertEqual(
+            self.app.read_csv(row, reader, first_row_map={'a': 'a', 'b': 'b'}),
+            [(10, 'foo'), (20, 'bar')],
+            )
+
+    def test_read_csv_mapping_remaps_headings(self):
+        import csv, io
+        def row(x:int, y:str):
+            return (x, y)
+        reader = csv.reader(io.StringIO("col_x,col_y\n1,z\n"))
+        self.assertEqual(
+            self.app.read_csv(row, reader, first_row_map={'col_x': 'x', 'col_y': 'y'}),
+            [(1, 'z')],
+            )
+
+    def test_read_mapping_with_multioption_list(self):
+        # README-documented pattern: a child MultiOption (here accumulator)
+        # reads its repeated values from a list keyed under that parameter
+        # name in the mapping.
+        def cfg(lines:appeal.accumulator, color:str=''):
+            return (lines, color)
+        self.assertEqual(
+            self.app.read_mapping(cfg, {'color': 'blue', 'lines': ['a', 'b', 'c']}),
+            (['a', 'b', 'c'], 'blue'),
+            )
+
+    def test_read_iterable_rejects_keyword_only(self):
+        # The iterator compiler can't position-feed a keyword-only parameter,
+        # so it raises ConfigurationError at compile time.  Locks in the
+        # f-string fix at line 3260 -- the message must interpolate the
+        # offending parameter name.
+        def fn(a, *, b=1):
+            return (a, b)
+        with self.assertRaises(appeal.ConfigurationError) as cm:
+            self.app.read_iterable(fn, [['x']])
+        msg = str(cm.exception)
+        self.assertIn("'b'", msg)
+        self.assertNotIn("{child.name}", msg)
+        self.assertNotIn("{parameter.name}", msg)
+
+    def test_read_iterable_rejects_var_keyword(self):
+        # Same for **kwargs.  Locks in the f-string fix at line 3262.
+        def fn(a, **kw):
+            return (a, kw)
+        with self.assertRaises(appeal.ConfigurationError) as cm:
+            self.app.read_iterable(fn, [['x']])
+        msg = str(cm.exception)
+        self.assertIn("'kw'", msg)
+        self.assertNotIn("{child.name}", msg)
+        self.assertNotIn("{parameter.name}", msg)
+
+    def test_read_mapping_multi_param_multioption_rejects_scalars(self):
+        # When a multi-parameter MultiOption is read from a mapping, each
+        # element of the list value must itself be iterable (so its items
+        # can feed the option's multiple parameters).  Scalars trigger the
+        # compile-time-emitted abort opcode at line ~3050, which exercises
+        # the runtime abort handler at line ~4579 as well as locking in
+        # the f-string fix from the bug-review pass.
+        class TwoParam(appeal.MultiOption):
+            def init(self, default=None):
+                self.results = []
+            def option(self, x:int, y:int):
+                self.results.append((x, y))
+            def render(self):
+                return self.results
+        def cfg(pairs:TwoParam):
+            return pairs
+        with self.assertRaises(Exception) as cm:
+            self.app.read_mapping(cfg, {'pairs': [1, 2, 3]})
+        msg = str(cm.exception)
+        self.assertIn("multiple parameters", msg)
+        self.assertIn("individual object", msg)
+
+
+class ConverterVocabularyTests(AppealTestsBase):
+    #
+    # Coverage for Appeal's built-in converter vocabulary:
+    # validate, validate_range, split, accumulator, mapping, counter.
+    #
+
+    def setUp(self):
+        self.app = appeal.Appeal(version="0.5")
+
+    def test_validate_ok(self):
+        app = self.app
+        @app.command()
+        def go(direction:appeal.validate('up', 'down', 'left')):
+            return direction
+        self.assertEqual(app.process(shlex.split("go up")), 'up')
+
+    def test_validate_rejects(self):
+        app = self.app
+        @app.command()
+        def go(direction:appeal.validate('up', 'down', 'left')):
+            return direction
+        with self.assertRaises(appeal.AppealUsageError):
+            app.process(shlex.split("go sideways"))
+
+    def test_validate_range_inside(self):
+        app = self.app
+        @app.command()
+        def n(v:appeal.validate_range(0, 10)):
+            return v
+        self.assertEqual(app.process(shlex.split("n 5")), 5)
+
+    def test_validate_range_equals_stop_allowed(self):
+        app = self.app
+        @app.command()
+        def n(v:appeal.validate_range(0, 10)):
+            return v
+        # validate_range differs from range(): the stop value is allowed.
+        self.assertEqual(app.process(shlex.split("n 10")), 10)
+
+    def test_validate_range_rejects_out_of_range(self):
+        app = self.app
+        @app.command()
+        def n(v:appeal.validate_range(0, 10)):
+            return v
+        with self.assertRaises(appeal.AppealUsageError):
+            app.process(shlex.split("n 99"))
+
+    def test_validate_range_clamp(self):
+        app = self.app
+        @app.command()
+        def n(v:appeal.validate_range(0, 10, clamp=True)):
+            return v
+        self.assertEqual(app.process(shlex.split("n 99")), 10)
+
+    def test_split_with_delimiter(self):
+        app = self.app
+        @app.command()
+        def s(items:appeal.split(':')=''):
+            return items
+        self.assertEqual(app.process(shlex.split("s a:b:c")), ['a', 'b', 'c'])
+
+    def test_split_default_whitespace(self):
+        app = self.app
+        @app.command()
+        def s(items:appeal.split()=''):
+            return items
+        self.assertEqual(app.process(shlex.split("s 'a b c'")), ['a', 'b', 'c'])
+
+    def test_accumulator_typed(self):
+        app = self.app
+        @app.command()
+        def a(*, p:appeal.accumulator[int]=[]):
+            return p
+        self.assertEqual(app.process(shlex.split("a -p 1 -p 2 -p 3")), [1, 2, 3])
+
+    def test_accumulator_multiple_types(self):
+        app = self.app
+        @app.command()
+        def a(*, p:appeal.accumulator[int, float]=[]):
+            return p
+        self.assertEqual(
+            app.process(shlex.split("a -p 1 2.5 -p 3 4.5")),
+            [(1, 2.5), (3, 4.5)],
+            )
+
+    def test_mapping(self):
+        app = self.app
+        @app.command()
+        def m(*, define:appeal.mapping={}):
+            return define
+        self.assertEqual(
+            app.process(shlex.split("m --define k1 v1 --define k2 v2")),
+            {'k1': 'v1', 'k2': 'v2'},
+            )
+
+    def test_mapping_typed(self):
+        app = self.app
+        @app.command()
+        def m(*, define:appeal.mapping[str, int]={}):
+            return define
+        self.assertEqual(
+            app.process(shlex.split("m --define age 5 --define count 9")),
+            {'age': 5, 'count': 9},
+            )
+
+    def test_counter(self):
+        app = self.app
+        @app.command()
+        def c(*, v:appeal.counter()=0):
+            return v
+        self.assertEqual(app.process(shlex.split("c -v -v -v")), 3)
+
+    def test_counter_max(self):
+        app = self.app
+        @app.command()
+        def c(*, v:appeal.counter(max=2)=0):
+            return v
+        self.assertEqual(app.process(shlex.split("c -v -v -v -v")), 2)
+
+
+class OptionParsingTests(AppealTestsBase):
+    #
+    # Coverage for the interpreter's command-line option and positional
+    # parsing edge cases.
+    #
+
+    def setUp(self):
+        self.app = appeal.Appeal(version="0.5")
+
+    def test_long_option_equals_value(self):
+        # --name=joe style; the option-and-value share one argv token.
+        app = self.app
+        @app.command()
+        def c(*, name='', age:int=0):
+            return (name, age)
+        self.assertEqual(
+            app.process(shlex.split("c --name=joe --age=30")),
+            ('joe', 30),
+            )
+
+    def test_short_option_chain(self):
+        # -abc collapses three single-character zero-oparg short options.
+        app = self.app
+        @app.command()
+        def c(*, a=False, b=False, c=False):
+            return (a, b, c)
+        self.assertEqual(
+            app.process(shlex.split("c -abc")),
+            (True, True, True),
+            )
+
+    def test_optional_positional_omitted(self):
+        # No positional supplied for a parameter with a default.
+        # Exercises the engine's "next_to_o, required=False, iterator
+        # exhausted -> resume loop 1 with flag=False" path on the
+        # command line (as opposed to inside an in-program iterator).
+        app = self.app
+        @app.command()
+        def c(name='default'):
+            return name
+        self.assertEqual(app.process(shlex.split("c")), 'default')
+
+    def test_optional_positional_given(self):
+        # The positive arm of the same parameter shape.
+        app = self.app
+        @app.command()
+        def c(name='default'):
+            return name
+        self.assertEqual(app.process(shlex.split("c specified")), 'specified')
+
+    def test_short_option_concatenated_oparg(self):
+        # -fX where -f takes exactly one *optional* oparg.  Appeal allows
+        # the concatenated form in this specific case.
+        app = self.app
+        def with_default(value='hello'):
+            return value
+        @app.command()
+        def c(*, f:with_default=''):
+            return f
+        self.assertEqual(app.process(shlex.split("c -fjoe")), 'joe')
+
+    def test_short_option_bare_uses_converter_default(self):
+        # -f alone, no oparg: the converter's own default ('hello') applies.
+        app = self.app
+        def with_default(value='hello'):
+            return value
+        @app.command()
+        def c(*, f:with_default=''):
+            return f
+        self.assertEqual(app.process(shlex.split("c -f")), 'hello')
+
+    def test_short_option_equals_value(self):
+        # -f=X is also valid for the same optional-oparg shape.
+        app = self.app
+        def with_default(value='hello'):
+            return value
+        @app.command()
+        def c(*, f:with_default=''):
+            return f
+        self.assertEqual(app.process(shlex.split("c -f=joe")), 'joe')
+
+    def test_short_option_concat_rejected_when_oparg_required(self):
+        # -fjoe with a *required*-oparg short option: not allowed, must be last.
+        app = self.app
+        @app.command()
+        def c(*, f=''):
+            return f
+        with self.assertRaises(appeal.AppealUsageError) as cm:
+            app.process(shlex.split("c -fjoe"))
+        self.assertIn("must be last", str(cm.exception))
+
+    def test_short_option_concat_with_split_value_rejected(self):
+        # -fjoe=extra is also rejected for a required-oparg short option.
+        app = self.app
+        @app.command()
+        def c(*, f=''):
+            return f
+        with self.assertRaises(appeal.AppealUsageError) as cm:
+            app.process(shlex.split("c -fjoe=extra"))
+        self.assertIn("must be last", str(cm.exception))
+
+    def test_unknown_option_rejected(self):
+        # An option the program doesn't define should produce a clean error.
+        app = self.app
+        @app.command()
+        def c(*, name=''):
+            return name
+        with self.assertRaises(appeal.AppealUsageError) as cm:
+            app.process(shlex.split("c --bogus value"))
+        self.assertIn("--bogus", str(cm.exception))
+
+    def test_too_many_positionals_rejected(self):
+        # Extra positionals beyond the signature should produce a clean error.
+        app = self.app
+        @app.command()
+        def c(a, b):
+            return (a, b)
+        with self.assertRaises(appeal.AppealUsageError):
+            app.process(shlex.split("c x y z"))
+
+    def test_missing_required_positional_rejected(self):
+        app = self.app
+        @app.command()
+        def c(a, b):
+            return (a, b)
+        with self.assertRaises(appeal.AppealUsageError):
+            app.process(shlex.split("c only_one"))
+
+    def test_end_of_options_terminator(self):
+        # '--' on the command line terminates option processing: subsequent
+        # tokens that start with '-' are treated as positionals.
+        app = self.app
+        @app.command()
+        def c(*args, verbose=False):
+            return (verbose, args)
+        self.assertEqual(
+            app.process(shlex.split("c --verbose -- --not-an-option positional")),
+            (True, ('--not-an-option', 'positional')),
+            )
+
+
+class SignatureUtilityTests(unittest.TestCase):
+    #
+    # Direct unit tests for the signature-stripping utilities used by the
+    # class-binding machinery.  Tested directly so they have coverage even
+    # though their main callers will be rewritten in the app.cls() redesign.
+    #
+
+    def test_strip_first_argument_strips_first(self):
+        import inspect
+        from appeal import strip_first_argument_from_signature
+        def f(self, a, b): pass
+        result = strip_first_argument_from_signature(inspect.signature(f))
+        self.assertEqual(list(result.parameters), ['a', 'b'])
+
+    def test_strip_first_argument_strips_first_regardless_of_name(self):
+        import inspect
+        from appeal import strip_first_argument_from_signature
+        def f(this, a): pass
+        result = strip_first_argument_from_signature(inspect.signature(f))
+        self.assertEqual(list(result.parameters), ['a'])
+
+    def test_strip_first_argument_raises_on_empty(self):
+        import inspect
+        from appeal import strip_first_argument_from_signature, ConfigurationError
+        def f(): pass
+        with self.assertRaises(ConfigurationError):
+            strip_first_argument_from_signature(inspect.signature(f))
+
+    def test_strip_self_strips_when_first_is_self(self):
+        import inspect
+        from appeal import strip_self_from_signature
+        def f(self, a, b): pass
+        result = strip_self_from_signature(inspect.signature(f))
+        self.assertEqual(list(result.parameters), ['a', 'b'])
+
+    def test_strip_self_leaves_signature_alone_when_first_is_not_self(self):
+        import inspect
+        from appeal import strip_self_from_signature
+        def f(other, a): pass
+        sig = inspect.signature(f)
+        result = strip_self_from_signature(sig)
+        self.assertEqual(list(result.parameters), ['other', 'a'])
+
+    def test_strip_self_handles_empty_signature(self):
+        import inspect
+        from appeal import strip_self_from_signature
+        def f(): pass
+        sig = inspect.signature(f)
+        result = strip_self_from_signature(sig)
+        self.assertEqual(list(result.parameters), [])
+
+
+class SubcommandTests(AppealTestsBase):
+    #
+    # Coverage for Appeal's command-group features: subcommands attached via
+    # @app.command("parent").command(), global_command, and default_command.
+    #
+
+    def test_subcommand_runs_after_parent(self):
+        app = appeal.Appeal(version="0.5")
+        calls = []
+        @app.command()
+        def db(*, host='localhost'):
+            calls.append(('db', host))
+        @app.command("db").command()
+        def deploy(version:int):
+            calls.append(('deploy', version))
+        app.process(shlex.split("db deploy 5"))
+        self.assertEqual(calls, [('db', 'localhost'), ('deploy', 5)])
+
+    def test_subcommand_parent_option_propagates(self):
+        app = appeal.Appeal(version="0.5")
+        calls = []
+        @app.command()
+        def db(*, host='localhost'):
+            calls.append(('db', host))
+        @app.command("db").command()
+        def deploy(version:int):
+            calls.append(('deploy', version))
+        app.process(shlex.split("db --host prod deploy 7"))
+        self.assertEqual(calls, [('db', 'prod'), ('deploy', 7)])
+
+    def test_parent_command_without_subcommand_rejected(self):
+        # Once a command has subcommands, invoking the parent alone is an
+        # error -- the user must pick a sub.
+        app = appeal.Appeal(version="0.5")
+        @app.command()
+        def db(*, host='localhost'):
+            return host
+        @app.command("db").command()
+        def deploy(version:int):
+            return version
+        with self.assertRaises(appeal.AppealUsageError):
+            app.process(shlex.split("db"))
+
+    def test_global_command_runs_before_command(self):
+        app = appeal.Appeal(version="0.5")
+        calls = []
+        @app.global_command()
+        def setup(*, verbose=False):
+            calls.append(('global', verbose))
+        @app.command()
+        def go():
+            calls.append(('go',))
+        app.process(shlex.split("--verbose go"))
+        self.assertEqual(calls, [('global', True), ('go',)])
+
+    def test_default_command_invoked_with_no_args(self):
+        app = appeal.Appeal(version="0.5")
+        calls = []
+        @app.command()
+        def a():
+            calls.append(('a',))
+        @app.command()
+        def b():
+            calls.append(('b',))
+        @app.default_command()
+        def default():
+            calls.append(('default',))
+        app.process(shlex.split(""))
+        self.assertEqual(calls, [('default',)])
+
+    def test_default_command_not_invoked_when_command_specified(self):
+        app = appeal.Appeal(version="0.5")
+        calls = []
+        @app.command()
+        def a():
+            calls.append(('a',))
+        @app.default_command()
+        def default():
+            calls.append(('default',))
+        app.process(shlex.split("a"))
+        self.assertEqual(calls, [('a',)])
+
+
+class OptionsThatMapOptionsTests(AppealTestsBase):
+    #
+    # The recursive-converter feature where an option's annotation introduces
+    # *new* options that exist only inside that option's scope.  Documented
+    # in the README as "Options that map other options".  Exercises the
+    # hierarchical Options stack and the scope-pop logic.
+    #
+
+    def test_parent_option_alone_uses_inner_default(self):
+        # --color red (no --brightness) -- inner converter's brightness
+        # parameter takes its default, here None.
+        app = appeal.Appeal(version="0.5")
+        def color(name, *, brightness:int=None):
+            return (name, brightness)
+        @app.command()
+        def paint(*, color:color=None):
+            return color
+        self.assertEqual(
+            app.process(shlex.split("paint --color red")),
+            ('red', None),
+            )
+
+    def test_child_option_active_inside_parent_scope(self):
+        # --color red --brightness 50 -- brightness is in scope because
+        # --color introduced it; the value reaches the inner converter.
+        app = appeal.Appeal(version="0.5")
+        def color(name, *, brightness:int=None):
+            return (name, brightness)
+        @app.command()
+        def paint(*, color:color=None):
+            return color
+        self.assertEqual(
+            app.process(shlex.split("paint --color red --brightness 50")),
+            ('red', 50),
+            )
+
+    def test_child_option_unknown_outside_parent_scope(self):
+        # Using --brightness without first using --color: the brightness
+        # option is never registered, so it's reported as unknown.
+        app = appeal.Appeal(version="0.5")
+        def color(name, *, brightness:int=None):
+            return (name, brightness)
+        @app.command()
+        def paint(*, color:color=None):
+            return color
+        with self.assertRaises(appeal.AppealUsageError) as cm:
+            app.process(shlex.split("paint --brightness 50"))
+        self.assertIn("--brightness", str(cm.exception))
+
+
 if __name__ == "__main__":
-    unittest.main()
+    # Run everything (TestCase classes and any plain test_* functions)
+    # through atest, with exit=False so control returns here.
+    #
+    # This is what fixes a real bug: the bottom of this file *used* to be
+    #     if __name__ == "__main__":
+    #         unittest.main()      # <- runs, then sys.exit()s the process
+    #     ...README-completeness check...
+    # The first unittest.main() exited before the README check ever ran,
+    # so the check was silently dead.  Now the check runs again.
+    total, failures = atest.run(verbose=False, exit=False)
 
-exit_code = 0
-try:
-    unittest.main()
-# oh no you don't!
-except SystemExit as e:
-    exit_code = e
+    not_run = []
+    for section, tests in readme_tests.items():
+        for i, (text, counter) in enumerate(tests):
+            if counter == 0:
+                not_run.append((section, i))
+    if not_run:
+        print()
+        print("The following README.md tests weren't run:")
+        for section, i in not_run:
+            print(f"  {section!r} #{i}")
+        failures += len(not_run)
 
-not_run = []
-for section, tests in readme_tests.items():
-    for i, (text, counter) in enumerate(tests):
-        if counter == 0:
-            not_run.append((section, i))
-if not_run:
-    print()
-    print("The following README.md tests weren't run:")
-    for section, i in not_run:
-        print(f"  {section!r} #{i}")
-    exit_code = -1
-
-sys.exit(exit_code)
+    sys.exit(1 if failures else 0)
