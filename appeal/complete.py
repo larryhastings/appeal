@@ -4,130 +4,158 @@
 # Part of Appeal v2.
 # Copyright 2021-2026 by Larry Hastings
 #
-# Shell-completion groundwork: given the words before the cursor and
-# the partial word at it, what could legally come next?  The plan
-# tree knows.  This is the in-process API; shell integration scripts
-# (bash/zsh completion functions calling back into the program) come
-# later and will sit on top of it.
-#
-# Conventions: candidates are offered for option strings (when the
-# partial word starts with '-') and for command words (in a command
-# set, at the command position).  Operand values belong to the
-# shell's own completion (usually filenames), so an empty list means
-# "no opinion", not "nothing is legal".
+# The build-time half of shell completion: turning a plan into the
+# tables the engine answers from.  The engine itself--and the
+# reentry protocol--lives in runtime.py, streamed into every
+# standalone script, so completion works identically in-process
+# and in a generated script.
 
 from .build import all_options, help_option_strings
 from .plan import Terminal
+from .runtime import complete_command, complete_command_set
 
 
-def _scan(plan, words):
+def _option_value_converters(o):
+    "The converters for an option's operands, one per position."
+    if len(o.converters) > 1:
+        return tuple(o.converters[1:])
+    return tuple(o.converters)
+
+
+def completion_table(plan):
     """
-    A forgiving pass over the words already typed: how many operands
-    appeared, which single-occurrence options were used, and whether
-    the cursor sits where an option's value belongs.  Never raises;
-    completion must work on half-typed nonsense.
+    The completion table for one command (see
+    runtime.complete_command for the shape).  Plain data plus
+    converter references--everything a generated script can carry.
     """
-    table = {}
+    options = {}
+    values = {}
     for owner, o in all_options(plan):
         entry = o.table_entry(windowed=getattr(owner, 'windowed', False))
         kind = entry[1]
         base = kind[2:] if kind.startswith('w:') else kind
-        nargs = entry[2] if len(entry) > 2 else (0 if base == 'flag' else 1)
+        if len(entry) > 3:
+            # folds and groups carry (minimum, maximum); the parser
+            # consumes greedily to the maximum, so completion does too
+            nargs = entry[3]
+        else:
+            nargs = entry[2] if len(entry) > 2 else (0 if base == 'flag' else 1)
         repeatable = base in ('multi', 'fold') or kind.startswith('w:')
         for s in o.strings:
-            table[s] = (o.key, nargs, repeatable)
+            options[s] = (o.key, nargs, repeatable)
+        if nargs:
+            values[o.key] = _option_value_converters(o)
 
-    used = set()
-    operands = 0
-    expect_values = 0
-    force_positional = False
-    for word in words:
-        if expect_values:
-            expect_values -= 1
-            continue
-        if force_positional or not word.startswith('-') or word == '-':
-            operands += 1
-            continue
-        if word == '--':
-            force_positional = True
-            continue
-        name = word.partition('=')[0] if word.startswith('--') else word[:2]
-        entry = table.get(name)
-        if entry is None:
-            continue
-        key, nargs, repeatable = entry
-        if not repeatable:
-            used.add(name if word.startswith('--') else key)
-            used.add(key)
-        if nargs and '=' not in word:
-            expect_values = nargs
-    return table, used, operands, expect_values, force_positional
+    operands = []
+    repeat = [None]
+
+    def terminal_count(p):
+        n = 0
+        for s in p.slots:
+            n += 1 if isinstance(s.child, Terminal) else terminal_count(s.child)
+        return n
+
+    def walk(p):
+        for s in p.slots:
+            child = s.child
+            if isinstance(child, Terminal):
+                if s.repeat:
+                    repeat[0] = child.converter
+                else:
+                    operands.append(child.converter)
+                continue
+            # a nonterminal that carries completions speaks for its
+            # sole operand: `hue: color` completes with color's
+            # completions, even though color's grammar wraps a str
+            # terminal.  (Build validation guarantees the "sole".)
+            if (getattr(child.callable, 'completions', None) is not None
+                    and terminal_count(child) == 1):
+                if s.repeat:
+                    repeat[0] = child.callable
+                else:
+                    operands.append(child.callable)
+                continue
+            walk(child)
+
+    walk(plan)
+    return {
+        'options': options,
+        'help': tuple(help_option_strings(plan)),
+        'values': values,
+        'operands': tuple(operands),
+        'repeat': repeat[0],
+        'minimum': plan.minimum,
+        'maximum': plan.maximum,
+    }
+
+
+# the auto version command's completion entry: a word that takes
+# nothing--zero operands, no options
+_VERSION_ENTRY = {
+    'options': {}, 'help': (), 'values': {}, 'operands': (),
+    'repeat': None, 'minimum': 0, 'maximum': 0,
+    }
+
+
+def completion_set_table(commands, global_plan, repeat=False,
+                         sets=None, auto_version=False):
+    """
+    The completion table for a multi-command program (see
+    runtime.complete_command_set for the shape).  repeat: the root
+    set cycles.  sets, if given, maps a parent word to
+    {'commands': {sub: Plan}, 'repeat': bool}--a nested set.
+    auto_version: the program supplies the automatic version
+    command, so the word completes.
+    """
+    sets = sets or {}
+
+    def entry_for(word, plan):
+        # recursive: sets is flat (every parent, any depth), so a
+        # child that is itself a parent nests its own entry
+        spec = sets.get(word)
+        if spec is None:
+            return completion_table(plan)
+        return {
+            'parent': completion_table(plan),
+            'commands': {sub: entry_for(sub, p)
+                         for sub, p in spec['commands'].items()},
+            'repeat': spec.get('repeat', False),
+        }
+
+    table = {}
+    for word, plan in commands.items():
+        table[word] = entry_for(word, plan)
+    if auto_version:
+        table['version'] = dict(_VERSION_ENTRY)
+    return {
+        'commands': table,
+        'global': dict(completion_table(global_plan), help=())
+                  if global_plan is not None else None,
+        'minimum': global_plan.minimum if global_plan is not None else 0,
+        'auto_help': 'help' not in commands,
+        'repeat': repeat,
+    }
 
 
 def complete(plan, words, prefix=''):
     """
     Candidate completions for `prefix`, given the `words` already
-    typed.  Options complete when prefix starts with '-'; operand
-    values are the shell's business (empty list = no opinion).
+    typed.  Options complete on a '-' prefix; value positions ask
+    the expecting converter's `completions`; anything else is the
+    shell's business (empty list = no opinion = filenames).
     """
-    table, used, operands, expect_values, force_positional = _scan(plan, words)
-    if expect_values or force_positional:
-        return []
-    if not prefix.startswith('-'):
-        return []
-    candidates = [s for s, (key, nargs, repeatable) in table.items()
-                  if s.startswith(prefix)
-                  and s not in used and key not in used]
-    candidates.extend(s for s in help_option_strings(plan)
-                      if s.startswith(prefix))
-    return sorted(set(candidates))
+    return complete_command(completion_table(plan), words, prefix)
 
 
-def complete_set(commands, global_plan, words, prefix=''):
+def complete_set(commands, global_plan, words, prefix='',
+                 repeat=False, sets=None, auto_version=False):
     """
-    Completion for a multi-command program.  Before the command
-    word: the global command's options, and command names (plus
-    'help') at the command position.  After it: that command's
-    completions.
+    Completion for a multi-command program: the global command's
+    options and the command words before the command word; that
+    command's completions after it--and under cycling, the
+    resolution chain's words at each saturated boundary.
     """
-    auto_help = 'help' not in commands
-    command_words = set(commands) | ({'help'} if auto_help else set())
-
-    # find the command word among the words already typed
-    if global_plan is not None:
-        table, used, operands, expect_values, force_positional = (
-            _scan(global_plan, words))
-        minimum = global_plan.minimum
-    else:
-        minimum = 0
-    for index, word in enumerate(words):
-        if word in command_words and not word.startswith('-'):
-            name = word if word in commands else None
-            if word == 'help':
-                # completing a help topic: the command names
-                remaining = words[index + 1:]
-                if not remaining and not prefix.startswith('-'):
-                    return sorted(w for w in command_words
-                                  if w.startswith(prefix))
-                if name is None:
-                    return []
-            if name is not None:
-                return complete(commands[name], words[index + 1:], prefix)
-
-    # still in global territory
-    if global_plan is not None:
-        table, used, operands, expect_values, force_positional = (
-            _scan(global_plan, words))
-        if expect_values:
-            return []
-        if prefix.startswith('-'):
-            return sorted(set(
-                s for s, (key, nargs, repeatable) in table.items()
-                if s.startswith(prefix)
-                and s not in used and key not in used))
-        if operands >= minimum:
-            return sorted(w for w in command_words if w.startswith(prefix))
-        return []
-    if prefix.startswith('-'):
-        return []
-    return sorted(w for w in command_words if w.startswith(prefix))
+    return complete_command_set(
+        completion_set_table(commands, global_plan, repeat, sets,
+                             auto_version),
+        words, prefix)

@@ -110,9 +110,14 @@ a reference to *another rule*.  A default value makes something optional.
 
 ```
 recurse2      =  ARG(a)  my_converter?
-my_converter  =  ARG(i)  ARG(f)  ARG(s)        [ options: -v | --verbose ]
+my_converter  =  int_float  ARG(s)             [ options: -v | --verbose ]
 int_float     =  ARG(i)  ARG(f)
 ```
+
+(The trailing `?` is the usual EBNF quantifier: zero or one, i.e. optional,
+because `b` has a default.  A rule name on the right-hand side is a
+reference to that rule; `ARG(x)` is a terminal--one command-line argument,
+consumed by the terminal converter for parameter `x`.)
 
 Now look at what Appeal v1 *already prints* as usage for `recurse2`:
 
@@ -120,7 +125,10 @@ Now look at what Appeal v1 *already prints* as usage for `recurse2`:
 recurse2 a [[-v|--verbose] i f s]
 ```
 
-That's the same object.  The square brackets are the standard notation for
+That's the same object, with every rule inlined: expand `my_converter`,
+then expand `int_float` inside it, and the terminals that remain are
+exactly `i f s`--the usage line is the grammar flattened to a derivation.
+The square brackets are the standard notation for
 "optional."  **Appeal's usage strings have been the grammar, pretty-printed,
 this entire time.**  The recursive step of the metaphor--the thing I'm proudest
 of--is precisely the property that a grammar's rules can refer to other rules.
@@ -336,11 +344,11 @@ functions:
   converter.  New in v2: it dereferences `Annotated`, understands builtin
   generics (§8.4), and--something v1 never had--detects cycles so a self-
   referential converter can't recurse forever.
-* **`compute_arity(plan)`** -- the bottom-up `(min, max)` fold.  A leaf is
+* **`compute_arity(plan)`** -- the bottom-up `(min, max)` fold.  A terminal is
   `(1,1)`; an optional child contributes `0` to the minimum; `*args` makes the
   maximum infinite.
 * **`compute_groups(plan)`** -- the replacement for `argument_grouping.py`.
-  Flatten the leaves into their linear order, each carrying how deeply-optional
+  Flatten the terminals into their linear order, each carrying how deeply-optional
   it is; one backward scan promotes "trailing optionals that sit before a
   required sibling" to required (that's the clever bit of the old second pass,
   now about four lines because the flattening already did the structural work);
@@ -349,7 +357,7 @@ functions:
   become option rules; every configuration error is gathered in one pass.
 
 And `argument_grouping.py` / `pgi` (the v1 "parameter grouper iterator")?  It's
-not thrown away--it's **retired as the oracle.**  During the transition we run
+not thrown away--it's **retired as the interpreter.**  During the transition we run
 *both* the old grouper and the new `compute_groups` over thousands of random
 signatures and diff them (§9).  My most-worried-about module ends its life as
 the instrument that certifies its own replacement.  I finally find out
@@ -401,7 +409,7 @@ There are two honest ways to run the plan tree, and I want both, in sequence:
   directly.  A few hundred lines.  Simple, obviously-correct, `pdb`-friendly.
 * **Rung 3: emit Python source and `exec` it.**  The compiler *writes* a
   Python function per rule--`def parse_frobnicate(stream): a = yield from
-  stream.leaf(SLOT_a); b = yield from parse_color(stream); ...`--and `exec`s it
+  stream.terminal(SLOT_a); b = yield from parse_color(stream); ...`--and `exec`s it
   into a real function object.  This is exactly the Jinja2 / Tidy move: compile
   the description into standalone Python.
 
@@ -417,7 +425,7 @@ Python that any reader already understands.  Register the generated source in
 `linecache` (another Jinja trick) and tracebacks and `pdb` step through the
 generated lines.
 
-The plan: **build rung 1 first, as the reference implementation and the oracle;
+The plan: **build rung 1 first, as the reference implementation and the interpreter;
 then emit rung 3 from the same plan tree, and fuzz rung 3 against rung 1
 forever.**  Jinja did essentially this--its compiler was built against semantics
 already pinned down by an earlier interpreting version.
@@ -499,8 +507,8 @@ Implementation notes an implementer needs:
   and unions have no natural signature spelling worth the machinery.  A
   dumber implementer should *not* helpfully add it.
 
-The same tree also gives you a REPL (`app.repl()`: readline + `shlex.split`
-+ the same parser + the same completion engine--an interactive mode for
+The same tree also gives you a REPL (`app.repl()`: readline + `shlex.split` +
+the same parser + the same completion engine--an interactive mode for
 every Appeal program, maybe fifty lines; see §8.9) almost for free.  One set
 of Python functions becomes a CLI, an agent toolset, a config reader, and an
 importable library, with no repetition.  Nobody else can offer that, because
@@ -804,6 +812,98 @@ Rendering rules that must be nailed down in code, not discovered:
   rendering pipeline must not receive pre-styled text.
 
 
+#### 8.7.1: Rulings (2026/07/07, design review)
+
+The design above was reviewed end to end and the undercooked areas
+ruled.  Where the rulings amend the text above, the rulings win.
+
+**The docstring is input, never output.**  It is *harvested*: section
+headings and their entries are slurped out, and all remaining prose
+coalesces into one blob, in source order.  The output's structure
+belongs entirely to the templates; input shape and output shape often
+rhyme, but that's coincidence of defaults, not plumbing.
+
+**The docstring grammar.**  A section heading is a line that is
+exactly `Arguments:`, `Options:`, `Commands:`, or `Subcommands:`
+(the last two are machine-identical; `Commands:` reads right on a
+global command, `Subcommands:` on a command with subcommands).
+`Sub-commands:` is detected and raised at the user.  A section runs
+from its heading to the first blank line; entries are `name: text`
+lines indented under the heading, deeper-indented lines continue an
+entry.  Entry text is kept as dedented *lines*, kid gloves, never
+flattened--code lines and paragraphs in a parameter's documentation
+survive (the text trio was written years ago in anticipation of this
+moment).  One section per heading kind per docstring; a duplicate is
+an error.  Everything else is prose.  Bare top-level `name: text`
+lines are NOT entries--without a heading they're just prose, which
+retires the plan-resolution heuristic entirely.  Restrictive now,
+relaxable later: the other direction is way harder.
+
+**Strictness.**  An entry naming nothing in the plan is a
+`ConfigurationError` naming the entry and the callable.  The heading
+must match the parameter's kind: `Arguments:` covers operands
+*including* keyword-only-no-default parameters (they're trailing
+operands); `Options:` means keyword-only with a default; a mismatch
+is a `ConfigurationError`.  An entry naming an *invisible* parameter
+--an internal node of the grammar, like `b: my_converter`--is a
+`ConfigurationError` shaped like "'b' is not one of the visible
+command-line arguments of 'recurse2'": only terminals, options, and
+command words have rows.
+
+**Merge-up: only entries merge.**  A converter's prose stays home;
+its summary stays home too (no summary-fallback: an undocumented
+parameter renders with an empty description--and the fallback's
+best case died with the observation that internal nodes have no
+rows, while its option case would inherit `int.__doc__`).  Nearest
+enclosing scope wins, silently: overriding docs inherited from your
+kids is the feature.  Options parallel arguments--same tech,
+different data.
+
+**Templates.**  One *master template* declares the page and the
+order:
+
+    {summary}
+
+    {usage}
+
+    {documentation}
+
+    {arguments}
+
+    {options}
+
+`{documentation}` is the coalesced prose blob.  Arguments before
+options in the shipped default.  Absent sections substitute as empty
+strings; a template line containing at least one placeholder, ALL of
+whose placeholders rendered empty, is dropped; runs of three-plus
+newlines collapse to two; the final render is `.rstrip() + '\n'`.
+(A dispatcher's command-list page is a second master template with
+`{commands}`.)  Section templates keep the two-pair form, amended:
+a pair may share a line (the definition-list form--the literal text
+between the placeholders is the spacer, the text before `{argument}`
+is the indent, and layout is delegated to
+`big.format_definition_list`) or sit on adjacent lines (the hanging
+form).  Literal lines before the first pair are the section's
+heading, so an empty section takes its heading with it by
+construction.  The parser stays partition-and-check at both levels;
+big.template stays out of this round (the section template is a
+structural parse, not a substitution--Formatter is the wrong tool,
+and TOOWTDI keeps the page template on the same parser).
+
+**No pluggable processors this release.**  The harvest/merge/render
+pipeline is internal machinery; templates are the entire
+customization surface.  The do-almost-nothing behavior is emergent:
+a heading-free docstring harvests no entries and renders as prose.
+
+**Emission.**  The compiled standalone script is *compiled*, and
+that means both the annotation tree and the documentation: harvest
+and merge run at build time, and the script ships the predigested
+corpus and the templates as literals, ready to format at runtime
+(colorization repaints at the script's own runtime, per the
+completion/colorization rulings).  The renderer rides the warehouse;
+the harvester and merger never leave home.
+
+
 ### 8.8: Colorization
 
 Table stakes since argparse grew it in the 3.14 stdlib.  The design:
@@ -897,7 +997,7 @@ The plan:
    tests the obscure interleavings (optional groups inside `*args` inside
    options) that no hand-written suite covers.  It's the safety net for getting
    from v1 to v2 without silent drift.
-3. **Use pgi as an oracle** during the grouping rewrite (§6), then delete
+3. **Use pgi as an interpreter** during the grouping rewrite (§6), then delete
    `argument_grouping.py` once the diff has been empty longer than my patience.
 
 
@@ -969,7 +1069,7 @@ Adoption depends on it, so it's scoped work, not an afterthought:
 
 * Replace Charm with plan tree + generator-based recursive-descent parser.
 * Rung 3 (emit-and-`exec` Python) is the production parser; rung 1 is the
-  reference oracle.
+  reference interpreter.
 * Support builtin generics (`list[int]`, `dict`, `tuple`) as *additional*
   annotation spellings; the only blessed `typing` import is `Annotated`; ship
   a `.pyi` stub so `@app.command()` doesn't erase signatures under mypy strict.
@@ -1059,3 +1159,100 @@ Argument Clinic did it for C.  Appeal does it for the command-line.  Tidy does
 it for text templates.  Appeal v2 is that instinct applied to Appeal itself:
 stop *interpreting* the description, and *compile* it--because Python already
 handed us the description, parsed, for free.
+
+
+---
+
+
+## Addendum (2026-07-05): what the implementation actually did
+
+*Written after the fact, because the code quietly declined part of
+this proposal and nobody wrote that down.  Larry read the proposal
+on a plane, then the implementation, and reasonably couldn't
+reconcile them.  This section is the missing bridge.*
+
+### The coroutine (§4, §7) was not built
+
+The proposal's rung 1 was a suspending tree-walker: a generator
+that pauses with `yield NeedArgument(slot)`, a driver that owns
+argv and feeds tokens back one at a time, and option scopes pushed
+and popped as the walk enters and leaves rules.
+
+None of that exists in the implementation.  There is no
+`NeedArgument`, no driver, no generator anywhere in the parse
+path.  It wasn't renamed; it dissolved--and the dissolving had a
+specific cause:
+
+**The distribution rule that won needs the total operand count
+before the first decision.**  §3.1's counting decision matured,
+during implementation, into leftmost-maximal-*completable*: each
+slot takes the most operands it can, subject to "what remains must
+be a total the later slots can still consume."  Answering that
+requires knowing `n`--which means tokenizing ALL of argv before
+filling any slot.  And once a single up-front pass
+(`parse_tokens`) has split argv into operands and options, the
+walker has nothing to suspend for.  `yield NeedArgument(slot)`
+became `operands[i]`.  The driver became `parse_tokens`.  The
+suspension machinery, having no remaining job, evaporated.
+
+So the shipped shape is **two passes over flat data**, not one
+pass over a stream:
+
+    parse_tokens:  argv -> (operands, given)     token syntax only
+    fill:          operands x plan tables -> your function's args
+
+Rung 1 (the tree-walking reference implementation) walks and
+indexes; rung 3 emits straight-line Python (`if remaining - 2 in
+(0, 2):`), not generators.  The "generated source is the
+disassembly" promise survived intact--arguably improved, since
+plain code beats generator code for readability--and the fuzz-
+rung-3-against-rung-1-forever plan survived verbatim.
+
+### The fossils this left, and the resurrection plan
+
+The departure wasn't free; its consequences shaped the semantics,
+and then Larry ruled on them:
+
+* The driver's *option scopes* (push on enter, pop on leave)
+  became flat recognition--every option in the tree recognized
+  anywhere on the line.  When this surfaced as a semantic
+  question, Larry ruled it the DESIRED behavior ("easy breezy";
+  see appeal.v2.grammar.md, Options), with two riders: the gate
+  rule (a required group walls off later options until fed) and
+  windows (position binds occurrences to instances under *args
+  repetition).
+* A family of features was deferred under the label "the
+  streaming driver": sibling-converter windows, greedy
+  option-group operands, fancier Option.option() signatures.
+  That label is no accident--**"the streaming driver" IS this
+  proposal's §7 coroutine**, waiting in exile.  Each deferred
+  feature is one that genuinely wants token-at-a-time consumption
+  with live scopes.  If those features ever matter enough, the
+  coroutine comes back as a THIRD consumer of the same plan tree,
+  alongside the two rungs--not as a rewrite of them.
+
+### Naming drift (under review)
+
+* "The interpreter" (rung 1's module) took its name from this
+  proposal's phrase "the reference implementation and the
+  interpreter."  Larry's critique, which stands: that names the
+  module's role in a testing activity, not its nature.  Its
+  nature is: it interprets the plan tree.  Rename pending.
+* `NeedArgument` never existed in code.  The nearest object in
+  the implementation is `Terminal`--the passive tree marker meaning
+  "this slot consumes one string"--which is a noun because the
+  tree never acts; the consumers do.  Rename (possibly to
+  `Terminal`, the grammar-theory word the spec already uses)
+  also pending.
+
+### What did survive, scorecard
+
+    plan tree as inert data          built as proposed
+    control flow is not data         built as proposed
+    rung 1 / rung 3, fuzzed forever  built as proposed
+    generated source = disassembly   built as proposed (plain code)
+    linecache registration           built as proposed
+    the coroutine walker             NOT built; see above
+    token-at-a-time driver           NOT built; became parse_tokens
+    option scopes push/pop           NOT built; ruled away (gates+windows instead)
+    rung 2 (closures)                skipped, as proposed

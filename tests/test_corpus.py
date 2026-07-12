@@ -58,7 +58,7 @@ def main():
     exec(compile(source, corpus_path, 'exec'), namespace)
 
     loader = unittest.TestLoader()
-    total = passed = 0
+    total = passed = skipped = 0
     regressions = []
     surprises = []
     for name in sorted(namespace):
@@ -78,12 +78,17 @@ def main():
         total += count
         failed = {case.id().split('.', 1)[-1]
                   for case, _ in result.failures + result.errors}
-        passed += count - len(failed)
+        # a skip is not a pass: it's a deferred feature's tombstone,
+        # and it gets counted out loud (the make -j lesson: skips
+        # hidden inside "270/270 passing" are a queue nobody reads)
+        skipped += len(result.skipped)
+        passed += count - len(failed) - len(result.skipped)
         regressions.extend(sorted(failed - EXPECTED_FAILURES))
         surprises.extend(sorted((ran & EXPECTED_FAILURES) - failed))
 
-    print(f'corpus: {passed}/{total} passing, '
-          f'{len(EXPECTED_FAILURES)} expected failures')
+    print(f'corpus: {passed}/{total} passing, {skipped} skipped '
+          f'(deferred features--see @unittest.skip labels in '
+          f'test_v1.py), {len(EXPECTED_FAILURES)} expected failures')
     ok = True
     if regressions:
         ok = False

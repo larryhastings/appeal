@@ -28,15 +28,24 @@ dynamic = [
     'description',
     ]
 dependencies = [
-    "big >= 0.13",
+    # only consulted at emission time (big.snip carves the
+    # runtime snippets); parsing in-process never imports it,
+    # and emitted scripts need neither big nor appeal
+    "big >= 0.14",
 ]
 
 [project.urls]
 Source = "https://github.com/larryhastings/appeal/"
 
 [project.optional-dependencies]
-dev = ['perky', 'tomli']
+# the name CI installs: pip install '.[test]'
+test = ['perky', 'tomli']
 
 [tool.coverage.run]
 source = ["appeal"]
+omit = [
+    # v1 keepsake, not part of v2: argument_grouping is the
+    # grouping reference implementation (kept on purpose)
+    "appeal/argument_grouping.py",
+]
 

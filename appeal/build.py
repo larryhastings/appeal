@@ -10,16 +10,19 @@
 #
 # Recursion: a positional parameter annotated with a non-blessed
 # callable becomes a *nonterminal*--its converter's own signature
-# is built into a child Plan.  Child plans are positional-only for
-# now: options, *args, and trailing operands inside converters
-# await the streaming driver (see the grammar's status table).
+# is built into a child Plan, full grammar: options, *args (an
+# absorbing subtree), and trailing arguments (the uniform
+# end-reservation rule) all work at depth.
 
 import inspect
 
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
-from .runtime import AppealConfigurationError, MultiOption, Option
+from .runtime import (
+    AppealConfigurationError, Option, is_multioption, is_option,
+    )
 
 
+# --8<-- start appeal build --8<--
 # terminal converters: called with one operand string, never introspected
 _blessed_leaves = {str, int, float, bool}
 
@@ -63,11 +66,13 @@ def _is_option_group(annotation):
     if not callable(annotation) or isinstance(annotation, type):
         return False
     if annotation in _blessed_leaves:
-        return False
+        return False   # pragma: no cover -- the blessed leaves are all
+                       # types, and types bailed at the isinstance check
     if getattr(annotation, '__origin__', None) is not None:
         return False
     if hasattr(annotation, '__appeal_factory__'):
-        return False
+        return False   # pragma: no cover -- _refuse_bare_factory fires
+                       # before the only caller reaches this predicate
     try:
         signature = inspect.signature(annotation)
     except (ValueError, TypeError):
@@ -101,8 +106,9 @@ def _is_multiparam_converter(annotation):
         return False
     if getattr(annotation, '__origin__', None) is not None:
         return False
-    if isinstance(annotation, type) and issubclass(annotation, Option):
-        return False
+    if is_option(annotation):
+        return False   # pragma: no cover -- Option classes take the fold
+                       # branch before the only caller asks about arity
     return _positional_arity(annotation) > 1
 
 
@@ -110,7 +116,9 @@ def _accepts_no_arguments(fn):
     "Callable with no parameters at all (a value-producing flag)?"
     try:
         signature = inspect.signature(fn)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError):   # pragma: no cover -- only called
+        # when _positional_arity() == 0, and uninspectable callables
+        # report arity 1
         return False
     return not signature.parameters
 
@@ -175,11 +183,100 @@ def _leaf_callable(annotation, context):
     return annotation
 
 
-def build(callable, name=None):
+def _validate_completions(plan):
+    """
+    Build-time validation of the completion protocol: a converter's
+    `completions` attribute, if present, must be a callable
+    accepting one positional argument (the prefix).  The tuple
+    return type is checked at query time--it can't be checked
+    before the call--but the signature is structure, and structure
+    bugs fail loudly, here.
+    """
+    def check(converter):
+        completions = getattr(converter, 'completions', None)
+        if completions is None:
+            return
+        where = getattr(converter, '__name__', repr(converter))
+        if not callable(completions):
+            raise AppealConfigurationError(
+                f"{where}.completions must be callable "
+                f"(a (prefix) -> tuple of str), not "
+                f"{completions!r}")
+        try:
+            inspect.signature(completions).bind('')
+        except TypeError:
+            raise AppealConfigurationError(
+                f"{where}.completions must accept one positional "
+                f"argument (the prefix)") from None
+
+    def terminal_count(p):
+        n = 0
+        for s in p.slots:
+            n += 1 if isinstance(s.child, Terminal) else terminal_count(s.child)
+        return n
+
+    def walk(p):
+        check(p.callable)
+        if (getattr(p.callable, 'completions', None) is not None
+                and terminal_count(p) != 1):
+            where = getattr(p.callable, '__name__', repr(p.callable))
+            raise AppealConfigurationError(
+                f"{where}.completions: {where!r} consumes "
+                f"{terminal_count(p)} arguments, so its completions "
+                f"are ambiguous; put completions on the individual "
+                f"converters")
+        for o in p.options:
+            for converter in o.converters:
+                check(converter)
+        for s in p.slots:
+            if isinstance(s.child, Terminal):
+                check(s.child.converter)
+            else:
+                walk(s.child)
+
+    walk(plan)
+
+
+def build(callable, name=None, method_of=None):
     """
     Analyze a callable's signature and produce its Plan.
+
+    method_of compiles a function found in a class body as a
+    method command: the first parameter (self) is supplied by the
+    execution environment, not the command line--the plan binds to
+    the instance stashed under that key.  A class analyzes as its
+    constructor (inspect.signature skips self; __new__ works the
+    ordinary Python way, because calling the class is all we do)
+    and its plan constructs: execution stashes the instance.
     """
-    return _build(callable, name, memo={}, stack=(), top=True)
+    wrapped_class = isinstance(getattr(callable, '__wrapped__', None),
+                               type)
+    grammar = callable
+    if (method_of is not None and wrapped_class
+            and hasattr(callable, '__get__')):
+        # a wrapped nested class (e.g. big's BoundInnerClass): at
+        # runtime it is constructed via attribute access on the
+        # parent instance, so the grammar is whatever that
+        # attribute accepts--ask the descriptor with a throwaway
+        # instance.  (Appeal doesn't know the wrapper; the
+        # descriptor protocol answers for it.)
+        class _Probe:
+            pass
+        try:
+            grammar = callable.__get__(_Probe(), _Probe)
+        except Exception:
+            grammar = callable
+    plan = _build(grammar, name or getattr(callable, '__name__', None),
+                  memo={}, stack=(), top=True,
+                  skip_first=method_of is not None
+                  and not isinstance(callable, type)
+                  and not wrapped_class)
+    if isinstance(callable, type) or wrapped_class:
+        plan.constructs = callable.__qualname__
+    if method_of is not None:
+        plan.binds = method_of
+    _validate_completions(plan)
+    return plan
 
 
 def _child_for(parameter, memo, stack):
@@ -213,14 +310,9 @@ def _child_for(parameter, memo, stack):
         # a vocabulary product (validate(...), split(...)): a terminal,
         # so its ValueError becomes a polite UsageError via convert()
         return Terminal(annotation)
-    if isinstance(annotation, type) and issubclass(annotation, Option):
-        converters = _fold_converters(
+    if is_option(annotation):
+        converters, _ = _fold_converters(
             annotation, f"parameter {parameter.name!r}")
-        if len(converters) > 2:
-            raise AppealConfigurationError(
-                f"parameter {parameter.name!r}: {annotation.__name__} "
-                f"takes multiple parameters per occurrence; a positional "
-                f"Option class must take one individual object")
         return Terminal(_fold_leaf(annotation, converters))
     if getattr(annotation, '__origin__', None) is tuple:
         return _tuple_plan(annotation, parameter.name, memo, stack)
@@ -239,52 +331,71 @@ def _child_for(parameter, memo, stack):
         signature = inspect.signature(annotation)
     except (ValueError, TypeError):
         return Terminal(annotation)
-    kinds = {p.kind for p in signature.parameters.values()}
-    if (inspect.Parameter.VAR_POSITIONAL in kinds
-            or inspect.Parameter.VAR_KEYWORD in kinds):
-        # *args/**kwargs converters consume one operand, like v1's
-        # simple converters; multi-operand var-consumption inside
-        # converters awaits the streaming driver
-        return Terminal(annotation)
-    return _build(annotation, None, memo, stack, top=False)
+    # a *args converter is an ABSORBING nonterminal: it consumes
+    # greedily, to what the slots after it don't need.  (v1,
+    # probed: pair(a, *rest) fed the whole remaining line--an
+    # earlier comment here claimed v1 read these as one-operand
+    # terminals; it doesn't.)
+    return _build(annotation, None, memo, stack, top=False,
+                  allow_trailing=True)
 
 
-def _operand_converters(callable, context, what, skip_self=False):
+def _operand_converters(callable, context, what, skip_self=False,
+                        allow_defaults=False):
     """
     The per-occurrence operand converters of a callable used as an
-    option's grammar: one terminal per parameter, per its annotation.
-    Staged: every parameter must be a required terminal.
+    option's grammar: one terminal per parameter, per its
+    annotation.  Returns (converters, minimum): with
+    allow_defaults, trailing parameters may have defaults--those
+    operands are optional, consumed greedily when tokens remain
+    (v1)--and minimum counts the required ones.
     """
     parameters = list(inspect.signature(callable).parameters.values())
     if skip_self:
         parameters = parameters[1:]
     converters = []
+    minimum = 0
     for parameter in parameters:
         if parameter.kind not in (inspect.Parameter.POSITIONAL_ONLY,
                                   inspect.Parameter.POSITIONAL_OR_KEYWORD):
             raise AppealConfigurationError(
                 f"{context}: {what} parameter {parameter.name!r} must be "
                 f"positional (fancier signatures await the streaming driver)")
-        if parameter.default is not inspect.Parameter.empty:
+        if parameter.default is inspect.Parameter.empty:
+            minimum += 1
+        elif not allow_defaults:
             raise AppealConfigurationError(
                 f"{context}: {what} parameter {parameter.name!r} can't have "
-                f"a default (fancier signatures await the streaming driver)")
+                f"a default here")
         annotation = parameter.annotation
         if annotation is inspect.Parameter.empty:
             annotation = str
+        annotation = dereference_annotated(annotation)
+        if is_option(annotation):
+            # a nested fold: mapping readers hand it sequences
+            inner, _ = _fold_converters(annotation, context)
+            converters.append(_fold_leaf(annotation, inner))
+            continue
         converters.append(_leaf_callable(annotation, context))
-    return tuple(converters)
+    return tuple(converters), minimum
 
 
 def _fold_leaf(cls, converters):
     """
     A positional Option/MultiOption: as a terminal converter it folds
-    one occurrence from the command line; mapping readers hand it
-    a whole sequence of occurrences (v1's corpus).
+    one occurrence from the command line; mapping readers hand it a
+    whole sequence of occurrences (v1's corpus)--each a sequence in
+    option()'s parameter order, or a mapping keyed by its parameter
+    names.  Only mapping readers can supply multi-parameter
+    occurrences (one command-line token can't); a token that
+    reaches one fails loudly.
     """
-    element = converters[1] if len(converters) > 1 else None
+    elements = converters[1:]
+    parameters = [p for p in
+                  inspect.signature(cls.option).parameters][1:]
 
     def fold_positional(value):
+        from collections.abc import Mapping as _Mapping
         if isinstance(value, (list, tuple)):
             occurrences = list(value)
         else:
@@ -292,22 +403,43 @@ def _fold_leaf(cls, converters):
         instance = cls()
         instance.init(None)
         for occurrence in occurrences:
-            if element is None:
+            if not elements:
                 instance.option()
+                continue
+            if isinstance(occurrence, _Mapping):
+                try:
+                    row = [occurrence[name] for name in parameters]
+                except KeyError as e:
+                    raise ValueError(
+                        f"{cls.__name__} occurrence is missing "
+                        f"{e.args[0]!r}") from None
+            elif len(elements) == 1:
+                row = [occurrence]
             else:
-                instance.option(element(occurrence))
+                row = list(occurrence) if isinstance(
+                    occurrence, (list, tuple)) else None
+                if row is None or len(row) != len(elements):
+                    raise ValueError(
+                        f"each {cls.__name__} occurrence takes "
+                        f"{len(elements)} values")
+            instance.option(*[convert(v) for convert, v
+                              in zip(elements, row)])
         return instance.render()
     fold_positional.__name__ = cls.__name__
     return fold_positional
 
 
-def _fold_converters(cls, context):
+def _fold_converters(cls, context, allow_defaults=False):
     """
     An Option/MultiOption subclass: its option() method's signature
-    defines the option's per-occurrence operands.
+    defines the option's per-occurrence operands.  Returns
+    (converters, minimum): the class plus one converter per
+    parameter, and how many of those parameters are required.
     """
-    return (cls,) + _operand_converters(
-        cls.option, context, f'{cls.__name__}.option()', skip_self=True)
+    converters, minimum = _operand_converters(
+        cls.option, context, f'{cls.__name__}.option()', skip_self=True,
+        allow_defaults=allow_defaults)
+    return (cls,) + converters, minimum
 
 
 def _is_repeat_group(annotation):
@@ -345,7 +477,7 @@ def _repeat_group_plan(annotation, context, memo, stack):
             raise AppealConfigurationError(
                 f"{context}: optional parameter {slot.name!r} in a *args "
                 f"converter group awaits the streaming driver (each "
-                f"instance's operand count must be fixed)")
+                f"instance's argument count must be fixed)")
         if not isinstance(slot.child, Terminal):
             raise AppealConfigurationError(
                 f"{context}: converter {slot.child.name!r} on {slot.name!r} "
@@ -353,7 +485,7 @@ def _repeat_group_plan(annotation, context, memo, stack):
     if plan.minimum < 1:
         raise AppealConfigurationError(
             f"{context}: a *args converter group must consume at least "
-            f"one operand per instance")
+            f"one argument per instance")
     plan.windowed = True
     return plan
 
@@ -432,12 +564,16 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
         rule.usage_name = metavar
         return rule
 
-    if isinstance(annotation, type) and issubclass(annotation, Option):
-        return finish(OptionRule(
+    if is_option(annotation):
+        converters, fold_minimum = _fold_converters(
+            annotation, context, allow_defaults=True)
+        rule = OptionRule(
             strings, name,
-            kind='fold' if issubclass(annotation, MultiOption) else 'fold1',
-            converters=_fold_converters(annotation, context),
-            default=default))
+            kind='fold' if is_multioption(annotation) else 'fold1',
+            converters=converters,
+            default=default)
+        rule.fold_minimum = fold_minimum
+        return finish(rule)
 
     if (annotation is bool) or (
             annotation is inspect.Parameter.empty
@@ -526,11 +662,12 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
         return finish(rule)
     elif _is_multiparam_converter(annotation):
         # a converter with several parameters consumes several
-        # operands (v1, probed): --where X Y
-        converters = ((annotation,)
-                      + _operand_converters(
-                            annotation, context,
-                            f'{getattr(annotation, "__name__", "converter")}()'))
+        # operands (v1, probed): --where X Y.  All required--a
+        # parameter with a default makes the converter a group.
+        operand_converters, _ = _operand_converters(
+            annotation, context,
+            f'{getattr(annotation, "__name__", "converter")}()')
+        converters = (annotation,) + operand_converters
     else:
         converters = (_leaf_callable(annotation, context),)
     return finish(OptionRule(
@@ -611,7 +748,8 @@ def add_option_override(callable, parameter_name, strings,
         declarations.append(declaration)
 
 
-def _build(callable, name, memo, stack, top):
+def _build(callable, name, memo, stack, top, skip_first=False,
+           allow_trailing=None):
     if callable in stack:
         cycle = ' -> '.join(getattr(c, '__name__', repr(c)) for c in stack)
         raise AppealConfigurationError(
@@ -626,6 +764,8 @@ def _build(callable, name, memo, stack, top):
         if not name:
             raise AppealConfigurationError(f"can't determine a name for {callable!r}")
 
+    if allow_trailing is None:
+        allow_trailing = top
     signature = inspect.signature(callable)
     stack = stack + (callable,)
     overrides = dict(getattr(callable, OPTION_OVERRIDES_ATTRIBUTE, None) or {})
@@ -637,7 +777,11 @@ def _build(callable, name, memo, stack, top):
     seen_defaulted_kwonly = False
     has_kwargs = False
 
-    for parameter in signature.parameters.values():
+    parameters = list(signature.parameters.values())
+    if skip_first:
+        # a method command: self comes from the environment
+        parameters = parameters[1:]
+    for parameter in parameters:
         kind = parameter.kind
         has_default = parameter.default is not inspect.Parameter.empty
 
@@ -653,21 +797,23 @@ def _build(callable, name, memo, stack, top):
             continue
 
         if kind is inspect.Parameter.VAR_POSITIONAL:
-            if not top:
-                raise AppealConfigurationError(
-                    f"converter {name!r}: *{parameter.name} inside a converter "
-                    f"is not yet in the grammar")
             annotation = parameter.annotation
             context = f"parameter *{parameter.name}"
             if annotation is inspect.Parameter.empty:
                 child = Terminal(str)
             else:
                 annotation = dereference_annotated(annotation)
-                if isinstance(annotation, type) and issubclass(annotation, Option):
+                if is_option(annotation):
                     raise AppealConfigurationError(
                         f"{context}: {annotation.__name__} is an Option "
                         f"class; those are only meaningful on options")
                 if _is_repeat_group(annotation):
+                    if not top:
+                        raise AppealConfigurationError(
+                            f"converter {name!r}: {context} takes a "
+                            f"multi-parameter converter; windowed "
+                            f"groups on *args inside a converter "
+                            f"aren't in the grammar yet")
                     child = _repeat_group_plan(annotation, context, memo, stack)
                 else:
                     child = Terminal(_leaf_callable(annotation, context))
@@ -682,17 +828,20 @@ def _build(callable, name, memo, stack, top):
             continue
 
         if kind is inspect.Parameter.KEYWORD_ONLY:
-            if not has_default and not top:
+            if not has_default and not allow_trailing:
                 raise AppealConfigurationError(
-                    f"converter {name!r}: trailing operand {parameter.name!r} "
-                    f"inside a converter is not yet in the grammar")
+                    f"converter {name!r}: trailing argument "
+                    f"{parameter.name!r} isn't in the grammar here--"
+                    f"only positional converters may carry trailing "
+                    f"arguments (an option's arguments are consumed "
+                    f"inline; there's no end to reserve from)")
             if not has_default:
                 # keyword-only with no default: a *required trailing
                 # operand* (the `cp SRC... DST` shape).  Must precede
                 # any defaulted keyword-only parameter.
                 if seen_defaulted_kwonly:
                     raise AppealConfigurationError(
-                        f"parameter {parameter.name!r}: required trailing operands "
+                        f"parameter {parameter.name!r}: required trailing arguments "
                         f"(keyword-only, no default) must come before all options "
                         f"(keyword-only with defaults)")
                 annotation = parameter.annotation
@@ -772,8 +921,9 @@ def _build(callable, name, memo, stack, top):
         leftover = ', '.join(repr(n) for n in overrides)
         raise AppealConfigurationError(
             f"{name!r}: @option names parameter(s) {leftover}, which "
-            f"aren't keyword-only-with-default parameters of {name!r} "
-            f"(options via **kwargs aren't in the grammar yet)")
+            f"aren't keyword-only-with-default parameters of {name!r}--"
+            f"and there's no **kwargs to deliver them into (v1's rule: "
+            f"such options need a **kwargs to land in)")
 
     slots = slots + trailing_slots
     plan = Plan(callable, name, slots, options, 0, 0, None)
@@ -868,34 +1018,96 @@ def _mark_barriers(plan, certain):
     return any_barriers
 
 
+def _count_sites(plan):
+    """
+    How many times each plan instantiates in the tree--a converter
+    reused across sibling slots is one Plan object with several
+    sites, and each site is a window for its options.  (Cycles
+    can't happen; build refuses them.)
+    """
+    sites = {}
+    def walk(p, count):
+        sites[id(p)] = sites.get(id(p), 0) + count
+        for option in p.options:
+            if option.child is not None:
+                walk(option.child, count)
+        for slot in p.slots:
+            if not isinstance(slot.child, Terminal):
+                walk(slot.child, count)
+    walk(plan, 1)
+    return sites
+
+
 def _finalize_options(plan):
     """
-    The whole-command view of the options: option strings must be
-    globally unique (per-scope shadowing awaits the streaming
-    driver), and each option gets a short string--its parameter's
-    first letter--if that letter is still free.  First declared,
-    first served (walk order: a rule's own options, then its
-    children's, depth-first).
+    The whole-command view of the options.  A string declared by
+    several windows is *scoped*: legal when every declaration
+    agrees on the grammar (kind and oparg counts--the consumption
+    must be binding-independent; defaults, converters, and
+    docstrings may differ per window), and occurrences bind by
+    position.  A string declared twice in ONE window is refused
+    (no position can distinguish them), as is a grammar mismatch.
+    Each option gets a short string--its parameter's first
+    letter--if that letter is still free.  First declared, first
+    served (walk order: a rule's own options, then its children's,
+    depth-first).
     """
-    taken = set()
+    sites = _count_sites(plan)
     pairs = all_options(plan)
+    declared = {}     # string -> [(owner, option)]
     for owner, option in pairs:
         for s in option.strings:
-            if s in taken:
-                raise AppealConfigurationError(
-                    f"option {s!r} (parameter {option.name!r} of "
-                    f"{owner.name!r}) is already defined; option strings "
-                    f"must be unique across a command until scoped "
-                    f"options land")
-            taken.add(s)
+            declared.setdefault(s, []).append((owner, option))
+    scoped = set()
+    for s, entries in declared.items():
+        owners = [id(owner) for owner, _ in entries]
+        if len(set(owners)) != len(owners):
+            raise AppealConfigurationError(
+                f"option {s!r} is declared twice by one converter; "
+                f"no position can tell the declarations apart")
+        windowed = [owner for owner, _ in entries
+                    if getattr(owner, 'windowed', False)]
+        total = sum(sites[id(owner)] for owner, _ in entries
+                    if not getattr(owner, 'windowed', False))
+        if windowed and (total or len(entries) > 1):
+            raise AppealConfigurationError(
+                f"option {s!r} is declared both by a *args group "
+                f"and elsewhere; that mix isn't in the grammar yet")
+        if total <= 1:
+            continue
+        # scoped: every declaration must agree on the grammar
+        grammars = {(o.table_entry()[1],) + tuple(o.table_entry()[2:])
+                    for _, o in entries}
+        if len(grammars) > 1:
+            names = ' and '.join(sorted(
+                repr(owner.name) for owner, _ in entries))
+            raise AppealConfigurationError(
+                f"option {s!r} is declared with different grammars "
+                f"by {names}; scoped options with differing "
+                f"grammars aren't in the grammar yet (the parser "
+                f"couldn't know how many arguments to consume "
+                f"before knowing which window wins)")
+        scoped.add(s)
+    plan.scoped_keys = frozenset(scoped)
+    taken = set(declared)
+    seen_rules = set()
     for owner, option in pairs:
         if getattr(option, 'explicit', False):
             # @app.option strings are the whole story
             continue
+        if id(option) in seen_rules:
+            # a shared rule revisited (all_options dedupes plans,
+            # but belt and braces)
+            continue   # pragma: no cover
+        seen_rules.add(id(option))
         short = '-' + option.name[0]
         if short not in taken:
             taken.add(short)
             option.strings = (short,) + option.strings
+            if option.strings[-1] in scoped:
+                # the short rides its long's scopedness
+                scoped.add(short)
+                plan.scoped_keys = frozenset(scoped)
     for owner, option in pairs:
         if not option.strings:
             raise AppealConfigurationError(
@@ -918,6 +1130,9 @@ def _analyze(plan):
     """
     non_trailing = [s for s in plan.slots if not s.trailing]
     n_trailing = sum(1 for s in plan.slots if s.trailing)
+    plan.tree_trailing = n_trailing + sum(
+        s.child.tree_trailing for s in non_trailing
+        if not isinstance(s.child, Terminal))
 
     for slot in non_trailing:
         if slot.repeat:
@@ -925,8 +1140,18 @@ def _analyze(plan):
             continue
         if isinstance(slot.child, Terminal):
             counts = (1,) if slot.required else (1, 0)
+        elif slot.child.valid_counts is None:
+            # an absorbing slot: its converter contains *args, so
+            # it consumes unboundedly--like a repeat slot, it takes
+            # what the slots after it don't need (v1 refused these
+            # shapes; v2's completable distribution reads them)
+            slot.count_options = None
+            continue
         else:
-            child_counts = set(slot.child.valid_counts)
+            # distribution runs in body space: a child subtree's
+            # trailing arguments come from the end of the whole
+            # command's stream, not from this window
+            child_counts = set(slot.child.body_valid_counts)
             if not slot.required:
                 child_counts.add(0)
             counts = tuple(sorted(child_counts, reverse=True))
@@ -939,6 +1164,11 @@ def _analyze(plan):
         counts, minimum = suffix
         if slot.repeat:
             suffix = (None, minimum)
+        elif slot.count_options is None:
+            # absorbing: unbounded above its child's minimum (0 if
+            # the slot is skippable)
+            floor = 0 if not slot.required else slot.child.body_minimum
+            suffix = (None, minimum + floor)
         elif counts is None:
             suffix = (None, minimum + min(slot.count_options))
         else:
@@ -948,11 +1178,14 @@ def _analyze(plan):
                 )
 
     whole_counts, whole_minimum = suffix
-    plan.minimum = whole_minimum + n_trailing
+    # the stream footprint: body plus every trailing argument in
+    # the subtree (they all come from the end of the stream)
+    plan.minimum = whole_minimum + plan.tree_trailing
     if whole_counts is None:
         plan.maximum = None
         plan.valid_counts = None
     else:
-        shifted = {c + n_trailing for c in whole_counts}
+        shifted = {c + plan.tree_trailing for c in whole_counts}
         plan.maximum = max(shifted)
         plan.valid_counts = shifted
+# --8<-- end appeal build --8<--

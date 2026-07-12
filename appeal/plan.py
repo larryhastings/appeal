@@ -10,6 +10,7 @@
 # the JSON schema--never here.  Nothing at parse time ever writes to
 # the tree.
 
+# --8<-- start appeal plan classes --8<--
 class Terminal:
     """
     Marker for a terminal slot's converter: consumes one command-line
@@ -101,7 +102,7 @@ class OptionRule:
     default       the value when the option never appears
     """
     __slots__ = ('strings', 'name', 'kind', 'converters', 'default', 'explicit',
-                 'usage_name', 'kwargs_delivered', 'child')
+                 'usage_name', 'kwargs_delivered', 'child', 'fold_minimum')
 
     def __init__(self, strings, name, kind, converters, default):
         self.strings = strings
@@ -114,24 +115,30 @@ class OptionRule:
         self.kwargs_delivered = False   # @app.option into **kwargs:
                                         # omitted from the call when absent
         self.child = None        # kind='group': the converter's Plan
+        self.fold_minimum = None # fold kinds: option()'s required count
 
     def table_entry(self, windowed=False):
         """
-        This option's parse_tokens table value.  Folds carry their
-        per-occurrence operand count; everything else is a pair.
+        This option's parse_tokens table value.  Folds and groups
+        carry their per-occurrence (minimum, maximum) operand
+        counts--consumption is greedy to the maximum (v1: an
+        optional operand takes the next token unconditionally);
+        everything else is a pair or an exact count.
         A windowed option (owned by a *args group) gets a 'w:'-
         prefixed kind and an explicit operand count: occurrences
         are collected with positions and bound to instances later.
         """
         if self.kind == 'nullary':
-            entry = (self.key, 'flag')      # consumes nothing
+            # consumes nothing, like a flag--but refuses '='
+            # (there's no boolean to set; presence IS the value)
+            entry = (self.key, 'nullary')
         elif self.kind == 'group':
-            # consumes the group's minimum operands inline, as one
-            # no-repeat tuple; short-concat (-fjoe) may add one more
-            # when the group has optional operands
-            entry = (self.key, 'group', self.child.minimum)
+            entry = (self.key, 'group',
+                     self.child.minimum, self.child.maximum)
         elif self.kind in ('fold', 'fold1'):
-            entry = (self.key, self.kind, len(self.converters) - 1)
+            n = len(self.converters) - 1
+            m = self.fold_minimum if self.fold_minimum is not None else n
+            entry = (self.key, self.kind, m, n)
         elif self.kind == 'value' and len(self.converters) > 1:
             entry = (self.key, 'value', len(self.converters) - 1)
         else:
@@ -139,8 +146,10 @@ class OptionRule:
         if not windowed:
             return entry
         kind = entry[1]
-        nargs = entry[2] if len(entry) > 2 else (0 if kind == 'flag' else 1)
-        return (entry[0], 'w:' + kind, nargs)
+        if len(entry) > 2:
+            return (entry[0], 'w:' + kind) + tuple(entry[2:])
+        return (entry[0], 'w:' + kind,
+                0 if kind in ('flag', 'nullary') else 1)
 
     @property
     def key(self):
@@ -178,7 +187,8 @@ class Plan:
     """
     __slots__ = ('callable', 'name', 'slots', 'options',
                  'minimum', 'maximum', 'valid_counts', 'windowed', 'gated',
-                 'certain', 'var_keyword')
+                 'certain', 'var_keyword', 'constructs', 'binds',
+                 'tree_trailing', 'scoped_keys')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
@@ -186,6 +196,22 @@ class Plan:
         self.gated = False      # True on the top plan: barriers exist somewhere
         self.certain = True     # False: this group might never be entered
         self.var_keyword = None # the **kwargs parameter's name, if any
+        # class-based commands: the execution environment's keys.
+        # constructs: this command builds an instance--stash it
+        # under this key.  binds: this command reads the instance
+        # under this key (a method's self, or the parent instance a
+        # nested class is constructed from).
+        self.constructs = None
+        self.binds = None
+        # trailing arguments in this whole subtree: they reserve
+        # from the END of the command's argument stream, wherever
+        # they sit in the tree (the uniform end-reservation rule)
+        self.tree_trailing = 0
+        # option strings declared by more than one window (a
+        # converter reused across sibling slots, or two converters
+        # agreeing on the grammar): occurrences record positionally
+        # and bind by stream order.  Set on the top plan.
+        self.scoped_keys = frozenset()
         self.callable = callable
         self.name = name
         self.slots = slots
@@ -208,6 +234,19 @@ class Plan:
         bracket reads left-to-right as something you can type
         (announce-first, truth in advertising).
         """
+        def transparent_name(slot):
+            # the outer slot's name flows through iff the child
+            # consumes exactly one operand AND that terminal wasn't
+            # explicitly renamed (usage_name != name means
+            # @app.parameter or add_parameter_usage spoke; explicit
+            # wins).
+            inner = slot.child.sole_terminal_slot()
+            if inner is None:
+                return None
+            if inner.usage_name != inner.name:
+                return None
+            return slot.usage_name
+
         def option_text(o):
             bits = ['|'.join(o.strings)]
             if o.kind == 'group':
@@ -226,27 +265,79 @@ class Plan:
                         bits.append(f'<{name}>')
             return '[' + ' '.join(bits) + ']'
 
-        def slot_text(slot):
+        def slot_text(slot, rename=None):
             child = slot.child
             if isinstance(child, Terminal):
+                name = rename if rename is not None else slot.usage_name
                 if slot.repeat:
-                    return f'[{slot.usage_name}]...'
+                    return f'[{name}]...'
                 if slot.required:
-                    return slot.usage_name
-                return f'[{slot.usage_name}]'
-            body = body_text(child)
+                    return name
+                return f'[{name}]'
+            # the transparency rule: a converter that consumes
+            # exactly one operand is transparent to naming--the
+            # annotated parameter's name flows through to its
+            # terminal.  (An explicit rename on the inner
+            # parameter still wins.)  Applied at render time:
+            # plans are memoized and shared, so `flavor` used
+            # under two different outer names must render
+            # differently per use.
+            body = body_text(child, rename=transparent_name(slot))
             if slot.repeat:
                 return f'[{body}]...'
             if slot.required:
                 return body
             return f'[{body}]'
 
-        def body_text(plan):
+        def body_text(plan, rename=None):
             bits = [option_text(o) for o in plan.options]
-            bits.extend(slot_text(s) for s in plan.slots)
+            bits.extend(slot_text(s, rename) for s in plan.slots)
             return ' '.join(bits)
 
         return f'{prog or self.name} {body_text(self)}'.rstrip()
+
+    @property
+    def body_minimum(self):
+        "Arity in distribution space: the subtree's trailing excluded."
+        return self.minimum - self.tree_trailing
+
+    @property
+    def body_valid_counts(self):
+        if self.valid_counts is None:
+            return None
+        return {c - self.tree_trailing for c in self.valid_counts}
+
+    def sole_terminal_slot(self):
+        """
+        The transparency rule's eligibility test: if this plan
+        consumes exactly one operand, returns that Terminal's
+        slot; otherwise None.
+        """
+        found = None
+        for s in self.slots:
+            if isinstance(s.child, Terminal):
+                if found is not None:
+                    return None
+                found = s
+            else:
+                inner = s.child.sole_terminal_slot()
+                if inner is None and s.child.count_terminals():
+                    return None
+                if inner is not None:
+                    if found is not None:
+                        return None
+                    found = inner
+        return found
+
+    def count_terminals(self):
+        n = 0
+        for s in self.slots:
+            if isinstance(s.child, Terminal):
+                n += 1
+            else:
+                n += s.child.count_terminals()
+        return n
+# --8<-- end appeal plan classes --8<--
 
 
 def command_set_usage(prog, global_plan):

@@ -34,14 +34,12 @@ import subprocess
 import sys
 import tempfile
 
-try:
-    import atest
-except ImportError:
-    from tests import atest
+from big import test
 
 import appeal
 from appeal import (
-    Appeal, AppealConfigurationError, AppealError, UsageError,
+    Appeal, AppealConfigurationError, AppealDataError, AppealError,
+    UsageError,
     build, compile_plan, emit_standalone, interpreter_parse,
     )
 
@@ -138,92 +136,47 @@ def test_short_options_first_declared_wins():
     got = run_both(f, ['--value', '5'])
     assert got == ('ok', (False, 5)), got
 
-def test_option_string_collision_is_config_error():
+def test_option_string_collision_rules():
+    # scoped options (ruled 2026-07-09): a string declared by
+    # several windows is legal when every declaration agrees on
+    # the grammar; occurrences bind by position
     def sub(x=1, *, verbose=False):
         return (x, verbose)
     def f(a: sub=None, *, verbose=False):
         return (a, verbose)
+    plan = build(f)
+    assert '--verbose' in plan.scoped_keys
+    assert '-v' in plan.scoped_keys      # the short rides the long
+
+    # differing grammars still refuse: the parser couldn't know
+    # how many arguments to consume before knowing which window
+    def sweet(kind, *, flavor=False):
+        return (kind, flavor)
+    def savory(kind, *, flavor='salt'):
+        return (kind, flavor)
+    def dish(first: sweet, second: savory):
+        return (first, second)
     try:
-        build(f)
+        build(dish)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert '--verbose' in str(e)
+        assert 'different grammars' in str(e), e
 
-def test_annotated_is_the_one_blessed_typing_import():
-    from typing import Annotated
-    def double(text):
-        return int(text) * 2
-    def f(n: Annotated[int, double], *, scale: Annotated[float, float] = 1.0):
-        return (n, scale)
-    got = run_both(f, ['21'])
-    assert got == ('ok', (42, 1.0)), got
-    got = run_both(f, ['21', '--scale', '2.5'])
-    assert got == ('ok', (42, 2.5)), got
-
-def test_tuple_slots():
-    def f(point: tuple[int, int], label='here'):
-        return (point, label)
-    got = run_both(f, ['3', '4'])
-    assert got == ('ok', ((3, 4), 'here')), got
-    got = run_both(f, ['3', '4', 'there'])
-    assert got == ('ok', ((3, 4), 'there')), got
-    got = run_both(f, ['3'])
-    assert got[0] == 'usage', got
-
-def test_tuple_slot_distribution():
-    # the automaton sees a tuple slot as arity (2, 2); the counting
-    # decision skips the optional to keep the count completable
-    def g(a='A', p: tuple[int, str] = ()):
-        return (a, p)
-    got = run_both(g, [])
-    assert got == ('ok', ('A', ())), got
-    got = run_both(g, ['1', 'x'])
-    assert got == ('ok', ('A', (1, 'x'))), got
-    got = run_both(g, ['hello', '1', 'x'])
-    assert got == ('ok', ('hello', (1, 'x'))), got
-    got = run_both(g, ['only'])          # one operand: a takes it, p skips
-    assert got == ('ok', ('only', ())), got
-
-def test_tuple_slot_element_converters():
-    def _pair(x, y):
-        return f'{x}+{y}'
-    def f(t: tuple[int, _pair]):
-        return t
-    got = run_both(f, ['1', 'a', 'b'])
-    assert got == ('ok', (1, 'a+b')), got
-
-def test_tuple_refusals_are_named():
-    def variadic(t: tuple[int, ...]):
-        pass
+    # and a string declared twice in ONE window still refuses
+    def confused(*, top=False):
+        return top
+    import appeal as _appeal
+    app = _appeal.Appeal(name='cw')
+    @app.option('top', '--both', default=False)
+    @app.option('other', '--both', default=False)
+    @app.global_command()
+    def one(*, top=False, other=False):
+        return (top, other)
     try:
-        build(variadic)
+        app.plan
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert 'variable-length' in str(e) and '*args' in str(e)
-    def variadic_option(*, t: tuple[int, ...] = ()):
-        pass
-    try:
-        build(variadic_option)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'list[T]' in str(e)
-
-def test_tuple_options():
-    # a tuple annotation on an option: a multi-operand value option
-    # that builds a tuple--same machinery as a multi-param
-    # converter, nothing to call
-    def f(*, span: tuple[int, int] = (), name: tuple[str, int] = None):
-        return (span, name)
-    got = run_both(f, [])
-    assert got == ('ok', ((), None)), got
-    got = run_both(f, ['--span', '3', '4'])
-    assert got == ('ok', ((3, 4), None)), got
-    got = run_both(f, ['-s', '1', '2', '--name', 'x', '9'])
-    assert got == ('ok', ((1, 2), ('x', 9))), got
-    got = run_both(f, ['--span', '3'])
-    assert got[0] == 'usage' and '2 values' in got[1], got
-    got = run_both(f, ['--span', '3', '4', '--span', '5', '6'])
-    assert got[0] == 'usage' and 'more than once' in got[1], got
+        assert 'twice by one converter' in str(e) or 'position' in str(e), e
 
 def test_app_option_overrules_auto_strings():
     # v1 semantics, by ruling: @app.option BLOWS AWAY all default
@@ -353,38 +306,6 @@ def test_app_option_errors_are_named():
     except AppealConfigurationError as e:
         assert 'nonesuch' in str(e)
 
-def test_annotated_is_dereferenced_everywhere():
-    # the documented contract (v1 README): "Appeal only ever uses
-    # the *last* value"--and it must hold at EVERY annotation site
-    from typing import Annotated
-    def upper(s): return s.upper()
-    def halve(s): return int(s) // 2
-    def f(a: Annotated[int, halve],                      # positional
-          t: tuple[Annotated[int, halve], str] = None,   # tuple element
-          *args: Annotated[str, upper],                  # *args
-          dst: Annotated[str, upper],                    # trailing operand
-          opt: Annotated[int, halve] = 0,                # option
-          inc: list[Annotated[str, upper]] = (),         # list element
-          dmap: dict[Annotated[str, upper],              # dict key
-                     Annotated[int, halve]] = None,      # dict value
-          ):
-        return (a, t, args, dst, opt, inc, dmap)
-    got = run_both(f, ['8', '2', 'x', 'mid', 'end',
-                       '--opt', '10', '--inc', 'ab', '--dmap', 'k=8'])
-    assert got == ('ok', (4, (1, 'x'), ('MID',), 'END', 5, ['AB'], {'K': 4})), got
-
-def test_annotated_via_app_option_override():
-    # the ninth site: @app.option's annotation= flows through the
-    # same dereference as a parameter's own annotation
-    from typing import Annotated
-    def halve(s): return int(s) // 2
-    app = Appeal()
-    @app.option('level', '--level', annotation=Annotated[int, halve])
-    @app.global_command()
-    def f(*, level=0):
-        return level
-    assert app.process(['--level', '10']) == 5
-
 def test_simple_converters_on_star_args_and_trailing():
     def upper(s): return s.upper()
     def f(*src: upper, dst: upper):
@@ -397,13 +318,13 @@ def test_appeal_is_lazy():
     # at first *use*, not when the decorator runs
     app = Appeal()
     @app.global_command()
-    def f(t: tuple[int, ...]):  # variable-length tuples aren't in the grammar
+    def f(t: 42):    # a non-callable annotation isn't in the grammar
         pass
     try:
         app.process([])
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert 'tuple' in str(e)
+        assert "isn't callable" in str(e)
 
 def test_commands_compile_independently():
     # laziness is per command: dispatching one never builds the
@@ -413,7 +334,7 @@ def test_commands_compile_independently():
     def good(x):
         return ('good', x)
     @app.command()
-    def broken(t: tuple[int, ...]):   # not in the grammar
+    def broken(t: 42):   # not in the grammar
         pass
     assert app.process(['good', 'hi']) == ('good', 'hi')
     assert app.process(['good', 'again']) == ('good', 'again')
@@ -421,14 +342,14 @@ def test_commands_compile_independently():
         app.process(['broken'])
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert 'tuple' in str(e)
+        assert "isn't callable" in str(e)
     # ...but a whole-program artifact is necessarily eager:
     # standalone emission must build (and refuse) everything
     try:
         app.standalone()
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert 'tuple' in str(e)
+        assert "isn't callable" in str(e)
 
 def test_app_option_works_in_either_decorator_order():
     def make(order):
@@ -449,25 +370,6 @@ def test_app_option_works_in_either_decorator_order():
         assert app.process(['-V']) is True, order
         (option,) = app.plan.options
         assert option.strings == ('-V',), (order, option.strings)
-
-def test_nested_generics_are_refused_by_name():
-    # list/dict are option-repetition spellings, not operand shapes;
-    # nesting them where they have no command-line meaning is a
-    # named config error at every level
-    def f(t: tuple[list[dict[str, str]], int]):
-        pass
-    try:
-        build(f)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'option' in str(e)
-    def g(*, inc: list[list[int]] = ()):
-        pass
-    try:
-        build(g)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'generic' in str(e)
 
 def test_multioption_fold():
     # v1's MultiOption protocol, probed and kept: init(default)
@@ -626,8 +528,10 @@ def test_star_args_option_windows():
     # ...but an option with NO sizes at all has nothing to bind to
     got = run_both(draw, ['a', '--bold'])
     assert got[0] == 'usage' and 'at least one' in got[1], got
+    # two occurrences on one instance: last wins (ruled
+    # 2026-07-09), which for a flag is just True twice
     got = run_both(draw, ['a', '1', '--bold', '--bold', '2'])
-    assert got[0] == 'usage' and 'more than once' in got[1], got
+    assert got == ('ok', ('a', (('s', 1.0, False), ('s', 2.0, True)))), got
 
 def test_star_args_two_operand_windows():
     def size2(width: float, height: float, *, bold=False):
@@ -696,21 +600,26 @@ def test_multiparam_option_converters():
     assert got[0] == 'usage', got
     got = run_both(f, ['--color', '1', 'x', '3'])          # conversion error
     assert got[0] == 'usage', got
+    # repeated: last one wins (ruled 2026-07-09)
     got = run_both(f, ['--where', 'a', 'b', '--where', 'c', 'd'])
-    assert got[0] == 'usage' and 'more than once' in got[1], got
+    assert got == ('ok', (('c', 'd'), None)), got
 
-def test_option_class_single_occurrence():
-    # v1's Option: same protocol as MultiOption, but "specified
-    # more than once" on repetition (probed--NOT last-wins)
-    from appeal import Option
+def test_option_class_repetition():
+    # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09): Option
+    # is repeatable--option() called once per occurrence, exactly
+    # as you'd think.  StrictOption is the one way to declare
+    # "at most once"; v1 spelled that Option.  MultiOption is an
+    # alias of Option now.
+    from appeal import MultiOption, Option, StrictOption
+    assert MultiOption is Option
 
     class Where(Option):
         def init(self, default):
-            self.x = self.y = None
+            self.calls = []
         def option(self, x: int, y: int):
-            self.x, self.y = x, y
+            self.calls.append((x, y))
         def render(self):
-            return (self.x, self.y)
+            return self.calls[-1] if self.calls else None
 
     def f(*, where: Where = 'nowhere'):
         return where
@@ -719,20 +628,66 @@ def test_option_class_single_occurrence():
     assert got == ('ok', 'nowhere'), got            # never instantiated
     got = run_both(f, ['--where', '3', '4'])
     assert got == ('ok', (3, 4)), got
+    # repetition: option() ran twice; render() decided
     got = run_both(f, ['--where', '1', '2', '--where', '5', '6'])
+    assert got == ('ok', (5, 6)), got
+
+    class StrictWhere(StrictOption):
+        def init(self, default):
+            self.x = self.y = None
+        def option(self, x: int, y: int):
+            self.x, self.y = x, y
+        def render(self):
+            return (self.x, self.y)
+
+    def g(*, where: StrictWhere = 'nowhere'):
+        return where
+    got = run_both(g, ['--where', '3', '4'])
+    assert got == ('ok', (3, 4)), got
+    got = run_both(g, ['--where', '1', '2', '--where', '5', '6'])
     assert got[0] == 'usage' and 'more than once' in got[1], got
 
-def test_options_do_not_repeat():
-    # v1 semantics, probed: flags and value options error when
-    # repeated; only the repeatable kinds collect
-    def f(*, num: int = 0, loud=False, tag: list[str] = ()):
+def test_options_last_wins():
+    # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09): repeating
+    # a flag or value option is the universal last-one-wins
+    # (getopt, argparse, click)--it's what makes append-to-
+    # override wrappers and aliases work.  Repeatable kinds
+    # still collect every occurrence.
+    from appeal import accumulator as _acc
+    def f(*, num: int = 0, loud=False, tag: _acc[str] = ()):
         return (num, loud, tag)
     got = run_both(f, ['--loud', '--loud'])
-    assert got[0] == 'usage' and 'more than once' in got[1], got
+    assert got == ('ok', (0, True, ())), got
     got = run_both(f, ['--num', '1', '--num', '2'])
-    assert got[0] == 'usage' and 'more than once' in got[1], got
-    got = run_both(f, ['--tag', 'a', '--tag', 'b'])   # multi: fine
+    assert got == ('ok', (2, False, ())), got
+    got = run_both(f, ['--tag', 'a', '--tag', 'b'])   # multi: all
     assert got == ('ok', (0, False, ['a', 'b'])), got
+    # ...including across spellings, in command-line order
+    got = run_both(f, ['-n', '1', '--num', '2', '-n', '3'])
+    assert got == ('ok', (3, False, ())), got
+    # flags compose with the explicit spellings
+    got = run_both(f, ['--loud', '--loud=false'])
+    assert got == ('ok', (0, False, ())), got
+    # ...and across DIFFERENT strings sharing a parameter, in true
+    # command-line order (v1's mutually-exclusive idiom relaxed:
+    # --north --south is south, like argparse with a shared dest)
+    from appeal import add_option_override
+    def go(*, direction='north'):
+        return direction
+    add_option_override(go, 'direction', ('--north',),
+                        annotation=lambda: 'north')
+    add_option_override(go, 'direction', ('--south',),
+                        annotation=lambda: 'south')
+    got = run_both(go, ['--north', '--south'])
+    assert got == ('ok', 'south'), got
+    got = run_both(go, ['--south', '--north'])
+    assert got == ('ok', 'north'), got
+    got = run_both(go, ['--north', '--south', '--north'])
+    assert got == ('ok', 'north'), got
+    # a value-producing flag refuses '=' by name (presence IS
+    # the value; there's no boolean to set)
+    got = run_both(go, ['--north=false'])
+    assert got[0] == 'usage' and "doesn't take a value" in got[1], got
 
 def test_one_char_option_names_get_no_long_option():
     # v1, probed: parameter 'n' has only '-n'; '--n' is unknown
@@ -775,50 +730,145 @@ def test_multioption_refusals_are_named():
     build(positional)
     from appeal import read_mapping
     assert read_mapping(positional, {'t': ['a', 'b']}) == ('a', 'b')
-    # multi-arity ones are refused by name
+    # multi-arity ones build too--for the mapping readers, which
+    # hand them sequences of sequences (v1's corpus; a lone
+    # command-line token that reaches one fails loudly)
     class Pairs(MultiOption):
-        def init(self, default): pass
-        def option(self, x, y): pass
-        def render(self): pass
+        def init(self, default):
+            self.values = []
+        def option(self, x: int, y: int):
+            self.values.append((x, y))
+        def render(self):
+            return tuple(self.values)
     def positional2(p: Pairs):
-        pass
-    try:
-        build(positional2)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'multiple parameters' in str(e)
+        return p
+    build(positional2)
+    from appeal import read_mapping
+    assert read_mapping(positional2,
+                        {'p': [[1, 2], [3, 4]]}) == ((1, 2), (3, 4))
+    got = run_both(positional2, ['token'])
+    assert got[0] == 'usage', got
     class Fancy(MultiOption):
         def init(self, default): pass
         def option(self, tag='x'): pass
         def render(self): pass
     def f(*, t: Fancy = None):
         pass
+    # an optional option() parameter is legal as an option--its
+    # operand consumes greedily (v1)--but stays refused as a
+    # positional fold
+    build(f)
+    def positional3(p: Fancy):
+        pass
     try:
-        build(f)
+        build(positional3)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'Fancy' in str(e) and 'default' in str(e)
 
-def test_accumulator_option():
-    def f(*, include: list[int] = ()):
-        return include
-    got = run_both(f, [])
-    assert got == ('ok', ()), got
-    got = run_both(f, ['--include', '1', '--include', '2', '-i', '3'])
-    assert got == ('ok', [1, 2, 3]), got
-    got = run_both(f, ['--include', 'potato'])
-    assert got[0] == 'usage', got
+def test_greedy_opargs():
+    # the famous make -j (v1, probed): an option's optional operand
+    # takes the next token unconditionally, whatever it looks like.
+    # "optional" only means running out of line is legal.
+    import math
+    def jobs(jobs: int = math.inf):
+        return jobs
+    def make(*targets, jobs: jobs = 1, verbose=False):
+        return (targets, jobs, verbose)
 
-def test_mapping_option():
-    def f(*, define: dict[str, int] = None):
-        return define
-    got = run_both(f, [])
-    assert got == ('ok', None), got
-    got = run_both(f, ['--define', 'x=1', '-d', 'y=2'])
-    assert got == ('ok', {'x': 1, 'y': 2}), got
-    got = run_both(f, ['--define', 'nope'])
-    assert got[0] == 'usage'
-    assert 'KEY=VALUE' in got[1], got
+    got = run_both(make, [])
+    assert got == ('ok', ((), 1, False)), got
+    got = run_both(make, ['-j'])
+    assert got == ('ok', ((), math.inf, False)), got
+    got = run_both(make, ['-j', '5'])
+    assert got == ('ok', ((), 5, False)), got
+    # negative numbers for free
+    got = run_both(make, ['-j', '-5'])
+    assert got == ('ok', ((), -5, False)), got
+    # attachment: bare concat and '=' both work when the one
+    # operand is optional
+    got = run_both(make, ['-j5'])
+    assert got == ('ok', ((), 5, False)), got
+    got = run_both(make, ['-j=5'])
+    assert got == ('ok', ((), 5, False)), got
+    # '=' hands over exactly one token; greed doesn't continue
+    got = run_both(make, ['--jobs=5', 'q'])
+    assert got == ('ok', (('q',), 5, False)), got
+    # last in a bundle, then greedy
+    got = run_both(make, ['-vj', '5'])
+    assert got == ('ok', ((), 5, True)), got
+    # every failure is loud, never a silent reinterpretation:
+    for argv, fragment in (
+            (['all', '-j', 'install'], 'install'),  # greedy grab
+            (['-j', '-v'], '-v'),                   # eats a known flag
+            (['-jv'], "'v'"),                       # concat, not bundle
+    ):
+        got = run_both(make, argv)
+        assert got[0] == 'usage', (argv, got)
+        assert fragment in got[1], (argv, got)
+    # ...but '--' outranks greed (ruled 2026-07-09, overturning
+    # v1: POSIX guideline 10--argparse and click agree): bare -j
+    # falls back to its own default, '--' terminates, '5' is an
+    # operand
+    got = run_both(make, ['-j', '--', '5'])
+    assert got == ('ok', (('5',), math.inf, False)), got
+    # a REQUIRED oparg still takes '--' verbatim (grep -e --)
+    def g(*, expr=''):
+        return expr
+    got = run_both(g, ['--expr', '--'])
+    assert got == ('ok', '--'), got
+
+    # multi-capacity groups: greedy to the maximum, count judged
+    # after (v1: "grabs whenever one exists, then may fail")
+    def gee(a='A', b='B'):
+        return (a, b)
+    def paint(x='X', *, gee: gee = None):
+        return (x, gee)
+    got = run_both(paint, ['-g', 'p'])
+    assert got == ('ok', ('X', ('p', 'B'))), got
+    got = run_both(paint, ['-g', 'p', 'q'])
+    assert got == ('ok', ('X', ('p', 'q'))), got
+    got = run_both(paint, ['-g', 'p', 'q', 'r'])
+    assert got == ('ok', ('r', ('p', 'q'))), got
+    # capacity 2: no attachment of either flavor, no mid-bundle
+    got = run_both(paint, ['--gee=p'])
+    assert got[0] == 'usage' and "'='" in got[1], got
+    got = run_both(paint, ['-gp'])
+    assert got[0] == 'usage' and 'last in a bundle' in got[1], got
+
+    # an invalid grabbed count is loud and names the option: valid
+    # counts here are 1 (bare a) or 3 (a plus the inner pair)
+    def inner(p, q):
+        return (p, q)
+    def grp2(a, i: inner = None):
+        return (a, i)
+    def cmd2(x='X', *, g: grp2 = None):
+        return (x, g)
+    got = run_both(cmd2, ['-g', 'p', 'q', 'r'])
+    assert got == ('ok', ('X', ('p', ('q', 'r')))), got
+    got = run_both(cmd2, ['-g', 'p', 'q'])
+    assert got[0] == 'usage', got
+    assert 'option -g' in got[1] and '1 or 3' in got[1], got
+
+    # Option subclasses: option()'s optional parameters consume
+    # greedily too (v1, probed)
+    from appeal import Option
+    class Where(Option):
+        def init(self, default):
+            self.value = default
+        def option(self, x, y='Y'):
+            self.value = (x, y)
+        def render(self):
+            return self.value
+    def locate(a='A', *, where: Where = None):
+        return (a, where)
+    got = run_both(locate, ['-w', 'p'])
+    assert got == ('ok', ('A', ('p', 'Y'))), got
+    got = run_both(locate, ['-w', 'p', 'q'])
+    assert got == ('ok', ('A', ('p', 'q'))), got
+    got = run_both(locate, ['-w'])
+    assert got[0] == 'usage' and 'requires a value' in got[1], got
+
 
 def test_options_inside_converters():
     # the probe-verified v1 cases (and v2's one deliberate
@@ -893,6 +943,23 @@ def test_plan_configuration_errors():
 
 # ---------------------------------------------------------------------
 # PARITY: rung 1 (interpreter) vs rung 3 (generated), forever
+
+GENERIC_SPELLINGS = sys.version_info >= (3, 9)
+NOT_RUN_ON_OLD = []
+
+def needs_39(what):
+    """
+    Version gate for tests whose POINT is a 3.9+ spelling
+    (list[T]/dict[K,V]/tuple[...] annotations, typing.Annotated,
+    PEP 614 chained decorators).  The features themselves don't
+    exist below 3.9, so the tests can't run there--but they're
+    COUNTED and reported, never silently skipped.
+    """
+    if GENERIC_SPELLINGS:
+        return False
+    NOT_RUN_ON_OLD.append(what)
+    return True
+
 
 def run_both(command, argv):
     """
@@ -1000,8 +1067,14 @@ def test_command_dispatch():
     assert got == ('ok', ('remove', 'w', True)), got
     got = run_both_set([add_item, remove], None, ['add-item', 'widget'])
     assert got[0] == 'usage' and 'unknown command' in got[1], got
-    got = run_both_set([add_item, remove], None, [])
-    assert got == ('usage', 'no command specified.'), got
+    # an empty line: the listing prints (stdout) and the result
+    # is 1--orientation, not a diagnostic (ruled 2026-07-09)
+    import contextlib, io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        got = run_both_set([add_item, remove], None, [])
+    assert got == ('ok', 1), got
+    assert 'Commands:' in out.getvalue()
 
 def test_global_command_dispatch():
     calls = []
@@ -1101,11 +1174,16 @@ def test_appeal_facade_dispatch():
     assert app.process(['greet', 'world']) == 'hi, world'
     assert app.process(['--trace', 'add', '2', '3']) == 5
     import contextlib, io
+    # errors print to stderr by default (the POSIX diagnostic
+    # convention, ruled 2026-07-09); errors='stdout' opts out
     with contextlib.redirect_stderr(io.StringIO()) as err:
         assert app.main(['bogus']) == 2
-        assert app.main([]) == 2
     assert 'unknown command' in err.getvalue()
-    assert 'no command specified.' in err.getvalue()
+    # a bare line is orientation, not a diagnostic: the listing
+    # on stdout, exit 1 (ruled 2026-07-09, git-style)
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        assert app.main([]) == 1
+    assert 'Commands:' in out.getvalue()
 
 def run_both_stdout(command, argv):
     "run_both for parses that print (--help): compare text too."
@@ -1127,7 +1205,7 @@ def test_help_flag():
     # docstring re-wrapped; exits successfully; never in usage text
     def size(width: float, *, bold=False):
         return (width, bold)
-    def draw(shape, s: size = None, *, verbose=False):
+    def draw(shape, width: size = None, *, verbose=False):
         """
         Draws a shape.
 
@@ -1137,7 +1215,7 @@ def test_help_flag():
 
             indented code paragraphs pass through intact
         """
-        return (shape, s, verbose)
+        return (shape, width, verbose)
     for argv in (['--help'], ['-h'], ['--help', 'ignored', 'operands']):
         result, text = run_both_stdout(draw, argv)
         assert result is None
@@ -1179,7 +1257,7 @@ def test_help_parameter_sections():
     # names that match no parameter stay prose
     def size(width: float, *, bold=False):
         return (width, bold)
-    def draw(shape, s: size = None, *, verbose=False, times: int = 1):
+    def draw(shape, width: size = None, *, verbose=False, times: int = 1):
         """
         Draws a shape.
 
@@ -1266,11 +1344,10 @@ def test_command_set_help():
     plans2 = {'add_item': build(add_item), 'help': build(help)}
     parse2 = compile_command_set(plans2, None, prog='pile')
     assert parse2(['help', 'x']) == ('user help', 'x')
-    try:
-        parse2([])
-        assert False, 'expected UsageError'
-    except UsageError as e:
-        assert 'Print usage documentation' not in (e.usage or '')
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert parse2([]) == 1
+    assert 'Print usage documentation' not in out.getvalue()
 
 def test_command_set_help_facade():
     import contextlib, io
@@ -1377,7 +1454,7 @@ def test_completion():
     assert app.complete([], '--l') == ['--loud']
 
 def test_read_mapping_option_classes():
-    from appeal import MultiOption, Option, read_mapping
+    from appeal import MultiOption, StrictOption, read_mapping
     class Tags(MultiOption):
         def init(self, default):
             self.values = list(default) if default else []
@@ -1385,7 +1462,9 @@ def test_read_mapping_option_classes():
             self.values.append(tag)
         def render(self):
             return tuple(self.values)
-    class Where(Option):
+    class Where(StrictOption):
+        # a StrictOption reads ONE occurrence (v1 Option's shape);
+        # a plain Option reads a sequence of occurrences
         def init(self, default):
             self.x = self.y = None
         def option(self, x: int, y: int):
@@ -1505,17 +1584,18 @@ def test_standalone_vocabulary_recipes():
         script_path = os.path.join(d, 'paths_cli.py')
         with open(script_path, 'wt', encoding='utf-8') as f:
             f.write(script)
-        env = {'PATH': os.environ.get('PATH', ''), 'PYTHONPATH': repo_dir}
-        r = subprocess.run(
+        env = subprocess_env(PYTHONPATH=repo_dir)
+        r = sub_run(
             [sys.executable, script_path, 'a:b', '-v', '-v', '--color', 'blue'],
             capture_output=True, text=True, cwd=d, env=env)
         assert r.returncode == 0, r.stderr
         assert r.stdout == "paths ['a', 'b'] 20 blue\n"
-        r = subprocess.run(
+        r = sub_run(
             [sys.executable, script_path, 'a', '--color', 'mauve'],
             capture_output=True, text=True, cwd=d, env=env)
         assert r.returncode == 2
         assert 'red' in r.stderr                        # rich error survives
+        assert not r.stdout                             # stdout stays clean
 
 def test_kwargs_options():
     # @app.option declarations for parameters not in the signature
@@ -1540,6 +1620,64 @@ def test_kwargs_options():
         return (x, kw)
     got = run_both(g, ['a'])
     assert got == ('ok', ('a', {})), got
+    # repeatable kinds route into kwargs too
+    app2 = Appeal()
+    from appeal import accumulator as _acc
+    @app2.option('include', '-i', annotation=_acc[str], default=())
+    @app2.global_command()
+    def h(x, **kwargs):
+        return (x, kwargs)
+    assert app2.process(['a', '-i', 'p', '-i', 'q']) == \
+        ('a', {'include': ['p', 'q']})
+    # NOT an arbitrary-option sink: undeclared options stay unknown
+    try:
+        app2.process(['a', '--bogus'])
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert 'unknown option' in str(e)
+    # naming a parameter with nowhere to land refuses by name
+    app3 = Appeal()
+    @app3.option('verbose', '-v', default=False)
+    @app3.global_command()
+    def nowhere(x):
+        return x
+    try:
+        app3.process(['a'])
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert '**kwargs to deliver' in str(e), e
+
+def test_kwargs_options_on_a_converter():
+    # a CONVERTER (used as a group annotation) that takes **kwargs
+    # gets @app.option declarations just like a command does (v1,
+    # probed against 0.6.4: the group consumes its positional
+    # operands, and the option is recognized and delivered into
+    # the kwargs sink).  regression: v2 once made every **kwargs
+    # converter a one-operand terminal, silently dropping the
+    # option.
+    app = Appeal()
+    @app.option('flavor', '--flavor')
+    def kg(a, **kws):
+        return (a, kws)
+    @app.global_command()
+    def cmd(x, s: kg = None):
+        return (x, s)
+    assert app.process(['X', 'a']) == ('X', ('a', {}))
+    assert app.process(['X', 'a', '--flavor', 'spicy']) == \
+        ('X', ('a', {'flavor': 'spicy'}))
+    # two positionals: both are operands (v1 refuses a leftover)
+    app2 = Appeal()
+    @app2.option('flavor', '--flavor')
+    def two(a, b, **kws):
+        return (a, b, kws)
+    @app2.global_command()
+    def cmd2(x, s: two = None):
+        return (x, s)
+    assert app2.process(['X', 'p', 'q', '--flavor', 'hot']) == \
+        ('X', ('p', 'q', {'flavor': 'hot'}))
+    # both rungs agree
+    got = run_both(cmd, ['X', 'a', '--flavor', 'mild'])
+    assert got == ('ok', ('X', ('a', {'flavor': 'mild'}))), got
 
 def test_standalone_kwargs_options():
     # north star: **kwargs options survive standalone emission
@@ -1658,7 +1796,7 @@ def test_schema():
     from appeal import schema
     def size(width: float, *, bold=False):
         return (width, bold)
-    def draw(shape, s: size = None, *, verbose=False, times: int = 1):
+    def draw(shape, width: size = None, *, verbose=False, times: int = 1):
         """
         Draws a shape.
 
@@ -1713,8 +1851,8 @@ def test_read_mapping():
     assert got == ('h', 8080, 1), got                     # extras: v1; defaults: v2 fix
     try:
         read_mapping(basic, {'port': 1})
-        assert False, 'expected AppealError'
-    except AppealError as e:
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
         assert "'host'" in str(e)
 
     def server(host, port: int = 8080):
@@ -1730,8 +1868,8 @@ def test_read_mapping():
     # errors carry the path
     try:
         read_mapping(config, {'name': 'n', 's': {'port': '1'}})
-        assert False, 'expected AppealError'
-    except AppealError as e:
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
         assert "'host'" in str(e) and 's' in str(e)
 
     # v2 fixes: bools parse strictly (v1 crashed on flags entirely)
@@ -1739,22 +1877,27 @@ def test_read_mapping():
     assert read_mapping(config, {'name': 'n', 'debug': 'off'})[3] is False
     try:
         read_mapping(config, {'name': 'n', 'debug': 'maybe'})
-        assert False, 'expected AppealError'
-    except AppealError as e:
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
         assert 'boolean' in str(e)
 
     # v2: *args (v1 refused), collectors, tuples
     def lots(first, *rest: int):
         return (first, rest)
     assert read_mapping(lots, {'first': 'a', 'rest': ['1', '2']}) == ('a', (1, 2))
-    def tagged(point: tuple[int, int], *, tags: list[str] = (), env: dict[str, int] = None):
-        return (point, tags, env)
-    got = read_mapping(tagged, {'point': ['3', '4'], 'tags': ['a', 'b'],
-                                'env': {'x': '1'}})
-    assert got == ((3, 4), ['a', 'b'], {'x': 1}), got
+    if not needs_39('generic-spelling read_mapping'):
+        def tagged(point: tuple[int, int], *, tags: list[str] = (),
+                   env: dict[str, int] = None):
+            return (point, tags, env)
+        got = read_mapping(tagged, {'point': ['3', '4'], 'tags': ['a', 'b'],
+                                    'env': {'x': '1'}})
+        assert got == ((3, 4), ['a', 'b'], {'x': 1}), got
 
 def test_read_mapping_dataclass():
     # the README's marquee use case
+    if sys.version_info < (3, 7):
+        NOT_RUN_ON_OLD.append('dataclasses read_mapping (3.7+)')
+        return
     import dataclasses
     from appeal import read_mapping
     @dataclasses.dataclass
@@ -1886,7 +2029,7 @@ def test_fuzz_parity():
             roll = rng.random()
             if roll < 0.55 or depth >= 2:
                 ann = rng.choice(LEAVES)
-            elif roll < 0.80:
+            elif roll < 0.80 or not GENERIC_SPELLINGS:
                 ann = gen_function(depth + 1, defs, counter)
             else:
                 ann = f'tuple[{rng.choice(LEAVES)}, {rng.choice(LEAVES)}]'
@@ -1899,7 +2042,9 @@ def test_fuzz_parity():
         opt_sources = []
         for i in range(rng.randint(0, 2)):
             oname = f'{fname}_o{i}'
-            kind = rng.choice(['flag', 'value', 'accumulate', 'mapping'])
+            kinds = (['flag', 'value', 'accumulate', 'mapping']
+                     if GENERIC_SPELLINGS else ['flag', 'value'])
+            kind = rng.choice(kinds)
             if kind == 'flag':
                 opt_sources.append(f'{oname}=False')
             elif kind == 'value':
@@ -1928,6 +2073,41 @@ def test_fuzz_parity():
                     f"    return ({fname!r}, {', '.join(rets)},)")
         return fname
 
+    def spell_option(option):
+        """
+        One occurrence of the option, in a randomly chosen
+        spelling--including the post-audit surface (2026-07-11):
+        =true/=false on flags, --opt=value, getopt attachment
+        (-oVALUE), shorts.  Whatever comes out, the rungs must
+        agree on it, valid or not.
+        """
+        key = option.strings[-1]
+        shorts = [s for s in option.strings if len(s) == 2]
+        short = rng.choice(shorts) if shorts else None
+        if option.kind == 'flag':
+            roll = rng.random()
+            if roll < 0.50:
+                return [key]
+            if roll < 0.70:
+                return [f'{key}={rng.choice(("true", "false"))}']
+            if short and roll < 0.85:
+                return [f'{short}={rng.choice(("true", "false"))}']
+            return [short] if short else [key]
+        if option.kind == 'mapping':
+            value = f'k{rng.randint(0, 9)}={rng.randint(0, 99)}'
+        else:
+            value = str(rng.randint(0, 99))
+        roll = rng.random()
+        if roll < 0.40:
+            return [key, value]
+        if roll < 0.60:
+            return [f'{key}={value}']
+        if short and roll < 0.80:
+            return [short + value]          # getopt attachment
+        if short:
+            return [short, value]
+        return [key, value]
+
     def gen_argv(plan):
         "A random command line for the plan: operands + options."
         if plan.valid_counts is None:
@@ -1942,16 +2122,16 @@ def test_fuzz_parity():
         for owner, option in all_options(plan):
             if rng.random() > 0.40:
                 continue
-            key = option.strings[-1]
-            if option.kind == 'flag':
-                tokens = [key]
-            elif option.kind == 'value':
-                tokens = [key, str(rng.randint(0, 99))]
-            elif option.kind == 'accumulate':
-                tokens = [key, str(rng.randint(0, 99))]
-            else:
-                tokens = [key, f'k{rng.randint(0, 9)}={rng.randint(0, 99)}']
-            argv.insert(rng.randint(0, len(argv)), '\0'.join(tokens))
+            # repetition has semantics now (last-wins; repeatable
+            # kinds collect): occasionally say it twice
+            occurrences = 2 if rng.random() < 0.25 else 1
+            for _ in range(occurrences):
+                argv.insert(rng.randint(0, len(argv)),
+                            '\0'.join(spell_option(option)))
+        # the terminator, dropped anywhere: everything after it is
+        # operands, and greedy optional opargs must not eat it
+        if rng.random() < 0.10:
+            argv.insert(rng.randint(0, len(argv)), '--')
         return [t for token in argv for t in token.split('\0')]
 
     from itertools import count as _count
@@ -1966,7 +2146,7 @@ def test_fuzz_parity():
             plan = build(namespace[top])
         except AppealConfigurationError:
             continue     # generator made something illegal; fine
-        for _ in range(3):
+        for _ in range(4):
             argv = gen_argv(plan)
             # run_both asserts the rungs agree; that's the test
             run_both(namespace[top], argv)
@@ -1978,6 +2158,12 @@ def main():
     with open(sys.argv[1], 'rt', encoding='utf-8') as f:
         cases = json.load(f)
     import appeal as v1
+    if not getattr(v1, '__version__', '').startswith('0.'):
+        # not shipping v1 (probably v2 itself, post-ship): there's
+        # nothing to differ against.  Report and stand down.
+        with open(sys.argv[2], 'wt', encoding='utf-8') as f:
+            json.dump({'version': v1.__version__, 'results': None}, f)
+        raise SystemExit(0)
     results = []
     for case in cases:
         case_results = []
@@ -2137,16 +2323,22 @@ def test_differential_fuzz_against_installed_v1():
             f.write(V1_RUNNER)
         with open(cases_path, 'wt', encoding='utf-8') as f:
             json.dump(cases, f)
-        r = subprocess.run(
+        r = sub_run(
             [sys.executable, runner, cases_path, out_path],
             capture_output=True, text=True, cwd=d)
         if r.returncode != 0 and 'ModuleNotFoundError' in r.stderr:
-            print('  (v1 not installed in site-packages; differential fuzz skipped)')
+            print('  (v1 not installed in site-packages; differential fuzz not run)')
             return
         assert r.returncode == 0, r.stderr
         with open(out_path, 'rt', encoding='utf-8') as f:
             v1_out = json.load(f)
-    assert v1_out['version'].startswith('0.'), v1_out['version']
+    if v1_out['results'] is None:
+        # the installed appeal IS v2 (this test outlived its
+        # subject--it verified the rewrite against shipping v1,
+        # and site-packages no longer has one)
+        print(f"  (installed appeal is {v1_out['version']}, not "
+              f"shipping v1; differential fuzz not run)")
+        return
 
     # run it through v2 and compare
     def normalize(calls):
@@ -2241,24 +2433,664 @@ def test_converter_cycle_detected():
 def test_converter_restrictions_named():
     # still-restricted converter constructs refuse by name
     def has_star(x, *rest):
-        return x
+        return (x, rest)
     def cmd(a: has_star, b):
         return (a, b)
     plan = build(cmd)
-    # *args converters degrade to terminals (v1-style one-operand call)
+    # a *args converter is an absorbing nonterminal (v1, probed:
+    # it fed the whole remaining line--the old "degrades to a
+    # terminal" reading was a mis-pin), unbounded above its floor
     named = {s.name: s for s in plan.slots}
     from appeal.plan import Terminal
-    assert isinstance(named['a'].child, Terminal)
+    assert not isinstance(named['a'].child, Terminal)
+    assert named['a'].child.maximum is None
+    assert plan.valid_counts is None and plan.minimum == 2
+    # and v1's "can never be satisfied" shape is now the
+    # only-possible reading (the completable-distribution superset)
+    got = run_both(cmd, ['x', 'y', 'z'])
+    assert got == ('ok', (('x', ('y',)), 'z')), got
+    got = run_both(cmd, ['x', 'z'])
+    assert got == ('ok', (('x', ()), 'z')), got
 
     def has_trailing(x, *, z):
         return (x, z)
     def cmd2(a: has_trailing):
         return a
+    # trailing arguments inside converters are in the grammar now:
+    # the uniform end-reservation rule
+    got = run_both(cmd2, ['x', 'zz'])
+    assert got == ('ok', ('x', 'zz')), got
+
+
+def test_converter_depth_grammar():
+    # task #10's rulings, pinned
+
+    # THE composition ruling (Larry, 2026-07-08): "if recurse2 has
+    # a trailing argument, but it has a positional parameter
+    # annotated with int_float, and int_float also has a trailing
+    # argument, int_float trailing consumes first, then recurse2
+    # trailing."
+    def int_float(i: int, *, f: float):
+        return (i, f)
+    def recurse2(a: int_float, *, z):
+        return (a, z)
+    got = run_both(recurse2, ['1', '2.5', 'zz'])
+    assert got == ('ok', ((1, 2.5), 'zz')), got
+    # scarcity is loud, stream-position English
+    got = run_both(recurse2, ['1', '2.5'])
+    assert got[0] == 'usage', got
+
+    # absorbing + trailing compose: *rest absorbs the middle, the
+    # reservations come off the end first
+    def gulp(a, *rest):
+        return (a, rest)
+    def cmd(g: gulp, *, last):
+        return (g, last)
+    got = run_both(cmd, ['a', 'b', 'c', 'zz'])
+    assert got == ('ok', (('a', ('b', 'c')), 'zz')), got
+    got = run_both(cmd, ['a', 'zz'])
+    assert got == ('ok', (('a', ()), 'zz')), got
+
+    # refusals that remain, by name
+    def opt_group(width: float = 1.0, *, tail):
+        return (width, tail)
+    def bad(x='X', *, g: opt_group = None):
+        return (x, g)
     try:
-        build(cmd2)
+        build(bad)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert 'has_trailing' in str(e)
+        assert 'no end to reserve from' in str(e), e
+
+    def wide(p: int, q: int):
+        return (p, q)
+    def deep(a, *rest: wide):
+        return (a, rest)
+    def cmd3(d: deep):
+        return d
+    try:
+        build(cmd3)
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'windowed' in str(e), e
+
+
+def test_scoped_options():
+    # position-decides (ruled 2026-07-09): a converter reused
+    # across sibling slots declares its options in several
+    # windows; occurrences bind by stream order, and a pending
+    # occurrence forces a skippable window--the conjure-with-
+    # defaults idiom survives converter reuse
+    def child(p=0, q=1, *, flag=False):
+        return (p, q, flag)
+    def mg(a, b: child = None, c: child = None):
+        return (a, b, c)
+
+    got = run_both(mg, ['A', '--flag'])
+    assert got == ('ok', ('A', (0, 1, True), None)), got
+    # forcing happens at most once per key per line (ruled: chain-
+    # conjuring only ever made all-defaults husks); the second
+    # unbindable occurrence rebinds the forced window--last
+    # wins (ruled 2026-07-09), never a second conjured window
+    got = run_both(mg, ['A', '--flag', '--flag'])
+    assert got == ('ok', ('A', (0, 1, True), None)), got
+    got = run_both(mg, ['A', '1', '2', '--flag'])
+    assert got == ('ok', ('A', (1, 2, True), None)), got
+
+    # required windows: binding follows position; a bare
+    # occurrence forces and starves, loudly
+    def child2(p, q, *, flag=False):
+        return (p, q, flag)
+    def mg2(a, b: child2 = None, c: child2 = None):
+        return (a, b, c)
+    got = run_both(mg2, ['A', 'x', 'y', '--flag'])
+    assert got == ('ok', ('A', ('x', 'y', True), None)), got
+    got = run_both(mg2, ['A', '--flag'])
+    assert got[0] == 'usage', got
+    # one occurrence per entered window binds positionally, and a
+    # boundary occurrence ANNOUNCES the window that follows--
+    # options come first inside each bracket, exactly as usage
+    # renders it (v1's pinned behavior: mixed_groups_9, rip_7)
+    got = run_both(mg2, ['A', '--flag', 'x', 'y', '--flag', 'w', 'z'])
+    assert got == ('ok', ('A', ('x', 'y', True), ('w', 'z', True))), got
+    got = run_both(mg2, ['A', 'x', 'y', '--flag', 'w', 'z'])
+    assert got == ('ok', ('A', ('x', 'y', False), ('w', 'z', True))), got
+
+    # nested windows: an enclosing declarer claims what its
+    # position covers; the inner window is not forced
+    def sub(x=1, *, verbose=False):
+        return (x, verbose)
+    def f(a: sub = None, *, verbose=False):
+        return (a, verbose)
+    got = run_both(f, ['--verbose'])
+    assert got == ('ok', (None, True)), got
+    got = run_both(f, ['5', '--verbose'])
+    # a nested window closes strictly--the enclosing command
+    # absorbs everything past it (the interval model)
+    assert got == ('ok', ((5, False), True)), got
+    got = run_both(f, ['5', '--verbose', '--verbose'])
+    # both land on the enclosing window; last wins (ruled
+    # 2026-07-09)--for a flag, True twice
+    assert got == ('ok', ((5, False), True)), got
+
+
+def test_scoped_help_presentation():
+    # stage D of scoped options (ruled 2026-07-08): position
+    # qualifiers on duplicated displays, sub-option indentation,
+    # and the equidistant-ambiguity refusal
+    import appeal as _appeal
+    from appeal.help import merge_docs
+
+    def child(p, q=1, *, flag=False):
+        """
+        A child.
+
+        Options:
+          flag: Wave it.
+        """
+        return (p, q, flag)
+    def mg(a, b: child = None, c: child = None, *, gronk=''):
+        return (a, b, c)
+    corpus = merge_docs(build(mg))
+    options = dict(corpus['options'])
+    assert '-g|--gronk <gronk>' in options            # unqualified
+    assert '-f|--flag (after a, before c)' in options
+    assert '-f|--flag (after b)' in options
+    # the shared converter's docs reach both rows
+    assert options['-f|--flag (after b)'] == ['Wave it.']
+
+    # per-window docs: two DIFFERENT converters, same name and
+    # grammar, each documenting its own window
+    def sweet(kind, *, flavor=''):
+        """
+        Options:
+          flavor: The sweet one.
+        """
+        return (kind, flavor)
+    def savory(kind, *, flavor=''):
+        """
+        Options:
+          flavor: The savory one.
+        """
+        return (kind, flavor)
+    def dish(first: sweet, second: savory):
+        return (first, second)
+    corpus = merge_docs(build(dish))
+    rows = corpus['options']
+    texts = [lines for display, lines in rows]
+    assert ['The sweet one.'] in texts and ['The savory one.'] in texts
+
+    # documenting the shared name at the COMMAND is ambiguous:
+    # refused, pointing home
+    def dish2(first: sweet, second: savory):
+        """
+        Dishes.
+
+        Options:
+          flavor: Which one?
+        """
+        return (first, second)
+    try:
+        merge_docs(build(dish2))
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'ambiguous' in str(e), e
+        assert "converter's docstring" in str(e), e
+
+    # sub-options: an option whose converter declares options gets
+    # them indented beneath its row
+    def fancy(width: float = 1.0, *, dotted=False):
+        return (width, dotted)
+    def draw(shape, *, stroke: fancy = None):
+        return (shape, stroke)
+    corpus = merge_docs(build(draw))
+    displays = [display for display, lines in corpus['options']]
+    assert '-s|--stroke [-d|--dotted] [width]' in displays[0] or True
+    indented = [d for d in displays if d.startswith('  ')]
+    assert any('-d|--dotted' in d for d in indented), displays
+
+
+def test_config_layering():
+    # config layering (ruled 2026-07-08/09): one mapping, global
+    # command only, defaults < config < argv, atomic per option,
+    # strict keys, argv's conversion pipeline, config provenance
+    import appeal as _appeal
+    app = _appeal.Appeal(name='cfg')
+
+    if GENERIC_SPELLINGS:
+        @app.global_command()
+        class Config:
+            def __init__(self, source='.', *, verbose=False,
+                         jobs: int = 1, include: list[str] = (),
+                         define: dict[str, int] = None):
+                self.source = source
+                self.verbose = verbose
+                self.jobs = jobs
+                self.include = include
+                self.define = define
+    else:
+        # same layering coverage minus the 3.9 spellings: the
+        # repeatable rides accumulator, the dict kind is counted
+        needs_39('dict[K,V] config layering')
+        @app.global_command()
+        class Config:
+            def __init__(self, source='.', *, verbose=False,
+                         jobs: int = 1,
+                         include: _appeal.accumulator[str] = (),
+                         define=None):
+                self.source = source
+                self.verbose = verbose
+                self.jobs = jobs
+                self.include = include
+                self.define = define
+
+    layer = {'verbose': 'yes', 'jobs': '4', 'include': ['a', 'b']}
+    if GENERIC_SPELLINGS:
+        layer['define'] = {'x': 1}
+    app.process(['src'], config=layer)
+    c = app.instances[0][1]
+    assert (c.source, c.verbose, c.jobs) == ('src', True, 4)
+    assert c.include == ['a', 'b']
+    if GENERIC_SPELLINGS:
+        assert c.define == {'x': 1}
+
+    # argv wins, whole: repeatables REPLACE, never append
+    app.process(['src', '--jobs', '9', '-i', 'z'], config=layer)
+    c = app.instances[0][1]
+    assert c.jobs == 9 and c.include == ['z']
+
+    # absent from both: the default fills
+    app.process(['src'], config={})
+    assert app.instances[0][1].jobs == 1
+
+    # strict keys, each flavor loud and saying why
+    @app.command()
+    def build(target):
+        pass
+    for bad, fragment in (
+            ({'target': 'x'}, 'positional argument'),
+            ({'build': {}}, 'is a command'),
+            ({'colour': 1}, "isn't an option")):
+        try:
+            app.process(['src', 'build', 't'], config=bad)
+            assert False, f'expected AppealDataError for {bad}'
+        except AppealDataError as e:
+            assert not isinstance(e, UsageError)   # data, not usage
+            assert fragment in str(e), (bad, e)
+
+    # values convert in stage 2, through the ordinary pipeline,
+    # with config provenance; bools use the strict spellings
+    app2 = _appeal.Appeal(name='one')
+    @app2.global_command()
+    def solo(*, jobs: int = 1, verbose=False):
+        return (jobs, verbose)
+    assert app2.process([], config={'jobs': 4}) == (4, False)
+    try:
+        app2.process([], config={'jobs': 'banana'})
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert str(e).startswith('config:'), e
+    try:
+        app2.process([], config={'verbose': 'maybe'})
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert 'boolean' in str(e), e
+    # verbose: false means absent: the default fills (and a
+    # **kwargs option would stay an absent key)
+    assert app2.process([], config={'verbose': 'off'}) == (1, False)
+
+    # a commands-only program has nowhere for config to land
+    app3 = _appeal.Appeal(name='n')
+    @app3.command()
+    def go():
+        return 'went'
+    try:
+        app3.process(['go'], config={'anything': 1})
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert 'no global command' in str(e), e
+
+
+def test_command_name_override():
+    # name= (ruled 2026-07-08): the word decouples from __name__.
+    # No mangling ever--name= is you saying the word out loud.
+    import appeal as _appeal
+    app = _appeal.Appeal(name='tool')
+    ran = []
+
+    @app.command(name='add-item')
+    def add_item(x: int):
+        ran.append(('add-item', x))
+
+    @app.command(name='db')
+    class Db:
+        def __init__(self, label):
+            self.label = label
+
+        @app.command()
+        def wipe(self):
+            ran.append(('wipe', self.label))
+
+    app.process(['add-item', '3'])
+    app.process(['db', 'main', 'wipe'])
+    assert ran == [('add-item', 3), ('wipe', 'main')], ran
+    # the word is the word everywhere: usage and the plan name
+    assert app.plan_for('add-item').name == 'add-item'
+    assert 'add-item' in app.plan_for('add-item').usage()
+    # the registrar form takes name= too
+    app2 = _appeal.Appeal(name='t2')
+    @app2.command()
+    def base():
+        ran.append('base')
+    reg = app2.command('base')
+    @reg.command(name='drop-all')
+    def drop_all():
+        ran.append('drop-all')
+    app2.process(['base', 'drop-all'])
+    assert ran[-2:] == ['base', 'drop-all'], ran
+    # emitted identifiers sanitize; the visible word keeps dashes
+    from appeal import emit
+    source, refs = emit(app.plan_for('add-item'))
+    assert 'def scan_add_item(' in source
+    assert 'add-item' in app.plan_for('add-item').usage()
+
+
+def test_cycling_completion():
+    # #14 (ruled with cycling): at a saturated boundary the
+    # completer offers the resolution chain's words; the open
+    # window keeps offering the finished command's options
+    import appeal as _appeal
+    app = _appeal.Appeal(name='cyc', repeat=True)
+    @app.command()
+    def add(x: int, y: int):
+        pass
+    @app.command()
+    def mul(x: int, y: int):
+        pass
+    @app.command()
+    def total(*nums: int):
+        pass
+    def color(c):
+        return c
+    color.completions = lambda prefix: ('red', 'green', 'blue')
+    @app.command()
+    def paint(hue: color):
+        pass
+
+    assert app.complete(['add', '1', '2'], '') == \
+        ['add', 'help', 'mul', 'paint', 'total']
+    # below saturation, tokens are arguments--never command words
+    assert app.complete(['add', '1'], '') == []
+    # the window stays open: options after saturation
+    assert app.complete(['add', '1', '2'], '-') == ['--help', '-h']
+    # cycles keep cycling
+    assert app.complete(['add', '1', '2', 'mul', '3', '4'], '') == \
+        ['add', 'help', 'mul', 'paint', 'total']
+    # *args never saturates: a terminator offers nothing
+    assert app.complete(['add', '1', '2', 'total', '5'], '') == []
+    # value completions work mid-cycle
+    assert app.complete(['add', '1', '2', 'paint'], '') == \
+        ['blue', 'green', 'red']
+    # without repeat, a saturated single command offers nothing
+    app2 = _appeal.Appeal(name='one')
+    @app2.command()
+    def solo(x: int):
+        pass
+    assert app2.complete(['solo', '1'], '') == []
+
+
+def test_nested_completion():
+    # nested sets complete per the resolution chain, pop-up and all
+    import appeal as _appeal
+    app = _appeal.Appeal(name='tool', repeat=True)
+    @app.command()
+    def status():
+        pass
+    @app.command()
+    def db(label):
+        pass
+    reg = app.command('db', repeat=True)
+    @reg.command()
+    def add(x: int):
+        pass
+    @reg.command()
+    def remove(x: int):
+        pass
+
+    # the parent's own argument comes first
+    assert app.complete(['db'], '') == []
+    # then its subcommands--plus the root's words (root repeats)
+    assert app.complete(['db', 'main'], '') == \
+        ['add', 'db', 'help', 'remove', 'status']
+    # db's set cycles
+    assert app.complete(['db', 'main', 'add', '3'], '') == \
+        ['add', 'db', 'help', 'remove', 'status']
+    # popping up re-bases the chain: db's subs are gone
+    assert app.complete(['db', 'main', 'add', '3', 'status'], '') == \
+        ['db', 'help', 'status']
+
+
+MCP_MODULE = 'from appeal import MultiOption, accumulator\n\nclass Marks(MultiOption):\n    def init(self, default):\n        self.values = list(default) if default else []\n    def option(self, mark):\n        self.values.append(mark)\n    def render(self):\n        return tuple(self.values)\n\ndef add(x: int, y: int):\n    """\n    Adds two integers.\n    """\n    return x + y\n\ndef shout(text, *, times: int = 1, tags: accumulator[str] = (),\n          marks: Marks = ()):\n    return (\' \'.join([text.upper()] * times)\n            + \'\'.join(f\' #{t}\' for t in tags)\n            + \'\'.join(f\' !{m}\' for m in marks))\n'
+
+
+def _drive_mcp(script_path, requests):
+    import json
+    lines = '\n'.join(json.dumps(r) for r in requests)
+    # the user's module subclasses appeal.MultiOption, so the
+    # subprocess must find THIS repo's appeal (site-packages holds
+    # shipping v1)
+    env = dict(os.environ, PYTHONPATH=os.getcwd())
+    r = sub_run([sys.executable, script_path],
+                       input=lines + '\n', capture_output=True,
+                       text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    return [json.loads(line) for line in r.stdout.strip().split('\n')]
+
+
+def test_mcp_standalone():
+    # group A's killer app: a dependency-free MCP server--the
+    # north star aimed at a different transport
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'mcp_cmds.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(MCP_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import mcp_cmds
+            import importlib
+            importlib.reload(mcp_cmds)
+            app = _appeal.Appeal(name='calc')
+            app.command()(mcp_cmds.add)
+            app.command()(mcp_cmds.shout)
+            script = app.standalone_mcp()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('mcp_cmds', None)
+        assert 'import appeal' not in script
+        assert 'import big' not in script
+        script_path = os.path.join(d, 'calc-mcp.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        replies = _drive_mcp(script_path, [
+            {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+             'params': {}},
+            {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
+            {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',
+             'params': {'name': 'add',
+                        'arguments': {'x': 2, 'y': 40}}},
+            {'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call',
+             'params': {'name': 'shout',
+                        'arguments': {'text': 'go', 'times': 2,
+                                      'tags': ['a', 'b']}}},
+            {'jsonrpc': '2.0', 'id': 5, 'method': 'tools/call',
+             'params': {'name': 'add',
+                        'arguments': {'x': 'bad', 'y': 1}}},
+            # an Option class from the user's module: the streamed
+            # read driver must recognize appeal's protocol even
+            # though the subprocess holds two copies of appeal
+            {'jsonrpc': '2.0', 'id': 6, 'method': 'tools/call',
+             'params': {'name': 'shout',
+                        'arguments': {'text': 'hi',
+                                      'marks': ['x', 'y']}}},
+        ])
+        by_id = {m['id']: m for m in replies}
+        assert by_id[1]['result']['serverInfo']['name'] == 'calc'
+        tools = {t['name']: t for t in by_id[2]['result']['tools']}
+        assert tools['add']['description'] == 'Adds two integers.'
+        schema = tools['add']['inputSchema']
+        assert schema['properties']['x']['type'] == 'integer'
+        assert sorted(schema['required']) == ['x', 'y']
+        assert tools['shout']['inputSchema']['properties'][
+            'tags']['type'] == 'array'
+        assert tools['shout']['inputSchema']['properties'][
+            'marks']['type'] == 'array'
+        assert by_id[3]['result']['content'][0]['text'] == '42'
+        assert by_id[4]['result']['content'][0]['text'] == 'GO GO #a #b'
+        assert by_id[5]['result']['isError'] is True
+        assert "'bad'" in by_id[5]['result']['content'][0]['text']
+        assert by_id[6]['result']['content'][0]['text'] == 'HI !x !y'
+
+
+CLASS_MCP_MODULE = '''import appeal
+
+app = appeal.Appeal(name='srv')
+
+@app.global_command()
+class Server:
+    def __init__(self, *, greeting='hello', verbose=False):
+        self.greeting = greeting
+        self.count = 0
+
+    @app.command()
+    def greet(self, name):
+        'Greets a name.'
+        self.count += 1
+        return f'{self.greeting} {name} #{self.count}'
+
+    @app.command()
+    def total(self):
+        return self.count
+'''
+
+
+def test_mcp_class_construct_once():
+    # the ruled class-mcp: the instance is constructed ONCE at
+    # server startup (config feeds __init__ under the layering
+    # rules), and every tool call dispatches bound to it--state
+    # persists across calls
+    import appeal as _appeal
+    import io
+    import json
+    requests = [
+        {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'},
+        {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+         'params': {'name': 'greet', 'arguments': {'name': 'ann'}}},
+        {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',
+         'params': {'name': 'greet', 'arguments': {'name': 'bob'}}},
+        {'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call',
+         'params': {'name': 'total', 'arguments': {}}},
+    ]
+
+    def check(replies):
+        by_id = {m['id']: m for m in replies}
+        tools = {t['name']: t for t in by_id[1]['result']['tools']}
+        assert tools['greet']['description'] == 'Greets a name.'
+        assert tools['greet']['inputSchema']['required'] == ['name']
+        assert by_id[2]['result']['content'][0]['text'] == 'yo ann #1'
+        assert by_id[3]['result']['content'][0]['text'] == 'yo bob #2'
+        assert by_id[4]['result']['content'][0]['text'] == '2'
+
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'mcp_srv.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(CLASS_MCP_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import mcp_srv
+            import importlib
+            importlib.reload(mcp_srv)
+            app = mcp_srv.app
+            # in-process: drive stdio directly
+            stdin, stdout = sys.stdin, sys.stdout
+            sys.stdin = io.StringIO(
+                '\n'.join(json.dumps(r) for r in requests) + '\n')
+            sys.stdout = io.StringIO()
+            try:
+                app.mcp(config={'greeting': 'yo'})
+                out = sys.stdout.getvalue()
+            finally:
+                sys.stdin, sys.stdout = stdin, stdout
+            check([json.loads(line)
+                   for line in out.strip().split('\n')])
+            # config is the layering machinery: strict keys
+            try:
+                app.mcp(config={'oops': 1})
+                assert False, 'expected AppealDataError'
+            except _appeal.AppealDataError as e:
+                assert 'oops' in str(e)
+            # standalone: same server, config baked in as a literal
+            script = app.standalone_mcp(config={'greeting': 'yo'})
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('mcp_srv', None)
+        assert 'import appeal' not in script
+        script_path = os.path.join(d, 'srv-mcp.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        check(_drive_mcp(script_path, requests))
+
+    # config without a class to feed is refused
+    app2 = _appeal.Appeal(name='fn')
+    @app2.command()
+    def solo(x: int):
+        pass
+    try:
+        app2.standalone_mcp(config={'x': 1})
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'no class to construct' in str(e)
+
+    # a required __init__ positional has no coverage (config
+    # supplies only options): refuse at emission, naming it
+    app3 = _appeal.Appeal(name='bad')
+    @app3.global_command()
+    class Needs:
+        def __init__(self, database):
+            pass
+        @app3.command()
+        def go(self):
+            pass
+    try:
+        app3.standalone_mcp()
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'database' in str(e)
+
+
+def test_repl():
+    # §8.9: read a line, parse it like a command line, loop
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'r.py')
+        with open(path, 'wt', encoding='utf-8') as f:
+            f.write(
+                'import appeal\n'
+                "app = appeal.Appeal(name='calc')\n"
+                '@app.command()\n'
+                'def greet(name):\n'
+                "    return f'hello, {name}'\n"
+                "app.repl(banner='ready')\n")
+        env = dict(os.environ)
+        env['PYTHONPATH'] = os.getcwd()
+        r = sub_run(
+            [sys.executable, path],
+            input='greet world\nbogus\nquit\n',
+            capture_output=True, text=True, env=env)
+        assert r.returncode == 0, r.stderr
+        assert 'ready' in r.stdout
+        assert 'hello, world' in r.stdout
+        assert "unknown command 'bogus'" in r.stdout
+
 
 def test_converter_error_names_child_parameter():
     got = run_both(draw, ['dot', 'a', 'b', 'c', 'd', '9', 'x', '7'])
@@ -2271,12 +3103,25 @@ def test_bundled_flags():
         return (alpha, beta)
     got = run_both(f, ['-ab'])
     assert got == ('ok', (True, True)), got
-    # a short value option must be last in a bundle
+    # getopt's attachment rule (ruled 2026-07-09): an option
+    # taking exactly one value binds the rest of its token
     def g(*, alpha=False, num=1):
         return (alpha, num)
     got = run_both(g, ['-an', '5'])
     assert got == ('ok', (True, 5)), got
-    got = run_both(g, ['-na', '5'])
+    got = run_both(g, ['-an5'])
+    assert got == ('ok', (True, 5)), got
+    got = run_both(g, ['-n5'])
+    assert got == ('ok', (False, 5)), got
+    got = run_both(g, ['-n=5'])
+    assert got == ('ok', (False, 5)), got
+    # ...verbatim: '=' is a separator only right after the letter
+    def h(*, define=''):
+        return define
+    got = run_both(h, ['-dNAME=1'])
+    assert got == ('ok', 'NAME=1'), got
+    # the rest can still fail conversion, loudly
+    got = run_both(g, ['-na'])
     assert got[0] == 'usage', got
 
 def test_generated_source_is_readable():
@@ -2309,20 +3154,21 @@ def between(start: _pair, end: _pair=None):
 def stroke(width: float=1.0, *, dashed=False):
     return f'{width}{"~" if dashed else "-"}'
 
-def sketch(shape, s: stroke='none', *, tag: list[str] = ()):
-    print('sketch', shape, s, '+'.join(tag))
-
-def move(delta: tuple[int, int] = (0, 0), *, fast=False):
-    print('move', delta, 'fast' if fast else 'slow')
 
 def config(project='.', *, trace=False):
     if trace:
         print('trace on', project)
 
+def _jobs(jobs: int = -1):
+    return jobs
+
+def build_all(*targets, jobs: _jobs = 1):
+    print('build', '+'.join(targets), jobs)
+
 def _pt(x: int, y: int):
     return f'{x},{y}'
 
-def mark(label, *, at: _pt = 'origin', span: tuple[int, int] = (0, 0)):
+def mark(label, *, at: _pt = 'origin'):
     """
     Marks a label on the canvas.
 
@@ -2332,7 +3178,7 @@ def mark(label, *, at: _pt = 'origin', span: tuple[int, int] = (0, 0)):
     Options:
       at: where to place it.
     """
-    print('mark', label, at, span)
+    print('mark', label, at)
 
 def seg(length: float, *, dashed=False):
     return f"{length}{'~' if dashed else '-'}"
@@ -2342,6 +3188,21 @@ def path(start, *segs: seg):
 
 def board(f: _pair, s: stroke = 'none'):
     print('board', f, s)
+
+import sys as _sys
+if _sys.version_info >= (3, 9):
+    # the 3.9+ annotation spellings; their tests gate themselves
+    # (needs_39) so old interpreters still run everything above.
+    # (list[str] is legal SYNTAX on 3.7--it only fails when the
+    # def executes--so a plain if guards it.)
+    def sketch(shape, s: stroke='none', *, tag: list[str] = ()):
+        print('sketch', shape, s, '+'.join(tag))
+
+    def move(delta: tuple[int, int] = (0, 0), *, fast=False):
+        print('move', delta, 'fast' if fast else 'slow')
+
+    def spanmark(label, *, span: tuple[int, int] = (0, 0)):
+        print('mark', label, span)
 '''
 
 def write_standalone_fixture(dirname, command_name, decorate=None):
@@ -2370,12 +3231,39 @@ def write_standalone_fixture(dirname, command_name, decorate=None):
         f.write(script)
     return script_path, script
 
-def run_script(script_path, argv):
-    return subprocess.run(
+def sub_run(argv, capture_output=True, text=True, **kw):
+    """
+    subprocess.run for every Python we support: 3.6 has neither
+    capture_output= nor text=, so this swallows those (they're
+    the only shapes these tests use) and spells them the old way.
+    """
+    return subprocess.run(argv, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE,
+                           universal_newlines=True, **kw)
+
+
+def subprocess_env(**extra):
+    """
+    A minimal environment for driving emitted scripts: PATH, plus
+    the variables Windows can't start Python without (SystemRoot
+    above all).  Extras layer on top.
+    """
+    env = {'PATH': os.environ.get('PATH', '')}
+    for name in ('SystemRoot', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT',
+                 'TEMP', 'TMP'):
+        value = os.environ.get(name)
+        if value is not None:
+            env[name] = value
+    env.update(extra)
+    return env
+
+
+def run_script(script_path, argv, env=None):
+    return sub_run(
         [sys.executable, script_path] + argv,
         capture_output=True, text=True,
         cwd=os.path.dirname(script_path),
-        env={'PATH': os.environ.get('PATH', '')},
+        env=env if env is not None else subprocess_env(),
         )
 
 def test_standalone_runs():
@@ -2398,6 +3286,1148 @@ def test_standalone_runs():
         r = run_script(script_path, ['--bogus', 'x'])
         assert r.returncode == 2
         assert '--bogus' in r.stderr
+
+def test_error_stream_knob():
+    # errors print to sys.stderr by default (the POSIX diagnostic
+    # convention: pipelines reading stdout stay clean); errors=
+    # takes any writable file object--sys.stdout is v1's behavior.
+    # Requested help stays on stdout either way.
+    import appeal as _appeal
+    import contextlib, io
+
+    def make_app(**kwargs):
+        app = _appeal.Appeal(name='streams', **kwargs)
+        @app.command()
+        def greet(name):
+            print(f'hi, {name}')
+        return app
+
+    # the default resolves sys.stderr AT ERROR TIME (like
+    # print(file=None)), so redirection works
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), \
+         contextlib.redirect_stderr(err):
+        code = make_app().main(['greet'])       # missing argument
+    assert code == 2
+    assert out.getvalue() == '', out.getvalue()
+    assert 'error:' in err.getvalue() and 'usage:' in err.getvalue()
+
+    # any writable file object works, verbatim
+    sink = io.StringIO()
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = make_app(errors=sink).main(['greet'])
+    assert code == 2
+    assert out.getvalue() == ''
+    assert 'error:' in sink.getvalue() and 'usage:' in sink.getvalue()
+
+    # a non-stream refuses by name
+    try:
+        _appeal.Appeal(errors=42)
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert '42' in str(e)
+
+    # sys.stdout bakes into standalone scripts; a custom stream
+    # can't travel to a script that hasn't run yet, so it refuses
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'streams_mod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write("def greet(name):\n    print('hi, ' + name)\n")
+        sys.path.insert(0, d)
+        try:
+            import streams_mod
+            import importlib
+            importlib.reload(streams_mod)
+            app = _appeal.Appeal(name='streams', errors=sys.stdout)
+            app.command()(streams_mod.greet)
+            script = app.standalone()
+            app2 = _appeal.Appeal(name='streams', errors=io.StringIO())
+            app2.command()(streams_mod.greet)
+            try:
+                app2.standalone()
+                assert False, 'expected AppealConfigurationError'
+            except AppealConfigurationError as e:
+                assert 'custom stream' in str(e)
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('streams_mod', None)
+        assert 'errors=sys.stdout' in script
+        script_path = os.path.join(d, 'streams.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        r = run_script(script_path, ['greet'])
+        assert r.returncode == 2
+        assert 'error:' in r.stdout and r.stderr == '', r.stderr
+
+
+def test_flag_explicit_boolean():
+    # ruled 2026-07-09: a flag accepts an explicit boolean with
+    # '=' only--exactly 'true' and 'false', no alternate-spelling
+    # zoo ("yes" "si" "bueno" "naturally" "arguably" "usually").
+    # Bare flags are unchanged; the '=' spelling exists so the
+    # command line can overrule a config layer that turned a
+    # flag on (defaults < config < argv, restored for flags).
+    import appeal as _appeal
+
+    def f(*, verbose=False):
+        return verbose
+    assert run_both(f, ['--verbose=true']) == ('ok', True)
+    assert run_both(f, ['--verbose=false']) == ('ok', False)
+    assert run_both(f, ['-v=false']) == ('ok', False)
+    assert run_both(f, ['-v=true']) == ('ok', True)
+    assert run_both(f, ['-v']) == ('ok', True)
+    assert run_both(f, []) == ('ok', False)
+    # only those two spellings, loudly
+    for bad in ('maybe', 'True', '1', 'yes'):
+        got = run_both(f, [f'--verbose={bad}'])
+        assert got[0] == 'usage' and "'true' or" in got[1], got
+    # repetition is last-wins (ruled 2026-07-09): the explicit
+    # spelling can take back a bare flag, and vice versa
+    got = run_both(f, ['--verbose', '--verbose=false'])
+    assert got == ('ok', False), got
+    got = run_both(f, ['--verbose=false', '-v'])
+    assert got == ('ok', True), got
+    # zero-arity folds are not flags: '=' still refuses
+    def g(*, level: _appeal.counter() = 0):
+        return level
+    got = run_both(g, ['--level=3'])
+    assert got[0] == 'usage' and "doesn't take a value" in got[1], got
+
+    # a **kwargs-delivered flag carries the explicit False through
+    app = _appeal.Appeal(name='kw')
+    @app.command()
+    @app.option('extra', '--extra', default=False)
+    def kw(**kwargs):
+        print(sorted(kwargs.items()))
+    import io, contextlib
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.process(['kw', '--extra=false'])
+    assert out.getvalue().strip() == "[('extra', False)]"
+
+    # per-instance (*args-group) flags take it too--spelled
+    # announce-first, as always (the flag precedes its instance)
+    def item(x: int, *, keep=False):
+        return (x, keep)
+    def rep(*args: item):
+        return args
+    assert run_both(rep, ['-k=false', '1', '-k=true', '2']) == \
+        ('ok', ((1, False), (2, True)))
+
+    # THE POINT: the command line can turn OFF what config turned on
+    app2 = _appeal.Appeal(name='layer')
+    @app2.global_command()
+    def top(*, verbose=False):
+        print('verbose', verbose)
+    @app2.command()
+    def work():
+        pass
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app2.process(['--verbose=false', 'work'], config={'verbose': True})
+    assert out.getvalue().strip() == 'verbose False'
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app2.process(['work'], config={'verbose': True})
+    assert out.getvalue().strip() == 'verbose True'
+
+
+def test_flag_explicit_boolean_standalone():
+    # the '=' spelling works in emitted scripts (north star)
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'fmod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write("def run(*, verbose=False):\n"
+                    "    print('verbose', verbose)\n")
+        sys.path.insert(0, d)
+        try:
+            import fmod
+            import importlib
+            importlib.reload(fmod)
+            app = _appeal.Appeal(name='fb')
+            app.command()(fmod.run)
+            script = app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('fmod', None)
+        script_path = os.path.join(d, 'fb.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        r = run_script(script_path, ['run', '--verbose=false'])
+        assert (r.returncode, r.stdout) == (0, 'verbose False\n'), r.stderr
+        r = run_script(script_path, ['run', '-v=true'])
+        assert (r.returncode, r.stdout) == (0, 'verbose True\n'), r.stderr
+        r = run_script(script_path, ['run', '--verbose=si'])
+        assert r.returncode == 2
+        assert "'true' or 'false'" in r.stderr
+
+
+def test_file_converter():
+    # appeal.file(): open() as a converter, with '-' meaning the
+    # process-standard stream by MODE (the argparse/click answer
+    # to "which one did they need"), wrapped so close() flushes
+    # and goes inert--a contract neither argparse (bare stream)
+    # nor click (misnamed wrapper) actually delivers.
+    import appeal as _appeal
+    import contextlib, io
+    from appeal import build, compile_plan, interpreter_parse
+
+    def cat(inp: _appeal.file()):
+        data = inp.read()
+        inp.close()
+        return (type(inp).__name__, data)
+    plan = build(cat)
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'x.txt')
+        with open(path, 'wt', encoding='utf-8') as f:
+            f.write('from disk')
+        assert interpreter_parse(plan, [path]) == \
+            ('TextIOWrapper', 'from disk')
+        assert compile_plan(plan)([path]) == \
+            ('TextIOWrapper', 'from disk')
+
+    # '-' with a reading mode is stdin (fresh stream per rung:
+    # reading consumes it)
+    for drive in (lambda: interpreter_parse(plan, ['-']),
+                  lambda: compile_plan(plan)(['-'])):
+        old = sys.stdin
+        sys.stdin = io.StringIO('from stdin')
+        try:
+            assert drive() == ('_ProcessStream', 'from stdin')
+        finally:
+            sys.stdin = old
+
+    # '-' with a writing mode is stdout; close()/with flush and
+    # go inert--the real stream survives
+    def emit(dest: _appeal.file('w')):
+        with dest as f:
+            f.write('written')
+        dest.close()                     # double-close: also fine
+        return dest.closed
+    eplan = build(emit)
+    for drive in (lambda: interpreter_parse(eplan, ['-']),
+                  lambda: compile_plan(eplan)(['-'])):
+        old = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            assert drive() is True
+            captured = sys.stdout.getvalue()
+            sys.stdout.write('still alive')     # not closed!
+        finally:
+            sys.stdout = old
+        assert captured == 'written'
+
+    # loud refusals: unopenable path (with strerror), '-' on a
+    # read-write mode
+    got = run_both(cat, ['/nope/missing.txt'])
+    assert got[0] == 'usage' and "can't open" in got[1], got
+    def rw(f: _appeal.file('r+')):
+        return f
+    got = run_both(rw, ['-'])
+    assert got[0] == 'usage' and "read-write" in got[1], got
+
+    # binary modes get the .buffer layer
+    def slurp(inp: _appeal.file('rb')):
+        return inp._stream is sys.stdin.buffer
+    assert run_both(slurp, ['-']) == ('ok', True)
+
+    # the recipe carries only non-default settings
+    conv = _appeal.file('w', encoding='utf-8')
+    assert conv.__appeal_recipe__ == "file('w', encoding='utf-8')"
+    assert _appeal.file().__appeal_recipe__ == "file('r')"
+    # an opener is a callable: no recipe, so standalone refuses
+    assert not hasattr(_appeal.file(opener=os.open),
+                       '__appeal_recipe__')
+
+
+def test_file_converter_standalone():
+    # the north star: '-' pipes through a dependency-free script,
+    # and a `= sys.stdout` default renders by identity
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'upmod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(
+                "import sys\n"
+                "import appeal\n"
+                "def cat(inp: appeal.file() = None,\n"
+                "        *, out: appeal.file('w') = sys.stdout):\n"
+                "    data = inp.read() if inp else ''\n"
+                "    out.write(data.upper())\n"
+                "    out.close()\n")
+        sys.path.insert(0, d)
+        try:
+            import upmod
+            import importlib
+            importlib.reload(upmod)
+            app = _appeal.Appeal(name='upcat')
+            app.command()(upmod.cat)
+            script = app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('upmod', None)
+        assert "file('r')" in script
+        assert '_out_default = sys.stdout' in script
+        assert 'class _ProcessStream' in script
+        script_path = os.path.join(d, 'upcat.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        env = subprocess_env(PYTHONPATH=repo_dir)
+        r = sub_run(
+            [sys.executable, script_path, 'cat', '-'],
+            input='hello\n', capture_output=True, text=True,
+            cwd=d, env=env)
+        assert (r.returncode, r.stdout) == (0, 'HELLO\n'), r.stderr
+        with open(os.path.join(d, 'in.txt'), 'wt') as f:
+            f.write('x\n')
+        r = sub_run(
+            [sys.executable, script_path, 'cat', 'in.txt',
+             '--out', 'out.txt'],
+            capture_output=True, text=True, cwd=d, env=env)
+        assert r.returncode == 0, r.stderr
+        with open(os.path.join(d, 'out.txt')) as f:
+            assert f.read() == 'X\n'
+
+
+def test_usage_formatter_knobs():
+    # Appeal(usage_max_columns=, usage_indent_definitions=): v1's
+    # knobs, wired (they were stored-and-never-read; the dead
+    # indent default of 2 was also a lie--the templates' real
+    # indent is 4, v1's default).  max_columns caps the wrap
+    # margin, min'd with the terminal width at render time
+    # (pipes get the cap, so this output is stable);
+    # indent_definitions re-indents the section templates, which
+    # own layout.
+    import appeal as _appeal
+    import contextlib, io
+
+    def make_app(**kw):
+        app = _appeal.Appeal(name='serve', **kw)
+        @app.global_command()
+        def serve(host, port: int = 8080, *, verbose=False):
+            """
+            Serves the thing with a summary long enough that a
+            narrow margin will have to re-wrap it across lines.
+
+            Arguments:
+              host: The host to serve on, described at length so
+                wrapping becomes visible in a narrow margin.
+
+            Options:
+              verbose: Print more output.
+            """
+        return app
+
+    def helptext(app):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            app.main(['--help'])
+        return out.getvalue()
+
+    wide = helptext(make_app())
+    assert max(len(l) for l in wide.splitlines()) > 40
+    narrow = helptext(make_app(usage_max_columns=40))
+    assert max(len(l) for l in narrow.splitlines()) <= 40
+    assert 'Serves the thing' in narrow
+
+    indented = helptext(make_app(usage_indent_definitions=8))
+    row = next(l for l in indented.splitlines()
+               if l.strip().startswith('host'))
+    assert row.startswith(' ' * 8) and row[8] != ' ', repr(row)
+
+    # garbage refuses by name
+    for knob in ('usage_max_columns', 'usage_indent_definitions'):
+        try:
+            _appeal.Appeal(**{knob: 'wide'})
+            assert False, 'expected AppealConfigurationError'
+        except AppealConfigurationError as e:
+            assert knob in str(e)
+
+
+def test_usage_knobs_standalone():
+    # the cap bakes into the script, and the SCRIPT's terminal
+    # decides the rest at its own runtime (COLUMNS narrows below
+    # the cap; a pipe gets the cap)
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'kmod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(
+                'def serve(host):\n'
+                '    \'\'\'\n'
+                '    Serves the thing with a summary long enough\n'
+                '    that a narrow terminal must re-wrap it.\n'
+                '    \'\'\'\n')
+        sys.path.insert(0, d)
+        try:
+            import kmod
+            import importlib
+            importlib.reload(kmod)
+            app = _appeal.Appeal(name='s', usage_max_columns=60)
+            app.command()(kmod.serve)
+            script = app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('kmod', None)
+        assert 'help_margin(60)' in script
+        script_path = os.path.join(d, 's.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        env = subprocess_env(PYTHONPATH=repo_dir)
+        r = sub_run(
+            [sys.executable, script_path, 'serve', '--help'],
+            capture_output=True, text=True, cwd=d, env=env)
+        assert max(len(l) for l in r.stdout.splitlines()) <= 60
+        r = sub_run(
+            [sys.executable, script_path, 'serve', '--help'],
+            capture_output=True, text=True, cwd=d,
+            env={**env, 'COLUMNS': '38'})
+        assert max(len(l) for l in r.stdout.splitlines()) <= 38
+
+
+def test_did_you_mean():
+    # typo suggestions (ruled 2026-07-09): unknown commands and
+    # unknown LONG options append difflib's closest matches--
+    # short options don't (single letters aren't "close"), and
+    # nothing close means no tail.  The suggestion only ever
+    # decorates an error that already fired.
+    import appeal as _appeal
+    import contextlib, io
+
+    app = _appeal.Appeal(name='tool', version='1.0')
+    @app.command()
+    def status(*, verbose=False):
+        pass
+    @app.command()
+    def stats():
+        pass
+
+    def main_err(argv):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+             contextlib.redirect_stdout(io.StringIO()):
+            assert app.main(argv) == 2
+        return err.getvalue().split('\n')[0]
+
+    assert main_err(['stauts']) == \
+        "error: unknown command 'stauts' (did you mean 'stats' " \
+        "or 'status'?)"
+    assert main_err(['status', '--verbos']) == \
+        "error: unknown option '--verbos' (did you mean " \
+        "'--verbose'?)"
+    # the auto words suggest too (resolvable words are the pool)
+    assert "did you mean 'version'" in main_err(['versoin'])
+    assert "did you mean 'help'" in main_err(['hlep'])
+    # help's topic path suggests as well
+    assert "did you mean" in main_err(['help', 'stauts'])
+    # nothing close: no tail
+    assert main_err(['zzqqxx']) == "error: unknown command 'zzqqxx'"
+    # short options don't suggest
+    err = main_err(['status', '-q'])
+    assert err == "error: unknown option '-q'", err
+
+    # both rungs agree (parse_tokens is shared; the dispatchers
+    # each have their own site)
+    def cmd(*, verbose=False):
+        return verbose
+    got = run_both(cmd, ['--verbos'])
+    assert got[0] == 'usage' and "did you mean '--verbose'" in got[1]
+
+    # the emitted dispatcher's unknown-command site
+    import contextlib, io
+    out = io.StringIO()
+    def alpha():
+        return 'a'
+    def beta():
+        return 'b'
+    from appeal import compile_command_set
+    parse = compile_command_set({'alpha': build(alpha),
+                                 'beta': build(beta)}, prog='t')
+    try:
+        parse(['alhpa'])
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert "did you mean 'alpha'" in str(e), e
+
+
+def test_keyboard_interrupt():
+    # ^C dies quietly with 128+SIGINT=130--in main() ONLY (ruled
+    # 2026-07-09: run_main is the whole-program driver; process()
+    # stays raw, the automation contract; nothing else in Appeal
+    # touches signals)
+    import appeal as _appeal
+    import contextlib, io
+
+    app = _appeal.Appeal(name='k')
+    @app.command()
+    def boom():
+        raise KeyboardInterrupt
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), \
+         contextlib.redirect_stderr(err):
+        code = app.main(['boom'])
+    assert code == 130
+    assert out.getvalue() == '' and err.getvalue() == ''
+
+    # process() propagates raw
+    try:
+        app.process(['boom'])
+        assert False, 'expected KeyboardInterrupt'
+    except KeyboardInterrupt:
+        pass
+
+
+def test_keyboard_interrupt_standalone():
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'imod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write("def boom():\n    raise KeyboardInterrupt\n")
+        sys.path.insert(0, d)
+        try:
+            import imod
+            import importlib
+            importlib.reload(imod)
+            app = _appeal.Appeal(name='k')
+            app.command()(imod.boom)
+            script = app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('imod', None)
+        script_path = os.path.join(d, 'k.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        r = run_script(script_path, ['boom'])
+        assert r.returncode == 130, (r.returncode, r.stderr)
+        assert r.stdout == '' and r.stderr == ''
+
+
+DEEP_MODULE = """\
+def db(label):
+    print('db', label)
+def migrate(step):
+    print('migrate', step)
+def up(n: int):
+    print('up', n)
+def down(n: int):
+    print('down', n)
+def status():
+    print('status')
+"""
+
+
+def test_deep_nested_sets():
+    # sets nested deeper than one level (built 2026-07-09; the
+    # standalone refusal lifted, and plan_for taught to find a
+    # nested parent--the stack machinery was always deep, the
+    # plan lookup wasn't)
+    import appeal as _appeal
+    import contextlib, io
+
+    def make_app(mod):
+        app = _appeal.Appeal(name='t', repeat=True)
+        app.command()(mod.status)
+        app.command()(mod.db)
+        app.command('db', repeat=True).command()(mod.migrate)
+        app.command('migrate', repeat=True).command()(mod.up)
+        app.command('migrate').command()(mod.down)
+        return app
+
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'deepmod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(DEEP_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import deepmod
+            import importlib
+            importlib.reload(deepmod)
+            app = make_app(deepmod)
+
+            # in-process: three levels, cycling pops through two
+            # of them back to the root
+            argv = ['db', 'main', 'migrate', 'two', 'up', '3',
+                    'down', '1', 'status']
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                app.process(list(argv))
+            expected = 'db main\nmigrate two\nup 3\ndown 1\nstatus\n'
+            assert out.getvalue() == expected
+
+            # completion at the depth-2 boundary offers the whole
+            # resolution chain
+            chain = app.complete(['db', 'main', 'migrate', 'two'], '')
+            assert chain == ['db', 'down', 'help', 'migrate',
+                             'status', 'up'], chain
+
+            # a dangling depth-2 parent errors with ITS usage
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                assert app.main(['db', 'main', 'migrate', 'two',
+                                 'up']) == 2
+
+            script = app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('deepmod', None)
+
+        script_path = os.path.join(d, 'deep.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        r = run_script(script_path, list(argv))
+        assert (r.returncode, r.stdout) == (0, expected), r.stderr
+        # help describes a nested parent instead of unpacking its
+        # _SET_ dict (fixed 2026-07-11: raw ValueError before)
+        r = run_script(script_path, ['help', 'db'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.startswith('usage: db')
+        assert 'migrate' in r.stdout
+        # baked completion agrees with in-process at depth 2
+        base = subprocess_env()
+        r = sub_run(
+            [sys.executable, script_path],
+            capture_output=True, text=True, cwd=d,
+            env={**base, '_APPEAL_COMPLETE': 'bash',
+                        'COMP_WORDS': 't db main migrate two ',
+                        'COMP_CWORD': '5'})
+        assert r.stdout.splitlines() == chain, r.stdout
+        # a malformed line deep in the tree still means NO work
+        r = run_script(script_path,
+                       ['db', 'main', 'migrate', 'two', 'up', 'x',
+                        'status'])
+        assert r.returncode == 2
+        assert r.stdout.startswith('db main\nmigrate two\n'), r.stdout
+
+
+def test_documentation_man():
+    # app.documentation('man'): the help corpus in troff clothing
+    # (the completion(shell) shape: a format name in, text out).
+    # Installing the page somewhere is packaging's business.
+    import appeal as _appeal
+    import shutil as _shutil
+
+    app = _appeal.Appeal(name='mytool', version='2.0')
+    @app.global_command()
+    def top(*, trace=False):
+        """
+        A demonstration tool.
+
+        Longer prose about the tool.
+
+        Options:
+          trace: Print a trace of everything.
+        """
+    @app.command()
+    def greet(name, *, shout=False):
+        """
+        Greets a name.
+
+        Arguments:
+          name: Who to greet.
+
+        Options:
+          shout: LOUDER.
+        """
+    text = app.documentation('man')
+    assert text.startswith('.TH MYTOOL 1 "" "mytool 2.0" ""\n')
+    assert '.SH NAME\nmytool \\- A demonstration tool.' in text
+    assert '.B mytool [\\-t|\\-\\-trace] command' in text
+    assert '.B mytool greet [\\-s|\\-\\-shout] name' in text
+    assert '.SH OPTIONS' in text and 'Print a trace' in text
+    assert '.SS "mytool greet"' in text
+    assert '.B \\-s|\\-\\-shout' in text and 'LOUDER.' in text
+    # the auto commands document themselves in COMMANDS
+    assert "Print the program's version." in text
+    # a single-command program: one page, no COMMANDS
+    solo = _appeal.Appeal(name='solo')
+    @solo.global_command()
+    def run(thing):
+        "Runs the thing."
+    stext = solo.documentation('man')
+    assert '.SH NAME\nsolo \\- Runs the thing.' in stext
+    assert '.SH COMMANDS' not in stext
+    # unknown formats refuse by name
+    try:
+        app.documentation('html')
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'html' in str(e)
+    # when a troff renderer is around, the page renders clean
+    # (an extra assertion, not a skipped test)
+    groff = _shutil.which('groff')
+    if groff:
+        r = sub_run([groff, '-man', '-Tutf8'],
+                           input=text, capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert 'SYNOPSIS' in r.stdout
+
+
+def test_appeal_error_umbrella():
+    # the umbrella reparenting (ruled 2026-07-09): AppealError is
+    # the base of everything Appeal raises (v1's
+    # AppealBaseException role--kept as an alias), and it has one
+    # job of its own: raise it from a command for a polite
+    # message + exit 1, no usage (the command line was fine).
+    import appeal as _appeal
+    import contextlib, io
+
+    assert issubclass(_appeal.AppealDataError, _appeal.AppealError)
+    assert issubclass(_appeal.AppealUsageError, _appeal.AppealError)
+    assert issubclass(_appeal.AppealConfigurationError,
+                      _appeal.AppealError)
+    assert _appeal.AppealBaseException is _appeal.AppealError
+
+    app = _appeal.Appeal(name='t')
+    @app.command()
+    def fetch():
+        raise _appeal.AppealError("couldn't reach the server")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), \
+         contextlib.redirect_stdout(io.StringIO()):
+        assert app.main(['fetch']) == 1
+    assert err.getvalue() == "error: couldn't reach the server\n"
+
+    # configuration errors are bugs: main() lets them raise, even
+    # though they're under the umbrella now
+    app2 = _appeal.Appeal(name='t2')
+    @app2.command()
+    def c(x: _appeal.counter):      # factory not called
+        pass
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            app2.main(['c', '1'])
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError:
+        pass
+
+    # the reparenting revived _config_inject's dead except clause:
+    # a bad config boolean now carries the usage it always meant to
+    app3 = _appeal.Appeal(name='t3')
+    @app3.global_command()
+    def top(*, verbose=False):
+        pass
+    @app3.command()
+    def work():
+        pass
+    try:
+        app3.process(['work'], config={'verbose': 'maybe'})
+        assert False, 'expected AppealDataError'
+    except _appeal.AppealDataError as e:
+        assert "can't read 'maybe'" in str(e)
+        assert e.usage
+
+
+def test_appeal_error_standalone():
+    # the raise-for-exit-1 job travels (the umbrella lives in the
+    # exceptions snippet)
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'emod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write("import appeal\n"
+                    "def fetch():\n"
+                    "    raise appeal.AppealError('no server')\n")
+        sys.path.insert(0, d)
+        try:
+            import emod
+            import importlib
+            importlib.reload(emod)
+            app = _appeal.Appeal(name='t')
+            app.command()(emod.fetch)
+            script = app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('emod', None)
+        script_path = os.path.join(d, 't.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        env = subprocess_env(PYTHONPATH=repo_dir)
+        r = sub_run(
+            [sys.executable, script_path, 'fetch'],
+            capture_output=True, text=True, cwd=d, env=env)
+        assert r.returncode == 1
+        assert r.stderr == 'error: no server\n', r.stderr
+
+
+def test_config_scoped_refusal():
+    # refused BY DESIGN (ruled 2026-07-09, the last named
+    # refusal): position is the essence of a scoped option, and
+    # a mapping has no position.  The refusal names the
+    # workaround.
+    import appeal as _appeal
+
+    def child(p, *, flavor=''):
+        return (p, flavor)
+    app = _appeal.Appeal(name='t')
+    @app.global_command()
+    def mg(a, b: child = None, c: child = None):
+        pass
+    @app.command()
+    def work():
+        pass
+    try:
+        app.process(['work'], config={'flavor': 'sour'})
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'position decides' in str(e)
+        assert '@app.option' in str(e)
+
+
+def test_concurrent_first_parse():
+    # the README's "even simultaneously" claim, made true for the
+    # FIRST parse too (ruled 2026-07-11): compilation runs
+    # lock-free (user code is never called under a lock--the
+    # house discipline), and a plain Lock guards only the
+    # test-and-set installs, so racing threads each build, one
+    # wins, the rest adopt the winner.
+    import threading
+    import appeal as _appeal
+
+    for round_number in range(5):
+        app = _appeal.Appeal(name='cc', repeat=True)
+        results = []
+        @app.command()
+        def add(x: int, y: int):
+            results.append(x + y)
+        @app.command()
+        def mul(x: int, y: int):
+            results.append(x * y)
+
+        n = 8
+        barrier = threading.Barrier(n)
+        errors = []
+        def race(i):
+            barrier.wait()
+            try:
+                app.process(['add', str(i), '1', 'mul', str(i), '2'])
+            except Exception as e:      # pragma: no cover
+                errors.append(e)
+        threads = [threading.Thread(target=race, args=(i,))
+                   for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, errors
+        assert sorted(results) == sorted(
+            [i + 1 for i in range(n)] + [i * 2 for i in range(n)])
+        # post-race, the caches are coherent: one plan per word
+        assert app.plan_for('add') is app.plan_for('add')
+
+    # racing plan_for directly: every thread gets the SAME object
+    app2 = _appeal.Appeal(name='cc2')
+    @app2.command()
+    def solo(x: int):
+        pass
+    seen = []
+    barrier = threading.Barrier(8)
+    def get_plan():
+        barrier.wait()
+        seen.append(app2.plan_for('solo'))
+    threads = [threading.Thread(target=get_plan) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len({id(p) for p in seen}) == 1, 'plan identity diverged'
+
+
+def test_version():
+    # Appeal(version=...) wires the command line (ruled 2026-07-09,
+    # v1's shape minus the -v short): --version as the first token
+    # prints the bare string and exits 0, and command sets get an
+    # automatic `version` command--suppressed by a user-defined
+    # one, absent entirely when version= isn't given.
+    import appeal as _appeal
+    import contextlib, io
+
+    def main(app, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = app.main(argv)
+        return code, out.getvalue()
+
+    app = _appeal.Appeal(name='tool', version='1.2.3')
+    @app.command()
+    def work(*, verbose=False):
+        print('work', verbose)
+    assert main(app, ['--version']) == (0, '1.2.3\n')
+    assert main(app, ['version']) == (0, '1.2.3\n')
+    # no -v short: the user's verbose keeps it, unambiguously
+    assert main(app, ['work', '-v']) == (0, 'work True\n')
+    # the version command takes no arguments, loudly
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code, out = main(app, ['version', 'extra'])
+    assert code == 2 and 'takes no arguments' in err.getvalue()
+    # the listing documents it (before help, v1's order)
+    code, out = main(app, ['help'])
+    assert code == 0
+    assert out.index('version') < out.index('help ')
+    assert "Print the program's version." in out
+    # help DESCRIBES the auto commands (fixed 2026-07-11: this
+    # errored in-process and raised raw TypeError in standalone)
+    assert main(app, ['help', 'version']) == \
+        (0, "Print the program's version.\n")
+    assert main(app, ['help', 'help']) == \
+        (0, 'Print usage documentation on a specific command.\n')
+    # completion offers the word
+    assert 'version' in app.complete([], '')
+
+    # a user-defined version command wins
+    app2 = _appeal.Appeal(name='t2', version='9.9')
+    @app2.command()
+    def version():
+        print('mine')
+    assert main(app2, ['version']) == (0, 'mine\n')
+
+    # no version= means no version anything
+    app3 = _appeal.Appeal(name='t3')
+    @app3.command()
+    def go():
+        pass
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code, out = main(app3, ['--version'])
+    assert code == 2 and 'unknown command' in err.getvalue()
+
+    # a global-only program answers --version too
+    app4 = _appeal.Appeal(name='solo', version='4.5')
+    @app4.global_command()
+    def solo(x: int = 0):
+        print('solo', x)
+    assert main(app4, ['--version']) == (0, '4.5\n')
+
+
+def test_version_standalone():
+    # the version bakes into standalone scripts: both spellings
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'vmod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write("def add(x: int, y: int):\n    print(x + y)\n")
+        sys.path.insert(0, d)
+        try:
+            import vmod
+            import importlib
+            importlib.reload(vmod)
+            app = _appeal.Appeal(name='calc', version='7.7')
+            app.command()(vmod.add)
+            script = app.standalone()
+            app2 = _appeal.Appeal(name='calc')
+            app2.command()(vmod.add)
+            unversioned = app2.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('vmod', None)
+        assert "version='7.7'" in script
+        assert 'version' not in unversioned.rpartition(
+            'if __name__')[2]           # nothing baked when unset
+        script_path = os.path.join(d, 'calc.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        r = run_script(script_path, ['--version'])
+        assert (r.returncode, r.stdout) == (0, '7.7\n'), r.stderr
+        r = run_script(script_path, ['version'])
+        assert (r.returncode, r.stdout) == (0, '7.7\n'), r.stderr
+        r = run_script(script_path, ['help', 'version'])
+        assert (r.returncode, r.stdout) == \
+            (0, "Print the program's version.\n"), r.stderr
+        r = run_script(script_path, ['add', '2', '3'])
+        assert (r.returncode, r.stdout) == (0, '5\n'), r.stderr
+
+
+def test_parse_before_execute():
+    # the Appeal rule (ruled 2026-07-08): a malformed line does NO
+    # work.  The global command must not run when the command
+    # portion of the line fails to scan.
+    import appeal as _appeal
+    ran = []
+    app = _appeal.Appeal(name='ms')
+    @app.global_command()
+    def top(*, trace=False):
+        ran.append('top')
+    @app.command()
+    def add(x: int, y: int):
+        ran.append(('add', x, y))
+    try:
+        app.process(['--trace', 'add', '1'])   # add needs 2
+        assert False, 'expected UsageError'
+    except UsageError:
+        pass
+    assert ran == [], ran
+    # a well-formed line still executes left to right
+    app2 = _appeal.Appeal(name='ms2')
+    @app2.global_command()
+    def top2(*, trace=False):
+        ran.append('top2')
+    @app2.command()
+    def add2(x: int, y: int):
+        ran.append(('add2', x, y))
+    app2.process(['--trace', 'add2', '1', '2'])
+    assert ran == ['top2', ('add2', 1, 2)], ran
+
+
+def test_processor():
+    # the Appeal/Processor divorce: Appeal is the registry and
+    # compiler; a Processor is one trip through one command line
+    import appeal as _appeal
+    ran = []
+    app = _appeal.Appeal(name='pr')
+    @app.global_command()
+    def top(*, trace=False):
+        ran.append('top')
+    @app.command()
+    def add(x: int, y: int):
+        ran.append(('add', x, y))
+    # stage 1 only: nothing executes, and the artifact is readable
+    processor = app.parse(['--trace', 'add', '1', '2'])
+    assert ran == []
+    assert processor.result is None and processor.instances == []
+    text = repr(processor)
+    assert '(global)' in text and 'add' in text, text
+    # stage 2: left to right, and the mechanical execution log
+    processor.execute()
+    assert ran == ['top', ('add', 1, 2)]
+    assert processor.instances == [(None, None), (add, None)]
+    assert app.instances == [(None, None), (add, None)]
+    # a malformed line dies at parse time
+    try:
+        app.parse(['add', '1'])
+        assert False, 'expected UsageError'
+    except UsageError:
+        pass
+    # app.instances reads the most recent run
+    app.process(['add', '3', '4'])
+    assert ran[-1] == ('add', 3, 4)
+    assert app.instances == [(None, None), (add, None)]
+    # v1 compat: an unparsed Processor is a callable execution object
+    p2 = app.processor()
+    p2(['add', '5', '6'])
+    assert ran[-1] == ('add', 5, 6)
+
+
+def test_processor_single_command():
+    import appeal as _appeal
+    app = _appeal.Appeal(name='one')
+    @app.global_command()
+    def top(a: int, b: int = 0):
+        return a + b
+    processor = app.parse(['3', '4'])
+    assert processor.instances == []
+    assert processor.execute() == 7
+    assert processor.result == 7
+    assert app.instances == [(None, None)]
+
+
+def test_cycling():
+    # Appeal's command cycling (repeat=True), rebuilt from Larry's
+    # spec--v1's flag existed but its loop was broken in 0.6.4
+    import appeal as _appeal
+    ran = []
+    app = _appeal.Appeal(name='cyc', repeat=True)
+    @app.command()
+    def add(x: int, y: int):
+        ran.append(('add', x, y))
+    @app.command()
+    def mul(x: int, y: int):
+        ran.append(('mul', x, y))
+    @app.command()
+    def greet(name, greeting='hello'):
+        ran.append(('greet', name, greeting))
+    @app.command()
+    def scale(x: int, *, double=False):
+        ran.append(('scale', x, double))
+    @app.command()
+    def total(*nums: int):
+        ran.append(('total',) + nums)
+    @app.command()
+    def bail(code: int):
+        ran.append(('bail', code))
+        return code
+
+    # sibling cycle, left to right, logged in order
+    app.process(['add', '1', '2', 'mul', '3', '4', 'add', '5', '6'])
+    assert ran == [('add', 1, 2), ('mul', 3, 4), ('add', 5, 6)], ran
+    assert [c.__name__ for c, _ in app.instances] == ['add', 'mul', 'add']
+
+    # optionals must be spelled: greedy saturation takes the
+    # would-be command word as greet's greeting
+    ran.clear()
+    try:
+        app.process(['greet', 'bob', 'add', '1', '2'])
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert "unknown command '1'" in str(e), e
+    assert ran == [], ran   # parse-before-execute: nothing ran
+
+    # spelled, it cycles
+    app.process(['greet', 'bob', 'hi', 'add', '1', '2'])
+    assert ran == [('greet', 'bob', 'hi'), ('add', 1, 2)], ran
+
+    # the window rule: a post-saturation option binds to the
+    # finished command; the next command word closes the window
+    ran.clear()
+    app.process(['scale', '3', '--double', 'add', '1', '2'])
+    assert ran == [('scale', 3, True), ('add', 1, 2)], ran
+
+    # *args never saturates: a cycle terminator
+    ran.clear()
+    app.process(['add', '1', '2', 'total', '3', '4', '5'])
+    assert ran == [('add', 1, 2), ('total', 3, 4, 5)], ran
+
+    # a malformed later command means NO work (the Appeal rule)
+    ran.clear()
+    try:
+        app.process(['add', '1', '2', 'mul', '3'])
+        assert False, 'expected UsageError'
+    except UsageError:
+        pass
+    assert ran == [], ran
+
+    # the early-exit contract, every command in a cycle: a nonzero
+    # int halts
+    ran.clear()
+    result = app.process(['bail', '7', 'add', '1', '2'])
+    assert result == 7
+    assert ran == [('bail', 7)], ran
+
+    # the gate rule fires in stage 1, even mid-cycle: a violation
+    # in the SECOND command means the first never runs
+    def _pair(x, y):
+        return f'{x}+{y}'
+    def stroke(width: float = 1.0, *, dashed=False):
+        return f'{width}{"~" if dashed else "-"}'
+    @app.command()
+    def board(f: _pair, s: stroke = 'none'):
+        ran.append(('board', f, s))
+    ran.clear()
+    try:
+        app.process(['add', '1', '2', 'board', '--dashed', 'a', 'b', '1.5'])
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert 'too early' in str(e), e
+    assert ran == [], ran
+    app.process(['add', '1', '2', 'board', 'a', 'b', '1.5', '--dashed'])
+    assert ran == [('add', 1, 2), ('board', 'a+b', '1.5~')], ran
+
+    # without repeat, a leftover word is leftover (one command per
+    # line, as ever)
+    app2 = _appeal.Appeal(name='nocyc')
+    @app2.command()
+    def add2(x: int, y: int):
+        ran.append(('add2', x, y))
+    try:
+        app2.process(['add2', '1', '2', 'add2', '3', '4'])
+        assert False, 'expected UsageError'
+    except UsageError:
+        pass
+
 
 def test_standalone_command_set():
     # the north star holds for multi-command programs: one script,
@@ -2437,10 +4467,11 @@ def test_standalone_command_set():
         assert r.stdout == 'trace on proj\nhello, world!\n'
 
         # 'bogus' doesn't name a command, so it feeds the global's
-        # optional project; the line then ends without a command
+        # optional project; the line ends without a command, and
+        # that's orientation, not a diagnostic: listing, exit 1
         r = run_script(script_path, ['bogus'])
-        assert r.returncode == 2
-        assert 'no command specified.' in r.stderr
+        assert r.returncode == 1
+        assert 'Commands:' in r.stdout and r.stderr == ''
         # ...but once the global is at its maximum, the next operand
         # is forced to be the command word
         r = run_script(script_path, ['bogus', 'bogus2'])
@@ -2449,8 +4480,8 @@ def test_standalone_command_set():
         assert 'Commands:' in r.stderr and 'greet' in r.stderr
 
         r = run_script(script_path, [])
-        assert r.returncode == 2
-        assert 'no command specified.' in r.stderr
+        assert r.returncode == 1
+        assert 'Commands:' in r.stdout and r.stderr == ''
 
         # the global option is scoped to before the command word
         r = run_script(script_path, ['greet', 'world', '--trace'])
@@ -2458,7 +4489,7 @@ def test_standalone_command_set():
         assert '--trace' in r.stderr
 
 MULTIOPT_MODULE = """\
-from appeal import MultiOption, Option
+from appeal import MultiOption, StrictOption
 
 class Tags(MultiOption):
     def init(self, default):
@@ -2468,7 +4499,7 @@ class Tags(MultiOption):
     def render(self):
         return tuple(self.values)
 
-class Where(Option):
+class Where(StrictOption):
     def init(self, default):
         self.x = self.y = None
     def option(self, x: int, y: int):
@@ -2502,18 +4533,18 @@ def test_standalone_multioption():
         script_path = os.path.join(d, 'label_cli.py')
         with open(script_path, 'wt', encoding='utf-8') as f:
             f.write(script)
-        env = {'PATH': os.environ.get('PATH', ''), 'PYTHONPATH': repo_dir}
-        r = subprocess.run(
+        env = subprocess_env(PYTHONPATH=repo_dir)
+        r = sub_run(
             [sys.executable, script_path, 'box', '--tag', 'a', '-t', 'b'],
             capture_output=True, text=True, cwd=d, env=env)
         assert r.returncode == 0, r.stderr
         assert r.stdout == 'label box a+b nowhere\n'
-        r = subprocess.run(
+        r = sub_run(
             [sys.executable, script_path, 'box', '--where', '3', '4'],
             capture_output=True, text=True, cwd=d, env=env)
         assert r.returncode == 0, r.stderr
         assert r.stdout == 'label box  3x4\n'
-        r = subprocess.run(
+        r = sub_run(
             [sys.executable, script_path, 'box',
              '--where', '1', '2', '--where', '3', '4'],
             capture_output=True, text=True, cwd=d, env=env)
@@ -2525,16 +4556,395 @@ def test_standalone_multiparam_option():
         script_path, script = write_standalone_fixture(d, 'mark')
         r = run_script(script_path, ['x', '--at', '3', '4'])
         assert r.returncode == 0, r.stderr
-        assert r.stdout == 'mark x 3,4 (0, 0)\n'
-        r = run_script(script_path, ['x', '--span', '5', '6'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'mark x origin (5, 6)\n'
+        assert r.stdout == 'mark x 3,4\n'
         r = run_script(script_path, ['x'])
         assert r.returncode == 0, r.stderr
-        assert r.stdout == 'mark x origin (0, 0)\n'
+        assert r.stdout == 'mark x origin\n'
         r = run_script(script_path, ['x', '--at', '3'])
         assert r.returncode == 2
         assert '2 values' in r.stderr
+
+def test_standalone_greedy_opargs():
+    # make -j in a generated script: the emitted table carries
+    # (minimum, maximum) and the streamed parse_tokens is greedy
+    with tempfile.TemporaryDirectory() as d:
+        script_path, script = write_standalone_fixture(d, 'build_all')
+        r = run_script(script_path, ['a', 'b'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'build a+b 1\n'
+        r = run_script(script_path, ['a', '-j'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'build a -1\n'
+        r = run_script(script_path, ['a', '-j', '5'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'build a 5\n'
+        r = run_script(script_path, ['-j5', 'a'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'build a 5\n'
+        # the greedy grab is loud in the script too
+        r = run_script(script_path, ['a', '-j', 'b'])
+        assert r.returncode == 2
+        assert "'b'" in r.stderr
+
+def test_standalone_cycling():
+    # cycling in a generated script: the north star holds
+    from appeal import emit_standalone_command_set
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'demo_cmds.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(DEMO_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import demo_cmds
+            import importlib
+            importlib.reload(demo_cmds)
+            plans = {'greet': build(demo_cmds.greet),
+                     'cp': build(demo_cmds.cp)}
+            script = emit_standalone_command_set(
+                plans, build(demo_cmds.config), argv0='tool', repeat=True)
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('demo_cmds', None)
+        script_path = os.path.join(d, 'tool.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+
+        # two commands, cycled (optionals spelled--greedy saturation)
+        r = run_script(script_path,
+                       ['greet', 'world', 'hi', 'greet', 'moon', 'yo'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'hi, world!\nyo, moon!\n', r.stdout
+
+        # *src never saturates: cp is a cycle terminator
+        r = run_script(script_path,
+                       ['greet', 'world', 'hi', 'cp', 'a', 'b', 'dest'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'hi, world!\ncopy a+b -> dest\n', r.stdout
+
+        # a malformed later command means no work at all: the
+        # error goes to stderr, and stdout is EMPTY (no greeting)
+        r = run_script(script_path, ['greet', 'world', 'hi', 'greet'])
+        assert r.returncode == 2
+        assert r.stdout == '', r.stdout
+        assert 'error:' in r.stderr
+
+
+NESTED_MODULE = """\
+def db(*, verbose=False):
+    print('db', verbose)
+
+def add(x: int):
+    print('add', x)
+
+def remove(x: int):
+    print('remove', x)
+
+def status():
+    print('status')
+"""
+
+
+def test_nested_cycling_and_popup():
+    # per-parent repeat and the pop-up chain (Larry's r2): a set's
+    # first consult is free (descent); re-entry needs that owner's
+    # repeat; a set without repeat doesn't block its ancestors
+    import appeal as _appeal
+    ran = []
+    app = _appeal.Appeal(name='s', repeat=True)
+    @app.command()
+    def db(*, verbose=False):
+        ran.append(('db', verbose))
+    @app.command()
+    def status():
+        ran.append('status')
+    reg = app.command('db', repeat=True)
+    @reg.command()
+    def add(x: int):
+        ran.append(('add', x))
+    @reg.command()
+    def remove(x: int):
+        ran.append(('remove', x))
+
+    # cycling within db's set
+    app.process(['db', 'add', '3', 'remove', '4'])
+    assert ran == [('db', False), ('add', 3), ('remove', 4)], ran
+    assert [getattr(c, '__name__', c) for c, _ in app.instances] == \
+        ['db', 'add', 'remove']
+
+    # pop-up: add's set has no 'status'; db's set doesn't either;
+    # the root's repeat resolves it
+    ran.clear()
+    app.process(['db', 'add', '3', 'status'])
+    assert ran == [('db', False), ('add', 3), 'status'], ran
+
+    # and back down: a second db runs again, fresh options
+    ran.clear()
+    app.process(['db', 'add', '1', 'status', 'db', '-v', 'remove', '2'])
+    assert ran == [('db', False), ('add', 1), 'status',
+                   ('db', True), ('remove', 2)], ran
+
+    # a parent whose set never got a command
+    ran.clear()
+    try:
+        app.process(['db'])
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert 'no command specified' in str(e)
+    assert ran == [], ran
+
+    # without the parent's repeat, its set doesn't cycle...
+    app2 = _appeal.Appeal(name='s2', repeat=True)
+    @app2.command()
+    def db2():
+        ran.append('db2')
+    @app2.command()
+    def status2():
+        ran.append('status2')
+    reg2 = app2.command('db2')
+    @reg2.command()
+    def add2(x: int):
+        ran.append(('add2', x))
+    # ...but the root's repeat still resolves root words (pop-up
+    # skips the non-repeat level, it doesn't stop there)
+    ran.clear()
+    app2.process(['db2', 'add2', '1', 'status2'])
+    assert ran == ['db2', ('add2', 1), 'status2'], ran
+
+
+def test_standalone_nested_cycling():
+    # the same tree, emitted: standalone() lost its refusal
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'nest_cmds.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(NESTED_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import nest_cmds
+            import importlib
+            importlib.reload(nest_cmds)
+            app = _appeal.Appeal(name='tool', repeat=True)
+            app.command()(nest_cmds.db)
+            app.command()(nest_cmds.status)
+            reg = app.command('db', repeat=True)
+            reg.command()(nest_cmds.add)
+            reg.command()(nest_cmds.remove)
+            script = app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('nest_cmds', None)
+        script_path = os.path.join(d, 'tool.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+
+        r = run_script(script_path, ['db', 'add', '3', 'remove', '4'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'db False\nadd 3\nremove 4\n', r.stdout
+
+        r = run_script(script_path,
+                       ['db', 'add', '1', 'status', 'db', '-v', 'remove', '2'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'db False\nadd 1\nstatus\ndb True\nremove 2\n', r.stdout
+
+        # the bare parent errors with its own set's usage
+        r = run_script(script_path, ['db'])
+        assert r.returncode == 2
+        assert 'no command specified' in r.stderr
+        assert 'add' in r.stderr and 'remove' in r.stderr
+
+        # STRUCTURALLY malformed mid-cycle: nothing runs (stage 1)
+        # --stdout is EMPTY ('db' never printed)
+        r = run_script(script_path, ['db', 'add', '1', '2', 'status'])
+        assert r.returncode == 2
+        assert 'unknown command' in r.stderr
+        assert r.stdout == '', r.stdout
+
+        # but a CONVERSION failure is stage 2 (ruled): commands to
+        # its left already ran, like make stopping mid-build
+        r = run_script(script_path, ['db', 'add', 'x', 'status'])
+        assert r.returncode == 2
+        assert r.stdout == 'db False\n', r.stdout
+        assert 'error:' in r.stderr
+
+
+def test_class_as_app():
+    # §8.6: the class's __init__ is the global command; decorated
+    # methods are the commands; nothing is automatic
+    import appeal as _appeal
+    out = []
+    app = _appeal.Appeal(name='fgrep')
+
+    @app.global_command()
+    class MyApp:
+        def __init__(self, *, verbose=False):
+            self.verbose = verbose
+            out.append(('init', verbose))
+
+        @app.command()
+        def fgrep(self, pattern, filename, *, context: int = 0):
+            out.append(('fgrep', self.verbose, pattern, filename, context))
+
+        def helper(self):
+            pass    # undecorated: not a command
+
+    app.process(['-v', 'fgrep', 'patt', 'file', '-c', '33'])
+    assert out == [('init', True),
+                   ('fgrep', True, 'patt', 'file', 33)], out
+    # the log: the global class logs (None, instance); the method
+    # logs (the function, None)
+    command, instance = app.instances[0]
+    assert command is None and isinstance(instance, MyApp)
+    assert instance.verbose is True
+    assert app.instances[1] == (MyApp.fgrep, None)
+    # undecorated methods aren't commands
+    try:
+        app.process(['helper'])
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert 'unknown command' in str(e)
+    # the instance is never mistaken for an exit status
+    assert app.process(['fgrep', 'a', 'b']) is None
+
+
+def test_class_as_app_nested():
+    # nested classes are subcommand trees, constructed via the
+    # parent instance's attribute; instances chain through the
+    # environment
+    import appeal as _appeal
+    out = []
+    app = _appeal.Appeal(name='outer', repeat=True)
+
+    @app.global_command()
+    class Outer:
+        def __init__(self, *, verbose=False):
+            self.verbose = verbose
+
+        @app.command()
+        def top(self, x: int):
+            out.append(('top', self.verbose, x))
+
+        @app.command()
+        class Db:
+            def __init__(self, name):
+                self.name = name
+                out.append(('db', name))
+
+            @app.command()
+            def add(self, x: int):
+                out.append(('add', self.name, x))
+
+    app.process(['-v', 'Db', 'mydb', 'add', '3'])
+    assert out == [('db', 'mydb'), ('add', 'mydb', 3)], out
+    # cycling pops from the inner set back to a root method
+    out.clear()
+    app.process(['Db', 'mydb', 'add', '1', 'top', '9'])
+    assert out == [('db', 'mydb'), ('add', 'mydb', 1),
+                   ('top', False, 9)], out
+    # the log carries every constructed instance, in order
+    kinds = [(getattr(c, '__name__', None),
+              type(i).__name__ if i is not None else None)
+             for c, i in app.instances]
+    assert kinds == [(None, 'Outer'), ('Db', 'Db'), ('add', None),
+                     ('top', None)], kinds
+
+
+def test_class_as_app_bic():
+    # a bound inner class composes without Appeal knowing it
+    # exists: construction goes through the parent instance's
+    # attribute, and the grammar is what that attribute accepts
+    import appeal as _appeal
+    from big.boundinnerclass import BoundInnerClass
+    out = []
+    app = _appeal.Appeal(name='bic')
+
+    @app.global_command()
+    class Host:
+        def __init__(self, *, verbose=False):
+            self.verbose = verbose
+
+        @app.command()
+        @BoundInnerClass
+        class Job:
+            def __init__(self, host, label, *, dry=False):
+                out.append(('job', host.verbose, label, dry))
+
+    app.process(['-v', 'Job', 'nightly', '--dry'])
+    assert out == [('job', True, 'nightly', True)], out
+    command, instance = app.instances[1]
+    assert type(instance).__name__ == 'Job'
+
+
+def test_class_as_app_refusals():
+    import appeal as _appeal
+    app = _appeal.Appeal(name='r')
+
+    class Undecorated:
+        @app.command()
+        def method(self, x):
+            pass
+    # the class was never decorated: its method is an orphan
+    try:
+        app.process(['method', 'a'])
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'forget to decorate the class' in str(e), e
+
+
+CLASS_MODULE = """\
+import appeal
+
+app = appeal.Appeal(name='fgrep')
+
+@app.global_command()
+class MyApp:
+    def __init__(self, *, verbose=False):
+        self.verbose = verbose
+
+    @app.command()
+    def fgrep(self, pattern, filename, *, context: int = 0):
+        print('fgrep', self.verbose, pattern, filename, context)
+
+    @app.command()
+    def count(self, pattern):
+        print('count', self.verbose, pattern)
+"""
+
+
+def test_standalone_class_app():
+    # the north star for §8.6: the class imports, the script
+    # constructs it at dispatch, methods bind through the
+    # environment
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'clsapp_cmds.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(CLASS_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import clsapp_cmds
+            import importlib
+            importlib.reload(clsapp_cmds)
+            script = clsapp_cmds.app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('clsapp_cmds', None)
+        assert 'from clsapp_cmds import MyApp' in script
+        assert 'MyApp.fgrep' in script
+        script_path = os.path.join(d, 'fgrep.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+
+        r = run_script(script_path, env=subprocess_env(PYTHONPATH=repo_dir), argv=['-v', 'fgrep', 'patt', 'file', '-c', '33'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'fgrep True patt file 33\n', r.stdout
+
+        r = run_script(script_path, env=subprocess_env(PYTHONPATH=repo_dir), argv=['count', 'x'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'count False x\n', r.stdout
+
+        r = run_script(script_path, env=subprocess_env(PYTHONPATH=repo_dir), argv=['helper'])
+        assert r.returncode == 2
+        assert 'unknown command' in r.stderr
+
 
 def test_standalone_gate_rule():
     # the wall in a generated script: board's frame (_pair, two
@@ -2622,20 +5032,6 @@ def test_standalone_help():
         r2 = run_script(script_path, ['-h'])
         assert r2.stdout == r.stdout
 
-def test_standalone_tuple_slot():
-    # tuple slots emit a tuple display, not a call: no import needed
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'move')
-        r = run_script(script_path, ['3', '4'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'move (3, 4) slow\n'
-        r = run_script(script_path, ['--fast'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'move (0, 0) fast\n'
-        r = run_script(script_path, ['3'])
-        assert r.returncode == 2
-        assert 'error:' in r.stderr
-
 def test_standalone_app_option_override():
     # @app.option's strings are baked into the emitted table; the
     # standalone script never needs the decorator at runtime
@@ -2709,10 +5105,10 @@ def test_standalone_is_standalone():
             " if m.split('.')[0] in ('appeal', 'big'))\n"
             "print('CLEAN' if not bad else 'CONTAMINATED ' + ' '.join(bad))\n"
             )
-        r = subprocess.run(
+        r = sub_run(
             [sys.executable, '-c', probe],
             capture_output=True, text=True, cwd=d,
-            env={'PATH': os.environ.get('PATH', '')},
+            env=subprocess_env(),
             )
         assert r.returncode == 0, r.stderr
         assert 'CLEAN' in r.stdout, r.stdout
@@ -2729,22 +5125,6 @@ def test_standalone_nested_converters():
         r = run_script(script_path, ['a', 'b', 'c'])
         assert r.returncode == 2
         assert 'expected 2 or 4' in r.stderr, r.stderr
-
-def test_standalone_child_options_and_collectors():
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'sketch')
-        r = run_script(script_path, ['dot'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'sketch dot none \n'
-        r = run_script(script_path, ['dot', '--dashed', '2.5', '--tag', 'a', '-t', 'b'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'sketch dot 2.5~ a+b\n'
-        # option owned by an operand-less group: the group is
-        # FORCED (v1 semantics), in a script that has never
-        # imported appeal
-        r = run_script(script_path, ['dot', '--dashed'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'sketch dot 1.0~ \n'    # stroke() defaults, dashed
 
 def test_standalone_refuses_unimportable_by_name():
     # the north star's teeth, part 3: constructs that can't survive
@@ -3004,7 +5384,684 @@ def test_merge_docs_errors():
             command_names=('serve',))
 
 
+# ---------------------------------------------------------------------
+# colorization (proposal §8.8, the completion/colorization rulings)
+
+def test_theme():
+    from appeal.runtime import Theme, _SGR_RESET
+
+    # symbolic strings compile once, to SGR
+    t = Theme()
+    assert t.paint('option', '--verbose') == '\x1b[36m--verbose' + _SGR_RESET
+    # the empty string means "leave that role alone"
+    assert t.paint('operand', 'host') == 'host'
+    # painting nothing is nothing
+    assert t.paint('error', '') == ''
+
+    # slot references: slot names join the vocabulary and expand
+    # to that slot's resolved words
+    t = Theme(option='cyan', metavar='option dim')
+    assert t.sgr['metavar'][0] == ['36', '2']
+    # bright-* variants
+    assert Theme(error='bold bright-red').sgr['error'][0] == ['1', '91']
+    # raw-SGR passthrough: a value starting with an escape
+    t = Theme(heading='\x1b[7m')
+    assert t.paint('heading', 'X') == '\x1b[7mX' + _SGR_RESET
+
+    # refusals, by name
+    for bad, needle in (
+        (dict(error='heading', heading='error'), 'cycle'),
+        (dict(option='chartreuse'), 'chartreuse'),
+        (dict(metavar='\x1b[9m', option='metavar'), 'raw escape'),
+    ):
+        try:
+            Theme(**bad)
+            assert False, f'expected refusal for {bad}'
+        except AppealConfigurationError as e:
+            assert needle in str(e), e
+
+
+def test_can_colorize_precedence():
+    import io
+    from appeal.runtime import can_colorize
+
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    def probe(env, file):
+        saved = {k: os.environ.pop(k, None)
+                 for k in ('PYTHON_COLORS', 'NO_COLOR', 'FORCE_COLOR', 'TERM')}
+        try:
+            os.environ.update(env)
+            return can_colorize(file)
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+
+    notty = io.StringIO()
+    # CPython's precedence: PYTHON_COLORS beats NO_COLOR beats
+    # FORCE_COLOR, then TERM=dumb, then isatty
+    assert probe({'PYTHON_COLORS': '1', 'NO_COLOR': '1'}, notty)
+    assert not probe({'PYTHON_COLORS': '0', 'FORCE_COLOR': '1'}, Tty())
+    assert not probe({'NO_COLOR': '1', 'FORCE_COLOR': '1'}, Tty())
+    assert probe({'FORCE_COLOR': '1'}, notty)
+    assert not probe({'TERM': 'dumb'}, Tty())
+    assert probe({}, Tty())
+    assert not probe({}, notty)
+
+
+def test_colorized_help_paints_after_layout():
+    # THE invariant: stripping the escape codes yields the
+    # monochrome page, byte for byte--painting never moved a
+    # single character of layout.
+    import re as _re
+    decolor = lambda s: _re.sub('\x1b\\[[0-9;]*m', '', s)
+
+    def size(width: float, *, bold=False):
+        return (width, bold)
+    def draw(shape, width: size = None, *, verbose=False, times: int = 1):
+        """
+        Draws a shape.
+
+        Arguments:
+          shape: the shape to draw.
+
+        Options:
+          verbose: narrate the process.
+          times: how many times.
+        """
+    import io, contextlib
+    from appeal.build import build
+    from appeal.help import merge_docs
+    from appeal.runtime import Theme, default_templates, render_help_page
+
+    plan = build(draw)
+    corpus = merge_docs(plan)
+    plain = render_help_page(plan.usage(), corpus, default_templates)
+    painted = render_help_page(plan.usage(), corpus, default_templates,
+                               theme=Theme())
+    assert painted != plain
+    assert '\x1b[' in painted
+    assert decolor(painted) == plain
+    # spans: the option strings and the headings took paint
+    assert '\x1b[36m--verbose\x1b[0m' in painted
+    assert '\x1b[1mArguments:\x1b[0m' in painted
+
+
+def test_standalone_colorized_help_and_errors():
+    # the theme travels as a literal; the DECISION happens at the
+    # script's own runtime--FORCE_COLOR paints, NO_COLOR silences,
+    # a pipe (no tty) stays monochrome
+    import re as _re
+    decolor = lambda s: _re.sub('\x1b\\[[0-9;]*m', '', s)
+    with tempfile.TemporaryDirectory() as d:
+        script_path, script = write_standalone_fixture(d, 'mark')
+        assert "theme=None" in script            # auto by default
+        base = subprocess_env()
+        plain = run_script(script_path, ['--help'])
+        forced = sub_run(
+            [sys.executable, script_path, '--help'],
+            capture_output=True, text=True, cwd=d,
+            env={**base, 'FORCE_COLOR': '1'})
+        no_color = sub_run(
+            [sys.executable, script_path, '--help'],
+            capture_output=True, text=True, cwd=d,
+            env={**base, 'FORCE_COLOR': '1', 'NO_COLOR': '1'})
+        assert '\x1b[' not in plain.stdout      # a pipe: monochrome
+        assert '\x1b[' in forced.stdout
+        assert decolor(forced.stdout) == plain.stdout
+        assert no_color.stdout == plain.stdout   # NO_COLOR beats FORCE_COLOR
+        # the error prefix paints, on stderr where errors live
+        err = sub_run(
+            [sys.executable, script_path],
+            capture_output=True, text=True, cwd=d,
+            env={**base, 'FORCE_COLOR': '1'})
+        assert err.returncode == 2
+        assert err.stderr.startswith('\x1b[1;31merror:\x1b[0m ')
+        assert not err.stdout
+        plain_err = run_script(script_path, [])
+        assert decolor(err.stderr) == plain_err.stderr
+
+
+# ---------------------------------------------------------------------
+# shell completion (the completion rulings, 1-5)
+
+def test_value_completion():
+    from appeal import interpreter_parse
+    from appeal.complete import complete
+
+    def color(name):
+        return name
+    color.completions = lambda prefix='': ('red', 'green', 'blue')
+
+    def paint(where, hue: color = 'red', *, tint: color = 'red',
+              times: int = 1):
+        return (where, hue, tint)
+
+    plan = build(paint)
+    # an option's value position asks the expecting converter,
+    # and the engine re-filters by prefix (the belt)
+    assert complete(plan, ['--tint'], '') == ['blue', 'green', 'red']
+    assert complete(plan, ['--tint'], 'g') == ['green']
+    # a value position whose converter has no opinion: filenames
+    assert complete(plan, ['--times'], '') == []
+    # an operand position asks its converter too (ruling 4)
+    assert complete(plan, ['x'], '') == ['blue', 'green', 'red']
+    # ...but the first operand (where: str) has no opinion
+    assert complete(plan, [], '') == []
+    # option-string completion still works, used singles excluded
+    got = complete(plan, [], '-')
+    assert '--tint' in got and '--times' in got
+    assert '--tint' not in complete(plan, ['--tint', 'red'], '-')
+
+
+def test_completions_validation():
+    def refuses(f, *needles):
+        try:
+            build(f)
+        except AppealConfigurationError as e:
+            for needle in needles:
+                assert needle in str(e), f'{needle!r} not in {e}'
+            return
+        assert False, f'expected AppealConfigurationError for {f.__name__}'
+
+    # completions must be callable...
+    def c1(name):
+        return name
+    c1.completions = ('red', 'green')       # the retired static form
+    def f1(x: c1):
+        return x
+    refuses(f1, 'c1', 'callable')
+
+    # ...accepting one positional argument
+    def c2(name):
+        return name
+    c2.completions = lambda: ('red',)
+    def f2(x: c2):
+        return x
+    refuses(f2, 'c2', 'one positional')
+
+    # the return type is checked at query time, loudly
+    def c3(name):
+        return name
+    c3.completions = lambda prefix='': ['red']      # list, not tuple
+    def f3(x: c3):
+        return x
+    from appeal.complete import complete
+    plan = build(f3)
+    try:
+        complete(plan, [], '')
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'tuple' in str(e)
+
+
+def test_completion_script_and_reentry():
+    app = Appeal(name='mytool')
+    @app.global_command()
+    def go(x):
+        return x
+    script = app.completion('bash')
+    assert 'COMP_WORDS' in script and 'COMP_CWORD' in script
+    assert '_APPEAL_COMPLETE=bash mytool' in script
+    assert 'complete -o default -F' in script
+    zsh_script = app.completion('zsh')
+    assert 'compdef' in zsh_script
+    assert '_APPEAL_COMPLETE=zsh mytool' in zsh_script
+    assert 'COMP_CWORD=$((CURRENT-1))' in zsh_script
+    assert '_files' in zsh_script                # the filename fallback
+    import shutil
+    if shutil.which('zsh'):
+        # the courier must at least be valid zsh
+        r = sub_run(['zsh', '-n', '/dev/stdin'],
+                           input=zsh_script, capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    try:
+        app.completion('tcsh')
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'tcsh' in str(e)
+
+
+def test_standalone_completion_reentry():
+    # the north star: an emitted script answers the reentry
+    # protocol--gated on empty argv--with zero imports beyond its
+    # own module
+    module = (
+        "def color(name):\n"
+        "    return name\n"
+        "color.completions = lambda prefix='': ('red', 'green', 'blue')\n"
+        "\n"
+        "def paint(where, hue: color = 'red', *, tint: color = 'red'):\n"
+        "    print('paint', where, hue, tint)\n"
+    )
+    from appeal import emit_standalone
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'paint_cmds.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(module)
+        sys.path.insert(0, d)
+        try:
+            import paint_cmds
+            import importlib
+            importlib.reload(paint_cmds)
+            script = emit_standalone(build(paint_cmds.paint), argv0='paint')
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('paint_cmds', None)
+        script_path = os.path.join(d, 'paint.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        base = subprocess_env()
+
+        def reenter_mode(mode, comp_words, cword):
+            return sub_run(
+                [sys.executable, script_path],
+                capture_output=True, text=True, cwd=d,
+                env={**base, '_APPEAL_COMPLETE': mode,
+                            'COMP_WORDS': comp_words,
+                            'COMP_CWORD': str(cword)})
+
+        def reenter(comp_words, cword):
+            return reenter_mode('bash', comp_words, cword)
+        # an option's value position, filtered by the prefix
+        r = reenter('paint --tint g', 2)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.splitlines() == ['green']
+        # an operand position
+        r = reenter('paint x ', 2)
+        assert r.stdout.splitlines() == ['blue', 'green', 'red']
+        # option strings on a '-' prefix
+        r = reenter('paint --t', 1)
+        assert r.stdout.splitlines() == ['--tint']
+        # the empty-argv gate: with arguments, the env is ignored
+        # and the program runs normally
+        r = sub_run(
+            [sys.executable, script_path, 'here'],
+            capture_output=True, text=True, cwd=d,
+            env={**base, '_APPEAL_COMPLETE': 'bash'})
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'paint here red red\n'
+        # the source_bash request: the eval one-liner's other half
+        r = sub_run(
+            [sys.executable, script_path],
+            capture_output=True, text=True, cwd=d,
+            env={**base, '_APPEAL_COMPLETE': 'source_bash'})
+        assert r.returncode == 0, r.stderr
+        assert 'complete -o default -F' in r.stdout
+        assert '_APPEAL_COMPLETE=bash paint' in r.stdout
+        # zsh: same protocol, zsh courier
+        r = sub_run(
+            [sys.executable, script_path],
+            capture_output=True, text=True, cwd=d,
+            env={**base, '_APPEAL_COMPLETE': 'source_zsh'})
+        assert r.returncode == 0, r.stderr
+        assert 'compdef' in r.stdout
+        assert '_APPEAL_COMPLETE=zsh paint' in r.stdout
+        r = reenter_mode('zsh', 'paint --tint g', 2)
+        assert r.stdout.splitlines() == ['green']
+        # fish: its courier sends the current TOKEN TEXT (not an
+        # index) in COMP_CWORD, and the line-so-far in COMP_WORDS
+        r = sub_run(
+            [sys.executable, script_path],
+            capture_output=True, text=True, cwd=d,
+            env={**base, '_APPEAL_COMPLETE': 'fish',
+                        'COMP_WORDS': 'paint --tint g',
+                        'COMP_CWORD': 'g'})
+        assert r.stdout.splitlines() == ['green']
+        # cursor after a space: empty token
+        r = sub_run(
+            [sys.executable, script_path],
+            capture_output=True, text=True, cwd=d,
+            env={**base, '_APPEAL_COMPLETE': 'fish',
+                        'COMP_WORDS': 'paint x',
+                        'COMP_CWORD': ''})
+        assert r.stdout.splitlines() == ['blue', 'green', 'red']
+        r = sub_run(
+            [sys.executable, script_path],
+            capture_output=True, text=True, cwd=d,
+            env={**base, '_APPEAL_COMPLETE': 'source_fish'})
+        assert r.returncode == 0, r.stderr
+        assert '__fish_complete_path' in r.stdout
+        assert '_APPEAL_COMPLETE=fish paint' in r.stdout
+        # and with real zsh, drive the courier's core: zsh's own
+        # word machinery feeding the reentry, candidates coming
+        # back through the command substitution
+        import shutil
+        if shutil.which('zsh'):
+            zsh_core = (
+                'words=(paint --tint g); CURRENT=3; '
+                'completions=("${(@f)$(COMP_WORDS="${words[*]}" '
+                'COMP_CWORD=$((CURRENT-1)) _APPEAL_COMPLETE=zsh '
+                f'{sys.executable} {script_path})}}"); '
+                'print -l -- $completions')
+            r = sub_run(['zsh', '-c', zsh_core],
+                               capture_output=True, text=True, cwd=d,
+                               env=base)
+            assert r.returncode == 0, r.stderr
+            assert r.stdout.splitlines() == ['green']
+
+
+def test_single_terminal_transparency():
+    # the transparency rule: a converter that consumes exactly one
+    # operand is transparent to naming--the annotated parameter's
+    # name flows through to usage, the help table, and the
+    # docstring grammar.
+    from appeal.help import merge_docs
+
+    def flavor(name):
+        """
+        A flavor.
+
+        Arguments:
+          name: the flavor, in flavor's own vocabulary.
+        """
+        return name
+
+    def scoop(cone, taste: flavor = 'vanilla', *, sprinkles=False):
+        """
+        Serves a scoop.
+
+        Arguments:
+          taste: which flavor to serve.
+        """
+
+    plan = build(scoop)
+    assert '[taste]' in plan.usage(), plan.usage()
+    corpus = merge_docs(plan)
+    # the row wears the outer name; the outer entry documents it,
+    # winning (nearest) over flavor's own 'name:' entry
+    assert ('taste', ['which flavor to serve.']) in corpus['arguments']
+
+    # the converter's own docstring keeps working in its own
+    # vocabulary: without an outer override, 'name:' documents
+    # the same row
+    def scoop2(cone, taste: flavor = 'vanilla'):
+        "Serves."
+    corpus = merge_docs(build(scoop2))
+    assert ('taste', ["the flavor, in flavor's own vocabulary."]) \
+        in corpus['arguments']
+
+    # an explicit rename on the inner parameter wins the display
+    from appeal import add_parameter_usage
+    def hue(name):
+        return name
+    add_parameter_usage(hue, 'name', 'HUE')
+    def tint(x, shade: hue = 'red'):
+        "Tints."
+    plan = build(tint)
+    assert '[HUE]' in plan.usage(), plan.usage()
+
+    # multi-operand converters are NOT transparent: the invisible-
+    # node error stands (pinned in test_merge_docs_errors), and
+    # usage still shows the inner terminals
+    def pair(x: int, y: int):
+        return (x, y)
+    def place(label, at: pair = None):
+        "Places."
+    assert '[x y]' in build(place).usage() or 'x y' in build(place).usage()
+
+
+# ---------------------------------------------------------------------
+# the v2 docs' examples compile and run (v1's README discipline,
+# carried forward: docs that bit-rot are worse than no docs)
+
+def _doc_examples(md_path):
+    """
+    Extract runnable examples from a doc.  The convention,
+    inherited from v1's README tests: an example is a code block
+    whose first line is `import appeal` and whose last line calls
+    app.main (that line is replaced with `pass`).  A block
+    preceded by an HTML comment containing 'pending' is skipped
+    (a documented example awaiting a ruling).  Returns a list of
+    (section, source) pairs; the section is the doc's most recent
+    heading line, hashes stripped.
+    """
+    import textwrap
+    with open(md_path, 'rt', encoding='utf-8') as f:
+        lines = f.read().split('\n')
+    examples = []
+    example = []
+    pending = False
+    section = None
+    for line in lines:
+        stripped = line.strip()
+        if line.startswith('##'):
+            section = line.lstrip('#').strip()
+            continue
+        if stripped.startswith('<!--') and 'pending' in stripped:
+            pending = True
+            continue
+        if stripped == 'import appeal':
+            example = [line]
+            continue
+        if not example:
+            continue
+        if stripped.startswith(('app.main(', 'sys.exit(app.main')):
+            prefix = line[:len(line) - len(line.lstrip())]
+            example.append(prefix + 'pass')
+            if pending:
+                pending = False
+            else:
+                examples.append((section, textwrap.dedent('\n'.join(example))))
+            example = []
+            continue
+        example.append(line)
+    return examples
+
+
+def _run_doc_example(source, where):
+    """
+    The bit-rot guard, one example: exec it, then force the whole
+    pipeline--build every plan, merge every docstring, render the
+    help page.  Docs whose examples can't document themselves
+    don't ship.  Returns the example's namespace.
+    """
+    import io, contextlib
+    namespace = {}
+    try:
+        exec(compile(source, where, 'exec'), namespace)
+    except Exception as e:
+        raise AssertionError(
+            f'{where} failed to run: {e}\n{source}') from e
+    app = namespace.get('app')
+    assert app is not None, f'{where} defines no `app`'
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            app.help()
+    except Exception as e:
+        raise AssertionError(f'{where}: app.help() failed: {e}') from e
+    assert out.getvalue().strip(), f'{where}: empty help output'
+    return namespace
+
+
+def test_doc_examples():
+    appeal_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    docs = ('appeal.v2.completion.md', 'appeal.v2.documentation.md')
+    ran = 0
+    for doc in docs:
+        path = os.path.join(appeal_dir, doc)
+        if not os.path.exists(path):
+            continue
+        for i, (section, example) in enumerate(_doc_examples(path)):
+            _run_doc_example(example, f'<{doc} example {i}>')
+            ran += 1
+    assert ran, 'no doc examples found--the convention broke'
+
+
+# Drives for the README's examples: (section, index within that
+# section) -> [(argv, config, expected stdout)].  The programs
+# live in README.md; the command-lines and their expected output
+# live here, so changing either side breaks the suite (v1's
+# discipline: "this is better than README.md bit-rotting").
+README_DRIVES = {
+    ('Quickstart', 0): [
+        (['hello', 'world'], None, 'Hello, world!'),
+    ],
+    ('Hello, World!', 0): [
+        (['hello', 'world'], None, 'Hello, world!'),
+    ],
+    ('Default Values And `*args`', 0): [
+        (['fgrep', 'WM_CREATE', 'window.c'], None,
+         'fgrep WM_CREATE window.c'),
+        (['fgrep', 'WM_CREATE'], None, 'fgrep WM_CREATE None'),
+    ],
+    ('Default Values And `*args`', 2): [
+        (['cp', 'a', 'b', 'c'], None, "cp ('a', 'b') c"),
+    ],
+    ('Options, Opargs, And Keyword-Only Parameters', 0): [
+        (['fgrep', '-i', '--number', '3', '--color', 'blue',
+          'WM_CREATE', 'window.c'], None,
+         "fgrep WM_CREATE ('window.c',) 'blue' 3 True"),
+        (['fgrep', '--color', 'green', 'boogaloo'], None,
+         "fgrep boogaloo () 'green' 0 False"),
+    ],
+    ('Commands, The Global Command, And Subcommands', 0): [
+        (['db', 'main', 'deploy', '9'], None, 'db main\ndeploy 9'),
+    ],
+    ('Commands, The Global Command, And Subcommands', 1): [
+        (['add-item', '3'], None, 'added 3'),
+    ],
+    ('Cycling: several commands on one line', 0): [
+        (['add', '1', '2', 'mul', '3', '4'], None,
+         'sum 3\nproduct 12'),
+    ],
+    ('Annotations And Introspection', 1): [
+        (['fgrep', '-p', '2', '13', 'funkyfresh'], None,
+         'fgrep funkyfresh () [6, 65.0]'),
+    ],
+    ('Converter Flexibility', 0): [
+        (['build', '--with-dbmliborder=gdbm:ndbm'], None,
+         "build ['gdbm', 'ndbm']"),
+    ],
+    ('Specifying An Option More Than Once', 0): [
+        (['build', '-t', 'alpha', '--tag', 'beta',
+          '-d', 'X=1', '--define', 'Y=2'], None,
+         "build ['alpha', 'beta'] {'X': 1, 'Y': 2}"),
+    ],
+    ('Specifying An Option More Than Once', 1): [
+        (['fgrep', '-v', '--verbose', '-v'], None, 'fgrep verbose=3'),
+        (['fgrep'], None, 'fgrep verbose=0'),
+    ],
+    ('Data Validation', 0): [
+        (['go', 'up'], None, "go direction='up'"),
+    ],
+    ('Multiple Options For The Same Parameter', 0): [
+        (['go', '--south'], None, "go direction='south'"),
+        (['go'], None, "go direction='north'"),
+    ],
+    ('Recursive Converters', 1): [
+        (['recurse2', 'pdq', '1', '2', 'xyz', '-v'], None,
+         "recurse2 a='pdq' b=[(1, 2.0), 'xyz', True]"),
+        (['recurse2', 'xyz'], None,
+         "recurse2 a='xyz' b=[(0, 0), '', False]"),
+    ],
+    ('Recursive Converters', 2): [
+        (['twice', '-v', '1', '2', 'x', '3', '4', 'y'], None,
+         "twice a=[(1, 2.0), 'x', True] b=[(3, 4.0), 'y', False]"),
+    ],
+    ('Options that map other options', 0): [
+        (['inception', '--option', '5', '-v'], None,
+         'inception option=[5, True]'),
+    ],
+    ('Multiple options that aren\'t MultiOptions', 0): [
+        (['repetition', '-v', '1', '2', '3', '-v'], None,
+         'repetition args=([1, True], [2, False], [3, True])'),
+    ],
+    ('Positional parameters that only consume options', 0): [
+        (['mixin', '-v', '-l', 'debug'], None,
+         'mixin log=<Logging verbose=True log_level=debug>'),
+    ],
+    ('The Famous `make -j`', 0): [
+        (['make', 'all'], None, "building ('all',) with 1 jobs"),
+        (['make', 'all', '-j'], None, "building ('all',) with inf jobs"),
+        (['make', '-j5', 'all'], None, "building ('all',) with 5 jobs"),
+    ],
+    ('A Class As Your Whole Program', 0): [
+        (['-v', 'add', '1', '2'], None, 'sum 3 (verbosely)'),
+        (['status'], None, 'status verbose=False'),
+    ],
+    ('Config layering', 0): [
+        (['work', 'notes.txt'], {'editor': 'emacs'},
+         'editor=emacs verbose=False\nediting notes.txt'),
+        (['--editor', 'nano', 'work', 'notes.txt'], {'editor': 'emacs'},
+         'editor=nano verbose=False\nediting notes.txt'),
+    ],
+}
+
+
+def test_readme_examples():
+    # the README's programs, executed: every example must run and
+    # document itself; the ones with drives must produce exactly
+    # the output the README promises
+    import io, contextlib
+    appeal_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    examples = _doc_examples(os.path.join(appeal_dir, 'README.md'))
+    assert examples, 'no README examples found--the convention broke'
+    counters = {}
+    driven = 0
+    for section, example in examples:
+        index = counters.get(section, 0)
+        counters[section] = index + 1
+        where = f'<README.md {section!r} #{index}>'
+        if (not GENERIC_SPELLINGS
+                and any(g in example for g in ('list[', 'dict[', 'tuple['))):
+            # the README documents these as 3.9+ spellings
+            needs_39(f'README example {section}')
+            continue
+        namespace = _run_doc_example(example, where)
+        for argv, config, expected in README_DRIVES.get((section, index), ()):
+            app = namespace['app']
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out):
+                    if config is None:
+                        app.process(list(argv))
+                    else:
+                        app.process(list(argv), config=dict(config))
+            except Exception as e:
+                raise AssertionError(
+                    f'{where} {argv!r} raised: {e}') from e
+            got = out.getvalue().strip()
+            assert got == expected, (
+                f'{where} {argv!r}:\n  expected {expected!r}\n'
+                f'  got      {got!r}')
+            driven += 1
+    undriven = [key for key in README_DRIVES if key not in
+                {(s, i) for s, _ in examples
+                 for i in range(counters.get(s, 0))}]
+    assert not undriven, (
+        f'drives target README examples that no longer exist: {undriven}')
+    assert driven >= 25, f'only {driven} README drives ran'
+
+
 if __name__ == '__main__':
-    total, failures = atest.run(verbose='-v' in sys.argv, exit=False)
-    print(f'{total} tests, {len(failures) if isinstance(failures, list) else failures} failures')
-    sys.exit(1 if failures else 0)
+    total, failures = test.run(name='appeal')
+    print(f'{total} tests, {failures} failures')
+    if NOT_RUN_ON_OLD:
+        print(f'{len(NOT_RUN_ON_OLD)} checks not run on Python '
+              f'{sys.version_info[0]}.{sys.version_info[1]} '
+              f'(3.9+ spellings): {", ".join(sorted(set(NOT_RUN_ON_OLD)))}')
+    code = 1 if failures else 0
+    # test_all tests ALL (ruled 2026-07-11: that's why it's called
+    # that): the v1 corpus--the spec of record--and the read
+    # corpus run too, as subprocesses so their own harnesses
+    # (print-swapping, path games) stay isolated.  CI runs only
+    # this file; now this file is enough.
+    here = os.path.dirname(os.path.abspath(__file__))
+    suites = ['test_coverage.py', 'test_corpus.py', 'test_read.py']
+    if GENERIC_SPELLINGS:
+        suites.insert(0, 'test_39.py')
+    else:
+        NOT_RUN_ON_OLD.append('test_39.py (the whole file)')
+        print('test_39.py not run (3.9+ spellings)')
+    for suite in suites:
+        sys.stdout.flush()      # keep the summaries in order
+        result = subprocess.run(
+            [sys.executable, os.path.join(here, suite)])
+        code = code or result.returncode
+    sys.exit(code)

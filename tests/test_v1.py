@@ -86,14 +86,10 @@ if getattr(appeal, '__version__', '').startswith('2.'):
     print("test_v1.py is the v1 corpus; this tree is v2. See tests/test_all.py.")
     sys.exit(0)
 
-# atest adds bare-assert introspection and a runner that returns control
-# to us instead of exiting.  Run by path (python tests/test_all.py) it's a
-# sibling ("import atest"); run as a module (python -m tests.test_all) it's
-# in the tests package.  Support both spellings.
-try:
-    import atest
-except ImportError:
-    from tests import atest
+# big.test adds bare-assert introspection and a runner that returns
+# control to us instead of exiting.  (Appeal already depends on big;
+# this is big.test's first customer after big itself.)
+from big import test
 from appeal.argument_grouping import Function, ParameterGrouper
 
 
@@ -430,18 +426,6 @@ class SmokeTests(AppealTestsBase):
         global command
         app = command = None
 
-    @unittest.skip("v1's [[section]]/{name} doc-format engine (converter docstring smooshing): not yet in v2; needs a ruling on whether the format returns")
-    def test_test_usage(self):
-        command(test)
-        text = capture_stdout('help test')
-        self.assertIn("Simple test command function.", text)
-        # v2 wraps usage at whole units
-        self.assertIn("test [-g|--gloop [-i|--intfloat [-v|--verbose] x_int y_float] gloopstr]", text)
-        self.assertIn("str1 str2 [optional_int]", text)
-        self.assertIn("A string!", text)
-        self.assertIn("grab-bag", text)
-        self.assertIn("for a in code:", text)
-        self.assertIn("fifth section.", text)
 
     def test_test_1(self):
         command(test)
@@ -457,12 +441,14 @@ class SmokeTests(AppealTestsBase):
             (test, 'abc', 'def', 336, (gloopfn, 'gloopy', (int_float_verbose, 1, 3.0, 'verbose'))),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_test_3(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(test)
-        self.assert_process_raises(
+        self.assert_process(
             "test -g gloopy abc def -i 1 3.0 -v 336",
-            appeal.AppealUsageError,
+            (test, 'abc', 'def', 336, (gloopfn, 'gloopy', (int_float_verbose, 1, 3.0, 'verbose'))),
             )
 
     def test_simple_defaults_1(self):
@@ -518,7 +504,6 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_rip_2(self):
         self.bind_rip()
 
@@ -546,7 +531,6 @@ class SmokeTests(AppealTestsBase):
                 )
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_rip_4(self):
         self.bind_rip()
         self.assert_process(
@@ -560,7 +544,6 @@ class SmokeTests(AppealTestsBase):
                 )
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_rip_5(self):
         self.bind_rip()
         self.assert_process(
@@ -575,7 +558,6 @@ class SmokeTests(AppealTestsBase):
             )
 
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_rip_6(self):
         self.bind_rip()
         self.assert_process(
@@ -589,7 +571,6 @@ class SmokeTests(AppealTestsBase):
                 )
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_rip_7(self):
         self.bind_rip()
         self.assert_process(
@@ -745,10 +726,14 @@ class SmokeTests(AppealTestsBase):
             )
 
     def test_go2_6(self):
+        # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09):
+        # options sharing a parameter are last-one-wins in
+        # command-line order (argparse with a shared dest), not
+        # "specified more than once".
         self.bind_go2()
-        self.assert_process_raises(
+        self.assert_process(
             "go2 --north --south",
-            appeal.AppealUsageError,
+            (go2, "south"),
             )
 
 
@@ -951,13 +936,18 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter reuse refusal policy: tied to windows, deferred")
     def test_invalid_logging_1(self):
+        # converted from a v1 refusal (ruled 2026-07-09): two
+        # required same-converter siblings sharing option strings
+        # are legal now--position decides.  Both windows are
+        # zero-width here, at the same spot: the deepest/latest
+        # wins, so -v lands on the second Logging.
         command(invalid_logging)
-        self.assert_process_raises(
-            "invalid_logging -v",
-            appeal.AppealConfigurationError,
-            )
+        result = process(shlex.split("invalid_logging -v"))
+        marker, first, second = result
+        self.assertIs(marker, invalid_logging)
+        self.assertEqual(first.verbose, 0)
+        self.assertEqual(second.verbose, 1)
 
     def test_invalid_annotation_1_1(self):
         command(invalid_annotation_1)
@@ -988,7 +978,6 @@ class SmokeTests(AppealTestsBase):
             (make2, (0, 0, 0), ('a', 'b', 'c')),
             )
 
-    @unittest.skip("greedy option-group operands (an option consuming up to its maximum inline): streaming driver, deferred")
     def test_make2_3(self):
         command(make2)
         self.assert_process(
@@ -996,7 +985,6 @@ class SmokeTests(AppealTestsBase):
             (make2, (33, 44, 55), ()),
             )
 
-    @unittest.skip("greedy option-group operands (an option consuming up to its maximum inline): streaming driver, deferred")
     def test_make2_4(self):
         command(make2)
         self.assert_process(
@@ -1018,7 +1006,6 @@ class SmokeTests(AppealTestsBase):
             (make2, (111, 222, 333), ('a', 'b', 'c')),
             )
 
-    @unittest.skip("greedy option-group operands (an option consuming up to its maximum inline): streaming driver, deferred")
     def test_make2_7(self):
         command(make2)
         self.assert_process(
@@ -1026,7 +1013,6 @@ class SmokeTests(AppealTestsBase):
             (make2, (88, 222, 333), ('a', 'b', 'c')),
             )
 
-    @unittest.skip("greedy option-group operands (an option consuming up to its maximum inline): streaming driver, deferred")
     def test_make2_8(self):
         command(make2)
         self.assert_process(
@@ -1248,54 +1234,64 @@ class SmokeTests(AppealTestsBase):
             (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False)))
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_options_stack_4(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(options_stack)
-        self.assert_process_raises(
-            'options_stack --option --nested -ace',
-            # (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False)))
-            appeal.AppealUsageError,
+        self.assert_process(
+            "options_stack --option --nested -ace",
+            (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False))),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_options_stack_5(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(options_stack)
-        self.assert_process_raises(
-            'options_stack --option --nested -ace -b',
-            # (options_stack, 'abc', True, True, (nested_option, True, False, (inner_option, True, False)))
-            appeal.AppealUsageError,
+        self.assert_process(
+            "options_stack --option --nested -ace -b",
+            (options_stack, 'abc', True, True, (nested_option, True, False, (inner_option, True, False))),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_options_stack_6(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(options_stack)
-        self.assert_process_raises(
-            'options_stack --option --nested -ace -bdf',
-            appeal.AppealUsageError,
+        self.assert_process(
+            "options_stack --option --nested -ace -bdf",
+            (options_stack, 'abc', True, True, (nested_option, True, True, (inner_option, True, True))),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_options_stack_7(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(options_stack)
-        self.assert_process_raises(
-            'options_stack --option --nested -a -e',
-            appeal.AppealUsageError,
+        self.assert_process(
+            "options_stack --option --nested -a -e",
+            (options_stack, 'abc', True, False, (nested_option, False, False, (inner_option, True, False))),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_options_stack_8(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(options_stack)
-        self.assert_process_raises(
-            'options_stack --option --nested -a -c',
-            appeal.AppealUsageError,
+        self.assert_process(
+            "options_stack --option --nested -a -c",
+            (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, False, False))),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_options_stack_9(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(options_stack)
-        self.assert_process_raises(
-            'options_stack --option --nested -a -c',
-            appeal.AppealUsageError,
+        self.assert_process(
+            "options_stack --option --nested -a -c",
+            (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, False, False))),
             )
 
 
@@ -1334,12 +1330,14 @@ class SmokeTests(AppealTestsBase):
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), False, False), True, False), False, False),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_five_level_stack_6(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(five_level_stack)
-        self.assert_process_raises(
+        self.assert_process(
             "five_level_stack -a -d -g -j -me -n",
-            appeal.AppealUsageError,
+            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), True, False), False, False), False, False), True, False), False, False),
             )
 
     def test_five_level_stack_7(self):
@@ -1357,20 +1355,24 @@ class SmokeTests(AppealTestsBase):
             )
 
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_five_level_stack_9(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(five_level_stack)
-        self.assert_process_raises(
+        self.assert_process(
             "five_level_stack -a -d -g -j -mh -k",
-            appeal.AppealUsageError,
+            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), True, False), True, False), False, False), False, False),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_five_level_stack_10(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(five_level_stack)
-        self.assert_process_raises(
+        self.assert_process(
             "five_level_stack -a -d -g -j -mh -n",
-            appeal.AppealUsageError,
+            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), True, False), False, False), True, False), False, False), False, False),
             )
 
     def test_five_level_stack_11(self):
@@ -1381,46 +1383,55 @@ class SmokeTests(AppealTestsBase):
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), True, True), False, False), False, False), False, False), False, False),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_five_level_stack_12(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(five_level_stack)
-        self.assert_process_raises(
+        self.assert_process(
             "five_level_stack -a -d -g -j -mb -e",
-            appeal.AppealUsageError,
+            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), False, False), True, False), True, False),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_five_level_stack_13(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(five_level_stack)
-        self.assert_process_raises(
+        self.assert_process(
             "five_level_stack -a -d -g -j -mb -h",
-            appeal.AppealUsageError,
+            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), True, False), False, False), True, False),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_five_level_stack_14(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(five_level_stack)
-        self.assert_process_raises(
+        self.assert_process(
             "five_level_stack -a -d -g -j -mb -k",
-            appeal.AppealUsageError,
+            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), True, False), False, False), False, False), True, False),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_five_level_stack_15(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(five_level_stack)
-        self.assert_process_raises(
+        self.assert_process(
             "five_level_stack -a -d -g -j -mb -n",
-            appeal.AppealUsageError,
+            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), True, False), False, False), False, False), False, False), True, False),
             )
 
-    @unittest.skip("superseded by v2 ruling (2026-07-04): options are recognized anywhere--v1's positional scope rejections are retired; see appeal.v2.grammar.md, Options")
     def test_five_level_stack_16(self):
+        # converted from a v1 scope-rejection pin (ruled
+        # 2026-07-08): the line is legal now--pin what it
+        # means (see appeal.v2.grammar.md, scoped options)
         command(five_level_stack)
-        self.maxDiff=None
-        self.assert_process_raises(
+        self.maxDiff = None
+        self.assert_process(
             "five_level_stack -a -d -g -j -m -behknp",
-            # (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, True, False, False), True, False), True, False), True, False), True, False), True, False),
-            appeal.AppealUsageError,
+            (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, True, False, False), True, False), True, False), True, False), True, False), True, False),
             )
 
 
@@ -1436,12 +1447,21 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_2(self):
+        # v2 divergence (the documented distribution superset):
+        # v1's greedy b grabbed 'def' and starved; v2's completable
+        # distribution reads it as the only-possible a + d
         command(multiple_groups)
-        self.assert_process_raises(
+        self.assert_process(
             "multiple_groups abc def",
-            appeal.AppealUsageError,
+            (multiple_groups,
+                'abc',
+                (multiple_groups_child, None, None, None, False,
+                 (0, 0.0, False)),
+                (multiple_groups_child, None, None, None, False,
+                 (0, 0.0, False)),
+                'def'
+                ),
             )
 
     def test_mixed_groups_3(self):
@@ -1463,15 +1483,23 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_5(self):
+        # v2 divergence (the scope liberalization, again): v1
+        # rejected -f before its group's window opened; v2's
+        # interval model announce-binds it to the first window
         command(multiple_groups)
-        self.assert_process_raises(
+        self.assert_process(
             "multiple_groups -f a ba bb bc ca cb cc",
-            appeal.AppealUsageError,
+            (multiple_groups,
+                'a',
+                (multiple_groups_child, 'ba', 'bb', 'bc', True,
+                 (0, 0.0, False)),
+                (multiple_groups_child, 'ca', 'cb', 'cc', False,
+                 (0, 0.0, False)),
+                ''
+                ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_6(self):
         command(multiple_groups)
         self.assert_process(
@@ -1484,7 +1512,6 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_7(self):
         command(multiple_groups)
         self.assert_process(
@@ -1497,7 +1524,6 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_8(self):
         command(multiple_groups)
         self.assert_process(
@@ -1510,7 +1536,6 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_9(self):
         command(multiple_groups)
         self.assert_process(
@@ -1523,7 +1548,6 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_10(self):
         command(multiple_groups)
         self.assert_process(
@@ -1536,7 +1560,6 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_11(self):
         command(multiple_groups)
         self.assert_process(
@@ -1550,7 +1573,6 @@ class SmokeTests(AppealTestsBase):
             )
 
     # the stuff in the final group sticks around forever
-    @unittest.skip("sibling-converter windows (same converter reused across sibling slots, options bound by position): streaming driver, deferred; see appeal.v2.streaming.md")
     def test_mixed_groups_12(self):
         command(multiple_groups)
         self.assert_process(
@@ -1602,13 +1624,15 @@ class SmokeTests(AppealTestsBase):
         self.assertEqual(str(e), "option '--option' requires a value")  # v2 message
 
 
-    @unittest.skip("class-based commands (app_class/command_method): not yet in v2")
     def test_app_class(self):
+        # rewritten as a v2 pin (2026-07-08): v1's app.app_class()
+        # two-registrar API retires; §8.6 spells it with the plain
+        # decorators--@app.global_command() on the class,
+        # @app.command() on the methods
         app = appeal.Appeal()
-        app_class, command_method = app.app_class()
 
         instances = []
-        @app_class()
+        @app.global_command()
         class MyApp:
             def __init__(self, *, verbose=False):
                 self.verbose = verbose
@@ -1617,7 +1641,7 @@ class SmokeTests(AppealTestsBase):
                 self.context = None
                 instances.append(self)
 
-            @command_method()
+            @app.command()
             def fgrep(self, pattern, filename, *, context=0):
                 self.pattern = pattern
                 self.filename = filename
@@ -1674,7 +1698,6 @@ class SmokeTests(AppealTestsBase):
                 ),
             )
 
-    @unittest.skip("fancier Option.option() signatures (defaults): streaming driver, deferred")
     def test_custom_option(self):
         class MyOption(appeal.Option):
             def init(self, default):
@@ -1755,96 +1778,71 @@ class NewStyleTests(AppealTestsBase):
 
 
 ##
-## I got tired of the examples in README.md not working
-## or being out of sync with the implementation.
-## So now I ensure the examples in README.md are always
-## working--because I run them.
+## The v1 README's example programs, frozen 2026-07-09.
 ##
-## Here we parse README.md, pull out just the example tests,
-## compile and execute, then run at least one test on each.
+## These examples used to be extracted from README.md at test
+## time ("I got tired of the examples in README.md not working
+## ... so now I run them").  README.md now documents v2, so the
+## v1 corpus carries its own copies of the v1 examples here,
+## exactly as the extractor last saw them.
 ##
-## Executable tests in README.md are always indented from
-## the left margin, are per-documentation-section,
-## and always take this form:
-##
-##     import appeal
-##     ...
-##     app.main([...]
-##
-## (As in, they start with a line that reads "import appeal",
-## and ends with a line that starts with "app.main(".)
-##
-## They're stored in readme_tests, a dict mapping
-## "section name" to a list of tests from that section.
-## (Sections are lines in README.md that start with '## '.)
-## Since there are sometimes multiple tests in the same
-## section, they're stored in order of appearance.
-##
-## If you change the tests in README.md, you'll probably
-## break the test suite!  But this is better than README.md
-## bit-rotting.
+## readme_tests maps a v1 README section name (its '## ' heading)
+## to that section's examples, in order of appearance.  Each
+## entry is [example_source, times_run]: exec_readme() bumps the
+## counter, and the completeness check at the bottom of this file
+## fails if any example was never exercised.
 ##
 
-readme = os.path.normpath(os.path.join(appeal_dir, "README.md"))
-with open(readme, "rt") as f:
-    lines = f.read()
+readme_tests = {
+    'Quickstart': [
+        ['import appeal\nimport sys\n\napp = appeal.Appeal()\n\n@app.command()\ndef hello(name):\n    print(f"Hello, {name}!")\n\npass', 0],
+        ['import appeal\nimport sys\n\napp = appeal.Appeal()\n\n@app.command()\ndef fgrep(pattern, *files, ignore_case=False):\n    if not files:\n        files = [\'-\']\n    print_file = len(files) > 1\n    if ignore_case:\n        pattern = pattern.lower()\n    for file in files:\n        if file == "-":\n            f = sys.stdin\n        else:\n            f = open(file, "rt")\n        for line in f:\n            if ignore_case:\n                match = pattern in line.lower()\n            else:\n                match = pattern in line\n            if match:\n                if print_file:\n                    print(file + ": ", end="")\n                print(line.rstrip())\n        if file != "-":\n            f.close()\n\n\nif __name__ == "__main__":\n    pass', 0],
+    ],
+    'Hello, World!': [
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef hello(name):\n    print(f"Hello, {name}!")\n\npass', 0],
+    ],
+    'Default Values And `*args`': [
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef fgrep(pattern, filename=None):\n    print(f"fgrep {pattern} {filename}")\n\npass', 0],
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef fgrep(pattern, *filenames):\n    print(f"fgrep {pattern} {filenames}")\n\npass', 0],
+    ],
+    'Options, Opargs, And Keyword-Only Parameters': [
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef fgrep(pattern, *filenames, color="", number=0, ignore_case=False):\n    print(f"fgrep {pattern} {filenames} {color!r} {number} {ignore_case}")\n\npass', 0],
+    ],
+    'Annotations And Introspection': [
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef fgrep(pattern, *filenames, id:float=None):\n    print(f"fgrep {pattern} {filenames} {id}")\n\npass', 0],
+        ['import appeal\napp = appeal.Appeal()\n\ndef int_and_float(integer: int, real: float):\n    return [integer*3, real*5]\n\n@app.command()\ndef fgrep(pattern, *filenames, position:int_and_float=(0, 0.0)):\n    print(f"fgrep {pattern} {filenames} {position}")\n\npass', 0],
+        ['import appeal\napp = appeal.Appeal()\n\nclass IntAndFloat:\n    def __init__(self, integer: int, real: float):\n        self.integer = integer * 3\n        self.real = real * 5\n\n    def __repr__(self):\n        return f"<IntAndFloat {self.integer} {self.real}>"\n\n@app.command()\ndef fgrep(pattern, *filenames, position=IntAndFloat(0, 0.0)):\n    print(f"fgrep {pattern} {filenames} {position}")\n\npass', 0],
+    ],
+    'Specifying An Option More Than Once': [
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef fgrep(*, verbose:appeal.counter()=0):\n    print(f"fgrep verbose={verbose!r}")\n\npass', 0],
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef fgrep(*, pattern:appeal.accumulator=[]):\n    print(f"fgrep pattern={pattern!r}")\n\npass', 0],
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef fgrep(*, pattern:appeal.accumulator[int]=[]):\n    print(f"fgrep pattern={pattern!r}")\n\npass', 0],
+    ],
+    'Data Validation': [
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\ndef go(direction:appeal.validate(\'up\', \'down\', \'left\', \'right\', \'forward\', \'back\')):\n    print(f"go direction={direction!r}")\n\npass', 0],
+    ],
+    'Multiple Options For The Same Parameter': [
+        ['import appeal\napp = appeal.Appeal()\n\n@app.command()\n@app.option("direction", "--north", annotation=lambda: "north")\n@app.option("direction", "--south", annotation=lambda: "south")\n@app.option("direction", "--east",  annotation=lambda: "east")\n@app.option("direction", "--west",  annotation=lambda: "west")\ndef go(*, direction=\'north\'):\n    print(f"go direction={direction!r}")\n\npass', 0],
+    ],
+    'Recursive Converters': [
+        ['import appeal\napp = appeal.Appeal()\n\ndef int_float(i: int, f: float):\n    return (i, f)\n\ndef my_converter(i_f: int_float, s: str):\n    return [i_f, s]\n\n@app.command()\ndef recurse(a:str, b:my_converter=[(0, 0), \'\']):\n    print(f"recurse a={a!r} b={b!r}")\n\npass', 0],
+        ['import appeal\napp = appeal.Appeal()\n\ndef int_float(i: int, f: float):\n    return (i, f)\n\ndef my_converter(i_f: int_float, s: str, *, verbose=False):\n    return [i_f, s, verbose]\n\n@app.command()\ndef recurse2(a:str, b:my_converter=[(0, 0), \'\', False]):\n    print(f"recurse2 a={a!r} b={b!r}")\n\npass', 0],
+    ],
+    'Options that map other options': [
+        ['import appeal\napp = appeal.Appeal()\n\ndef my_converter(a: int, *, verbose=False):\n    return [a, verbose]\n\n@app.command()\ndef inception(*, option:my_converter=[0, False]):\n    print(f"inception option={option!r}")\n\npass', 0],
+    ],
+    "Multiple options that aren't MultiOptions": [
+        ['import appeal\napp = appeal.Appeal()\n\ndef my_converter(a: int, *, verbose=False):\n    return [a, verbose]\n\n@app.command()\ndef repetition(*args:my_converter):\n    print(f"repetition args={args!r}")\n\npass', 0],
+    ],
+    'Positional parameters that only consume options': [
+        ['import appeal\napp = appeal.Appeal()\n\nclass Logging:\n    def __init__(self, *, verbose=False, log_level=\'info\'):\n        self.verbose = verbose\n        self.log_level = log_level\n\n    def __repr__(self):\n        return f"<Logging verbose={self.verbose!r} log_level={self.log_level}>"\n\n@app.command()\ndef mixin(log:Logging):\n    print(f"mixin log={log!r}")\n\npass', 0],
+    ],
+    'Classes, Instances, And Preparers': [
+        ['import appeal\n\napp = appeal.Appeal()\napp_class, command_method = app.app_class()\n\n@app_class()\nclass MyApp:\n    def __init__(self, *, verbose=False):\n        print(f"MyApp init verbose={verbose!r}")\n        self.verbose = verbose\n\n    def __repr__(self):\n        return "<MyApp>"\n\n    @command_method()\n    def add(self, a, b, c):\n        print(f"MyApp add self={self!r} a={a!r} b={b!r} c={c!r} self.verbose={self.verbose!r}")\n\npass', 0],
+        ['import appeal\n\napp = appeal.Appeal()\ncommand_method = app.command_method()\n\nclass MyApp:\n    def __init__(self, id):\n        self.id = id\n\n    def __repr__(self):\n        return f"<MyApp id={self.id!r}>"\n\n    @command_method()\n    def add(self, a, b, c):\n        print(f"MyApp add self={self!r} a={a!r} b={b!r} c={c!r}")\n\nmy_app = MyApp("dingus")\n\np = app.processor()\np.preparer(command_method.bind(my_app))\npass', 0],
+    ],
+}
 
-in_code = False
-readme_tests = collections.defaultdict(list)
-readme_test = []
-section = None
-
-for line in lines.split("\n"):
-    stripped = line.lstrip()
-    if stripped == line:
-        if line.startswith("##"):
-            while line.startswith("#"):
-                line = line[1:]
-            section = line.strip()
-            # if we had a malformed test, throw it away here
-            readme_test.clear()
-            continue
-    stripped = stripped.rstrip()
-    if stripped == "import appeal":
-        readme_test.clear()
-        readme_test.append(line)
-    elif readme_test:
-        if stripped.startswith(("app.main(", "p.main(")):
-            # don't actually append the app.main(), we don't want it
-            # but add a correctly-indented 'pass' so it still parses
-            prefix = line.partition(stripped)[0]
-            pass_line = prefix + "pass"
-            readme_test.append(pass_line)
-
-            t = "\n".join(readme_test)
-            t = textwrap.dedent(t)
-            readme_tests[section].append([t, 0])
-            readme_test = []
-            # print("[test]", section, len(readme_tests[section]), repr(t)[:30] + "[...]")
-        else:
-            readme_test.append(line)
-
-# for line in lines.split("\n"):
-#     if line.startswith("##"):
-#         section = line.partition(' ')[2].strip()
-#         continue
-#     stripped = line.strip()
-#     if stripped.startswith("```"):
-#         in_code = not in_code
-#     if in_code and (not readme_test) and (stripped == "import appeal"):
-#         readme_test.append(line)
-#     elif readme_test:
-#         if stripped == "app.main()":
-#             # don't append line, we don't want it anyway
-#             # in fact, we probably want to lose the previous line too
-#             if readme_test[-1] == 'if __name__ == "__main__":':
-#                 readme_test.pop()
-#             t = "\n".join(readme_test)
-#             t = textwrap.dedent(t)
-#             readme_tests[section].append([t, 0])
-#             readme_test = []
-#         else:
-#             readme_test.append(line)
 
 # print the tests
 if "-v" in sys.argv:
@@ -2674,32 +2672,61 @@ class ReadmeTests(AppealTestsBase):
     #     pass
     #     ]
 
-    @unittest.skip("class-based commands (app_class/command_method): not yet in v2")
+    def _class_app(self, printer):
+        # the v1 README's "Classes, Instances, And Preparers"
+        # examples, rewritten as v2 pins (2026-07-08): the class
+        # decorated whole; the preparer API retires with it (the
+        # environment does its job internally)
+        app = appeal.Appeal()
+
+        @app.global_command()
+        class MyApp:
+            def __init__(self, *, verbose=False):
+                self.verbose = verbose
+                printer(f"MyApp init verbose={verbose}")
+
+            @app.command()
+            def add(self, a, b, c):
+                printer(f"MyApp add self=<MyApp> a={a!r} b={b!r} "
+                        f"c={c!r} self.verbose={self.verbose}")
+
+        return app
+
     def test_classes_instances_and_preparers_0_1(self):
-        self.exec_readme(
-            'Classes, Instances, And Preparers',
-            0,
-            "add f g h",
-            "MyApp init verbose=False\nMyApp add self=<MyApp> a='f' b='g' c='h' self.verbose=False",
-            )
+        lines = []
+        app = self._class_app(lines.append)
+        app.process(shlex.split("add f g h"))
+        self.assertEqual(lines, [
+            "MyApp init verbose=False",
+            "MyApp add self=<MyApp> a='f' b='g' c='h' self.verbose=False"])
 
-    @unittest.skip("class-based commands (app_class/command_method): not yet in v2")
     def test_classes_instances_and_preparers_0_2(self):
-        self.exec_readme(
-            'Classes, Instances, And Preparers',
-            0,
-            "-v add f g h",
-            "MyApp init verbose=True\nMyApp add self=<MyApp> a='f' b='g' c='h' self.verbose=True",
-            )
+        lines = []
+        app = self._class_app(lines.append)
+        app.process(shlex.split("-v add f g h"))
+        self.assertEqual(lines, [
+            "MyApp init verbose=True",
+            "MyApp add self=<MyApp> a='f' b='g' c='h' self.verbose=True"])
 
-    @unittest.skip("class-based commands (app_class/command_method): not yet in v2")
     def test_classes_instances_and_preparers_1_1(self):
-        self.exec_readme(
-            'Classes, Instances, And Preparers',
-            1,
-            "add f g h",
-            "MyApp add self=<MyApp id='dingus'> a='f' b='g' c='h'",
-            )
+        # v1's second technique--a pre-made instance--survives as
+        # ordinary bound methods: no preparer machinery needed
+        lines = []
+        app = appeal.Appeal()
+
+        class MyApp:
+            def __init__(self, id):
+                self.id = id
+
+            def add(self, a, b, c):
+                lines.append(f"MyApp add self=<MyApp id={self.id!r}> "
+                             f"a={a!r} b={b!r} c={c!r}")
+
+        my_app = MyApp("dingus")
+        app.command()(my_app.add)
+        app.process(shlex.split("add f g h"))
+        self.assertEqual(lines, [
+            "MyApp add self=<MyApp id='dingus'> a='f' b='g' c='h'"])
 
 
 class ArgumentGrouperTests(unittest.TestCase):
@@ -3042,6 +3069,10 @@ class ConfigFileReadingTests(AppealTestsBase):
         # compile-time-emitted abort opcode at line ~3050, which exercises
         # the runtime abort handler at line ~4579 as well as locking in
         # the f-string fix from the bug-review pass.
+        # (v2 divergence, 2026-07-09: multi-parameter positional
+        # MultiOptions BUILD now--the mapping readers feed them
+        # sequences of sequences--so the rejection moved from
+        # build time to read time, still loud, still saying why)
         class TwoParam(appeal.MultiOption):
             def init(self, default=None):
                 self.results = []
@@ -3054,8 +3085,8 @@ class ConfigFileReadingTests(AppealTestsBase):
         with self.assertRaises(Exception) as cm:
             self.app.read_mapping(cfg, {'pairs': [1, 2, 3]})
         msg = str(cm.exception)
-        self.assertIn("multiple parameters", msg)
-        self.assertIn("individual object", msg)
+        self.assertIn("TwoParam", msg)
+        self.assertIn("occurrence takes 2 values", msg)
 
 
 class ConverterVocabularyTests(AppealTestsBase):
@@ -3259,25 +3290,29 @@ class OptionParsingTests(AppealTestsBase):
             return f
         self.assertEqual(app.process(shlex.split("c -f=joe")), 'joe')
 
-    def test_short_option_concat_rejected_when_oparg_required(self):
-        # -fjoe with a *required*-oparg short option: not allowed, must be last.
+    def test_short_option_concat_binds_rest(self):
+        # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09):
+        # getopt's rule adopted.  v1 rejected -fjoe for a
+        # required-oparg short option ("must be last"); v2 binds
+        # the rest of the token as the oparg, like getopt,
+        # GNU getopt, and argparse.
         app = self.app
         @app.command()
         def c(*, f=''):
             return f
-        with self.assertRaises(appeal.AppealUsageError) as cm:
-            app.process(shlex.split("c -fjoe"))
-        self.assertIn("must be last", str(cm.exception))
+        self.assertEqual(app.process(shlex.split("c -fjoe")), 'joe')
 
-    def test_short_option_concat_with_split_value_rejected(self):
-        # -fjoe=extra is also rejected for a required-oparg short option.
+    def test_short_option_concat_takes_rest_verbatim(self):
+        # DELIBERATE v1 -> v2 DIVERGENCE (same ruling): the rest
+        # is the oparg VERBATIM--only a '=' immediately after the
+        # option letter is a separator.  -fjoe=extra is
+        # -f 'joe=extra' (think -DNAME=1).
         app = self.app
         @app.command()
         def c(*, f=''):
             return f
-        with self.assertRaises(appeal.AppealUsageError) as cm:
-            app.process(shlex.split("c -fjoe=extra"))
-        self.assertIn("must be last", str(cm.exception))
+        self.assertEqual(app.process(shlex.split("c -fjoe=extra")),
+                         'joe=extra')
 
     def test_unknown_option_rejected(self):
         # An option the program doesn't define should produce a clean error.
@@ -3383,7 +3418,11 @@ class SubcommandTests(AppealTestsBase):
         @app.command()
         def db(*, host='localhost'):
             calls.append(('db', host))
-        @app.command("db").command()
+        # (the chained @app.command("db").command() spelling is
+        # PEP 614 syntax--3.9+; the assign-then-decorate spelling
+        # parses everywhere)
+        db_registrar = app.command("db")
+        @db_registrar.command()
         def deploy(version:int):
             calls.append(('deploy', version))
         app.process(shlex.split("db deploy 5"))
@@ -3395,7 +3434,11 @@ class SubcommandTests(AppealTestsBase):
         @app.command()
         def db(*, host='localhost'):
             calls.append(('db', host))
-        @app.command("db").command()
+        # (the chained @app.command("db").command() spelling is
+        # PEP 614 syntax--3.9+; the assign-then-decorate spelling
+        # parses everywhere)
+        db_registrar = app.command("db")
+        @db_registrar.command()
         def deploy(version:int):
             calls.append(('deploy', version))
         app.process(shlex.split("db --host prod deploy 7"))
@@ -3408,7 +3451,8 @@ class SubcommandTests(AppealTestsBase):
         @app.command()
         def db(*, host='localhost'):
             return host
-        @app.command("db").command()
+        db_registrar = app.command("db")    # PEP 614: chaining
+        @db_registrar.command()             # needs 3.9
         def deploy(version:int):
             return version
         with self.assertRaises(appeal.AppealUsageError):
@@ -3506,7 +3550,8 @@ class OptionsThatMapOptionsTests(AppealTestsBase):
 
 if __name__ == "__main__":
     # Run everything (TestCase classes and any plain test_* functions)
-    # through atest, with exit=False so control returns here.
+    # through big.test.run, which returns control here instead of
+    # exiting (so the README-completeness check below still runs).
     #
     # This is what fixes a real bug: the bottom of this file *used* to be
     #     if __name__ == "__main__":
@@ -3514,7 +3559,7 @@ if __name__ == "__main__":
     #     ...README-completeness check...
     # The first unittest.main() exited before the README check ever ran,
     # so the check was silently dead.  Now the check runs again.
-    total, failures = atest.run(verbose=False, exit=False)
+    total, failures = test.run(name='appeal v1 corpus')
 
     not_run = []
     for section, tests in readme_tests.items():

@@ -20,11 +20,22 @@ appeal_dir = preload_local_appeal()
 import appeal
 import big.all as big
 import datetime
-from dataclasses import dataclass
+try:
+    from dataclasses import dataclass
+except ImportError:
+    # Python 3.6: the CSV corpus record is a dataclass, so the
+    # read_csv tests can't run there.  Counted out loud below,
+    # never silently skipped.
+    dataclass = None
 import csv
 import os
 import perky
-import tomli
+try:
+    import tomli
+except ImportError:
+    # Python 3.6: modern tomli wheels don't reach back that far.
+    # The two TOML-shaped tests self-report below.
+    tomli = None
 import unittest
 
 os.chdir(appeal_dir / "tests")
@@ -228,6 +239,9 @@ class TestReadMapping(unittest.TestCase):
         self.assertEqual(expected, got)
 
     def test_toml_1(self):
+        if tomli is None:
+            print('test_toml_1 not run (tomli unavailable on this Python)')
+            return
         app = appeal.Appeal()
 
         def darth_vader(darth, vader):
@@ -268,6 +282,9 @@ class TestReadMapping(unittest.TestCase):
 
 
     def test_toml_2(self):
+        if tomli is None:
+            print('test_toml_2 not run (tomli unavailable on this Python)')
+            return
         # what's the difference between test_toml_1 and test_toml_2?
         # test.d has an annotation of "float", which was a thing I had to handle.
         app = appeal.Appeal()
@@ -323,123 +340,127 @@ def vote(vote):
 def nested_vote(q):
     return vote(q)
 
-@dataclass
-class AkaliSkinVote:
-    voter_id: str
-    vote_time: datestamp
-    poll_id: str
-    vote_Original: vote
-    vote_Nurse: nested_vote
-    vote_Blood_Moon: vote
-    vote_Silverfang: vote
-    vote_Headhunter: vote
-    vote_Sashimi: vote
-    vote_K_DA: vote
-    vote_Project: vote
-    vote_True_Damage: vote
-    vote_K_DA_All_Out: vote
-    vote_Crime_City_Nightmare: vote
-    vote_Star_Guardian: vote
-    vote_Stinger: vote
-    vote_Infernal: vote
-    vote_All_Star: vote
-    vote_Prestige_K_DA: vote
+if dataclass is not None:
+    @dataclass
+    class AkaliSkinVote:
+        voter_id: str
+        vote_time: datestamp
+        poll_id: str
+        vote_Original: vote
+        vote_Nurse: nested_vote
+        vote_Blood_Moon: vote
+        vote_Silverfang: vote
+        vote_Headhunter: vote
+        vote_Sashimi: vote
+        vote_K_DA: vote
+        vote_Project: vote
+        vote_True_Damage: vote
+        vote_K_DA_All_Out: vote
+        vote_Crime_City_Nightmare: vote
+        vote_Star_Guardian: vote
+        vote_Stinger: vote
+        vote_Infernal: vote
+        vote_All_Star: vote
+        vote_Prestige_K_DA: vote
 
-def akali_skin_vote_fn(
-    voter_id: str,
-    vote_time: datestamp,
-    poll_id: str,
-    *votes: vote):
-    return (AkaliSkinVote, voter_id, vote_time, poll_id, votes)
+    def akali_skin_vote_fn(
+        voter_id: str,
+        vote_time: datestamp,
+        poll_id: str,
+        *votes: vote):
+        return (AkaliSkinVote, voter_id, vote_time, poll_id, votes)
 
 
-class TestReadCSV(unittest.TestCase):
+    class TestReadCSV(unittest.TestCase):
 
-    def setUp(self):
-        with open("read_corpus/starvote_ballots_best_akali_skins.csv", "rt") as f:
-            text = f.read().split("\n")
-        self.csv_reader = csv.reader(text)
+        def setUp(self):
+            with open("read_corpus/starvote_ballots_best_akali_skins.csv", "rt") as f:
+                text = f.read().split("\n")
+            self.csv_reader = csv.reader(text)
 
-        self.row0 = AkaliSkinVote(
-            voter_id='9szh13efc4',
-            vote_time=datetime.datetime(2022, 8, 10, 9, 25, 51),
-            poll_id='4tyx27ks',
-            vote_Original=4,
-            vote_Nurse=3,
-            vote_Blood_Moon=3,
-            vote_Silverfang=3,
-            vote_Headhunter=2,
-            vote_Sashimi=4,
-            vote_K_DA=5,
-            vote_Project=2,
-            vote_True_Damage=3,
-            vote_K_DA_All_Out=5,
-            vote_Crime_City_Nightmare=4,
-            vote_Star_Guardian=5,
-            vote_Stinger=2,
-            vote_Infernal=1,
-            vote_All_Star=4,
-            vote_Prestige_K_DA=5)
+            self.row0 = AkaliSkinVote(
+                voter_id='9szh13efc4',
+                vote_time=datetime.datetime(2022, 8, 10, 9, 25, 51),
+                poll_id='4tyx27ks',
+                vote_Original=4,
+                vote_Nurse=3,
+                vote_Blood_Moon=3,
+                vote_Silverfang=3,
+                vote_Headhunter=2,
+                vote_Sashimi=4,
+                vote_K_DA=5,
+                vote_Project=2,
+                vote_True_Damage=3,
+                vote_K_DA_All_Out=5,
+                vote_Crime_City_Nightmare=4,
+                vote_Star_Guardian=5,
+                vote_Stinger=2,
+                vote_Infernal=1,
+                vote_All_Star=4,
+                vote_Prestige_K_DA=5)
 
-    def test_read_csv(self):
-        app = appeal.Appeal()
-        results = app.read_csv(AkaliSkinVote, self.csv_reader)
-        self.assertEqual(len(results), 669)
-        self.assertEqual(results[0], self.row0)
+        def test_read_csv(self):
+            app = appeal.Appeal()
+            results = app.read_csv(AkaliSkinVote, self.csv_reader)
+            self.assertEqual(len(results), 669)
+            self.assertEqual(results[0], self.row0)
 
-    def test_read_csv_var_positional(self):
-        app = appeal.Appeal()
-        results = app.read_csv(akali_skin_vote_fn, self.csv_reader)
-        self.assertEqual(len(results), 669)
-        row0 = akali_skin_vote_fn(
-            '9szh13efc4',
-            datetime.datetime(2022, 8, 10, 9, 25, 51),
-            '4tyx27ks',
-            4,
-            3,
-            3,
-            3,
-            2,
-            4,
-            5,
-            2,
-            3,
-            5,
-            4,
-            5,
-            2,
-            1,
-            4,
-            5)
+        def test_read_csv_var_positional(self):
+            app = appeal.Appeal()
+            results = app.read_csv(akali_skin_vote_fn, self.csv_reader)
+            self.assertEqual(len(results), 669)
+            row0 = akali_skin_vote_fn(
+                '9szh13efc4',
+                datetime.datetime(2022, 8, 10, 9, 25, 51),
+                '4tyx27ks',
+                4,
+                3,
+                3,
+                3,
+                2,
+                4,
+                5,
+                2,
+                3,
+                5,
+                4,
+                5,
+                2,
+                1,
+                4,
+                5)
 
-        self.assertEqual(results[0], row0)
+            self.assertEqual(results[0], row0)
 
-    def test_read_csv_by_name(self):
-        first_row_map = {
-            'voterID': 'voter_id',
-            'voteTime': 'vote_time',
-            'pollID': 'poll_id',
-            'Original': 'vote_Original',
-            'Nurse': 'vote_Nurse',
-            'Blood Moon': 'vote_Blood_Moon',
-            'Silverfang': 'vote_Silverfang',
-            'Headhunter': 'vote_Headhunter',
-            'Sashimi': 'vote_Sashimi',
-            'K/DA': 'vote_K_DA',
-            'Project': 'vote_Project',
-            'True Damage': 'vote_True_Damage',
-            'K/DA All Out': 'vote_K_DA_All_Out',
-            'Crime City Nightmare': 'vote_Crime_City_Nightmare',
-            'Star Guardian': 'vote_Star_Guardian',
-            'Stinger': 'vote_Stinger',
-            'Infernal': 'vote_Infernal',
-            'All-Star': 'vote_All_Star',
-            'Prestige K/DA': 'vote_Prestige_K_DA',
-        }
-        app = appeal.Appeal()
-        results = app.read_csv(AkaliSkinVote, self.csv_reader, first_row_map=first_row_map)
-        self.assertEqual(len(results), 669)
-        self.assertEqual(results[0], self.row0)
+        def test_read_csv_by_name(self):
+            first_row_map = {
+                'voterID': 'voter_id',
+                'voteTime': 'vote_time',
+                'pollID': 'poll_id',
+                'Original': 'vote_Original',
+                'Nurse': 'vote_Nurse',
+                'Blood Moon': 'vote_Blood_Moon',
+                'Silverfang': 'vote_Silverfang',
+                'Headhunter': 'vote_Headhunter',
+                'Sashimi': 'vote_Sashimi',
+                'K/DA': 'vote_K_DA',
+                'Project': 'vote_Project',
+                'True Damage': 'vote_True_Damage',
+                'K/DA All Out': 'vote_K_DA_All_Out',
+                'Crime City Nightmare': 'vote_Crime_City_Nightmare',
+                'Star Guardian': 'vote_Star_Guardian',
+                'Stinger': 'vote_Stinger',
+                'Infernal': 'vote_Infernal',
+                'All-Star': 'vote_All_Star',
+                'Prestige K/DA': 'vote_Prestige_K_DA',
+            }
+            app = appeal.Appeal()
+            results = app.read_csv(AkaliSkinVote, self.csv_reader, first_row_map=first_row_map)
+            self.assertEqual(len(results), 669)
+            self.assertEqual(results[0], self.row0)
+
+else:
+    print('TestReadCSV not run on Python 3.6 (the corpus record is a dataclass, 3.7+)')
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,12 +27,59 @@ jobs:
         name: wheel
         path: dist/*.whl
 
+  test-windows:
+    # Windows evidence (2026-07-09): nothing in appeal is
+    # structurally POSIX-only, so let the suite say whether the
+    # README's decade-old "might work on Windows" is true.  The
+    # oldest-realistic and newest Pythons; bash (present on the
+    # runners) so the wheel glob works unchanged.
+    needs: [build-wheel]
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["3.9", "3.14"]
+
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '${{ matrix.version }}'
+        allow-prereleases: true
+        cache: pip
+    - name: Download wheel
+      uses: actions/download-artifact@v4
+      with:
+        name: wheel
+        path: ./
+    - name: Install wheel
+      run: |
+        pip install *.whl
+    - name: Run tests without optional dependencies
+      run: |
+        python tests/test_all.py
+    - name: Install optional dependencies
+      run: |
+        python -m pip install . '.[test]'
+    - name: Run tests with optional dependencies
+      run: |
+        python tests/test_all.py
+
   test:
     needs: [build-wheel]
     strategy:
       fail-fast: false
       matrix:
-        version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        # 3.6 is supported and verified locally; GitHub-hosted
+        # runners can't install it (setup-python needs
+        # ubuntu-20.04 for 3.6, and that runner is retired)
+        version: ["3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
 
     runs-on: ubuntu-22.04
 

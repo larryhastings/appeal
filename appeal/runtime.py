@@ -19,30 +19,92 @@ import sys
 
 
 # --8<-- start appeal exceptions --8<--
-class AppealConfigurationError(Exception):
+def did_you_mean(word, candidates):
+    """
+    The suggestion tail for an unknown-name error: " (did you
+    mean 'x'?)" when something in candidates is close, '' when
+    nothing is.  difflib's gestalt matching--the stdlib's public
+    answer (git hand-rolls Damerau-Levenshtein, clap uses
+    Jaro-Winkler; on names this short they all agree).
+    """
+    import difflib
+    matches = difflib.get_close_matches(word, list(candidates), n=2)
+    if not matches:
+        return ''
+    if len(matches) == 1:
+        return f" (did you mean {matches[0]!r}?)"
+    return f" (did you mean {matches[0]!r} or {matches[1]!r}?)"
+
+
+class AppealError(Exception):
+    """
+    The umbrella: every exception Appeal raises derives from it
+    (v1's AppealBaseException role), so `except AppealError` means
+    "anything Appeal raised".  It also has one job of its own:
+    raise it FROM YOUR COMMAND for a runtime failure that should
+    stop the program with a polite message but *without* usage
+    (the command line was fine)--main() prints `error: ...` and
+    exits 1.
+    """
+
+
+class AppealConfigurationError(AppealError):
     """
     Raised at *build* time: the program's signature (or a request,
     like standalone emission) doesn't make sense.  Always names the
-    offender.  Generated parsers never raise it--but the converter
-    vocabulary below does, so it travels with the file.
+    offender.  A bug, so main() lets it raise.  Generated parsers
+    never raise it--but the converter vocabulary below does, so it
+    travels with the file.
     """
 
 
-class UsageError(Exception):
+class AppealDataError(AppealError):
     """
-    Something is wrong with the *command line* (not the program).
-    Printing it shows the message and the command's usage.
+    The data handed to the program is wrong--whatever its
+    provenance: a config mapping, a mapping or CSV row being read,
+    or (the most common data of all) the command line.  Carries
+    the command's usage text when there is one to show.
     """
     def __init__(self, message, usage=None):
         super().__init__(message)
         self.usage = usage
 
 
-class AppealError(Exception):
+class AppealUsageError(AppealDataError):
     """
-    A runtime failure that should stop the program with a message
-    but *without* usage (the user's command line was fine).
+    The command line specifically is wrong (v1's name, kept).
+    Printing it shows the message and the command's usage.
     """
+
+
+# the short spellings, for terse qualified use (appeal.UsageError)--
+# and v1's name for the umbrella
+UsageError = AppealUsageError
+DataError = AppealDataError
+ConfigurationError = AppealConfigurationError
+AppealBaseException = AppealError
+
+
+def foreign_appeal_error(e):
+    """
+    A standalone script's user module imports appeal (to raise
+    AppealError, subclass Option, ...), so exceptions it raises
+    are the INSTALLED appeal's classes--not this script's
+    streamed copies, and `except` can't match them by identity
+    (the two-copies problem, exceptions edition; see is_option).
+    Recognizes one by name and home; returns 'configuration',
+    'data', 'error', or None.
+    """
+    for c in type(e).__mro__:
+        if not c.__module__.endswith('appeal.runtime'):
+            continue
+        if c.__name__ == 'AppealConfigurationError':
+            return 'configuration'
+        if c.__name__ == 'AppealDataError':
+            return 'data'
+        if c.__name__ == 'AppealError':
+            return 'error'
+    return None
 # --8<-- end appeal exceptions --8<--
 
 
@@ -74,10 +136,14 @@ def parse_tokens(argv, options, usage=None, command_split=None,
 
     options maps each option string to (key, kind), where key is
     the option's canonical name and kind is 'flag', 'value', or
-    'multi'.  Returns (operands, given): operands is a list of
-    strings; given maps keys to True (flags), a raw string
-    (values), or a list of raw strings (multi).  Options that
-    aren't repeatable kinds error when given twice (v1 semantics).
+    'multi'.  Folds and groups carry per-occurrence operand
+    counts: (key, kind, minimum, maximum); consumption is greedy
+    to the maximum--an optional operand takes the next token
+    unconditionally (v1).  Returns (operands, given): operands is
+    a list of strings; given maps keys to True (flags), a raw
+    string (values), or a list of raw strings (multi).  Options
+    that aren't repeatable kinds error when given twice (v1
+    semantics).
 
     Handles: '--' (ends option recognition for this parse only--
     it's local state, never program state), '--name=value',
@@ -109,15 +175,35 @@ def parse_tokens(argv, options, usage=None, command_split=None,
             # happens later, by operand position (window_options)
             given.setdefault(key, []).append((len(operands), kind[2:], value))
             return
-        if kind in ('flag', 'value', 'fold1', 'group'):
-            # v1 semantics, probed: an option that isn't a
-            # repeatable kind may be given at most once
+        if kind == 'fold1':
+            # a StrictOption: at most once, by declaration
             if key in given:
                 raise UsageError(
                     f"option {key} specified more than once", usage)
-            given[key] = True if kind == 'flag' else value
+            given[key] = value
+        elif kind in ('flag', 'nullary', 'value', 'group'):
+            # last one wins (ruled 2026-07-09: the universal
+            # rule--getopt, argparse, click--and what makes
+            # append-to-override wrappers work).  Reinsertion
+            # keeps `given` in last-occurrence order, which is
+            # how a parameter shared by several option strings
+            # knows which string spoke last.
+            if key in given:
+                del given[key]
+            given[key] = value
         else:   # 'multi' collects raw strings; 'fold' tuples of them
             given.setdefault(key, []).append(value)
+
+    def flag_value(name, text):
+        # a flag's explicit '=' value: exactly these two
+        # spellings (ruled 2026-07-09)--no yes/no/on/off zoo
+        if text == 'true':
+            return True
+        if text == 'false':
+            return False
+        raise UsageError(
+            f"option {name!r}: '=' value must be 'true' or "
+            f"'false', not {text!r}", usage)
 
     for token in it:
         if force_positional or (not token.startswith('-')) or (token == '-'):
@@ -138,42 +224,67 @@ def parse_tokens(argv, options, usage=None, command_split=None,
             name_part, equals, value_part = token.partition('=')
             entry = options.get(name_part)
             if entry is None:
-                raise UsageError(f"unknown option {name_part!r}", usage)
+                tail = did_you_mean(
+                    name_part,
+                    [s for s in options if s.startswith('--')])
+                raise UsageError(
+                    f"unknown option {name_part!r}{tail}", usage)
             key, kind = entry[0], entry[1]
             base = kind[2:] if kind.startswith('w:') else kind
-            nargs = entry[2] if len(entry) > 2 else 1
-            if base == 'flag' or (base in ('fold', 'fold1') and nargs == 0):
+            if base in ('fold', 'fold1', 'group'):
+                minimum = entry[2]
+                maximum = entry[3] if len(entry) > 3 else entry[2]
+            else:
+                minimum = maximum = entry[2] if len(entry) > 2 else 1
+            if base in ('flag', 'nullary') or maximum == 0:
+                # flags, value-producing flags, zero-operand
+                # folds, options-only groups
                 if equals:
-                    raise UsageError(
-                        f"option {name_part!r} doesn't take a value", usage)
-                record(key, kind, True if base == 'flag' else ())
-                continue
-            if base == 'group' and nargs == 0:
-                # a group of all-optional operands: bare, or given
-                # one inline operand via '='
-                record(key, kind, (value_part,) if equals else ())
+                    if base != 'flag':
+                        raise UsageError(
+                            f"option {name_part!r} doesn't take a value",
+                            usage)
+                    # a flag with an explicit boolean: --verbose=false
+                    # overrides anything a config layer said
+                    record(key, kind, flag_value(name_part, value_part))
+                    continue
+                record(key, kind,
+                       True if base in ('flag', 'nullary') else ())
                 continue
             if equals:
-                if nargs != 1:
+                if maximum > 1:
+                    counts = (f'{maximum} values' if minimum == maximum
+                              else f'up to {maximum} values')
                     raise UsageError(
-                        f"option {name_part!r} takes {nargs} values "
+                        f"option {name_part!r} takes {counts} "
                         f"and can't use '='", usage)
                 record(key, kind,
                        (value_part,) if base in ('fold', 'fold1', 'group')
                        else value_part)
                 continue
+            # greedy to the maximum: an optional operand takes the
+            # next token unconditionally, whatever it looks like
+            # (v1, probed: -j -5 works, -j -v is a loud conversion
+            # error)--EXCEPT '--', the terminator, which outranks
+            # greed once the minimum is satisfied (ruled
+            # 2026-07-09, POSIX guideline 10: only a REQUIRED
+            # oparg may consume '--', the `grep -e --` idiom)
             values = []
             for value in it:
-                values.append(value)
-                if len(values) == nargs:
+                if value == '--' and len(values) >= minimum:
+                    force_positional = True
                     break
-            if len(values) < nargs:
+                values.append(value)
+                if len(values) == maximum:
+                    break
+            if len(values) < minimum:
                 raise UsageError(
                     f"option {name_part!r} requires "
-                    f"{'a value' if nargs == 1 else f'{nargs} values'}", usage)
+                    f"{'a value' if minimum == 1 else f'{minimum} values'}",
+                    usage)
             record(key, kind,
                    tuple(values)
-                   if (base in ('fold', 'fold1', 'group') or nargs != 1)
+                   if (base in ('fold', 'fold1', 'group') or maximum != 1)
                    else values[0])
             continue
 
@@ -197,53 +308,61 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                 raise UsageError(f"unknown option {'-' + c!r}", usage)
             key, kind = entry[0], entry[1]
             base = kind[2:] if kind.startswith('w:') else kind
-            nargs = entry[2] if len(entry) > 2 else 1
-            if base == 'group' and nargs == 0:
-                # optional-operand groups allow the concatenated
-                # form: -fjoe (and -f=joe) hand 'joe' to the group.
-                # But if every remaining character is itself a known
-                # short option, this is an ordinary bundle: -me is
-                # m-then-e, not m('e')  (v1).
+            if base in ('fold', 'fold1', 'group'):
+                minimum = entry[2]
+                maximum = entry[3] if len(entry) > 3 else entry[2]
+            else:
+                minimum = maximum = entry[2] if len(entry) > 2 else 1
+            if base in ('flag', 'nullary') or maximum == 0:
                 rest = chars[index + 1:]
-                bundled = (not rest
-                           or (not rest.startswith('=')
-                               and all(('-' + ch) in options for ch in rest)))
-                if bundled:
-                    record(key, kind, ())
-                    continue
                 if rest.startswith('='):
-                    rest = rest[1:]
-                record(key, kind, (rest,))
-                break
-            if base == 'flag' or (base in ('fold', 'fold1') and nargs == 0):
-                record(key, kind, True if base == 'flag' else ())
-                continue
-            # -p=8: the remainder after '=' is the value
-            rest = chars[index + 1:]
-            if rest.startswith('=') and nargs == 1:
-                value = rest[1:]
+                    if base != 'flag':
+                        raise UsageError(
+                            f"option {'-' + c!r} doesn't take a value",
+                            usage)
+                    record(key, kind, flag_value('-' + c, rest[1:]))
+                    break
                 record(key, kind,
-                       (value,) if base in ('fold', 'fold1', 'group')
-                       else value)
-                break
-            # a short option that takes values must be last in a
-            # bundle; its values are the next tokens
-            if index != len(chars) - 1:
+                       True if base in ('flag', 'nullary') else ())
+                continue
+            rest = chars[index + 1:]
+            if rest:
+                # attachment, getopt's rule (adopted 2026-07-09,
+                # overturning v1's refusal): for an option taking
+                # exactly one value, the rest of the token IS the
+                # oparg--`-fjoe` is `-f joe`, `-DX=1` is
+                # `-D 'X=1'`.  A leading '=' is the separator
+                # spelling and is stripped (`-f=joe` is `joe`).
+                if maximum == 1:
+                    if rest.startswith('='):
+                        rest = rest[1:]
+                    record(key, kind,
+                           (rest,) if base in ('fold', 'fold1', 'group')
+                           else rest)
+                    break
+                counts = (f'{maximum} values' if minimum == maximum
+                          else f'up to {maximum} values')
                 raise UsageError(
-                    f"option {'-' + c!r} takes a value and "
+                    f"option {'-' + c!r} takes {counts} and "
                     f"must be last in a bundle", usage)
+            # last in its bundle: greedy to the maximum (see the
+            # long-option form above, '--' carve-out included)
             values = []
             for value in it:
-                values.append(value)
-                if len(values) == nargs:
+                if value == '--' and len(values) >= minimum:
+                    force_positional = True
                     break
-            if len(values) < nargs:
+                values.append(value)
+                if len(values) == maximum:
+                    break
+            if len(values) < minimum:
                 raise UsageError(
                     f"option {'-' + c!r} requires "
-                    f"{'a value' if nargs == 1 else f'{nargs} values'}", usage)
+                    f"{'a value' if minimum == 1 else f'{minimum} values'}",
+                    usage)
             record(key, kind,
                    tuple(values)
-                   if (base in ('fold', 'fold1', 'group') or nargs != 1)
+                   if (base in ('fold', 'fold1', 'group') or maximum != 1)
                    else values[0])
 
     if command_split is not None:
@@ -254,35 +373,140 @@ def parse_tokens(argv, options, usage=None, command_split=None,
 
 # --8<-- start appeal command set --8<--
 # --8<-- requires appeal exceptions --8<--
-def run_command_set(argv, parse_globals, commands, usage=None,
-                    default=None):
+def scan_command_set(argv, parse_globals, commands, usage=None,
+                     default=None, repeat=False, words=None):
     """
-    Dispatch for a multi-command program: run the global command
-    over the tokens before the command word (if there is a global
-    command), then the named command over the tokens after it.
-    A truthy result from the global command halts dispatch and is
-    the program's result (v1's contract: an early exit code).
-    `default`, if given, handles an empty line instead of the
-    "no command specified." error (v1's default_command).
+    Stage 1 of a multi-command program: scan the whole line--global
+    portion, command word, command portion--with no user code.  A
+    malformed line dies here, before anything runs (Appeal rule).
+
+    parse_globals and each commands value are (scan, run) pairs.
+    With repeat (Appeal's cycling), a command's arguments--all of
+    them, optional included--may be followed by another command
+    word, resolved against `words`; scanning loops until the line
+    runs out.  Returns (invocations, tail): invocations is a list of
+    (word, run, operands, given, positions)--word None for the
+    global command--and tail is the odd trailing job, if any:
+    ('fused', word, callable, tokens) for a commands value that is
+    a plain callable (a nested dispatcher, or the generated help
+    command--scanned and executed together, stage separation inside
+    is its own business), or ('default',) for an empty line with a
+    default command (v1's default_command).
     """
+    invocations = []
     if parse_globals is not None:
-        result, rest = parse_globals(argv)
-        if isinstance(result, int) and not isinstance(result, bool) and result:
-            # v1's early-exit contract: a nonzero int halts dispatch
-            # (other truthy returns don't--the corpus's parent
-            # commands return strings and dispatch proceeds)
-            return result
+        scan_globals, run_globals = parse_globals
+        operands, given, rest, positions = scan_globals(argv)
+        invocations.append((None, run_globals, operands, given, positions))
     else:
         rest = list(argv)
     if not rest:
         if default is not None:
-            return default([])
-        raise UsageError("no command specified.", usage)
-    word = rest[0]
-    parse = commands.get(word)
-    if parse is None:
-        raise UsageError(f"unknown command {word!r}", usage)
-    return parse(rest[1:])
+            return invocations, ('default',)
+        # an empty command line isn't a mistake, it's someone who
+        # needs orientation (ruled 2026-07-09, git-style): the
+        # caller shows the listing and exits 1; nothing runs
+        return invocations, ('bare',)
+
+    # the resolution stack, deepest set on top.  Consulting a set
+    # for its FIRST command is free--that's descent, how the line
+    # got here; re-entering a set for a second command is what
+    # repetition means, and needs that set's own repeat.  A set
+    # without repeat doesn't block resolution in its ancestors.
+    stack = [{'commands': commands, 'repeat': repeat, 'words': words,
+              'usage': usage, 'entered': False}]
+
+    def frames_in_order():
+        for depth, frame in enumerate(reversed(stack)):
+            if depth == 0 and not frame['entered']:
+                yield frame          # descent: first consult free
+            elif frame['repeat']:
+                yield frame          # re-entry: gated on repeat
+
+    def resolvable_words():
+        out = set()
+        for frame in frames_in_order():
+            out.update(frame['words'] or ())
+        return frozenset(out)
+
+    while rest:
+        word = rest[0]
+        entry = target = None
+        for frame in frames_in_order():
+            entry = frame['commands'].get(word)
+            if entry is not None:
+                target = frame
+                break
+        if entry is None:
+            tail = did_you_mean(word, resolvable_words())
+            raise UsageError(f"unknown command {word!r}{tail}",
+                             stack[-1]['usage'])
+        while stack[-1] is not target:
+            stack.pop()              # re-base at the resolved set
+        target['entered'] = True
+        if isinstance(entry, dict):
+            # a nested set: the parent runs first, like a global
+            # command of its own little set
+            stack.append({'commands': entry['commands'],
+                          'repeat': entry['repeat'],
+                          'words': entry['words'],
+                          'usage': entry['usage'],
+                          'entered': False})
+            boundary = resolvable_words()
+            operands, given, rest, positions = entry['scan'](
+                rest[1:], boundary)
+            invocations.append((word, entry['run'], operands, given,
+                                positions))
+            continue
+        if not isinstance(entry, tuple):
+            # fused: scanned and executed together, last (stage
+            # separation inside is its own business)
+            return invocations, ('fused', word, entry, rest[1:])
+        scan_command, run_command = entry
+        boundary = resolvable_words()
+        operands, given, rest, positions = scan_command(
+            rest[1:], boundary or None)
+        invocations.append((word, run_command, operands, given,
+                            positions))
+
+    if len(stack) > 1 and not stack[-1]['entered']:
+        # a parent was named but its set never got a command
+        raise UsageError("no command specified.", stack[-1]['usage'])
+    return invocations, None
+
+
+def run_command_set(argv, parse_globals, commands, usage=None,
+                    default=None, repeat=False, words=None,
+                    listing=None):
+    """
+    Both stages of a multi-command program: scan the whole line,
+    then execute left to right.  A nonzero int return halts
+    dispatch and is the result (v1's early-exit contract, extended
+    to every command in a cycle; other truthy returns don't halt).
+    An empty line (no command named, no default command) prints
+    the listing--`listing` if given, else the usage text--to
+    stdout and returns 1: orientation, not a diagnostic.
+    """
+    invocations, tail = scan_command_set(argv, parse_globals, commands,
+                                         usage, default, repeat, words)
+    if tail == ('bare',):
+        if listing is not None:
+            listing()
+        else:
+            print(f"usage: {usage}")
+        return 1
+    result = None
+    env = {}    # class-based commands: instances live here
+    for word, run, operands, given, positions in invocations:
+        result = run(operands, given, positions, env)
+        if (isinstance(result, int)
+                and not isinstance(result, bool) and result):
+            return result
+    if tail is not None:
+        if tail[0] == 'fused':
+            return tail[2](tail[3])
+        return default([])
+    return result
 # --8<-- end appeal command set --8<--
 
 
@@ -295,15 +519,17 @@ class Option:
     protocol (v1's, kept):
 
       * init(default) -- called once, with the parameter's default;
-      * option(...)   -- called when the option is given; its
-        signature defines the option's operands (each parameter
-        one operand, converted per its annotation);
+      * option(...)   -- called once per occurrence, in
+        command-line order; its signature defines the option's
+        operands (each parameter one operand, converted per its
+        annotation);
       * render()      -- the final value passed to the command.
 
-    An Option may be given at most once ("specified more than
-    once" otherwise); subclass MultiOption to allow repetition.
-    If the option is never given, the class is never instantiated:
-    the parameter's default passes through untouched.
+    An Option may be given any number of times (ruled 2026-07-09:
+    repetition is the norm--getopt, argparse, click; subclass
+    StrictOption to declare "at most once").  If the option is
+    never given, the class is never instantiated: the parameter's
+    default passes through untouched.
     """
     def init(self, default):
         pass
@@ -315,11 +541,47 @@ class Option:
         raise NotImplementedError
 
 
-class MultiOption(Option):
+# v1's name for a repeatable Option--which is now every Option
+MultiOption = Option
+
+
+class StrictOption(Option):
     """
-    An Option that may be given any number of times: option() is
-    called once per occurrence, in command-line order.
+    An Option that may be given AT MOST ONCE: a second occurrence
+    is "specified more than once", loudly.  (v1 called this
+    Option; strictness is opt-in now, so it gets the louder name.)
     """
+
+
+def _foreign_option(annotation, protocol):
+    # A standalone script imports the user's module; if that module
+    # itself imports appeal (it must, to subclass Option), the
+    # process holds TWO copies of the protocol classes--the script's
+    # and appeal's--and issubclass against ours says no.  Recognize
+    # the foreign base by name and home.
+    return any(c.__name__ == protocol
+               and c.__module__.endswith('appeal.runtime')
+               for c in annotation.__mro__)
+
+
+def is_option(annotation):
+    "Is this annotation an Option subclass?  (Either copy of Option.)"
+    if not isinstance(annotation, type):
+        return False
+    return (issubclass(annotation, Option)
+            or _foreign_option(annotation, 'Option'))
+
+
+def is_strict_option(annotation):
+    if not isinstance(annotation, type):
+        return False
+    return (issubclass(annotation, StrictOption)
+            or _foreign_option(annotation, 'StrictOption'))
+
+
+def is_multioption(annotation):
+    "A repeatable option class: any Option that isn't strict."
+    return is_option(annotation) and not is_strict_option(annotation)
 
 
 def fold(cls, converters, occurrences, default, name, usage=None):
@@ -371,10 +633,14 @@ def window_options(occurrences, first, arity, count, name, usage=None,
             if j >= count:
                 j = count - 1
             given = givens[j]
-            if kind in ('flag', 'value', 'fold1', 'group'):
+            if kind == 'fold1':
                 if key in given:
                     raise UsageError(
                         f"option {key} specified more than once", usage)
+                given[key] = value
+            elif kind in ('flag', 'nullary', 'value', 'group'):
+                if key in given:
+                    del given[key]      # last one wins, per instance
                 given[key] = value
             else:
                 given.setdefault(key, []).append(value)
@@ -442,11 +708,248 @@ def collect_mapping(key_converter, value_converter, values, name, usage=None):
 
 # --8<-- start appeal check count --8<--
 # --8<-- requires appeal exceptions --8<--
-def check_count(n, minimum, maximum, valid_counts, usage=None):
+def absorb_take(remaining, suffix_counts, suffix_minimum, floor,
+                skippable):
+    """
+    How many arguments an absorbing slot consumes--one whose
+    converter contains *args, so it takes the most the slots after
+    it can spare (leftmost-maximal-completable): the largest take
+    the child accepts (>= floor), or a clean skip.  Returns the
+    take, or None when only check_count-guaranteed-unreachable
+    states remain.
+    """
+    if suffix_counts is None:
+        candidates = (remaining - suffix_minimum,)
+    else:
+        candidates = tuple(remaining - x for x in sorted(suffix_counts))
+    for c in candidates:
+        if c >= floor or (c == 0 and skippable):
+            return c
+    return None
+
+
+class ScopedQueue:
+    """
+    One scoped option string's occurrences, and the interval model
+    that binds them (decoded from v1's pinned behavior, July 2026):
+
+      * a window's interval runs from its first token to the next
+        window's first token;
+      * the last window opened extends to the end of the line
+        ("the stuff in the final group sticks around forever");
+      * a window nested inside an open window of the same key
+        closes strictly--the enclosing window absorbs the rest;
+      * an occurrence forces a skippable window only when no
+        window could claim it (none open, and the latest is
+        full); the forced window claims its forcer immediately--
+        and forcing happens AT MOST ONCE per key per line (ruled
+        2026-07-09: chain-conjuring could only ever produce
+        all-defaults husks, and cost an inconsistency).
+
+    Two phases, like everything since the dispatcher rework: the
+    structural (dry) walk records the windows and every forcing
+    decision; resolve() assigns the remaining occurrences offline;
+    the live walk replays the recorded decisions and pops each
+    window's values in order.
+    """
+    __slots__ = ('occurrences', 'mode', 'repeatable', 'taken',
+                 'records', 'stack', 'close_order', 'force_answers',
+                 'phase', 'live_window', 'live_force')
+
+    def __init__(self, occurrences, mode):
+        # mode: 'multi' (every occurrence collects), 'last'
+        # (occurrences in one window overwrite--last wins), or
+        # 'strict' (a StrictOption: at most once per window)
+        self.occurrences = occurrences      # [(position, kind, value)]
+        self.mode = mode
+        self.repeatable = mode == 'multi'
+        self.taken = [False] * len(occurrences)
+        # one record per entered window, in walk order:
+        # [start, end, strict, forced, values]
+        self.records = []
+        self.stack = []                     # open record indexes
+        self.close_order = []               # indexes, by close time
+        self.force_answers = []             # dry's decisions, replayed
+        self.phase = 'dry'
+        self.live_window = 0
+        self.live_force = 0
+
+    def forces(self):
+        "Would a pending occurrence force a window right now?"
+        if self.phase == 'live':
+            answer = self.force_answers[self.live_force]
+            self.live_force += 1
+            return answer
+        if self.stack:
+            answer = False      # something enclosing will claim it
+        elif not any(not t for t in self.taken):
+            answer = False
+        elif any(record[3] for record in self.records):
+            answer = False      # one conjured window per key per line
+        elif self.records:
+            last = self.records[-1][4]
+            # the latest window claims trailing occurrences unless
+            # it's already full
+            answer = bool(last) and not self.repeatable
+        else:
+            answer = True
+        self.force_answers.append(answer)
+        return answer
+
+    def open_window(self, start, forced=False):
+        if self.phase == 'live':
+            return
+        record = [start, None, False, forced, []]
+        if forced:
+            # the forced window claims its forcer immediately
+            for index, done in enumerate(self.taken):
+                if not done:
+                    self.taken[index] = True
+                    record[4].append(self.occurrences[index][2])
+                    break
+        self.records.append(record)
+        self.stack.append(len(self.records) - 1)
+
+    def close_window(self, end):
+        if self.phase == 'live':
+            return
+        index = self.stack.pop()
+        record = self.records[index]
+        record[1] = end
+        # nested inside an open window of the same key: strict
+        record[2] = bool(self.stack)
+        self.close_order.append(index)
+
+    def resolve(self, key, usage=None):
+        "Assign the unforced occurrences per the interval model."
+        if self.phase == 'live':
+            return
+        opens = [i for i, r in enumerate(self.records) if not r[2]]
+        ends = {}
+        starts = {}
+        for j, index in enumerate(opens):
+            # announce-first: the first window's interval reaches
+            # back to the start of the line; the last one extends
+            # to its end--and a boundary occurrence (an option
+            # between two windows' operands) ANNOUNCES the window
+            # that follows, exactly as usage renders it (options
+            # first inside each bracket; v1's pinned behavior)
+            starts[index] = 0 if j == 0 else self.records[index][0]
+            ends[index] = (self.records[opens[j + 1]][0]
+                           if j + 1 < len(opens) else None)
+        for occurrence, done in zip(self.occurrences, list(self.taken)):
+            if done:
+                continue
+            position, kind, value = occurrence
+            target = None
+            for index, record in enumerate(self.records):
+                if record[2]:
+                    start = record[0]
+                    end = record[1]
+                else:
+                    start = starts[index]
+                    end = ends[index]
+                if position < start:
+                    continue
+                if end is not None and position >= end:
+                    continue
+                if record[4] and self.mode == 'strict':
+                    continue                # full: at most once
+                target = record             # deepest/latest wins
+            if target is None:
+                if any(r[4] for r in self.records):
+                    raise UsageError(
+                        f"option {key} specified more than once",
+                        usage)
+                raise UsageError(   # pragma: no cover -- announce-first
+                    # and the last window extending to the end leave
+                    # no occurrence unclaimed; belt and braces
+                    f"option {key} has nothing to bind to", usage)
+            if target[4] and self.mode == 'last':
+                target[4][-1] = value       # last one wins
+            else:
+                target[4].append(value)
+        self.taken = [True] * len(self.taken)
+
+    def rewind(self):
+        "Switch to the live phase: replay decisions, pop values."
+        self.phase = 'live'
+        self.live_window = 0
+        self.live_force = 0
+
+    def next_values(self):
+        """
+        The live walk's pop: this window's assigned values.  Pops
+        happen as windows close--descendants before ancestors--so
+        they follow the recorded close order.
+        """
+        record = self.records[self.close_order[self.live_window]]
+        self.live_window += 1
+        return record[4]
+
+
+def scopes_for(specs, given):
+    """
+    One ScopedQueue per scoped key that actually appeared.  specs
+    maps each key to its mode--'multi', 'last', or 'strict' (same
+    grammar in every window, so one answer per key).
+    """
+    scopes = {}
+    for key, mode in specs.items():
+        occurrences = given.get(key)
+        if isinstance(occurrences, list) and occurrences:
+            scopes[key] = ScopedQueue(occurrences, mode)
+    return scopes
+
+
+def scoped_forces(scopes, keys):
+    "Does a pending occurrence force this window?  (Or replay it.)"
+    answer = False
+    for key in keys:
+        queue = scopes.get(key)
+        if queue is not None and queue.forces():
+            answer = True
+    return answer
+
+
+def scoped_window(scopes, keys, edge, i, forced=False):
+    "Open ('in') or close ('out') a window for each declared key."
+    for key in keys:
+        queue = scopes.get(key)
+        if queue is None:
+            continue
+        if edge == 'in':
+            queue.open_window(i, forced)
+        else:
+            queue.close_window(i)
+
+
+def scoped_resolve(scopes, usage=None):
+    "After the structural walk: bind every occurrence, loudly."
+    for key, queue in scopes.items():
+        queue.resolve(key, usage)
+
+
+def scoped_rewind(scopes):
+    for queue in scopes.values():
+        queue.rewind()
+
+
+def scoped_next(scopes, key):
+    "The live walk's pop for one key (None: no occurrences at all)."
+    queue = scopes.get(key)
+    if queue is None:
+        return None
+    return queue.next_values()
+
+
+def check_count(n, minimum, maximum, valid_counts, usage=None, what=None):
     """
     The exact-arity error, phrased as English, computed from the
-    valid-count set.
+    valid-count set.  what, if given, names the offender (e.g.
+    "option -g") in the message.
     """
+    where = f' for {what}' if what else ''
     if valid_counts is not None:
         if n in valid_counts:
             return
@@ -456,33 +959,103 @@ def check_count(n, minimum, maximum, valid_counts, usage=None):
         else:
             wanted = ', '.join(str(c) for c in counts[:-1]) + f' or {counts[-1]}'
         raise UsageError(
-            f"wrong number of arguments: got {n}, expected {wanted}", usage)
+            f"wrong number of arguments{where}: got {n}, expected {wanted}",
+            usage)
     if n < minimum:
         raise UsageError(
-            f"wrong number of arguments: got {n}, expected at least {minimum}",
+            f"wrong number of arguments{where}: got {n}, "
+            f"expected at least {minimum}",
             usage)
 # --8<-- end appeal check count --8<--
 
 
 # --8<-- start appeal run main --8<--
+# --8<-- requires appeal theme --8<--
+# --8<-- requires appeal complete --8<--
 # --8<-- requires appeal exceptions --8<--
-def run_main(parse, argv=None):
+def run_main(parse, argv=None, theme=None, completion=None,
+             errors=None, version=None):
     """
     The main() driver for a generated parser: parse and execute,
-    print errors the polite way, return the exit code.
+    print errors the polite way, return the exit code.  theme (a
+    spec: None, False, a Theme, or a baked dict) paints the
+    'error:' prefix when the error stream wants color; the
+    environment always wins (resolve_theme).  completion, if
+    given, is (table, prog): with an empty argv and
+    _APPEAL_COMPLETE in the environment, the invocation is a
+    shell-completion reentry and is answered instead of parsed.
+
+    errors is the file object error messages print to, default
+    sys.stderr (the POSIX diagnostic convention, so pipelines
+    reading this program's stdout stay clean; sys.stdout is v1's
+    behavior).  Like print(file=None), the default is resolved
+    at error time, so redirecting sys.stderr works.  Requested
+    help always prints to stdout; this knob moves only the
+    errors.
+
+    version, if given, is the program's version string:
+    `--version` as the first token prints it bare and exits 0,
+    like -h/--help--program metadata outranks parsing.
     """
     if argv is None:
         argv = sys.argv[1:]
+    if completion is not None and not argv:
+        table, prog = completion
+        if 'commands' in table:
+            completer = lambda w, p: complete_command_set(table, w, p)
+        else:
+            completer = lambda w, p: complete_command(table, w, p)
+        code = completion_reentry(completer, prog)
+        if code is not None:
+            return code
+    if version is not None and argv and argv[0] == '--version':
+        print(version)
+        return 0
+
+    def error_stream():
+        # None resolves at error time, not at call time (tests
+        # and callers redirect sys.stderr)
+        return errors if errors is not None else sys.stderr
+
+    def error_prefix():
+        active = resolve_theme(theme, error_stream())
+        if active is None:
+            return 'error:'
+        return active.paint('error', 'error:')
+
     try:
         result = parse(list(argv))
-    except UsageError as e:
-        print(f"error: {e}", file=sys.stderr)
+    except KeyboardInterrupt:
+        # a process ended by SIGINT dies quietly with 128+SIGINT
+        # (the shell already echoed ^C).  ONLY here (ruled
+        # 2026-07-09): run_main is the whole-program driver;
+        # process()/parse() stay raw--Appeal is an argument
+        # processor, not an environment
+        return 130
+    except AppealDataError as e:
+        print(f"{error_prefix()} {e}", file=error_stream())
         if e.usage:
-            print(f"usage: {e.usage}", file=sys.stderr)
+            print(f"usage: {e.usage}", file=error_stream())
         return 2
+    except AppealConfigurationError:
+        raise               # a bug in the program: traceback
     except AppealError as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(f"{error_prefix()} {e}", file=error_stream())
         return 1
+    except Exception as e:
+        # the installed appeal's exceptions, raised by the user's
+        # module inside a standalone script
+        kind = foreign_appeal_error(e)
+        if kind == 'data':
+            print(f"{error_prefix()} {e}", file=error_stream())
+            usage = getattr(e, 'usage', None)
+            if usage:
+                print(f"usage: {usage}", file=error_stream())
+            return 2
+        if kind == 'error':
+            print(f"{error_prefix()} {e}", file=error_stream())
+            return 1
+        raise               # not appeal's (or a config bug): traceback
     if result is None:
         return 0
     if isinstance(result, int):
@@ -496,7 +1069,7 @@ def run_main(parse, argv=None):
 ##
 ## The help renderers below lean on big's word-wrap trio.  These
 ## two snippets are big's--copied verbatim out of big/big/text.py
-## between the scissors markers, re-synced by tools/sync_text.py.
+## between the scissors markers, re-synced by tools/sync_snippets.py.
 ## The one authoritative copy of this code is big's.
 ##
 
@@ -508,7 +1081,40 @@ def export(fn):
 # --8<-- end appeal export shim --8<--
 
 
+# --8<-- start big license --8<--
+_big_license = """
+big
+Copyright 2022-2026 Larry Hastings
+All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""
+# --8<-- end big license --8<--
+
+# --8<-- start big word wrap trio imports --8<--
+import enum
+import operator
+import sys
+# --8<-- end big word wrap trio imports --8<--
+
 # --8<-- start big _iterate_over_bytes --8<--
+# --8<-- requires big license --8<--
 
 def _iterate_over_bytes(b):
     # this may not actually iterate over bytes.
@@ -522,6 +1128,7 @@ def _iterate_over_bytes(b):
 # --8<-- end big _iterate_over_bytes --8<--
 
 # --8<-- start big toy multisplit --8<--
+# --8<-- requires big license --8<--
 
 def _toy_multisplit(s, separators):
     """
@@ -536,7 +1143,11 @@ def _toy_multisplit(s, separators):
       or bytes or iterable of bytes.
 
     Returns a list equivalent to
-        list(big.multisplit(s, separators, keep=ALTERNATING, separate=True))
+        list(big.multisplit(s, separators, keep=True, separate=True))
+    which is to say, a list of 2-tuples of
+        (non-separator string, subsequent separator string)
+    where the separator string in the final 2-tuple is
+    always empty.
 
     (Doesn't support any other arguments--maxsplit etc.)
 
@@ -566,6 +1177,15 @@ def _toy_multisplit(s, separators):
         empty = ''
     # assert empty not in separators
 
+    def as_pairs(segments):
+        # segments alternates non-separator and separator strings,
+        # always starting and ending with a (possibly empty)
+        # non-separator string.  pair each non-separator string
+        # with its subsequent separator--appending the always-empty
+        # trailing separator--to make the keep=True 2-tuple form.
+        segments.append(empty)
+        return list(zip(segments[::2], segments[1::2]))
+
     # special-cased only one separator,
     # for PEDAL TO THE MEDAL HYPER-SPEED
     if len(separators) == 1:
@@ -584,7 +1204,7 @@ def _toy_multisplit(s, separators):
             s = s[index2:]
         if s is not None:
             segments.append(s)
-        return segments
+        return as_pairs(segments)
 
     # separators_by_length is a list of tuples:
     #    (length, bucket_of_separators_of_that_length)
@@ -646,12 +1266,13 @@ def _toy_multisplit(s, separators):
             s = s[1:]
     flush_word()
 
-    return segments
+    return as_pairs(segments)
 
 # --8<-- end big toy multisplit --8<--
 
 
 # --8<-- start big linebreaks --8<--
+# --8<-- requires big license --8<--
 export('str_linebreaks')
 str_linebreaks = (
     # char    decimal   hex      identity
@@ -758,6 +1379,8 @@ bytes_linebreaks_without_crlf = tuple(s for s in bytes_linebreaks if s != b'\r\n
 # --8<-- end big linebreaks --8<--
 
 # --8<-- start big word wrap trio --8<--
+# --8<-- requires big license --8<--
+# --8<-- requires big word wrap trio imports --8<--
 # --8<-- requires big _iterate_over_bytes --8<--
 # --8<-- requires big linebreaks --8<--
 
@@ -1395,11 +2018,16 @@ def merge_columns(*columns, column_separator=None,
     All these objects (text and column_separator) must have the
     same baseclass, str or bytes.
     """
-    assert overflow_strategy in (OverflowStrategy.INTRUDE_ALL, OverflowStrategy.DELAY_ALL, OverflowStrategy.RAISE)
+    # real raises, not asserts: these guard user input, and
+    # asserts vanish under python -O.  (OverflowStrategy.INVALID
+    # used to silently behave as INTRUDE_ALL under -O!)
+    if overflow_strategy not in (OverflowStrategy.INTRUDE_ALL, OverflowStrategy.DELAY_ALL, OverflowStrategy.RAISE):
+        raise ValueError(f"invalid overflow_strategy {overflow_strategy!r}")
     raise_overflow_error = overflow_strategy == OverflowStrategy.RAISE
     delay_all = overflow_strategy == OverflowStrategy.DELAY_ALL
 
-    assert columns
+    if not columns:
+        raise ValueError("no columns")
     is_bytes = isinstance(columns[0][0], bytes)
 
     if is_bytes:
@@ -1572,6 +2200,7 @@ def merge_columns(*columns, column_separator=None,
 
 
 # --8<-- start big format definition list --8<--
+# --8<-- requires big license --8<--
 # --8<-- requires big word wrap trio --8<--
 
 _default_definition_list_indent = '  '
@@ -1810,8 +2439,688 @@ def format_definition_list(pairs, margin=79, *,
 ##
 
 
+# --8<-- start appeal complete --8<--
+# --8<-- requires appeal exceptions --8<--
+
+##
+## Shell completion (the completion rulings): the engine answers
+## "what could legally come next?" from tables--plain data plus
+## converter references--so it runs identically in-process and
+## inside a generated script.  A converter may carry a
+## `completions` attribute: always a callable, (prefix) -> tuple
+## of str; the engine always calls it, always passing the prefix
+## (empty string when nothing's typed), and always re-filters.
+## Silence means "no opinion", which the shell treats as
+## "complete filenames".
+##
+
+def _completion_scan(options, words, maximum=None, boundary=None,
+                     minimum=None):
+    """
+    A forgiving pass over the words already typed.  options maps
+    each option string to (key, nargs, repeatable).  Returns
+    (used, operands, pending, force_positional, leftover):
+    pending is (key, nargs, remaining) when the cursor sits where
+    an option's value belongs; leftover is the index where a new
+    command word begins--at saturation (operands == maximum,
+    cycling's boundary), or, for a set parent or the global
+    command (minimum given), the first operand naming a boundary
+    word once the minimum is met.  Options after saturation still
+    belong to this command (the window stays open).  Never raises;
+    completion must work on half-typed nonsense.
+    """
+    used = set()
+    operands = 0
+    pending = None
+    force_positional = False
+    for index, word in enumerate(words):
+        if pending:
+            key, nargs, remaining = pending
+            remaining -= 1
+            pending = (key, nargs, remaining) if remaining else None
+            continue
+        if force_positional or not word.startswith('-') or word == '-':
+            if maximum is not None and operands >= maximum:
+                return used, operands, pending, force_positional, index
+            if (minimum is not None and boundary
+                    and operands >= minimum and word in boundary):
+                return used, operands, pending, force_positional, index
+            operands += 1
+            continue
+        if word == '--':
+            force_positional = True
+            continue
+        name = word.partition('=')[0] if word.startswith('--') else word[:2]
+        entry = options.get(name)
+        if entry is None:
+            continue
+        key, nargs, repeatable = entry
+        if not repeatable:
+            used.add(name)
+            used.add(key)
+        if nargs and '=' not in word:
+            pending = (key, nargs, nargs)
+    return used, operands, pending, force_positional, None
+
+
+def _value_candidates(converter, prefix):
+    """
+    A value position's candidates: the expecting converter's
+    completions callable, called with the prefix (a hint--the
+    filter here is the belt).  No converter, or no completions
+    attribute, means no opinion.  A wrong return type raises:
+    garbage on TAB is a loud signal; silently dropping candidates
+    hides the bug forever.
+    """
+    completions = getattr(converter, 'completions', None)
+    if completions is None:
+        return []
+    values = completions(prefix)
+    where = getattr(converter, '__name__', repr(converter))
+    if not isinstance(values, tuple):
+        raise AppealConfigurationError(
+            f"completions for {where!r} returned "
+            f"{type(values).__name__}, must return a tuple of str")
+    out = []
+    for value in values:
+        if not isinstance(value, str):
+            raise AppealConfigurationError(
+                f"completions for {where!r} returned a "
+                f"{type(value).__name__}, must return a tuple of str")
+        if value.startswith(prefix):
+            out.append(value)
+    return sorted(out)
+
+
+def _pending_candidates(table, pending, prefix):
+    key, nargs, remaining = pending
+    converters = table['values'].get(key) or ()
+    index = nargs - remaining
+    converter = converters[index] if index < len(converters) else None
+    return _value_candidates(converter, prefix)
+
+
+def _option_candidates(table, used, prefix):
+    candidates = [s for s, (key, nargs, repeatable)
+                  in table['options'].items()
+                  if s.startswith(prefix)
+                  and s not in used and key not in used]
+    candidates.extend(s for s in table.get('help', ())
+                      if s.startswith(prefix))
+    return sorted(set(candidates))
+
+
+def _operand_candidates(table, operands, prefix):
+    slots = table['operands']
+    converter = (slots[operands] if operands < len(slots)
+                 else table['repeat'])
+    return _value_candidates(converter, prefix)
+
+
+def complete_command(table, words, prefix=''):
+    """
+    Candidate completions for one command.  table:
+
+        options    {option string: (key, nargs, repeatable)}
+        help       the automatic help option strings, or ()
+        values     {key: (converter, ...)}, one per option operand
+        operands   (converter-or-None, ...) in flat operand order
+        repeat     the *args converter, or None
+        minimum,   the argument-count arity (maximum None when
+        maximum    unbounded)
+
+    Options complete when the prefix starts with '-'; value
+    positions ask the expecting converter; anything else is the
+    shell's business (empty list = no opinion = filenames).
+    """
+    used, operands, pending, force_positional, _ = _completion_scan(
+        table['options'], words)
+    if pending:
+        return _pending_candidates(table, pending, prefix)
+    if prefix.startswith('-') and not force_positional:
+        return _option_candidates(table, used, prefix)
+    maximum = table.get('maximum')
+    if maximum is not None and operands >= maximum:
+        return []       # saturated: nothing more to say here
+    return _operand_candidates(table, operands, prefix)
+
+
+def complete_command_set(table, words, prefix=''):
+    """
+    Completion for a multi-command program.  table:
+
+        commands   {word: command table, or a nested set entry
+                    {'parent': table, 'commands': {...},
+                     'repeat': bool}}
+        global     the global command's table, or None
+        minimum    the global command's minimum argument count
+        auto_help  True if the automatic help command is live
+        repeat     the root set cycles
+
+    The walk mirrors the dispatcher: the global command's portion,
+    then commands--and under cycling, a saturated command's
+    boundary offers the resolution chain's words, while its open
+    window keeps offering its options.
+    """
+    commands = table['commands']
+    auto_help = table['auto_help']
+    words = list(words)
+
+    def is_set(entry):
+        return 'options' not in entry
+
+    root_words = set(commands) | ({'help'} if auto_help else set())
+
+    if words and auto_help and words[0] == 'help' and 'help' not in commands:
+        remaining = words[1:]
+        if not remaining and not prefix.startswith('-'):
+            return sorted(w for w in root_words if w.startswith(prefix))
+        if remaining and remaining[0] in commands:
+            entry = commands[remaining[0]]
+            if not is_set(entry):
+                return complete_command(entry, remaining[1:], prefix)
+        return []
+
+    stack = [{'commands': commands, 'repeat': table.get('repeat', False),
+              'entered': False}]
+
+    def resolvable():
+        out = set()
+        for depth, frame in enumerate(reversed(stack)):
+            if (depth == 0 and not frame['entered']) or frame['repeat']:
+                out.update(frame['commands'])
+                if auto_help and frame is stack[0]:
+                    out.add('help')
+        return out
+
+    index = 0
+    g = table['global']
+    if g is not None:
+        used, operands, pending, forced, leftover = _completion_scan(
+            g['options'], words, maximum=g.get('maximum'),
+            boundary=root_words, minimum=table['minimum'])
+        if leftover is None:
+            if pending:
+                return _pending_candidates(g, pending, prefix)
+            if prefix.startswith('-') and not forced:
+                return _option_candidates(g, used, prefix)
+            if operands >= table['minimum']:
+                out = sorted(w for w in root_words
+                             if w.startswith(prefix))
+                return out or _operand_candidates(g, operands, prefix)
+            return _operand_candidates(g, operands, prefix)
+        index = leftover
+
+    while True:
+        if index >= len(words):
+            # the cursor sits at a command-word boundary
+            if prefix.startswith('-'):
+                return []
+            return sorted(w for w in resolvable()
+                          if w.startswith(prefix))
+        word = words[index]
+        entry = target = None
+        for depth, frame in enumerate(reversed(stack)):
+            if (depth == 0 and not frame['entered']) or frame['repeat']:
+                if word in frame['commands']:
+                    entry, target = frame['commands'][word], frame
+                    break
+        if entry is None:
+            return []           # half-typed nonsense: no opinion
+        while stack[-1] is not target:
+            stack.pop()
+        target['entered'] = True
+        index += 1
+        if is_set(entry):
+            # a nested parent: a global command of its own little
+            # set, flexible boundary
+            stack.append({'commands': entry['commands'],
+                          'repeat': entry.get('repeat', False),
+                          'entered': False})
+            parent = entry['parent']
+            sub_words = resolvable()
+            used, operands, pending, forced, leftover = (
+                _completion_scan(parent['options'], words[index:],
+                                 maximum=parent.get('maximum'),
+                                 boundary=sub_words,
+                                 minimum=parent.get('minimum', 0)))
+            if leftover is None:
+                if pending:
+                    return _pending_candidates(parent, pending, prefix)
+                if prefix.startswith('-') and not forced:
+                    return _option_candidates(parent, used, prefix)
+                if operands >= parent.get('minimum', 0):
+                    out = sorted(w for w in sub_words
+                                 if w.startswith(prefix))
+                    return out or _operand_candidates(parent, operands,
+                                                      prefix)
+                return _operand_candidates(parent, operands, prefix)
+            index += leftover
+            continue
+        # a leaf command: greedy saturation is its boundary when
+        # anything could follow
+        chain = resolvable()
+        used, operands, pending, forced, leftover = _completion_scan(
+            entry['options'], words[index:],
+            maximum=entry.get('maximum') if chain else None)
+        if leftover is None:
+            if pending:
+                return _pending_candidates(entry, pending, prefix)
+            if prefix.startswith('-') and not forced:
+                return _option_candidates(entry, used, prefix)
+            maximum = entry.get('maximum')
+            if (chain and maximum is not None
+                    and operands >= maximum):
+                # saturated: the resolution chain's words complete
+                # here (the open window's options handled above)
+                return sorted(w for w in chain
+                              if w.startswith(prefix))
+            return _operand_candidates(entry, operands, prefix)
+        index += leftover
+
+
+
+
+_BASH_COMPLETION_SCRIPT = """\
+_appeal_{ident}_completion() {{
+    local IFS=$'\\n'
+    COMPREPLY=( $( COMP_WORDS="${{COMP_WORDS[*]}}" \\
+                   COMP_CWORD=$COMP_CWORD \\
+                   _APPEAL_COMPLETE=bash {prog} ) )
+    return 0
+}}
+complete -o default -F _appeal_{ident}_completion {prog}
+"""
+
+
+_ZSH_COMPLETION_SCRIPT = """\
+_appeal_{ident}_completion() {{
+    local -a completions
+    completions=("${{(@f)$(COMP_WORDS="${{words[*]}}" \\
+                          COMP_CWORD=$((CURRENT-1)) \\
+                          _APPEAL_COMPLETE=zsh {prog})}}")
+    if (( ${{#completions}} )) && [ -n "${{completions[1]}}" ]; then
+        compadd -a completions
+    else
+        _files
+    fi
+}}
+compdef _appeal_{ident}_completion {prog}
+"""
+
+
+_FISH_COMPLETION_SCRIPT = """\
+function _appeal_{ident}_completion
+    set -l response (env COMP_WORDS=(commandline -cp) \\
+                         COMP_CWORD=(commandline -ct) \\
+                         _APPEAL_COMPLETE=fish {prog})
+    if set -q response[1]
+        printf '%s\\n' $response
+    else
+        __fish_complete_path (commandline -ct)
+    end
+end
+complete --command {prog} --no-files \\
+    --arguments "(_appeal_{ident}_completion)"
+"""
+
+
+def completion_script(shell, prog):
+    """
+    The shell function that wires `prog <TAB>` to the reentry
+    protocol.  Source its output (or install it in the shell's
+    completion directory).  The shell's own filename completion is
+    the fallback when the program has no opinion: bash via
+    `-o default`, zsh via `_files`, fish via __fish_complete_path.
+    (zsh needs compsys loaded--the standard
+    `autoload -U compinit && compinit`.)
+    """
+    ident = ''.join(c if c.isalnum() else '_' for c in prog)
+    if shell == 'bash':
+        return _BASH_COMPLETION_SCRIPT.format(ident=ident, prog=prog)
+    if shell == 'zsh':
+        return _ZSH_COMPLETION_SCRIPT.format(ident=ident, prog=prog)
+    if shell == 'fish':
+        return _FISH_COMPLETION_SCRIPT.format(ident=ident, prog=prog)
+    raise AppealConfigurationError(
+        f"unsupported completion shell {shell!r} "
+        f"(supported: 'bash', 'zsh', 'fish')")
+
+
+def completion_reentry(completer, prog):
+    """
+    Answer an _APPEAL_COMPLETE reentry, if this invocation is one:
+    prints the candidates (or the sourcing script) and returns an
+    exit code.  Returns None if this isn't a reentry.  The caller
+    gates on empty argv--the shell's data travels in COMP_WORDS /
+    COMP_CWORD, never argv, so a real reentry is always a bare
+    invocation.
+    """
+    import os
+    mode = os.environ.get('_APPEAL_COMPLETE')
+    if not mode:
+        return None
+    if mode.startswith('source'):
+        shell = mode.partition('_')[2] or 'bash'
+        print(completion_script(shell, prog))
+        return 0
+    words = os.environ.get('COMP_WORDS', '').split()
+    if mode == 'fish':
+        # fish can't cheaply produce a word INDEX; its courier
+        # sends the current token's TEXT in COMP_CWORD instead
+        # (commandline -ct: empty when the cursor follows a
+        # space).  COMP_WORDS is the line up to the cursor.
+        prefix = os.environ.get('COMP_CWORD', '')
+        before = words[1:]
+        if prefix and before and before[-1] == prefix:
+            before = before[:-1]
+    else:
+        # bash and zsh answer identically: the courier normalizes
+        # the shell's own variables into COMP_WORDS/COMP_CWORD
+        # (zsh's 1-based CURRENT becomes 0-based COMP_CWORD in
+        # the courier).
+        try:
+            cword = int(os.environ.get('COMP_CWORD', '0') or 0)
+        except ValueError:
+            cword = 0
+        before = words[1:cword]
+        prefix = words[cword] if 0 <= cword < len(words) else ''
+    for candidate in completer(before, prefix):
+        print(candidate)
+    return 0
+# --8<-- end appeal complete --8<--
+
+
+
+
+# --8<-- start appeal mcp --8<--
+# --8<-- requires appeal exceptions --8<--
+def run_mcp(tools, name, version='0'):
+    """
+    Serve this program's commands as MCP tools: JSON-RPC 2.0 over
+    stdio, newline-delimited--the Model Context Protocol's stdio
+    transport, stdlib only.  tools maps a tool name to
+    (description, input_schema, call) where call takes the
+    arguments mapping and returns the result.
+
+    Runs until stdin closes.  Returns 0.
+    """
+    import json
+    import sys
+
+    def reply(id, result=None, error=None):
+        message = {'jsonrpc': '2.0', 'id': id}
+        if error is not None:
+            message['error'] = error
+        else:
+            message['result'] = result
+        sys.stdout.write(json.dumps(message) + '\n')
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+        except ValueError:
+            continue
+        method = request.get('method', '')
+        id = request.get('id')
+        if method == 'initialize':
+            reply(id, {
+                'protocolVersion':
+                    request.get('params', {}).get('protocolVersion',
+                                                  '2024-11-05'),
+                'capabilities': {'tools': {}},
+                'serverInfo': {'name': name, 'version': version},
+            })
+        elif method == 'notifications/initialized':
+            pass
+        elif method == 'ping':
+            reply(id, {})
+        elif method == 'tools/list':
+            reply(id, {'tools': [
+                {'name': tool, 'description': description,
+                 'inputSchema': schema}
+                for tool, (description, schema, call)
+                in sorted(tools.items())]})
+        elif method == 'tools/call':
+            params = request.get('params', {})
+            tool = tools.get(params.get('name'))
+            if tool is None:
+                reply(id, error={'code': -32602,
+                                 'message': f"unknown tool "
+                                            f"{params.get('name')!r}"})
+                continue
+            description, schema, call = tool
+            try:
+                result = call(params.get('arguments') or {})
+            except AppealDataError as e:
+                reply(id, {'content': [{'type': 'text',
+                                        'text': str(e)}],
+                           'isError': True})
+                continue
+            reply(id, {'content': [{'type': 'text',
+                                    'text': '' if result is None
+                                            else str(result)}]})
+        elif id is not None:
+            reply(id, error={'code': -32601,
+                             'message': f'unknown method {method!r}'})
+    return 0
+# --8<-- end appeal mcp --8<--
+
+
+# --8<-- start appeal theme --8<--
+# --8<-- requires appeal exceptions --8<--
+
+##
+## Colorization (proposal §8.8, plus the completion/colorization
+## rulings): a Theme styles semantic roles, not spans of text, and
+## painting happens strictly AFTER layout--the trio only ever
+## measures uncolored text.
+##
+
+_SGR_WORDS = {
+    'bold': '1', 'dim': '2', 'italic': '3', 'underline': '4',
+    'black': '30', 'red': '31', 'green': '32', 'yellow': '33',
+    'blue': '34', 'magenta': '35', 'cyan': '36', 'white': '37',
+    'bright-black': '90', 'bright-red': '91', 'bright-green': '92',
+    'bright-yellow': '93', 'bright-blue': '94', 'bright-magenta': '95',
+    'bright-cyan': '96', 'bright-white': '97',
+}
+
+_SGR_RESET = '\x1b[0m'
+
+
+class Theme:
+    """
+    Colors for appeal's own output--help and error messages.
+    Each slot's value is a little symbolic language: space-
+    separated words from {bold, dim, italic, underline}, the eight
+    colors {black, red, green, yellow, blue, magenta, cyan,
+    white}, their bright-* variants, and the names of other slots,
+    which expand to that slot's resolved words.  Resolved once,
+    here; reference cycles and unknown words are refused by name.
+    The empty string means "leave that role alone".  A value that
+    starts with an escape character (\x1b) passes through
+    verbatim--the escape hatch for styling we don't model (it
+    can't be referenced by other slots).
+
+    Theme() with no arguments is the stock theme.  Whether a theme
+    is USED is a separate, runtime question (resolve_theme):
+    NO_COLOR and friends always win.
+    """
+    def __init__(self, *, program='bold', option='cyan',
+                 metavar='dim', operand='', heading='bold',
+                 error='bold red', summary=''):
+        self.spec = {
+            'program': program, 'option': option, 'metavar': metavar,
+            'operand': operand, 'heading': heading, 'error': error,
+            'summary': summary,
+        }
+        self.sgr = {}
+        resolving = []
+
+        def resolve(slot):
+            if slot in self.sgr:
+                return self.sgr[slot]
+            if slot in resolving:
+                raise AppealConfigurationError(
+                    f"theme: reference cycle: "
+                    f"{' -> '.join(resolving + [slot])}")
+            resolving.append(slot)
+            value = self.spec[slot]
+            if value.startswith('\x1b'):
+                codes = None
+                on = value
+            else:
+                codes = []
+                for word in value.split():
+                    if word in _SGR_WORDS:
+                        codes.append(_SGR_WORDS[word])
+                        continue
+                    if word in self.spec:
+                        referenced = resolve(word)
+                        if referenced[0] is None:
+                            raise AppealConfigurationError(
+                                f"theme: {slot!r} references {word!r}, "
+                                f"which is a raw escape sequence")
+                        codes.extend(referenced[0])
+                        continue
+                    raise AppealConfigurationError(
+                        f"theme: {slot!r}: unknown word {word!r}")
+                on = ('\x1b[' + ';'.join(codes) + 'm') if codes else ''
+            resolving.pop()
+            self.sgr[slot] = (codes, on)
+            return self.sgr[slot]
+
+        for slot in self.spec:
+            resolve(slot)
+
+    def paint(self, slot, s):
+        "Wrap s in the slot's escape codes; a plain slot returns s as-is."
+        on = self.sgr[slot][1]
+        if not on or not s:
+            return s
+        return f'{on}{s}{_SGR_RESET}'
+
+
+def can_colorize(file):
+    """
+    The established convention, copied from CPython's _colorize
+    precedence so appeal programs and stock argparse programs
+    respond identically to the same shell: PYTHON_COLORS beats
+    NO_COLOR beats FORCE_COLOR, then TERM=dumb, then isatty.
+    """
+    import os
+    python_colors = os.environ.get('PYTHON_COLORS')
+    if python_colors == '0':
+        return False
+    if python_colors == '1':
+        return True
+    if os.environ.get('NO_COLOR'):
+        return False
+    if os.environ.get('FORCE_COLOR'):
+        return True
+    if os.environ.get('TERM') == 'dumb':
+        return False
+    try:
+        return file.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def resolve_theme(spec, file):
+    """
+    The runtime half of the theme decision.  spec is what the
+    program was configured with: None (auto: the stock theme),
+    False (never), a Theme, or a dict of symbolic strings (a baked
+    theme in a generated script).  Returns a Theme to paint with,
+    or None for monochrome.  The environment always wins: NO_COLOR
+    and friends silence any theme.
+    """
+    if spec is False:
+        return None
+    if not can_colorize(file):
+        return None
+    if spec is None:
+        return Theme()
+    if isinstance(spec, Theme):
+        return spec
+    return Theme(**spec)
+
+
+def _paint_atoms(theme, text):
+    """
+    Paint the atoms inside a laid-out span: '<metavar>'s and
+    '-'-led option strings.  Painting happens inside spans the
+    layout already placed, never across them, so the escape codes
+    can't perturb any width arithmetic--it already happened.
+    """
+    out = []
+    append = out.append
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == '<':
+            j = text.find('>', i)
+            if j == -1:
+                append(text[i:])
+                break
+            append(theme.paint('metavar', text[i:j + 1]))
+            i = j + 1
+            continue
+        if c == '-' and ((i == 0) or (text[i - 1] in '[|= ')):
+            j = i
+            while j < n and (text[j].isalnum() or text[j] in '-_'):
+                j += 1
+            append(theme.paint('option', text[i:j]))
+            i = j
+            continue
+        append(c)
+        i += 1
+    return ''.join(out)
+
+
+def _bare_word(token):
+    "True if the token is a bare name (an operand in a usage line)."
+    return token and all(c.isalnum() or c in '_.' for c in token)
+
+
+def paint_usage(theme, text):
+    """
+    Paint a rendered usage block, token by token: the program name,
+    option strings, metavars, and bare operand names.  Structural
+    characters (brackets, pipes, ellipses) stay plain.  Tokens are
+    whole--wrap_words wraps usage at whole units--so every painted
+    span survived layout intact.
+    """
+    painted_program = False
+    lines = []
+    for line in text.split('\n'):
+        stripped = line.lstrip(' ')
+        indent = line[:len(line) - len(stripped)]
+        tokens = []
+        for token in stripped.split(' '):
+            if token == 'usage:':
+                tokens.append(token)
+            elif not painted_program:
+                tokens.append(theme.paint('program', token))
+                painted_program = True
+            elif _bare_word(token.rstrip('.')):
+                tokens.append(theme.paint('operand', token))
+            else:
+                tokens.append(_paint_atoms(theme, token))
+        lines.append(indent + ' '.join(tokens))
+    return '\n'.join(lines)
+# --8<-- end appeal theme --8<--
+
+
 # --8<-- start appeal help --8<--
 # --8<-- requires appeal export shim --8<--
+# --8<-- requires appeal theme --8<--
 # --8<-- requires big word wrap trio --8<--
 # --8<-- requires big format definition list --8<--
 def usage_units(usage):
@@ -1945,18 +3254,47 @@ def parse_section_template(name, template):
     return heading, indent, spacer, separator
 
 
-def render_section(name, template, rows, margin=79):
+_SECTION_TERM_SLOTS = {
+    'arguments': 'operand',
+    'options': None,        # atoms: option strings + metavars
+    'commands': 'program',
+}
+
+
+def render_section(name, template, rows, margin=79, theme=None):
     """
     Renders one section--rows of (display, documentation-lines)--
     through its template, laying out the definition list with
     format_definition_list.  No rows renders as the empty string,
     heading and all.
+
+    With a theme, painting happens after layout: heading lines are
+    painted whole, and each row's term is painted where it landed
+    (terms are never wrapped, so the span survived layout intact).
     """
     if not rows:
         return ''
     heading, indent, spacer, separator = parse_section_template(name, template)
     pairs = [(display, '\n'.join(lines)) for display, lines in rows]
     body = format_definition_list(pairs, margin, indent=indent, spacer=spacer)
+    if theme is None:
+        return heading + body
+    slot = _SECTION_TERM_SLOTS.get(name)
+    lines = body.split('\n')
+    cursor = 0
+    for display, _ in pairs:
+        prefix = indent + display
+        for i in range(cursor, len(lines)):
+            if lines[i].startswith(prefix):
+                painted = (theme.paint(slot, display) if slot
+                           else _paint_atoms(theme, display))
+                lines[i] = indent + painted + lines[i][len(prefix):]
+                cursor = i + 1
+                break
+    body = '\n'.join(lines)
+    heading = '\n'.join(
+        theme.paint('heading', line) if line else line
+        for line in heading.split('\n'))
     return heading + body
 
 
@@ -1991,28 +3329,49 @@ def render_page(template_name, template, values, margin=79):
     return text.lstrip('\n').rstrip() + '\n'
 
 
-def render_help_page(usage, corpus, templates, margin=79):
+def help_margin(max_columns=79):
+    """
+    The wrap margin for a rendered help page: the terminal's
+    width, capped at max_columns (v1's rule--a narrow terminal
+    re-wraps, a wide one doesn't stretch lines past the cap).
+    Pipes and other non-terminals get the cap itself, so captured
+    output is stable.
+    """
+    import shutil
+    return min(shutil.get_terminal_size((max_columns, 24)).columns,
+               max_columns)
+
+
+def render_help_page(usage, corpus, templates, margin=79, theme=None):
     """
     The --help page: assembles the master template's values from a
     predigested corpus (see help.merge_docs) and renders it.  The
     'help commands' master serves when the corpus has command
-    rows; 'help' otherwise.
+    rows; 'help' otherwise.  With a theme, spans are painted after
+    layout--the width arithmetic only ever sees uncolored text.
     """
     def prose(lines):
         if not lines:
             return ''
         return wrap_words(split_text_with_code('\n'.join(lines)), margin)
 
+    summary = prose(corpus['summary'])
+    usage_text = render_usage(usage, margin)
+    if theme is not None:
+        summary = '\n'.join(
+            theme.paint('summary', line) if line else line
+            for line in summary.split('\n'))
+        usage_text = paint_usage(theme, usage_text)
     values = {
-        'summary': prose(corpus['summary']),
-        'usage': render_usage(usage, margin),
+        'summary': summary,
+        'usage': usage_text,
         'documentation': prose(corpus['documentation']),
         'arguments': render_section('arguments', templates['arguments'],
-                                    corpus['arguments'], margin),
+                                    corpus['arguments'], margin, theme),
         'options': render_section('options', templates['options'],
-                                  corpus['options'], margin),
+                                  corpus['options'], margin, theme),
         'commands': render_section('commands', templates['commands'],
-                                   corpus['commands'], margin),
+                                   corpus['commands'], margin, theme),
     }
     name = 'help commands' if corpus['commands'] else 'help'
     return render_page(name, templates[name], values, margin)
@@ -2075,13 +3434,14 @@ def split(*separators, strip=False):
             # here--multisplit rejects an empty separator tuple--
             # so its docstring's promise is the spec.)
             return value.split()
-        # _toy_multisplit returns the raw alternating form:
-        # text, separator, text, ... with empty texts between
+        # _toy_multisplit returns (text, separator) pairs (big
+        # 0.14's keep=True form), with empty texts between
         # adjacent separators.  keep the texts; drop the interior
         # empties (adjacent separators count as one); and with
         # strip, drop the boundary empties too (leading and
         # trailing separators).
-        texts = _toy_multisplit(value, list(separators))[::2]
+        texts = [text for text, _ in
+                 _toy_multisplit(value, list(separators))]
         last = len(texts) - 1
         values = [text for i, text in enumerate(texts)
                   if text or i == 0 or i == last]
@@ -2199,8 +3559,124 @@ counter.__appeal_factory__ = "counter()"
 # --8<-- end appeal counter --8<--
 
 
+# --8<-- start appeal file --8<--
+# --8<-- requires appeal recipe repr --8<--
+class _ProcessStream:
+    """
+    The safe wrapper file() puts around a process-standard stream
+    (sys.stdin or sys.stdout, spelled '-' on the command line).
+    Everything delegates to the stream, so it reads and writes
+    like the file it stands in for--but close() FLUSHES and goes
+    inert, and so does leaving a `with` block.  The stream
+    belongs to the process, not to one command line; your
+    function gets one uniform contract: whatever file() hands
+    you, you may close.
+    """
+    def __init__(self, stream):
+        self._stream = stream
+        self._closed = False
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def __iter__(self):
+        return iter(self._stream)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def close(self):
+        # close() promises a flush--an inert close that skipped
+        # it would silently lose buffered output
+        if not self._closed:
+            self._closed = True
+            try:
+                self._stream.flush()
+            except (OSError, ValueError):
+                pass
+
+    @property
+    def closed(self):
+        return self._closed
+
+    def __repr__(self):
+        return f'<_ProcessStream {self._stream!r}>'
+
+
+def file(mode='r', *, buffering=-1, encoding=None, errors=None,
+         newline=None, opener=None):
+    """
+    Creates a converter that opens its argument with open(),
+    passing these arguments along (open()'s parameters, spelled
+    out; closefd is omitted because it's only legal for file
+    descriptors, and this converter always opens a path).
+
+    '-' means the process-standard stream instead: sys.stdin for
+    reading modes, sys.stdout for writing modes ('b' modes get
+    the .buffer layer), wrapped in _ProcessStream so close() is
+    safe.  '-' with a '+' mode refuses--the standard streams
+    aren't read-write.  (And /dev/stderr needs no convention:
+    it's a path, so the ordinary open() branch handles it.)
+    """
+    reads = 'r' in mode and '+' not in mode
+    writes = (('w' in mode or 'a' in mode or 'x' in mode)
+              and '+' not in mode)
+
+    def file_converter(value):
+        if value == '-':
+            if reads:
+                stream = sys.stdin
+            elif writes:
+                stream = sys.stdout
+            else:
+                raise ValueError(
+                    f"can't open '-' with mode {mode!r} (the "
+                    f"standard streams aren't read-write)")
+            if 'b' in mode:
+                stream = stream.buffer
+            return _ProcessStream(stream)
+        try:
+            return open(value, mode, buffering=buffering,
+                        encoding=encoding, errors=errors,
+                        newline=newline, opener=opener)
+        except OSError as e:
+            raise ValueError(
+                f"can't open {value!r}: {e.strerror or e}") from None
+    file_converter.__name__ = 'file'
+    if opener is None:
+        # an opener is a callable: it can't ride a recipe string,
+        # so a converter carrying one refuses standalone emission
+        # (by name, per the north star)
+        settings = {kw: v for kw, v, default in (
+                        ('buffering', buffering, -1),
+                        ('encoding', encoding, None),
+                        ('errors', errors, None),
+                        ('newline', newline, None))
+                    if v != default}
+        file_converter.__appeal_recipe__ = (
+            f'file({_recipe_repr(mode, **settings)})')
+        file_converter.__appeal_snippet__ = 'appeal file'
+    return file_converter
+file.__appeal_factory__ = "file()"
+# --8<-- end appeal file --8<--
+
+
 # --8<-- start appeal folds --8<--
 # --8<-- requires appeal option protocol --8<--
+class _Subscriptable(type):
+    """
+    v1's crazy science magic, restored for Python 3.6:
+    accumulator[int] parameterizes via a metaclass __getitem__,
+    because __class_getitem__ (PEP 560) only exists from 3.7.
+    The metaclass serves every version, so it's the ONLY spelling.
+    """
+    def __getitem__(cls, types):
+        return cls._parameterize(types)
+
+
 def _folder(kind, types):
     "The shared engine behind accumulator[...] and mapping[...]."
     names = [f'v{i}' for i in range(len(types))]
@@ -2217,7 +3693,7 @@ def _folder(kind, types):
     return namespace['option']
 
 
-class accumulator(MultiOption):
+class accumulator(MultiOption, metaclass=_Subscriptable):
     """
     A repeatable option collecting values into a list.  Subscript
     for types: accumulator[int] collects ints; accumulator[int, str]
@@ -2234,17 +3710,18 @@ class accumulator(MultiOption):
     def render(self):
         return self.values
 
-    def __class_getitem__(cls, types):
+    @classmethod
+    def _parameterize(cls, types):
         if not isinstance(types, tuple):
             types = (types,)
-        sub = type('accumulator', (cls,),
-                   {'option': _folder('accumulator', types)})
+        sub = _Subscriptable('accumulator', (cls,),
+                             {'option': _folder('accumulator', types)})
         sub.__appeal_recipe__ = (
             f'accumulator[{", ".join(t.__name__ for t in types)}]')
         return sub
 
 
-class mapping(MultiOption):
+class mapping(MultiOption, metaclass=_Subscriptable):
     """
     A repeatable option collecting key/value pairs into a dict:
     --define KEY VALUE.  Subscript for types: mapping[int, str]
@@ -2264,12 +3741,13 @@ class mapping(MultiOption):
     def render(self):
         return self.values
 
-    def __class_getitem__(cls, types):
+    @classmethod
+    def _parameterize(cls, types):
         if not isinstance(types, tuple) or len(types) < 2:
             raise TypeError("mapping[...] needs at least a key type "
                             "and one value type")
-        sub = type('mapping', (cls,),
-                   {'option': _folder('mapping', types)})
+        sub = _Subscriptable('mapping', (cls,),
+                             {'option': _folder('mapping', types)})
         sub.__appeal_recipe__ = (
             f'mapping[{", ".join(t.__name__ for t in types)}]')
         return sub

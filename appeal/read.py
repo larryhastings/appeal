@@ -25,7 +25,11 @@ from collections.abc import Mapping, Sequence
 
 from .build import build
 from .plan import Terminal, NO_DEFAULT, Plan
-from .runtime import AppealError
+from .runtime import (
+    AppealConfigurationError, AppealDataError, is_multioption, is_option,
+    )
+
+# --8<-- start appeal read --8<--
 
 
 _TRUTHY = frozenset(('true', 'yes', 'on', '1'))
@@ -34,7 +38,7 @@ _FALSY = frozenset(('false', 'no', 'off', '0'))
 
 def _fail(message, path):
     where = f" (at {path})" if path else ""
-    raise AppealError(f"{message}{where}")
+    raise AppealDataError(f"{message}{where}")
 
 
 def _sub(path, name):
@@ -68,11 +72,18 @@ def _read_bool(value, path):
 def _convert(converter, value, path):
     if converter is bool:
         return _read_bool(value, path)
+    if converter is str and not isinstance(value, str):
+        # the identity terminal: an unannotated parameter reading
+        # typed data keeps the type (v1--str() would mangle a TOML
+        # float into its repr)
+        return value
     try:
         return converter(value)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
         name = getattr(converter, '__name__', 'converter')
-        _fail(f"can't convert {value!r} (not a valid {name})", path)
+        why = f': {e}' if str(e) else ''
+        _fail(f"can't convert {value!r} (not a valid {name}{why})",
+              path)
 
 
 def _read_child(child, value, path):
@@ -81,6 +92,12 @@ def _read_child(child, value, path):
         return _read_group(child, value, path)
     if _is_sequence(value):
         return _read_sequence(child, list(value), path)
+    if child.minimum <= 1 and (child.maximum is None
+                               or child.maximum >= 1):
+        # a scalar, for a group that can take exactly one: the
+        # single-parameter converter (datestamp(text)) reads its
+        # one value in place--v1 applied converters, always
+        return _read_sequence(child, [value], path)
     _fail(f"expected a mapping or a sequence, got {value!r}", path)
 
 
@@ -164,6 +181,13 @@ def _subtree_names(plan):
 
 
 def _read_group(plan, mapping, path):
+    args, kwargs = _read_group_args(plan, mapping, path)
+    if plan.callable is tuple:
+        return tuple(args)
+    return plan.callable(*args, **kwargs)
+
+
+def _read_group_args(plan, mapping, path):
     args = []
     kwargs = {}
     for slot in plan.slots:
@@ -215,12 +239,10 @@ def _read_group(plan, mapping, path):
     for name, default in option_defaults.items():
         kwargs.setdefault(name, default)
 
-    if plan.callable is tuple:
-        return tuple(args)
-    return plan.callable(*args, **kwargs)
+    return args, kwargs
 
 
-def _read_sequence(plan, items, path):
+def _read_sequence(plan, items, path, call=True):
     n = len(items)
     trailing = [s for s in plan.slots if s.trailing]
     reserved = items[n - len(trailing):] if trailing else []
@@ -272,9 +294,43 @@ def _read_sequence(plan, items, path):
         if not o.kwargs_delivered:
             kwargs[o.name] = o.default
 
+    if not call:
+        return args, kwargs
     if plan.callable is tuple:
         return tuple(args)
     return plan.callable(*args, **kwargs)
+
+
+def _read_fold(cls, data):
+    """
+    An Option subclass as the callable: the protocol, read-side--
+    init(default) once, option() per occurrence (an Option reads
+    a sequence of occurrences; a StrictOption reads exactly one),
+    render() produces the value.
+    """
+    plan = build(cls.option, name=cls.__name__, method_of=cls.__name__)
+    if is_multioption(cls):
+        if not _is_sequence(data):
+            raise AppealDataError(
+                f"{cls.__name__} repeats; read it from a sequence "
+                f"of occurrences, got {type(data).__name__}")
+        occurrences = data
+    else:
+        occurrences = (data,)
+    instance = cls()
+    instance.init(None)
+    for index, occurrence in enumerate(occurrences):
+        path = f'{cls.__name__}[{index}]'
+        if isinstance(occurrence, Mapping):
+            args, kwargs = _read_group_args(plan, occurrence, path)
+        elif _is_sequence(occurrence):
+            args, kwargs = _read_sequence(plan, list(occurrence),
+                                          path, call=False)
+        else:
+            _fail(f"expected a mapping or a sequence, got "
+                  f"{occurrence!r}", path)
+        instance.option(*args, **kwargs)
+    return instance.render()
 
 
 def read_mapping(callable, mapping):
@@ -284,17 +340,20 @@ def read_mapping(callable, mapping):
     pointed at a config file.  Groups (converter annotations) read
     a sub-mapping under their parameter's name, or flat keys at the
     same level; defaults fill absent keys; extra keys are ignored.
+    An Option subclass folds: it reads a sequence of occurrences,
+    option() per element (a StrictOption reads one occurrence).
     """
+    if is_option(callable):
+        return _read_fold(callable, mapping)
     plan = callable if isinstance(callable, Plan) else build(callable)
     if not isinstance(mapping, Mapping):
-        raise AppealError(
+        raise AppealDataError(
             f"read_mapping needs a mapping, got {type(mapping).__name__}")
     return _read_group(plan, mapping, '')
 
 
 def _reject_unfeedable(plan):
     "read_iterable/read_csv can't position-feed names (v1's corpus)."
-    from .runtime import AppealConfigurationError
     for slot in plan.slots:
         if slot.trailing:
             raise AppealConfigurationError(
@@ -347,7 +406,8 @@ def read_csv(callable, reader, *, first_row_map=None):
     try:
         names = [first_row_map[h] for h in headings]
     except KeyError as e:
-        raise AppealError(
+        raise AppealDataError(
             f"read_csv: heading {e.args[0]!r} isn't in first_row_map")
     return [_read_group(plan, dict(zip(names, row)), '')
             for row in rows if row]
+# --8<-- end appeal read --8<--

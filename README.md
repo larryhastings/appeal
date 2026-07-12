@@ -2,7 +2,7 @@
 
 ![## Give your program Appeal!](https://raw.githubusercontent.com/larryhastings/appeal/master/resources/images/give.your.program.appeal.png)
 
-##### Copyright 2021-2023 by Larry Hastings
+##### Copyright 2021-2026 by Larry Hastings
 
 [![# test badge](https://img.shields.io/github/actions/workflow/status/larryhastings/appeal/test.yml?branch=master&label=test)](https://github.com/larryhastings/appeal/actions/workflows/test.yml) [![# python versions badge](https://img.shields.io/pypi/pyversions/appeal.svg?logo=python&logoColor=FBE072)](https://pypi.org/project/appeal/)
 
@@ -11,7 +11,6 @@
 
 ```Python
 import appeal
-import sys
 
 app = appeal.Appeal()
 
@@ -79,12 +78,49 @@ also intuitive, because it mirrors Python itself.
 If you understand how to write Python functions,
 you're already halfway to understanding Appeal!
 
-Appeal has only one dependency,
-[my **big** library.](https://github.com/larryhastings/big)
+This is Appeal version 2--a ground-up rewrite of the engine
+under the same API.  Version 2 keeps version 1's semantics
+(there's a [list of the deliberate changes](#what-changed-from-v1)
+near the end of this document), runs its whole test corpus,
+and adds some marquee powers of its own:
 
+* **Standalone scripts.**  Appeal can write your command-line
+  parser out as a *standalone Python script*: stdlib plus your
+  own module, no appeal installed, no dependencies at all.
+  Parsing decisions are made ahead of time and compiled to
+  ordinary Python, so the emitted script is also *fast*--a
+  standalone Appeal parser costs about 2.6ms over the price
+  of starting Python itself.
+* **Tab completion** for bash, zsh, and fish, answered by the
+  same grammar that parses your command line--and it works in
+  the standalone scripts too.
+* **Documentation that composes**, rendered through templates
+  you can reshape and a color theme you can restyle.
+* **Cycling**: several commands on one command-line, run left
+  to right, like `busybox` or your favorite build tool.
+* **A class as your whole program**: `__init__` handles the
+  global options, decorated methods are the commands.
+* **Config layering**: hand `main()` a dict of settings from
+  your config file; the command line still wins.
+* An interactive **REPL** and an **MCP server** (the protocol
+  AI agents use to call tools), each one method call away,
+  each built on the same grammar as everything else.
+
+Appeal's *only* dependency is
+[my **big** library](https://github.com/larryhastings/big)--and
+even that is only consulted when *emitting* standalone scripts.
+Parsing needs nothing but Appeal itself, and the emitted scripts
+need nothing but the stdlib and your module.
+
+Appeal supports Python 3.6 and up.  (The `list[T]` and
+`dict[K, V]` annotation spellings require Python 3.9, where
+Python introduced them; on older Pythons, spell those
+`appeal.accumulator` and `appeal.mapping`, which work
+everywhere.  CI exercises 3.7 through 3.14--GitHub's runners
+can't install 3.6 anymore--and 3.6 is verified locally.)
 Appeal is currently only supported for POSIX platforms
-(UNIX, Linux, BSD, OS X, etc).  It might work on Windows
-but this has not yet been tested.
+(UNIX, Linux, BSD, OS X, etc).  It might work on Windows but
+this has not yet been tested.
 
 ### A New And Appealing Approach
 
@@ -104,7 +140,10 @@ then translates the user's command-line back into calls to your API.
 This raises another good point: the API you build using Appeal
 also often makes for a very nice *automation API,* allowing
 your program to also be used as a library by other programs
-with minimal effort.
+with minimal effort.  (Appeal v2 leans into this hard: the same
+functions can be driven by the command line, by a config file,
+by a JSON blob, by a shell-completion request, or by an AI
+agent over MCP--and it's the same grammar answering every time.)
 
 
 ## Basics
@@ -169,7 +208,7 @@ option: *short options* and *long options.*
 followed by one or more individual characters, which
 are the short option strings.  In the above example,
 we specify two sets of short options: the first is `-v`,
-the second is `-xz`.  You can combine options togther,
+the second is `-xz`.  You can combine options together,
 and it's the same as specifying them separately.  We
 could have said `-vxz`, or `-v -x -z`; these both do
 the same thing.  When we talk about short options, we
@@ -241,7 +280,7 @@ become options.
 
 (Technically, Appeal translates both *positional parameters*
 and *positional-or-keyword parameters* into arguments.
-For the sake of clarity and consiseness, I'll always
+For the sake of clarity and conciseness, I'll always
 refer to these collectively as *positional parameters.)*
 
 
@@ -267,7 +306,7 @@ If you now ran `python3 script.py help hello`, you'd
 see usage information for your `hello` command.
 It'd start like this:
 
-    usage: script.py hello name
+    usage: hello name
 
 Already, a lot has happened!  Let's go over it piece by piece:
 
@@ -284,12 +323,13 @@ Already, a lot has happened!  Let's go over it piece by piece:
   We call a function decorated with `@app.command()`
   a *command function.*
 * Our `hello()` command function takes one positional
-  parameters, `name`.  Therefore, our `hello` command
+  parameter, `name`.  Therefore, our `hello` command
   on the command-line takes one positional argument,
   which we identify as `name` in the usage string.
-* Appeal also automatically created simple help for our
-  program, displaying *usage* information.  Usage shows
-  you what command-line options and arguments the command
+* Appeal also automatically created help for our
+  program: a `help` command, plus `-h` and `--help`
+  options on every command.  Usage shows you what
+  command-line options and arguments the command
   will accept.
 
 So!  If you ran this command at the command-line:
@@ -312,6 +352,16 @@ considered success; returning a non-zero integer indicates
 failure.  (And if your function exits without a return
 statement, Python behaves as if your function ended with
 `return None`.)
+
+And if the user gets the command-line wrong--a missing
+argument, an unknown option--Appeal prints a polite error
+and the usage for the command that failed, and your program
+exits with status 2.  Your command function is never called
+with malformed input; that's the deal.  (Errors print to
+standard error, the POSIX diagnostic convention, so a
+pipeline reading your program's output never receives an
+error message as data.  Prefer everything on one stream?
+`Appeal(errors=sys.stdout)`.)
 
 
 ## Default Values And `*args`
@@ -350,20 +400,12 @@ If you run this command at the command-line:
 Appeal would call `fgrep()` like this:
 
 ```Python
-fgrep('WM_CREATE', None)
-```
-
-Actually that's not 100% accurate.  When Appeal
-builds the arguments to call your `fgrep()` function,
-it only passes in the arguments you passed in on the
-command-line.  So actually Appeal calls your `fgrep()`
-function like this:
-
-```Python
 fgrep('WM_CREATE')
 ```
 
-And it's Python that sets the `filename` parameter to `None`.
+Notice Appeal only passes in the arguments you supplied on the
+command-line; it's Python that fills in the default value
+of `None` for the `filename` parameter.
 
 What else can Appeal command functions do?  Well, they can
 have a `*args` parameter. Naturally, a command function that
@@ -387,6 +429,34 @@ fifty filenames--as many as they want!  They'd all be
 collected in a tuple and passed in to `fgrep()` in the
 `filenames` parameter.
 
+One more parameter shape, new in Appeal version 2: a
+*keyword-only parameter without a default value*.  On the
+command-line, options are always optional (we'll get to
+that)--so a keyword-only parameter that *must* be supplied
+can't be an option.  Instead, it becomes a *required trailing
+argument*: it's filled from the *end* of the command-line.
+This is how you write `cp`:
+
+```Python
+import appeal
+app = appeal.Appeal()
+
+@app.command()
+def cp(*src, dest):
+    print(f"cp {src} {dest}")
+
+app.main()
+```
+
+The usage reads:
+
+    cp [src]... dest
+
+Run `script.py cp a b c`, and Appeal calls `cp('a', 'b',
+dest='c')`--the *last* argument lands in `dest`, and everything
+before it is collected into `src`.  (Appeal version 1 refused
+this signature; version 2 makes it mean the obvious thing.)
+
 
 ## Options, Opargs, And Keyword-Only Parameters
 
@@ -407,7 +477,7 @@ app.main()
 
 Now the `fgrep` command-line usage looks like this:
 
-    usage: script.py fgrep [-c|--color] [-n|--number int] [-i|--ignore-case] pattern [filenames]...
+    fgrep [-c|--color <color>] [-n|--number <int>] [-i|--ignore-case] pattern [filenames]...
 
 Again, a lot just happened.
 
@@ -419,25 +489,28 @@ and turned that into an option.  (Also, if the parameter
 name has any underscores, Appeal turns those into dashes.)
 
 Second, Appeal also automatically uses the first letter of a
-keyword-only argument as a short option.  So the
+keyword-only parameter as a short option.  So the
 `color` keyword-only parameter becomes both the `--color`
 *and* `-c` options.  When running your program, the user
-can use `-c` or `--color` interchangably.  The same goes
-for `-i` and `--ignore_case`, and for `-n` and `--number`.
+can use `-c` or `--color` interchangeably.  The same goes
+for `-i` and `--ignore-case`, and for `-n` and `--number`.
 
 (What if you have two keyword-only parameters that start
 with the same letter?  The first one gets the short option.
 If we added a keyword-only parameter named `credit` to the
 end of `fgrep()`'s parameter list, Appeal would map `color`
-to `--color` and `-c`, but only map `credit` to `--credit`.)
+to `--color` and `-c`, but only map `credit` to `--credit`.
+And a parameter whose name is a single character gets *only*
+the short option: a parameter named `n` maps to `-n`, never
+`--n`--a one-letter long option would just be confusing.)
 
 Third, options are *always optional.*
 (As a pedantic wag might put it--"the clue's right there in the name.")
-Therefore, in Appeal, keyword-only
-parameters to command functions must *always* have a
-default value.  (Python programmers usually have default
-values for their keyword-only parameters anyway, so this
-requirement isn't a big deal.)
+Therefore, in Appeal, keyword-only parameters that map to
+options must have a default value.  (A keyword-only parameter
+*without* a default becomes a required trailing argument, as
+we saw with `cp` above--precisely *because* it can't be an
+option.)
 
 Fourth, notice that `--color` takes an argument, or *oparg.*
 Appeal noticed that the `color` parameter had a default
@@ -453,10 +526,10 @@ Appeal infers from that that `--number` should be an `int`.
 Appeal automatically converts the string from the command-line
 into a Python object for you, using the type of the default value.
 (Appeal did that for `--color` too--except `--color` takes a str,
-so no conversion is necessary.)  When the user provides an oparg
-to `--number` on the command-line, it must be followed by an
-oparg; Appeal will take that oparg, pass it in to `int`, then take
-the return value from `int` and pass it in to the `number` parameter.
+so no conversion is necessary.)  When the user provides `--number`
+on the command-line, it must be followed by an oparg; Appeal will
+take that oparg, pass it in to `int`, then take the return value
+from `int` and pass it in to the `number` parameter.
 
 Finally, `ignore_case` has a default value of `False`.
 Boolean values for options are a special case: they don't
@@ -491,8 +564,40 @@ Appeal would call `fgrep()` like this:
 fgrep('boogaloo', color='green')
 ```
 
+Some option syntax worth knowing, all demonstrated on `--color`:
 
-## The Global Command, Subcommands, And The Default Command
+* `--color blue` and `--color=blue` both work.  So do
+  `-c blue` and `-c=blue`.
+* A flag takes an explicit boolean with `=` only:
+  `--ignore-case=false` and `--ignore-case=true` (exactly those
+  two spellings--this is not the place for `yes`, `si`, or
+  `naturally`).  A bare flag still means `True`; the explicit
+  form exists so the command line can turn *off* what a config
+  file turned on (see [Config layering](#config-layering)).
+* Short options bundle: `-vxz` means `-v -x -z`.  A short
+  option that takes one oparg ends its bundle, and binds
+  either the next string (`-ic blue`) or the rest of its own
+  token, getopt-style: `-cblue`, `-icblue`, and `-c=blue` all
+  mean `blue`.  The rest binds *verbatim*--only a `=`
+  immediately after the option letter is a separator, so
+  `-dNAME=1` passes `NAME=1` whole (think `-DNAME=1`).
+* Repeating an option is fine, and the last one wins:
+  `--color red --color blue` means blue, exactly as in getopt,
+  argparse, and click--it's what lets a shell alias bake in a
+  default (`alias grep='grep --color=auto'`) and still be
+  overridden (`grep --color=never`).  Options that *collect*
+  their repetitions are one annotation away--see [Specifying An
+  Option More Than Once](#specifying-an-option-more-than-once)
+  below.
+* `--` (two dashes alone) turns off option recognition for
+  the rest of the command-line, so arguments can start with
+  dashes: `fgrep -- -weird-pattern`.
+* A negative number is an argument, not an option: `add -5 3`
+  just works (unless your program actually defines a `-5`
+  option, in which case you have only yourself to blame).
+
+
+## Commands, The Global Command, And Subcommands
 
 Many programs that support "commands" also have
 "global options".  Global options are options
@@ -504,12 +609,12 @@ a "global option".
 
 Appeal supports global options, too.  It's simple:
 write your command function like normal, but
-instead of decorating it with `Appeal.command()`, decorate
-it with `Appeal.global_command()`.  Appeal will process all
+instead of decorating it with `@app.command()`, decorate
+it with `@app.global_command()`.  Appeal will process all
 those options before the command, and call your global
-command function.
+command function--*before* it calls the command function.
 
-`Appeal.global_command()` also gets used for programs that
+`@app.global_command()` also gets used for programs that
 don't use "commands".  Although the "command" command-line
 paradigm is popular these days, most programs don't bother
 with them.  For example, `ls`, `grep`, and... hey! `python`
@@ -517,59 +622,56 @@ itself!  None of these programs support commands, but they
 all support command-line arguments and options.
 
 Naturally, Appeal supports this behavior.  Simply decorate
-one function with `Appeal.global_command()` and don't add
-any command functions.
+one function with `@app.global_command()` and don't add
+any command functions.  Now that function owns the whole
+command-line.
 
 On the flip side of this coin, Appeal also supports
-*subcommands*.  This is a common feature of command-line
-parsing libraries, though it's rarely-used in practice.
-The idea is, your command can *itself* be followed by
-another command.
-
-To add a subcommand to your Appeal instance, just
-decorate your command function with two chained
-command calls, specifying the name of the existing
-command in the first call, like so:
+*subcommands:* your command can *itself* be followed by
+another command, `git remote add`-style.  To add a
+subcommand to an existing command, name the parent command
+in a call to `app.command()`, and use the object it returns
+as your decorator:
 
 ```Python
-@app.command()
-def db(...):
-    ...
+import appeal
+app = appeal.Appeal()
 
-@app.command("db").command()
-def deploy(...):
-    ...
+@app.command()
+def db(label):
+    print(f"db {label}")
+
+db_commands = app.command('db')
+
+@db_commands.command()
+def deploy(version: int):
+    print(f"deploy {version}")
+
+app.main()
 ```
 
-This adds a `deploy` subcommand under the `db` command.
+(On Python 3.9 and newer you can chain the calls directly--
+`@app.command('db').command()`--thanks to PEP 614's relaxed
+decorator grammar.  The two-step spelling above parses on every
+Python Appeal supports.)
+
 So now the whole command-line looks something like this:
 
-    script.py [global arguments and options] db [db arguments and options] deploy [deploy arguments and options]
+    script.py [global options] db <label> deploy <version>
 
-Finally, what should Appeal do if your program
-takes commands, but the user doesn't supply one?
-That's what the *default command* is for.  The
-default command is a command function Appeal will
-run for you if your Appeal instance has commands,
-and the user doesn't supply one.  For example,
-if `script.py` has ten different commands, but the
-user just runs
+The parent command runs first--it's the "global command" of
+its own little command set--then the subcommand.  Running
+`script.py db main deploy 9` prints `db main` and then
+`deploy 9`.
 
-    script.py
-
-without any arguments, Appeal would run the default
-command.
-
-If you don't specify a default command, Appeal has
-a built-in default *default command*.  The default *default
-command* raises a usage error, which means it prints basic help
-information and exits.
-
-To specify your own default command, just decorate a
-command function with the `Appeal.default_command()` decorator.
-For example, if you wanted your program to run the `status`
-command when the user didn't specify a command, you could
-do this:
+What should Appeal do if your program takes commands, but the
+user doesn't supply one?  That's what the *default command* is
+for.  If you don't specify one, Appeal treats an empty command
+line as a request for orientation, not a mistake--it prints the
+usage line and the list of commands to standard output (no
+`error:` anywhere) and exits with status 1, like `git`.  To
+specify your own default command, decorate a function with
+`@app.default_command()`:
 
 ```Python
 @app.default_command()
@@ -579,20 +681,80 @@ def default():
 
 Notice that the default command doesn't take any arguments
 or options.  It simply can't accept any, by definition.
+(If the user specified options without a command, they'd be
+"global options", processed by the global command.  And if
+the user specified an argument, that would automatically be
+the name of the command to run.)
 
-(If the user specified options
-without a command, they'd be considered "global options"
-and would be processed by the global command.  And if the
-user specified an argument, that would automatically be the
-name of the command to run.)
+Two more things about command names.
 
-And yes, subcommands can have a default command too:
+First: the command word is the function's name, *literally*--
+Appeal never renames your commands.  (Options get dash-for-
+underscore treatment because `--ignore_case` looks silly;
+commands don't, because the function name IS the command.)
+
+Second: if you want a command word that isn't a valid Python
+identifier--dashes, say--pass `name=` to `app.command()`:
 
 ```Python
-@app.command('db').default_command()
-def db_default():
-    return db_status()
+import appeal
+app = appeal.Appeal()
+
+@app.command(name='add-item')
+def add_item(x: int):
+    print(f"added {x}")
+
+app.main()
 ```
+
+`name=` is you saying the command word out loud; Appeal uses
+it exactly as written.
+
+### Cycling: several commands on one line
+
+Here's a version 2 superpower.  Pass `repeat=True` to
+`Appeal()`, and once a command's arguments are all satisfied,
+the next argument may name *another* command--and the line
+starts over.  The commands run left to right:
+
+```Python
+import appeal
+app = appeal.Appeal(repeat=True)
+
+@app.command()
+def add(x: int, y: int):
+    print(f"sum {x + y}")
+
+@app.command()
+def mul(x: int, y: int):
+    print(f"product {x * y}")
+
+app.main()
+```
+
+    % python3 script.py add 1 2 mul 3 4
+    sum 3
+    product 12
+
+The rules are exactly what you'd hope:
+
+* A command's *whole* signature must be satisfied--optional
+  arguments included--before the next word can name a command.
+  (A command taking `*args` never fills up, so it soaks up the
+  rest of the line.)
+* Appeal parses the *entire* command-line before running
+  anything.  If the line is malformed anywhere, *no* work
+  happens--that's an Appeal rule.  (A *conversion* failure--
+  `add one 2`--is different: conversions happen as each
+  command runs, so like `make`, the commands to the left have
+  already run when the failure stops the line.)
+* If a command returns a non-zero integer, the line halts
+  there, and that's your exit status.
+* Subcommand sets can cycle too--pass `repeat=True` to
+  `app.command('db', repeat=True)` and the `db` set keeps
+  accepting subcommands until a word pops back up to the
+  outer set.
+
 
 ## Annotations And Introspection
 
@@ -606,7 +768,7 @@ import appeal
 app = appeal.Appeal()
 
 @app.command()
-def fgrep(pattern, *filenames, id:float=None):
+def fgrep(pattern, *filenames, id: float = None):
     print(f"fgrep {pattern} {filenames} {id}")
 
 app.main()
@@ -637,20 +799,19 @@ from highest-priority to lowest-priority:
   - If `type(default)` is `NoneType`, Appeal will use `str`
     instead.
   - If `type(default)` is `bool`, and the parameter is a
-    keyword-only parameter, Appeal will use a special internal
-    class that implements the special-case "negate the default"
-    behavior for options with boolean default values.
+    keyword-only parameter, the option becomes a flag that
+    negates the default, as we saw above.
 * If the signature for that parameter lacks both an annotation
   *and* a default value, Appeal uses `str` as the converter.
 
 Converters are surprisingly flexible.
 For example, Appeal will introspect the converter for a
-keyword-only parameter and map all its positional arguments
+keyword-only parameter and map all its positional parameters
 into opargs.  That's how Appeal supports options that take
 *multiple opargs:* you simply annotate the keyword-only
-parameter with a converter that takes *multiple arguments.*
+parameter with a converter that takes *multiple parameters.*
 Appeal will also pay attention to the annotations for the
-converter's own arguments, and use those to convert the
+converter's own parameters, and use those to convert the
 strings from the command-line into Python objects.
 
 Let's tie it all together with another example:
@@ -663,7 +824,7 @@ def int_and_float(integer: int, real: float):
     return [integer*3, real*5]
 
 @app.command()
-def fgrep(pattern, *filenames, position:int_and_float=(0, 0.0)):
+def fgrep(pattern, *filenames, position: int_and_float = (0, 0.0)):
     print(f"fgrep {pattern} {filenames} {position}")
 
 app.main()
@@ -673,7 +834,7 @@ Here, Appeal would introspect `fgrep()`, then also
 introspect `int_and_float()`.  The resulting usage
 string would now look like this:
 
-    usage: script.py fgrep [-p|--position integer real] pattern [filenames]...
+    fgrep [-p|--position <int> <float>] pattern [filenames]...
 
 `--position` takes *two* opargs.  Appeal would
 call `int` on the first one and `float` on the second
@@ -724,7 +885,6 @@ of its default value, then introspected that type to determine
 how many opargs it should consume from the command-line and how
 to convert them.
 
-
 > **An important note about annotations**
 >
 > If you use static type analysis in your project,
@@ -736,23 +896,25 @@ to convert them.
 > and there are some ways Appeal uses annotations that
 > static type analyzers may not like.
 >
-> Fortunately, there are ways to get static type analyzers
-> to work alongside Appeal.
+> Fortunately, there's a way to get static type analyzers
+> to work alongside Appeal: `typing.Annotated`, which lets
+> you specify an ordered list of values.  Static type hints
+> only ever use the *first* value; Appeal only ever uses the
+> *last* value.  So you can have both types of annotations,
+> side by side, and both static type checkers and Appeal are
+> perfectly happy:
 >
-> First, you can decorate your Appeal command functions
-> and converters with `@typing.no_type_check()`.  This should
-> only be necessary if you use functions as annotations;
-> if you only ever use types and classes, this shouldn't be
-> necessary.
+> ```Python
+> def fgrep(pattern, *filenames,
+>           position: Annotated[list, int_and_float] = (0, 0.0)):
+> ```
 >
-> Second, if you're using Python 3.9 or newer, you can use
-> `typing.Annotated` with your annotations.  `typing.Annotated`
-> allows you to specify an ordered list of values, and static
-> type hints only ever use the *first* value.  Appeal also
-> handles `typing.Annotated`, but Appeal only ever uses the
-> *last* value.  This makes it easy--you can have both types
-> of annotations, side by side, and both static type checkers
-> and Appeal are perfectly happy.
+> This is the only thing from the `typing` module Appeal
+> understands--and Appeal itself never imports `typing`
+> unless your annotations make it necessary.
+> (`typing.Annotated` arrived in Python 3.9, like the
+> `list[T]` spellings; on older Pythons, Appeal simply
+> never sees it.)
 
 
 ## Converter Flexibility
@@ -779,9 +941,64 @@ however you like, and returns the list.
 Although... you don't need to bother!  Appeal also provides
 a converter that does it for you, called `appeal.split()`.
 You pass in as many delimiter strings as you want, and
-`appeal.split()` will split the command-line across all of
+`appeal.split()` will split the command-line string across all of
 them.  (If you don't specify any delimiters, `appeal.split()`
 will split at every whitespace character.)
+
+```Python
+import appeal
+app = appeal.Appeal()
+
+@app.command()
+def build(*, with_dbmliborder: appeal.split(':') = ()):
+    print(f"build {with_dbmliborder}")
+
+app.main()
+```
+
+    % python3 script.py build --with-dbmliborder=gdbm:ndbm
+    build ['gdbm', 'ndbm']
+
+One more converter deserves its own introduction:
+`appeal.file()`.  It's `open()` as a converter--pass it `open()`'s
+parameters, spelled out (`mode`, `buffering`, `encoding`,
+`errors`, `newline`, `opener`)--plus the classic command-line
+convention: an argument of `-` means the process-standard
+stream, chosen by mode (`'r'` means `sys.stdin`, `'w'` means
+`sys.stdout`, binary modes get the `.buffer` layer):
+
+```Python
+import appeal
+import sys
+app = appeal.Appeal()
+
+@app.command()
+def upcase(inp: appeal.file() = None, *, out: appeal.file('w') = sys.stdout):
+    data = inp.read() if inp else ''
+    out.write(data.upper())
+    out.close()
+
+app.main()
+```
+
+    % echo hello | python3 script.py upcase -
+    HELLO
+
+Note that `upcase()` closes `out` unconditionally.  That's the
+contract: whatever `file()` hands you, you own--close it, use it
+in a `with` block, whatever you like.  When the argument was `-`,
+the handle is a safe wrapper whose `close()` *flushes* and then
+goes inert, so the process's real stream is never harmed.
+(argparse hands you bare `sys.stdout` there, and closing it is a
+famous footgun.)  An unopenable path is a polite usage error,
+naming the file and the reason.  One caveat, inherent to
+opening files during conversion (argparse's `FileType` shares
+it): a *structurally* malformed line opens nothing, but if a
+`file('w')` argument converts and a *later* argument's
+conversion then fails, the output file has already been
+opened--and truncated--even though your function never ran.  And there's no convention for
+`-` meaning stderr--none ever formed, because on POSIX systems
+`/dev/stderr` is a path, and paths already work.
 
 
 ## Specifying An Option More Than Once
@@ -790,20 +1007,36 @@ One thing you might have noticed by now: the interfaces
 you've seen only allow Appeal to handle command-lines
 where an option can be specified either zero times or
 one time.  What if you want the user to be able to
-specify an option three times?  Or ten?  That's what the
-`MultiOption` class is for.  `MultiOption` objects
-are converters that allow options to be specified
-multiple times.
+specify an option three times?  Or ten?
 
-`MultiOption` isn't useful by itself; it's only an
-abstract base class.  To make use of it you'll
-need to use a subclass--or create your own.
+The simplest spelling is new in version 2: annotate the
+keyword-only parameter with `list[T]`, and the option is
+repeatable--each occurrence takes one oparg, converted with
+`T`, and they're all collected into a list.  Its sibling
+`dict[K, V]` gives you a repeatable `KEY=VALUE` option:
 
-This time, let's start with some examples.  Appeal
-provides three useful subclasses of `MultiOption`:
-`counter`, `accumulator`, and `mapping`.
+```Python
+import appeal
+app = appeal.Appeal()
 
-First, let's look at `counter`.  `counter`
+@app.command()
+def build(*, tag: list[str] = (), define: dict[str, int] = {}):
+    print(f"build {tag} {define}")
+
+app.main()
+```
+
+    % python3 script.py build -t alpha --tag beta -d X=1 --define Y=2
+    build ['alpha', 'beta'] {'X': 1, 'Y': 2}
+
+(These spellings require Python 3.9.  The parameterized
+converters below do the same jobs and work on every Python
+Appeal supports.)
+
+Appeal also provides three repeatable converters with more
+history behind them: `counter`, `accumulator`, and `mapping`.
+
+First, let's look at `counter`.  `counter()`
 simply counts the number of times an option is
 specified on the command-line.  This is a somewhat
 common idiom for "verbose" options; a program
@@ -817,7 +1050,7 @@ import appeal
 app = appeal.Appeal()
 
 @app.command()
-def fgrep(*, verbose:appeal.counter()=0):
+def fgrep(*, verbose: appeal.counter() = 0):
     print(f"fgrep verbose={verbose!r}")
 
 app.main()
@@ -845,66 +1078,29 @@ fgrep(verbose=3)
 ```
 
 `accumulator` handles options that take a single oparg.
-It remembers them all and returns them in a single array.
-Like so:
+It remembers them all and returns them in a single list--
+the same job as `list[str]`.  Using crazy science magic
+from the future, `accumulator` is parameterized: 
+`accumulator[int]` converts every oparg with `int`, and
+`accumulator[int, float]` makes the option take *two*
+opargs per occurrence, collecting `(int, float)` tuples.
+
+`mapping()` is like `accumulator` except it returns a
+`dict`.  An option annotated with `mapping()` consumes *two*
+opargs from the command-line; the first one is the key, the
+second one is the value.  (You can parameterize `mapping` the
+same way, though you can only specify exactly two types.
+Note the spelling difference from `dict[K, V]`: `mapping()`
+takes two separate opargs, `dict[K, V]` takes one `KEY=VALUE`
+oparg.)
+
+Behind all of these is the `Option` class: converters that
+collect an option's occurrences however you like.  `Option`
+isn't useful by itself; it's an abstract base class.  Subclass
+it and override up to three methods:
 
 ```Python
-import appeal
-app = appeal.Appeal()
-
-@app.command()
-def fgrep(*, pattern:appeal.accumulator=[]):
-    print(f"fgrep pattern={pattern!r}")
-
-app.main()
-```
-
-If the user ran
-
-    % python3 script.py fgrep --pattern three -p four --pattern fiv5
-
-Appeal would call
-
-```Python
-fgrep(pattern=['three', 'four', 'fiv5'])
-```
-
-What if you don't want strings, but another type?  Using crazy
-science magic from the future, `accumulator` is actually
-parameterized.  You can say:
-
-```Python
-import appeal
-app = appeal.Appeal()
-
-@app.command()
-def fgrep(*, pattern:appeal.accumulator[int]=[]):
-    print(f"fgrep pattern={pattern!r}")
-
-app.main()
-```
-
-and now the opargs to `--pattern` will all be converted using int.
-
-You can even specify multiple types as arguments to the
-parameterized version of `accumulator`, separated by commas.
-The option will then require multiple opargs and convert
-them to the types specified.
-
-`mapping` is like `accumulator` except it returns a
-`dict` instead of a `list`.  An option annotated with `mapping()`
-consumes *two* positional arguments from the command-line;
-the first one is the key, the second one is the value.
-(You can also parameterize `mapping` the same way you parameterize
-`accumulator`, though you can only specify exactly two types.)
-
-
-Of course, you can also subclass `MultiOption` to make your own
-converter classes with custom behavior. `MultiOption` subclasses
-can override these three methods:
-
-```Python
-class MultiOption:
+class Option:
 
     def init(self, default):
         ...
@@ -916,16 +1112,22 @@ class MultiOption:
         ...
 ```
 
-Well, actually, subclasses are *required* to override
+Subclasses are *required* to override
 `option()` and `render()`.  But `init()` is optional.
+(`MultiOption` is an alias of `Option`, kept from version 1;
+use whichever name you like.)
 
-If you then specify a subclass of `MultiOption` as an
+If you then specify a subclass of `Option` as an
 annotation on a keyword-only parameter of an
 Appeal command function, several things happen:
 
 * If that option is specified one or more times on
   the command-line, Appeal will instantiate exactly
-  one of these objects and call its `init()` method.
+  one of these objects and call its `init()` method,
+  passing in the parameter's default value.
+  (If the option is never specified, the class is never
+  instantiated--the parameter's default passes through
+  untouched.)
 * Every time the user specifies that option on
   the command-line, Appeal will call the `option()`
   method on the object.
@@ -935,23 +1137,22 @@ Appeal command function, several things happen:
   argument to that keyword-only parameter.
 
 The most powerful part of this interface: you can
-redefine `option()` to suit your needs--it supports
+define `option()` to suit your needs--it supports
 the same sort of polymorphism as annotations do.
 Appeal will introspect your `option()` method to
 determine how many opargs to consume from the
 command-line, and how to convert them.
 
-Let's demonstrate all this with another example.
 If you want your option to take two opargs,
 with one being an `int` and the other being
 a `float`, you would define `option()` in your
 subclass as:
 
 ```Python
-class MyMultiOption(appeal.MultiOption):
+class MyOption(appeal.Option):
 
-    def option(self, a:int, b:float):
-        ....
+    def option(self, a: int, b: float):
+        ...
 ```
 
 Every time the user specified your option,
@@ -962,24 +1163,14 @@ you to decide how to store them, and how to
 render them into a single value returned
 by your `render()` method.
 
-`MultiOption` is a subclass of a general
-`Option` class.  `Option` behaves identically
-to `MultiOption`, except it only permits
-specifying the option once on the command-line,
-which means it will only your `option()`
-method once.
-You usually don't need to bother with making subclasses
-of `Option`--it's usually better to just use a class
-directly, like our `class IntAndFloat` example.
-The only feature you get by subclassing `Option` is,
-you get the default value for the parameter passed in
-to your constructor.
-
-(The downside of subclassing `Option` and `MultiOption`
-is that it makes exporting your Appeal API as an automation
-API a little less convenient for the user, because your
-users will have to construct these objects and feed
-values into them by calling the `option` method.)
+One sibling: `StrictOption`.  It behaves identically to
+`Option`, except the option may be given *at most once*--a
+second occurrence is `specified more than once`, loudly.
+Everywhere else repetition means last-one-wins; subclassing
+`StrictOption` is how an option declares, by name, that
+repeating it is a mistake.  (In version 1 this behavior was
+spelled `Option`; strictness is opt-in now, so it gets the
+louder name.)
 
 
 ## Data Validation
@@ -999,11 +1190,16 @@ import appeal
 app = appeal.Appeal()
 
 @app.command()
-def go(direction:appeal.validate('up', 'down', 'left', 'right', 'forward', 'back')):
+def go(direction: appeal.validate('up', 'down', 'left', 'right', 'forward', 'back')):
     print(f"go direction={direction!r}")
 
 app.main()
 ```
+
+Feed it something else and Appeal answers with a proper
+usage error:
+
+    error: invalid value for 'direction': 'sideways' (must be one of 'up', 'down', 'left', 'right', 'forward', 'back')
 
 You can pass in an explicit type using a `type=`
 named argument to `validate()`; if you omit it,
@@ -1038,14 +1234,14 @@ at the implementations of `validate()` and
 
 ## Multiple Options For The Same Parameter
 
-Some programs have a set of options on their
-command-line that are mutually exclusive.  Consider
-this simple-minded command-line:
+Some programs have a set of options that all
+answer the same question.  Consider this simple-minded
+command-line:
 
     go [--north|--south|--east|--west]
 
-That is, you want the user to be able to "go" in
-one of those four directions, but *only* one.
+That is, the user picks a direction--and if they name
+several, the last one wins, like every repeated option.
 How would you do that in Appeal?
 
 Easy.  You simply define multiple options that
@@ -1056,12 +1252,12 @@ actually Appeal allows you to make your own mappings.
 You can map a parameter as many ways as you want,
 even using different converters!
 
-To manually define your own options, use the `Appeal.option()`
+To manually define your own options, use the `app.option()`
 method on your Appeal instance.  It's a decorator you
 apply to your command function.  The first argument is
 the name of the parameter you want the option to write
-to.  After that is one or more options you want to
-map to this parameter.  `Appeal.option()` also takes
+to.  After that is one or more option strings you want to
+map to this parameter.  `app.option()` also takes
 `default` and `annotation` keyword-only parameters,
 allowing you to specify respectively the default value or
 annotation for this option.
@@ -1087,8 +1283,12 @@ app.main()
 All these annotations return a string.  But actually you can
 return any type you want--and you can even map multiple
 annotations that return different types to the same parameter.
-You can even annotate with a `MultiOption` to allow specifying
-that option multiple times!
+`go --north --south` means south--whichever string spoke last
+on the command line wins, exactly like repeating one option.
+(Need strict mutual exclusion?  Check in your function; the
+command line is a conversation, and the last word stands.)
+You can even annotate with an `Option` class to *collect*
+the occurrences instead!
 
 Note that, whenever you use the `option()` decorator
 to map your own options onto a parameter, Appeal won't add
@@ -1096,18 +1296,26 @@ its default options for that parameter.  It'll only have
 the options you explicitly set.  Which means, for example,
 that in the sample code above, there aren't any short options
 for the options we created.  `-n` won't work, only `--north`.
+It's a *fresh declaration:* the parameter's own annotation and
+default don't leak into the option's grammar either--if you
+want the option to convert, say so in the `@app.option()`
+call.  (This is also how you *suppress* an unwanted automatic
+short option: map the long option yourself, and mention no
+short one.)
 
 One final thing.  Your command function can accept `**kwargs`
 too.  The only things that will go into it are options you
-create with `Appeal.option()`, which map to parameters that
-don't otherwise exist.
+create with `app.option()`, which map to parameters that
+don't otherwise exist.  If such an option isn't used on the
+command-line, its name simply isn't in `kwargs`--absent means
+absent.
 
 
 ## Recursive Converters
 
 You already know that you can pass in a converter that takes
-multiple arguments, and Appeal will consume multiple arguments
-from the command-line to fill it.  And if the arguments to that
+multiple parameters, and Appeal will consume multiple arguments
+from the command-line to fill it.  And if the parameters of that
 converter have annotations, Appeal will call those functions to
 convert the command-line argument into the type your converter
 wants.
@@ -1125,7 +1333,7 @@ def my_converter(i_f: int_float, s: str):
     return [i_f, s]
 
 @app.command()
-def recurse(a:str, b:my_converter=[(0, 0), '']):
+def recurse(a: str, b: my_converter = [(0, 0), '']):
     print(f"recurse a={a!r} b={b!r}")
 
 app.main()
@@ -1167,11 +1375,6 @@ Technically, Appeal views this command-line as taking two
 one command-line argument; the second group is optional, and
 consumes three command-line arguments.
 
-(We actually saw our first "argument group" in the
-second example in the
-**Annotations And Introspection** section above, but
-that time the argument group was an oparg.)
-
 Now let's add an option and see what changes:
 
 ```Python
@@ -1185,7 +1388,7 @@ def my_converter(i_f: int_float, s: str, *, verbose=False):
     return [i_f, s, verbose]
 
 @app.command()
-def recurse2(a:str, b:my_converter=[(0, 0), '', False]):
+def recurse2(a: str, b: my_converter = [(0, 0), '', False]):
     print(f"recurse2 a={a!r} b={b!r}")
 
 app.main()
@@ -1193,21 +1396,16 @@ app.main()
 
 Now the usage looks like this:
 
-    recurse2 a [i [-v|--verbose] f s]
+    recurse2 a [[-v|--verbose] i f s]
 
-Notice the way Appeal renders it in the usage
-string--the options aren't created until *after* the first
-argument in the optional argument group.  This may seem
-strange but that's how it works.  That's how it *has* to work.
+The brackets *announce* the group: everything you can type in
+that group--its options first, then its arguments--reads left
+to right, exactly as you'd type it.
 
-Why?  From a high conceptual level, Appeal doesn't know that
-you've "entered" the optional argument group until it
-sees the user supply the first argument for that group.
-So it doesn't create the options defined in that group
-until after the first argument.
-
-This high conceptual level corresponds exactly to how Appeal
-calls your function.  Consider, if the user runs this command:
+Why is `--verbose` only available inside the group?  From a
+high conceptual level, Appeal doesn't call `my_converter()`
+at all unless you enter that optional group.  Consider, if
+the user runs this command:
 
     recurse2 xyz
 
@@ -1217,34 +1415,55 @@ Appeal calls your function like so:
 recurse2('xyz')
 ```
 
-Since Appeal never called `my_converter()`, it can't
-map `--verbose`.  It can only map `--verbose` once it
-knows it's going to call `my_converter()`, and that
-only becomes true the moment you supply that second
-command-line argument.
-
-Once you *do* supply that second command-line argument,
-you have to supply two more, for a total of four.
-
-    recurse2 pdq 1 2 xyz
-
-Appeal calls your function like so:
-
-    recurse2('pdq', my_converter(int('1'), float('2'), xyz))
-
-    recurse2 pdq 1 2 xyz
-
-And in this example, you can supply the `-v` or `--verbose` anywhere *after*
-the second parameter.  So if your command-line looks like this:
+Since Appeal never called `my_converter()`, there's nothing
+for `--verbose` to configure.  It only means something once
+you're going to call `my_converter()`--which is to say, once
+you supply the group's arguments:
 
     recurse2 pdq 1 2 xyz -v
 
-Appeal calls `recurse()` like this:
+Appeal calls `recurse2()` like this:
 
 ```Python
-recurse2('pdq', my_converter(int('1'), float('2'), xyz, verbose=True))
+recurse2('pdq', my_converter(int('1'), float('2'), 'xyz', verbose=True))
 ```
 
+You can put the `-v` anywhere from the start of the group
+onward--`recurse2 pdq -v 1 2 xyz` works too.  Announcing the
+option first is fine; it tells Appeal you intend to enter the
+group.  In fact, if every argument in a group has a default,
+*just the option alone* conjures the group into existence,
+with all its arguments defaulted.
+
+One more trick that falls out of "position decides".  Two
+sibling parameters can use the *same* converter--so the same
+option string can appear in two argument groups, and its
+position on the command-line decides which group it
+configures.  With `my_converter` above:
+
+```Python
+import appeal
+app = appeal.Appeal()
+
+def int_float(i: int, f: float):
+    return (i, f)
+
+def my_converter(i_f: int_float, s: str, *, verbose=False):
+    return [i_f, s, verbose]
+
+@app.command()
+def twice(a: my_converter = None, b: my_converter = None):
+    print(f"twice a={a!r} b={b!r}")
+
+app.main()
+```
+
+    % python3 script.py twice -v 1 2 x 3 4 y
+    twice a=[(1, 2.0), 'x', True] b=[(3, 4.0), 'y', False]
+
+The first `-v` announces the first group; a `-v` typed among
+the second group's arguments would configure the second.
+Each group accepts its options at most once, as always.
 
 Take a look back at all the examples in this document, and consider
 that anywhere you specify a function or type, you can pass in nearly
@@ -1253,7 +1472,7 @@ any callable you like.
 For example, the parameterized version of `mapping` isn't limited just to simple types.
 If you used `mapping[str, int_float]` as the annotation
 for a keyword-only parameter, that option would consume
-three arguments on the command line: a `str`, an `int`, and
+three opargs on the command line: a `str`, an `int`, and
 a `float`, and the dictionary would map strings to 2-tuples
 of ints and floats.
 
@@ -1281,23 +1500,23 @@ def my_converter(a: int, *, verbose=False):
     return [a, verbose]
 
 @app.command()
-def inception(*, option:my_converter=[0, False]):
+def inception(*, option: my_converter = [0, False]):
     print(f"inception option={option!r}")
 
 app.main()
 ```
 
 Woah, that works too!  We've created an option that
-*itself* takes an option.  If you run `fgrep --option`,
+*itself* takes an option.  If you run `inception --option 5`,
 you can now also specify `-v` or `--verbose`--but only
-*after* you've specified `--option`.
+once you've specified `--option`.
 
-In case you're wondering: `Appeal.option()` must
+In case you're wondering: `app.option()` must
 decorate the function that takes the parameter you're
 mapping an option *to.*  So if you want to define
 explicit options for the `verbose` parameter to
 `my_converter` in the above example, you'd
-decorate `my_converter` with `Appeal.option()` calls,
+decorate `my_converter` with `app.option()` calls,
 not `inception`.  (This also means, everywhere you
 use `my_converter` as a converter, it will behave
 the same, including taking the same options.)
@@ -1314,16 +1533,24 @@ def my_converter(a: int, *, verbose=False):
     return [a, verbose]
 
 @app.command()
-def repetition(*args:my_converter):
+def repetition(*args: my_converter):
     print(f"repetition args={args!r}")
 
 app.main()
 ```
 
 That works too, and I bet you're already guessing what it
-does.  This version of `weird` accepts as many `int` arguments
+does.  This version accepts as many `int` arguments
 as the user wants to specify on the command-line, and *each one*
-can optionally take its own `-v` or `--verbose` flag.
+can optionally take its own `-v` or `--verbose` flag:
+
+    % python3 script.py repetition -v 1 2 3 -v
+    repetition args=([1, True], [2, False], [3, True])
+
+(Announce-first, as always: the leading `-v` announces the
+first instance, a `-v` typed between `1` and `2` would
+announce the second, and the trailing one belongs to the
+last.)
 
 ### Positional parameters that only consume options
 
@@ -1342,7 +1569,7 @@ class Logging:
         return f"<Logging verbose={self.verbose!r} log_level={self.log_level}>"
 
 @app.command()
-def mixin(log:Logging):
+def mixin(log: Logging):
     print(f"mixin log={log!r}")
 
 app.main()
@@ -1351,7 +1578,7 @@ app.main()
 Can you guess what usage for `mixin` looks like?  (Probably!)
 It looks like this:
 
-    mixin [-v|--verbose] [-l|--log-level str]
+    mixin [-v|--verbose] [-l|--log-level <log_level>]
 
 Even though `log` is a positional parameter, it doesn't consume
 any positional arguments on the command-line.  The `Logging`
@@ -1367,815 +1594,716 @@ always call its converter.  Specifying any of the options will
 set arguments for that call.  And the resulting `Logging` object
 will be passed in as the argument to `log`.
 
-
 What's really going on here is that, from Appeal's perspective,
 *there's no difference between a "command function" and a
 "converter".*  A command function is just a converter that
 happens to be mapped to a command.  So anything you can do
 with a command function, you can do with a converter too.
 A converter can define options, it can be decorated with
-`app.option()` (or `app.parameter()` which we haven't
-discussed yet), it can have accept any kind of parameter defined
-by Python, and any parameter can use (almost) any converter.
-And those converters can recursively use other converters.
-
-Really, anything can be used with anything:
-
-* Converters for positional parameters
-  can take positional parameters, or keyword-only parameters, or `*args`, or `**kwargs`.
-* Converters for keyword-only parameters
-  can take positional parameters, or keyword-only parameters, or `*args`, or `**kwargs`.
-* Converters for `*args`
-  can take positional parameters, or keyword-only parameters, or `*args`, or `**kwargs`.
-* Command functions can use any converter.
-* The global command function can use any converter.
+`app.option()` or `app.parameter()`, it can accept any kind
+of parameter defined by Python, and any parameter can use
+(almost) any converter.  And those converters can recursively
+use other converters.
 
 By *now* you can see the expressive power Appeal gives you.
-Of course, you'll rarely use only a fraction of that power.
+Of course, you'll rarely use more than a fraction of that power.
 But it's reassuring to know that, whatever command-line API
 metaphor you want to express, it's not just *possible* in
 Appeal--it's *easy.*
 
 
-## Classes, Instances, And Preparers
+## The Famous `make -j`
+
+The `--jobs`/`-j` option of unix `make` has an interesting and
+subtle behavior.  Run `make` and it runs one job at a time.
+Run `make -j 5` and it runs five.  But run `make -j`, with no
+number, and it runs *as many jobs as it likes.*  In a way, the
+`-j` option has *two default values.*
+
+Can you do this with Appeal?  Naturally!  It's a converter
+whose one parameter has a default--two defaults, two homes:
+
+```Python
+import appeal
+import math
+
+app = appeal.Appeal()
+
+def jobs(jobs: int = math.inf):
+    return jobs
+
+@app.command()
+def make(*targets, jobs: jobs = 1):
+    print(f"building {targets} with {jobs} jobs")
+
+app.main()
+```
+
+The parameter's own default (`1`) fills when `-j` never
+appears; the converter's default (`math.inf`) fills when `-j`
+appears bare.  The usage line even tells the user the oparg is
+optional:
+
+    make [-j|--jobs [jobs]] [targets]...
+
+An optional oparg is *greedy*: when `-j` has a next string, it
+takes it--whatever it looks like.  So `make -j 5` is five
+jobs, and so are `make -j5` and `make -j=5`.  The flip side of
+greed is that `make all -j install` hands `install` to `-j`
+and fails loudly--`invalid value for 'jobs'`--rather than
+quietly guessing you meant it as a target.  If `-j` should not
+eat the word after it, give `-j` its value explicitly, put it
+last, or say `make all -j -- install`: the `--` terminator
+outranks greed.
+
+
+## A Class As Your Whole Program
 
 Maybe you've noticed--all the examples so far have used
 standard Python functions as Appeal commands.  What about
-method calls?  Can you use those for commands?  The answer
-is, yes of course!  But it's slightly more complicated.
+methods?  Can you use those for commands?  In version 2, the
+answer isn't just "yes"--it's the nicest way to structure a
+whole program.
 
-Appeal's whole purpose in life is to call functions by
-pulling data from the command-line.  Whenever it sees a
-positional parameter on a function, it thinks "okay, I'm
-gonna have to supply an argument to that".  So if you map
-an *unbound* method call to a command:
-
-```Python
-class MyApp:
-    @app.command()
-    def sum(self, *operands: int):
-        return sum(*operands)
-```
-
-Appeal would see the `self` parameter and think "aha! I
-need to pass a string in there!"  We need to prevent
-Appeal from seeing that parameter in the first place.
-
-There are two major techniques to handle this.  The first
-is straightforward, if a bit inflexible: create the instance
-of your class first, then call `app.command()()` on the
-bound instances.  Like this:
-
-```Python
-app = appeal.Appeal()
-class MyApp:
-    def sum(self, *operands: int):
-        return sum(*operands)
-
-o = MyApp()
-app.command()(o.sum)
-app.main()
-```
-
-Since you pass in the already-bound method to Appeal, it doesn't
-even *see* the `self` parameter in the signature.  (The signature
-of a bound method doesn't include the `self` parameter.)
-
-This works fine... but maybe it looks a little weird.  We're no
-longer decorating functions (or methods), instead we're calling
-the decorator function directly and passing in the bound method.
-It also restricts us to one instance of `MyApp` per Appeal
-instance, which might be restrictive.
-
-The other technique uses a little magic to provide a convenient
-and familiar-looking interface.  `Appeal.app_class()` gives you
-two decorators; you use one to decorate your class, and the
-other to decorate methods in the class.  Appeal will instantiate
-your class for you, and use your `__init__` method as your app's
-"global command" to handle global options!
+Decorate a *class* with `@app.global_command()`, and decorate
+its methods with `@app.command()`:
 
 ```Python
 import appeal
-
 app = appeal.Appeal()
-app_class, command_method = app.app_class()
 
-@app_class()
+@app.global_command()
 class MyApp:
     def __init__(self, *, verbose=False):
-        print(f"MyApp init verbose={verbose!r}")
         self.verbose = verbose
 
-    def __repr__(self):
-        return "<MyApp>"
+    @app.command()
+    def add(self, a: int, b: int):
+        print(f"sum {a + b}{' (verbosely)' if self.verbose else ''}")
 
-    @command_method()
-    def add(self, a, b, c):
-        print(f"MyApp add self={self!r} a={a!r} b={b!r} c={c!r} self.verbose={self.verbose!r}")
+    @app.command()
+    def status(self):
+        print(f"status verbose={self.verbose}")
 
 app.main()
 ```
 
-Behind the scenes, this uses a `CommandMethodPreparer` object
-to handle late-binding the method to the object.  Since
-`Appeal.app_class()` is a little inflexible, you may want
-to use these objects directly.  You can create one manually
-by calling `Appeal.command_method()`.  Here's an example showing
-how to use one:
+Here's what that means:
 
-```Python
-import appeal
+* The class's `__init__` is the *global command*: its
+  parameters are the program's global options and arguments.
+  Running `script.py -v add 1 2` constructs `MyApp(verbose=True)`.
+* Each decorated method is a command, and when it runs, `self`
+  is the instance that was just constructed.  Undecorated
+  methods (`helper`, `__repr__`, whatever) are just methods;
+  nothing is automatic, you decorate what you want exposed.
+* A *nested class* decorated with `@app.command()` is a
+  subcommand set: the inner class constructs from the parent
+  instance, and *its* decorated methods are its subcommands.
 
-app = appeal.Appeal()
-command_method = app.command_method()
+Where do the constructed instances go?  Appeal logs them.
+After a run, `app.instances` is a list of `(command, instance)`
+tuples, appended mechanically as things are called: the global
+class logs `(None, instance)`; an ordinary command function or
+method logs `(function, None)`; a constructing command (a class)
+logs `(class, instance)`.  So `app.instances[0][1]` is your
+application object, if you want it back after `main()` returns.
 
-class MyApp:
-    def __init__(self, id):
-        self.id = id
+And because the class-as-app is just commands all the way down,
+everything else in this document composes with it: cycling
+(`Appeal(repeat=True)` lets one line call several methods on
+the *same* instance), config layering (the config dict feeds
+`__init__`--see below), standalone emission, the REPL, MCP.
 
-    def __repr__(self):
-        return f"<MyApp id={self.id!r}>"
+(Appeal version 1 handled methods with "preparer" objects--
+`app.app_class()`, `app.command_method()`, and friends.  The
+class-as-app replaces all of that.  If you just want to bind
+one existing instance's method as a command, the old direct
+spelling still works fine: `app.command()(o.method)` passes
+the *bound* method in, and Appeal never sees `self`.)
 
-    @command_method()
-    def add(self, a, b, c):
-        print(f"MyApp add self={self!r} a={a!r} b={b!r} c={c!r}")
-
-my_app = MyApp("dingus")
-
-p = app.processor()
-p.preparer(command_method.bind(my_app))
-p.main()
-```
-
-This is the first time you're seeing the `Processor`
-object.  All the runtime information for processing
-a command-line lives in the `Processor` object; in
-fact, `Appeal.main` and `Appeal.process` are both
-thin wrappers over their equivalent methods on the
-`Processor` object.  Moving all the runtime information
-into the `Processor` object lets you process multiple
-command-lines with the same Appeal object, even
-simultaneously!
-
-The `CommandMethodPreparer` object is at the core of how Appeal
-handles late-binding of methods to objects.  First,
-you decorate the method calls of your class with this object.
-You then call the `bind` method on that object to pass in the
-instance of that class you want to bind those methods to--though
-`app_class()` takes care of that for you.  `bind()` returns a callable
-you pass in to `Processor.preparer`, which binds the method to that 
-instance before Appeal calls it.
-
-Under the covers, `CommandMethodPreparer` wraps the method
-with a `functools.partial` object, passing in a placeholder
-object for the `self` parameter.  Then `command_method.bind()`
-replaces the placeholder for the real instance.  For maximum
-compatibility, it actually uses `getattr()` to bind the
-instance to the method.
 
 ## Writing Help
 
-Appeal automatically generates *usage* for your command functions.
-But it's up to you to write the documentation explaining what those
-commands and arguments and options actually *do.*
+Appeal automatically generates *usage* for your command
+functions.  But it's up to you to write the documentation
+explaining what those commands and arguments and options
+actually *do.*  You write it where a Python programmer would
+want to write it anyway: in docstrings.
 
-There's very complete notes on how to write documentation in Appeal,
-see `appeal/notes/writing.documentation.txt` in the Appeal source
-distribution.  In a nutshell, you write docstring in a particular way,
-and Appeal can mechanically parse them and combine them together.
-So you document each converter separately, and Appeal smooshes all
-these bits of documentation together to produce the help for your
-command function.
+The docstring is *input*, never output.  Appeal reads it as
+data--a summary, prose, and named `Arguments:` / `Options:` /
+`Commands:` sections--and generates the help page fresh from
+that data, laid out by templates, optionally painted by a
+color theme:
 
-(One note: the main help for your program should be the docstring
-for your Appeal instance's global command.)
+```Python
+import appeal
+
+app = appeal.Appeal(name='serve')
+
+@app.global_command()
+def serve(host, port: int = 8080, *, verbose=False):
+    """
+    Serves the thing.
+
+    Longer prose about serving, wrapped and formatted
+    for you.
+
+    Arguments:
+      host: The host to serve on.
+      port: The port.  Defaults to 8080.
+
+    Options:
+      verbose: Print more output.
+    """
+    print('serving', host, port, verbose)
+
+app.main()
+```
+
+The headline feature is that documentation *composes* the same
+way converters do: document a converter's parameters once, in
+the converter's own docstring, and every command that uses the
+converter inherits that documentation--with the command able
+to override any entry it wants (nearest scope wins).  Your
+`Logging` mixin documents itself once, everywhere.
+
+Entries are validated against your program's actual grammar at
+build time, loudly: document a parameter that doesn't exist,
+or file an option under `Arguments:`, and Appeal names your
+mistake instead of quietly shipping wrong help.
+
+You can reshape the page (the templates live in a plain dict,
+`app.templates`) and color it (pass a `theme=` to `Appeal()`;
+Appeal decides whether color actually appears the same way
+CPython does, and layout never moves--a colored page strips
+back to the monochrome page byte-for-byte).
+
+The full walkthrough--every rule, every template placeholder,
+the theme vocabulary--lives in
+[appeal.v2.documentation.md](appeal.v2.documentation.md).
+Every example in it is executed by the test suite.
+
+And the same corpus renders one more dialect:
+`app.documentation('man')` returns your program as a troff
+man(1) page--NAME, SYNOPSIS, OPTIONS, a COMMANDS section with a
+subsection per top-level command--assembled from the docstrings
+you already wrote.  (Returns the text; where it installs is
+your packaging's business.  Nested subcommand sets appear in
+their parent's listing but don't get subsections of their own
+yet.)
 
 
-## Appeal's latest superpower: reading config files
+## Tab Completion
+
+Appeal answers shell tab-completion from the same grammar that
+parses the command-line: command words, option strings, and
+even value candidates (give a converter a `completions`
+attribute and Appeal will offer its suggestions).  Completion
+understands subcommands, cycling, and option opargs.
+
+Wiring it up costs one line in your shell configuration.  The
+zero-effort spelling:
+
+    eval "$(env _APPEAL_COMPLETE=source_bash mytool)"
+
+`app.completion(shell)` returns the same shell-function text
+for `'bash'`, `'zsh'`, or `'fish'`, if you'd rather install it
+properly.  And standalone scripts (next section) ship with
+completion baked in--the emitted script answers its own
+completion requests with no appeal installed.
+
+The full walkthrough lives in
+[appeal.v2.completion.md](appeal.v2.completion.md).
+
+
+## The REPL
+
+Any Appeal program is one method call away from being an
+interactive one:
+
+    app.repl()
+
+reads lines, splits them like a shell, and feeds them through
+the *same parser* as the command-line--same commands, same
+options, same conversions, same errors (printed politely, with
+usage).  Return values print--a REPL is a conversation, so a
+calculator's `3` is an answer, not an exit code.  Tab
+completion works at the prompt, driven by the same completion
+engine as the shell's.  `quit`, `exit`, or end-of-file
+(control-D) leaves.
+
+`app.repl(prompt=..., banner=...)` customizes the greeting.
+
+
+## Reading Config Files
 
 Appeal allows for friction-free command-line APIs.  You write your
 command function, point Appeal at it, and whoosh! now you've got a
 command-line interface.  But there are other interfaces users may
-want to use to configure your program.  Now Appeal can work with
+want to use to configure your program.  Appeal works with
 those too.
 
-For example, your program may read configuration from environment
-variables.  Some programs launch an editor; for example `git` will
-open an editor when committing a revision.  Traditionally on
-UNIX-based platforms this is configurable using two environment
-variables, `VISUAL` and `EDITOR` in that order of preference.
-
-Appeal doesn't need to add explicit support for environment variables,
-as Python already has an easy-to-use interface.  For example, here's
-how to support the environment variables configuring your editor:
-
-However, many programs also support a configuration file, also called
-an "rc file"  on UNIX.  By convention settings in such a config file
-usually take precedence over environment variables.  For example, you
-can configure what editor `git` uses for commits with a value called
-`core.editor` stored in a config file.
-
-As of 0.6, Appeal has support for reading data from configuration
-files.  Note that Appeal doesn't read the data files itself; you
-already have a library for that.  Instead, Appeal has a generic
-mechanism for reading data from either an iterable or a mapping--
-either a list or a dict.
-
-The first step is to read in the values from the configuration file,
-and produce a dict or dict-like object.  You can use any library
-you like.  For example, the [`tomli`](https://pypi.org/project/tomli/) library
-works well for [TOML files.](https://en.wikipedia.org/wiki/TOML)
-JSON and YAML parsers also work nicely.  And this facility works
-*especially* well with my [`Perky`](https://pypi.org/project/perky/)
-file format.  Though that's just a coincidence, as they were designed
-separately, years apart.  Honest!
-
-(You can also use `configparser` to read your INI config file,
-but this doesn't mesh well with Appeal's model.  Better support
-for reading INI files is a possible future direction for Appeal.)
-
-Once you've got a dictionary containing your configuration information,
-you can get Appeal to read from it using a single method call:
+Appeal doesn't read config *files*--you already have a library
+for that.  Read your TOML/JSON/YAML/[Perky](https://pypi.org/project/perky/)
+file into a dict with whatever you like; Appeal's job starts
+once you have the dict:
 
 ```Python
-    Appeal.read_mapping(self, callable, mapping)
+result = appeal.read_mapping(callable, mapping)
 ```
 
-Simply pass in the callable you want called, and the mapping--the dict--you
-read from your config file.  Appeal will read the names of the callable's
-parameters, pull values out of the mapping using those names, and pass those
-values in to a call to the callable.
+`read_mapping` points the command-line metaphor at a mapping:
+it reads the names of the callable's parameters, pulls values
+out of the mapping using those names, converts them per the
+annotations--converters always apply, already-typed values
+included--and calls the callable.  Parameters with defaults
+are optional; parameters without are required; extra keys in
+the mapping are ignored.  This works especially well with
+classes decorated with `dataclasses.dataclass`: a few lines
+define a typed configuration object, and `read_mapping` fills
+it straight from your config file.
 
-Of course, any mapping will work.  But this method works particularly
-well with classes decorated with `dataclasses.dataclass`.  In just a few
-lines, you can define a class to contain your configuration information,
-read it out of a file, and populate the class with values of all the correct
-types!
+Everything composes, just like the command-line:
 
-In a lot of ways, this works very similarly to Appeal when it's processing
-a command-line.  For example:
+* A parameter whose converter takes several parameters reads a
+  *nested* dict under the parameter's name--or, equivalently,
+  flat keys at the same level.  (Both spellings always work;
+  use the nested one when two branches of your tree each have
+  a parameter named `x`.  Version 1's `@app.unnested()` is
+  accepted as a no-op.)
+* `list[T]`, `dict[K, V]`, tuples, `*args`--they all read the
+  obvious shapes.
+* An `Option` class reads naturally: the parameter reads a
+  *sequence of occurrences*, calling `option()` per element,
+  exactly as if each had appeared on a command-line.  (A
+  `StrictOption` reads a single occurrence.)
+* Booleans parse strictly: real booleans or
+  `true/false/yes/no/on/off/1/0`--never truthiness.  `'false'`
+  must not mean `True`.
+* Missing required values and bad values raise
+  `AppealDataError`, carrying the path to the offender
+  (`at s.port`).
 
-* Appeal will use the annotations and default values to convert
-  the values from the dictionary into the correct types.
-* Parameters with default values are optional; parameters without
-  default values are required.
+Two siblings round out the family.  `read_iterable(callable,
+iterable)` is row-oriented: it calls the callable once per row
+(a sequence of strings), converting positionally, and returns
+the list of results.  `read_csv(callable, reader,
+first_row_map=None)` does the same for a `csv.reader`--and if
+you pass `first_row_map=True`, the CSV's heading row maps each
+row's values to parameters *by name*, read_mapping-style.
 
-But there are differences too:
+### Config layering
 
-* You can use positional-only, positional-or-keyword,
-  or keyword-only arguments.  However, var-positional
-  (`*args`) and var-keyword (`**kwargs`) are unsupported.
-
-
-Let's bring all of this together with an example.  Let's say we're
-writing a hypothetical program that may launch an editor.  Our
-sophisticated program has *five* ways to decide what program
-to run for the editor.  In decreasing order of importance:
-
-* Command-line options '-e' and '--editor' specify the
-  editor to use for this instnace.
-* The config file `~/.myprogramrc` is a Perky file, and it
-  can contain an `editor` value.
-* If the user has set an `VISUAL` environment variable, use that.
-* If the user has set an `EDITOR` environment variable, use that.
-* The default value is `/usr/bin/vi`.
-
-Here's sample Python code implementing those semantics:
+New in version 2, and better than calling `read_mapping`
+yourself for the common case: hand the config dict directly to
+`main()` (or `process()`, or `parse()`):
 
 ```Python
-    default_editor = os.environ.get("VISUAL",
-        os.environ.get("EDITOR", "/usr/bin/vi"))
-    @dataclasses.dataclass
-    class ConfigFile:
-        editor:str=default_editor
+import appeal
+app = appeal.Appeal(name='edit')
 
-    d = perky.load(os.path.expanduser("~/.myprogramrc"))
-    app = appeal.Appeal()
-    config_file = app.read_mapping(ConfigFile, d)
+@app.global_command()
+def global_command(*, editor='vi', verbose=False):
+    print(f"editor={editor} verbose={verbose}")
 
-    @app.global_command()
-    def global_command(*, editor=config_file.editor):
-        print(f"editor = {editor}")
+@app.command()
+def work(file):
+    print(f"editing {file}")
 
-    app.main()
+config = {'editor': 'emacs'}      # you read this from your rc file
+app.main(config=config)
 ```
 
-Note: using `os.path.expanduser` and a hard-coded filename
-like this is no longer considered best practice.  You should use 
-[`platformdirs`](https://pypi.org/project/platformdirs/) to
-define the paths to your config files.
+The layering rules are fixed and unknobbed:
 
-### Nesting
+* Config supplies **the global command's options only**.
+  Config holds program-wide settings; the command line names
+  the work.  One dict--if you have several layers (system,
+  user, project), merge them yourself first.
+* Precedence is **defaults < config < argv**, atomic per
+  option: an option the command-line mentions wins *whole*
+  (repeatable options replace, never append--the command line
+  can always subtract).  That includes flags: config turned
+  `verbose` on?  `--verbose=false` turns it back off.
+* Keys are **strict**: every key must name a global-command
+  option.  A command name, a positional argument, or an
+  unknown key is a loud error saying exactly which it is.
+  Either this dict is yours, or it isn't.  (One key can never
+  work: a *scoped* option--the same string declared by several
+  argument groups--is addressed by position, and a mapping has
+  no position.  The refusal says so, and points at the
+  workaround.)
+* Values convert through the ordinary pipeline, with `config:`
+  provenance on failures.  Flags use the strict boolean
+  spellings; repeatable options take a sequence.
 
-Appeal's config file reader supports reading values from nested dicts.
-This maps directly onto nested function calls in annotations.  If an
-annotation takes two or more parameters, the name of the parameter
-with that annotation will be used as the name of the nested dict.
+With a class-as-app, this is the whole argparse-replacement
+story in three lines: the config file helps construct your
+application object, and argv picks the methods.
 
-Since that probably wasn't clear--sorry!--an example would probably help.
-Consider this example dictionary:
+
+## The Processor: Many Runs, One App
+
+An `Appeal` object is your program's *description*.  The
+runtime state of one command-line run lives in a `Processor`--
+so one Appeal object can process many command-lines, even
+simultaneously (imagine an app server handling commands for
+many users, each with their own config):
 
 ```Python
-    d = {
-        'a': 33,
-        'b': {
-            'verbose': True,
-            'color': 'blue',
-        },
-    }
+processor = app.parse(argv, config=config)   # stage 1: parse only
+status = processor.execute()                 # stage 2: run the commands
 ```
 
-Here the value of `'b'` is a nested dict.  If we want Appeal to read
-a dict with this shape, it will have to descend into that nested dict.
-Appeal does that by default when a parameter has an annotation, and
-the annotation takes two or more parameters.  Here's sample Python
-showing how to read this dict using Appeal:
+`app.parse()` fully parses the command-line and returns the
+Processor *without running anything*--if the line is
+malformed, it raises before any of your code runs.
+(Simultaneously means simultaneously: even threads racing the
+very first parse are safe.  Compilation runs lock-free--Appeal
+never holds a lock while calling your code--and a plain lock
+guards only the cache installs, so racing threads each build,
+one wins, and the rest adopt the winner.)
+`processor.execute()` then runs the commands left to right.
+`processor.instances` is that run's `(command, instance)` log;
+`app.instances` is a convenience alias for the latest run's.
+`app.process(argv)` is parse-plus-execute in one call, and
+`app.main(argv)` is `process()` plus polite error printing
+plus the exit-code protocol.  Every layer takes `config=`.
+
+
+## Standalone Scripts: The North Star
+
+Here is version 2's defining feature.  Appeal can write your
+command-line parser out as a *standalone Python script:*
 
 ```Python
-    def read_b(verbose=False, color='black'):
-        return (verbose, color)
-
-    def config_file(a: int, b: read_b):
-        return (a, b)
+app.write_standalone('mytool.py')
 ```
 
-Because `read_b` is an annotation taking multiple parameters,
-Appeal will assume the value of `'b'` is a nested dict,
-and will get the values of `'verbose'` and `'color'` from
-that dict.
+The emitted script:
 
-If you don't want this behavior, you can disable it by
-decorating the annotation function with the `unnested`
-method on the Appeal object.  If we change the code to
-the following:
+* imports **nothing but the stdlib and your own module**--your
+  converters and command functions are imported by name;
+  Appeal's runtime (a few hundred lines: the token driver, the
+  help renderer, the completion engine) is embedded in the
+  script itself.  No appeal installed, no big installed, no
+  pip anything.
+* parses **exactly** like the in-process parser--it *is* the
+  same generated code, tested relentlessly against the
+  in-process implementation.
+* supports `--help` (your composed documentation, baked in),
+  your color theme (re-deciding at *its* runtime whether color
+  is appropriate), and tab completion.
+* is *fast*.  Appeal decides everything decidable ahead of
+  time and compiles the decisions to ordinary Python `if`
+  statements.  A standalone Appeal parser adds about 2.6ms to
+  Python's own startup; version 1 added about 70ms.  (Warm
+  in-process parses are about 700x faster than version 1's.)
 
-```Python
-    @app.unnested()
-    def read_b(verbose=False, color='black'):
-        return (verbose, color)
+This "north star" disciplines the whole library: any feature
+that works in-process must either work in a standalone script
+or *refuse by name* at emission time.  Refusals are honest and
+specific: a lambda converter, a callable defined in
+`__main__`, a default value whose `repr` doesn't round-trip--
+each names its offender and what to do about it.  Nothing
+silently emits a script that behaves differently.
 
-    def config_file(a: int, b: read_b):
-        return (a, b)
-```
+(Emission is the one moment Appeal uses my
+[big](https://github.com/larryhastings/big) library--to carve
+its own runtime into the script.  The *emitted script* doesn't
+need big, and parsing in-process never touches it.)
 
-Appeal *won't* descend into a nested dict named `'b'`.
-In this case the dictionary would have to be be completely
-flat, like this:
-
-```Python
-    d = { 'a': 33, 'verbose': True, 'color': 'blue' }
-```
-
-### Iterables
-
-Appeal can also read from iterables inside the dictionary.
-The parameter that accepts an iterable should be annotated
-with a subclass of `MultiOption`.  Appeal will instantiate
-the `MultiOption` and use the MultiOption protocol to
-fill the object.
-
-For example, if your config file dict looked like this:
-
-```Python
-    d = {
-        'color': 'blue',
-        'lines': [
-            'line 1',
-            'here is line 2',
-            'and finally, line 3',
-            ]
-    }
-```
-
-Appeal could map it to this callable:
-
-```Python
-    @dataclasses.dataclass
-    class ConfigFile:
-        lines: appeal.accumulator
-        color:str = ''
-```
-
-If the `MultiOption` option takes multiple parameters,
-then the list must contain dictionaries.  For example,
-this Python code:
-
-```Python
-    class Resolutions(appeal.Multioption):
-        def init(self, default=None):
-            self.default = default
-            self.values = None
-
-        def option(self, width:int, height:int, depth:int):
-            if self.values is None:
-                self.values = []
-            self.values.append((width, height, depth))
-
-        def render(self):
-            if self.values is None:
-                return self.default
-            return self.values
-
-    @dataclasses.dataclass
-    class ConfigFile:
-        resolutions: Resolutions
-        color:str = ''
-```
-
-Would be able to read this mapping:
-
-```Python
-    d = {
-        'color': 'orange',
-        'resolutions': [
-            {'width': 1280, 'height': 1024, 'depth': 24},
-            {'width': 1600, 'height': 1200, 'depth': 16},
-        ],
-    }
-```
+Note that the standalone script imports your module: your
+converters run at parse time, so they travel by import, not by
+copy.  Vocabulary converters (`appeal.split(':')`,
+`appeal.counter()`, `appeal.validate(...)`) travel as
+*recipes*--the factory call is re-run inside the script--so
+they work standalone even though they're closures.
 
 
-### `read_iterable`
+## MCP: Your Commands As AI Tools
 
-In addition to Appeal's `read_mapping` method, Appeal
-also supports a `read_iterable` method.  The API is
-almost identical:
+MCP (the Model Context Protocol) is the JSON-RPC-over-stdio
+protocol AI agents use to call tools.  Any Appeal program can
+serve its commands as MCP tools:
 
-```Python
-    Appeal.read_iterable(callable, iterable)
-```
+    app.mcp()
 
-However this function is much simpler.  The iterable
-should itself be an iterable of iterables.  Appeal will
-call the callable you specify once for every nested
-iterable.  The result will be appended to a list, and
-`read_iterable` will return that list.
+Each command becomes one tool: its docstring summary is the
+tool's description, its signature (rendered as JSON Schema) is
+the input schema, and each call arrives as a mapping and runs
+through the same read driver as `read_mapping`--conversions
+always apply, defaults fill absences, converter errors come
+back as polite tool errors instead of crashes.  Schema keys
+are your *parameter names*; the agent never sees an option
+string.
 
-As always, Appeal will handle converting values using
-the annotations you specify.  Unlike `read_mapping`,
-here you may pass in a function accepting `*args`,
-in which case Appeal will process an arbitrary number
-of trailing arguments.  Also unlike `read_mapping`,
-there's no support for testing--neither nested dictionaties
-nor (further) nested lists.  (Like when processing the
-command-line, when reading values from the iterable,
-nested annotations get flattened.)
+A few things to know:
 
-### CSV files
+* MCP tool names are flat strings, so there are no
+  subcommands; if your program has them, flatten the names
+  yourself--`@app.command(name='db add')` is fine, command
+  names are never validated or mangled.
+* A class-as-app constructs its instance **once, at server
+  startup**--`app.mcp(config=...)` feeds `__init__` under the
+  config-layering rules--and every method tool dispatches
+  bound to that one instance, so state persists across calls.
+* And of course, there's a standalone version:
+  `app.standalone_mcp()` emits the whole MCP server as one
+  dependency-free script, per the north star.
 
-Finally, Appeal has special support for reading CSV files.  This may
-seem like an odd thing to support--nobody uses CSV files as config
-files.  But CSV files were the proof-of-concept for Appeal's config
-file support, and it's proved useful in another project, so for
-now it's staying in.  There's a special method for reading CSV
-files:
+The machine-readable twin of `--help` is also available
+directly: `app.schema()` describes your whole program as plain
+JSON-safe data--usage, arguments, options, types, docs.
+`schema()` tells a machine what a command accepts;
+`read_mapping` runs the command from the JSON object the
+machine sends back.
 
-```Python
-    Appeal.read_csv(self, callable, csv_reader, *, first_row_map=None)
-```
 
-You pass in your callable, and a fresh `csv.reader` object.  Appeal
-will read the rows out of the `CSV` object, passing in the strings into
-the `callable`, and append the result to a list.  The return value is
-that list.
+## Errors
 
-If `first_row_map` is false, `read_csv` will ignore the first line of
-the CSV file (the "column names" line) and pass in the values from the
-CSV file by position.  If `first_row_map` is true, `read_csv` will use
-the rows from the first line of the CSV file as keys in a dictionary,
-populate the values with each subsequent row, and will pass the
-arguments by name.
+Appeal's exceptions form a tiny, principled hierarchy:
 
-In other words, if `first_row_map` is false, Appeal calls
+* `AppealDataError` -- the base: *the data was wrong.*  Maybe
+  it came from a command-line, maybe from a config file, maybe
+  from a JSON blob; Appeal often can't know, and the type name
+  doesn't pretend to.
+* `AppealUsageError(AppealDataError)` -- the data was wrong
+  *and* it came from a command-line.  Carries the usage text
+  for the command that failed.
+* `AppealConfigurationError` -- *you* (the program author)
+  used Appeal incorrectly: an unbuildable signature, colliding
+  option strings, an unemittable standalone.  Raised at build
+  time wherever possible, so structure bugs fail before any
+  user input arrives.
 
-```Python
-    callable(*row)
-```
+`app.main()` catches the data errors and turns them into the
+polite protocol: an `error:` line (plus usage, when there is
+usage) printed to **standard error**, and exit status 2.
+Unknown commands and unknown long options come with a
+suggestion when something in your grammar is close--`unknown
+command 'stauts' (did you mean 'status'?)`--the way git does
+it.  And control-C exits quietly with status 130 (128+SIGINT,
+the POSIX convention)--in `main()` only; `process()` propagates
+the raw `KeyboardInterrupt`, because automation gets real
+exceptions.  That's the whole of Appeal's signal handling, on
+purpose: Appeal is an argument processor, not an environment.
+Standard error is the POSIX diagnostic convention: it keeps a
+filter's stdout clean, so `mytool --oops | jq .` shows the user
+Appeal's message instead of feeding it to `jq`.  If you'd
+rather have everything on one stream--or somewhere else
+entirely--`errors=` takes any writable file object:
+`Appeal(errors=sys.stdout)` is version 1's behavior, and a log
+file works too.  (Requested help is always on stdout,
+regardless.)  Configuration errors are bugs, so they raise.
+`app.process()` catches nothing--automation and tests get real
+exceptions.
 
-for every line after the first line in the CSV file.  And if `first_row_map`
-is true, Appeal calls
+`AppealError` is the umbrella--every exception Appeal raises
+derives from it, so `except AppealError` means "anything Appeal
+raised" (version 1 spelled the umbrella `AppealBaseException`;
+that name is kept as an alias).  And it has one job of its own:
+raise it *from your command* for a runtime failure that should
+end the program politely--`raise AppealError("couldn't reach
+the server")` prints `error: couldn't reach the server` and
+exits 1, no usage (the command line was fine).  It works from a
+standalone script too, even though your module and the script
+each hold their own copy of the class.
 
-```Python
-    d = {key: value for key, value in zip(column_headers, row)}
-    callable(**d)
-```
-
-for every line after the first line in the CSV file.
+(The short spellings `UsageError`, `DataError`, and
+`ConfigurationError` are importable aliases, and both
+spellings are the same classes--catch whichever you like.)
 
 
 ## API Reference
 
-`Appeal(help=True, version=None, positional_argument_usage_format="{name}", default_options=default_options)`
+`Appeal(name=None, *, theme=None, version=None, repeat=False, errors=None, usage_max_columns=79, usage_indent_definitions=2)`
 
 Creates a new Appeal instance.
 
-If `help` is true, Appeal automatically adds help support to
-your program:
+* `name` is your program's name, as shown in usage.  If you
+  don't supply it, Appeal uses `sys.argv[0]`'s basename.
+* `theme` colors Appeal's output: `None` means the stock theme
+  (when the environment and terminal permit), `False` means
+  never, or pass an `appeal.Theme` of your own.
+* `version` is your program's version string.  It wires up
+  `--version` (as the first token--prints the bare string,
+  exits 0) and, when the program has commands, an automatic
+  `version` command (suppressed if you define your own).
+  No short option: `-v` stays available for `verbose`.
+  Also stamped into MCP servers.
+* `repeat=True` enables cycling: one command-line may invoke
+  several commands, left to right.
+* `errors` is the file object error messages print to,
+  default `sys.stderr` (resolved at error time, like
+  `print(file=None)`).  `sys.stdout` is version 1's behavior.
+  Standalone scripts can bake `sys.stderr` or `sys.stdout`;
+  any other stream refuses at emission, by name.
+* `usage_max_columns` (default 79) caps the help page's wrap
+  margin; at render time the page uses the terminal's width or
+  this cap, whichever is narrower (pipes and redirects get the
+  cap, so captured output is stable).  Baked into standalone
+  scripts, where the *script's* terminal decides.
+* `usage_indent_definitions` (default 4) sets the left indent
+  of the help tables.  It works by re-indenting the section
+  templates, which own layout--overwrite `app.templates` to go
+  further.
 
-* Adds hard-coded `-h` and `--help` options that print basic help.
-* If your Appeal instance has any commands, and you haven't defined
-  a `help` command, automatically adds a `help` command.
+Help is always on: every command answers `-h`/`--help`, and a
+program with commands gets a `help` command, unless you define
+your own.  Version works the same way, when you supply one:
+`Appeal(version='1.2.3')` gives you `--version` and a `version`
+command for free, and both are baked into standalone scripts.
 
-If `version` is true, it should be a string denoting the version
-of your program.  Appeal will automatically add version support
-to your program:
+`Appeal.command(parent=None, repeat=False, name=None)`
 
-* Adds hard-coded `-v` and `--version` options that print
-  the version string.
-* If your Appeal instance has any commands, and you haven't defined
-  a `version` command, automatically adds a `version` command
-  which prints the version string.
+Used as a decorator; registers the decorated callable as a
+command.  The command word is the callable's `__name__`,
+verbatim--or `name=`, verbatim, if you pass it.  Decorating a
+*class* registers a constructing command whose decorated
+methods are its subcommands.
 
-`positional_argument_usage_format` is the format string used
-to format positional arguments for usage.  The only valid
-interpolations inside this string are `{name}`, which evaluates
-to the name of the parameter, and `{name.upper()}`, which evaluates
-to the upper-cased name of the parameter.  So if you want your usage
-string to show arguments or opargs as `<name>` or `NAME`, you can
-achieve that by setting `positional_argument_usage_format` to
-`<{name}>` or `{name.upper()}` respectively.
-
-`default_options` is a callable, called when a keyword-only parameter
-for a command function or a converter doesn't have any options
-explicitly mapped to it.  The purpose of `default_options` is to
-call `Appeal.option()` one or more times to create some default options
-for that keyword-only parameter.
-
-The API for a `default_options` callable should be:
-
-    default_options(appeal, callable, parameter_name, annotation, default)
-
-* `appeal` is the Appeal instance.
-* `callable` is the command function or converter the parameter is defined on.
-* `parameter_name` is the name of the keyword-only parameter that does
-   not have any explicitly defined options.
-* `annotation` is the annotation for this parameter.  This may
-   be explicitly set on the function, or it may be inferred from the
-   default parameter.
-* `default` is the default value for this parameter.  Since Appeal
-   requires that keyword-only parameters must always have default values,
-   this may never be `inspect.Parameter.empty`.
-
-The return value of `default_options` is ignored.
-
-The default value of `default_options` is `Appeal.default_options()`,
-documented below.
-
-
-`Appeal.command(name=None)`
-
-Used as a decorator.  Returns a callable that accepts a single
-parameter `callable`, which must be a callable.
-
-Adds the callable as a command
-for the current Appeal instance.  If `name` is `None`, the name of
-the command will be `callable.__name__`.
-
-(Doesn't modify `callable` in any way.)
-
+`app.command('db')` (naming an existing command) returns a
+registrar whose `.command()` decorator attaches subcommands to
+`db`; `repeat=True` there makes that subcommand set cycle.
 
 `Appeal.global_command()`
 
-Used as a decorator.  Returns a callable that accepts a single
-parameter `callable`, which must be a callable.
-
-Sets the *global command* for this Appeal object.  This is
-the command that processes global options before the first
-command function.
-
-Can only be set on the topmost Appeal object.  (You can't
-call `app.command('foo').global_command()`.)
-
-(Doesn't modify `callable` in any way.)
-
+Used as a decorator.  Sets the *global command*: the callable
+that owns everything before the first command word (or the
+whole line, if the program has no commands).  Decorating a
+class makes it your program: `__init__` is the global command
+and its decorated methods are the commands.
 
 `Appeal.default_command()`
 
-Used as a decorator.  Returns a callable that accepts a single
-parameter `callable`, which must be a callable.
+Used as a decorator.  Sets the command run when the program
+has commands but the user names none.  Takes no parameters, by
+definition.
 
-Sets the *default command* for this Appeal object.  The default
-command is run when your Appeal instance has subcommands,
-but the user doesn't supply the name of a command on the command-line.
+`Appeal.option(parameter_name, *options, annotation=..., default=...)`
 
-Your default command function must not take any parameters.
+Used as a decorator, on the callable that owns
+`parameter_name` (a command function or any converter).  Maps
+the given option strings to that parameter--*instead of* the
+automatic ones, and as a fresh declaration: the option's
+grammar comes from `annotation`/`default` given here, not from
+the parameter.  Option strings are validated (`-X`, or
+`--long-name` of at least four characters).  May be stacked;
+may target `**kwargs`.
 
-(Doesn't modify `callable` in any way.)
+`Appeal.parameter(parameter_name, *, usage=None)`
 
+Used as a decorator.  Renames how one positional parameter (or
+option metavar) displays in usage: `@app.parameter('path',
+usage='FILE')`.
 
-`Appeal.option(parameter_name, *options, annotation=empty, default=empty)`
-
-Used as a decorator.  Returns a callable that accepts a single
-parameter `callable`, which must be a callable.
-
-Maps an option on the command-line to the parameter `parameter_name`
-on the decorated function.  All subsequent positional parameters
-are options, like `--verbose` or `-v`.  (Thus, they must be strings,
-either exactly two characters long, or four or more characters long.)
-
-`annotation` is the converter that will be used if this
-option is invoked.  If no explicit `annotation` is supplied,
-`Appeal.option()` will default to `type(default)`.
-
-`default` is the default value for this option.  Since this parameter
-only comes into play if the user specifies this option, a `default` value
-here is nearly useless.  But it does have two uses:
-
-* If the type of the annotation is a subclass of `Option`, this default
-  value will be passed in to `Option.init()`.
-* If no `annotation` is specified, the annotation defaults to
-  `type(default)`.
-
-It's illegal to call `Appeal.option()` without specifying a value
-for either `annotation` or `default`.
-
-Raises `AppealConfigurationError` if any `option` has already been
-mapped inside this `Appeal` instance *with a different signature.*
-
-(Doesn't modify `callable` in any way.)
-
-
-`Appeal.parameter(self, parameter_name, *, usage=None)`
-
-Used as a decorator.  Returns a callable that accepts a single
-parameter `callable`, which must be a callable.
-
-Allows for configuration of a positional (or positional-or-keyword)
-parameter on a command function or converter.  `parameter_name` is the
-name of the parameter; it must be a parameter of the decorated `callable`.
-
-Currently the only supported configuration is `usage`, which specifies
-the string that will represent this parameter in usage information.
-
-(Doesn't modify `callable` in any way.)
-
-
-`Appeal.main(args=None)`
+`Appeal.main(argv=None, config=None)`
 
 Processes a command-line and calls your command functions.
-Stops at the first failure result and passes it in to `sys.exit()`.
-Catches usage errors; if it catches one, displays usage information.
-The implementation calls `Appeal.process()`.
+Catches data errors and prints them politely (to stdout, with
+usage); returns the exit status (also usable as
+`sys.exit(app.main())`).  `argv` defaults to `sys.argv[1:]`.
+
+`Appeal.process(argv, config=None)`
+
+Like `main()`, but catches nothing and returns the last
+command's return value.  The automation entry point.
+
+`Appeal.parse(argv=None, config=None)` / `Appeal.processor()`
+
+Stage 1 only: returns a `Processor` holding the fully-parsed
+run.  `processor.execute()` runs it; `processor.instances` is
+its `(command, instance)` log.  `app.processor()` returns an
+unparsed Processor you can drive yourself.
+
+`Appeal.instances`
+
+The latest run's `(command, instance)` log.
+
+`Appeal.help()` / `Appeal.schema()` / `Appeal.documentation(format)`
+
+The help page (printed); the JSON-safe program description
+(returned); and the docs rendered in a named format--only
+`'man'` for now, a troff man page (returned).
+
+`Appeal.complete(words, prefix='')` / `Appeal.completion(shell)`
+
+The completion candidates for a partial command-line, and the
+shell wiring text for `'bash'`/`'zsh'`/`'fish'`.
+
+`Appeal.repl(*, prompt=None, banner=None)`
+
+The interactive loop.
+
+`Appeal.mcp(*, config=None, version=None)`
+
+Serve the program's commands as MCP tools over stdio, until
+stdin closes.
+
+`Appeal.standalone(*, argv0=None)` / `Appeal.write_standalone(path, *, argv0=None)` / `Appeal.standalone_mcp(*, argv0=None, config=None, version=None)`
+
+The standalone script's text; the same, written to a file; and
+the standalone MCP server's text.
+
+`appeal.read_mapping(callable, mapping)` / `appeal.read_iterable(callable, iterable)` / `appeal.read_csv(callable, reader, *, first_row_map=None)`
+
+The config-reading family, described above.  Also available as
+methods on the app.
+
+The converter vocabulary: `appeal.split(*separators)`,
+`appeal.file(mode='r', *, buffering=-1, encoding=None, errors=None, newline=None, opener=None)`,
+`appeal.validate(*values, type=None)`,
+`appeal.validate_range(start, stop=None, *, type=None, clamp=False)`,
+`appeal.counter(*, max=None, step=1)`, `appeal.accumulator`,
+`appeal.mapping`, and the classes `appeal.Option` (repeatable;
+`appeal.MultiOption` is its alias) and `appeal.StrictOption`
+(at most once).
+
+The exceptions: `AppealDataError`, `AppealUsageError`,
+`AppealConfigurationError` (and their short aliases).
+
+The theme: `appeal.Theme`.
 
 
-`Appeal.process(args=None)`
-
-Processes a command-line and calls your command functions.
-Stops at the first failure result and returns that result.
-Doesn't catch any errors.  Useful mainly for automation,
-particularly for testing, and as the main driver underlying
-`Appeal.main()`.
-
-
-`Appeal.default_options()`
-
-`Appeal.default_long_option()`
-
-`Appeal.default_short_option()`
-
-These functions create the default options for a keyword-only
-parameter.  They're all valid callbacks for the `default_options`
-parameter for the `Appeal()` constructor.  `Appeal.default_options()`
-is the default value for that parameter.
-
-`Appeal.default_long_option()` creates the option `--{modified_parameter_name}`
-with the default annotation and default value.  `modified_parameter_name` is
-`parameter_name.lower().replace('_', '-')`.
-
-`Appeal.default_short_option()` creates the option `-{parameter_name[0]}`
-with the default annotation and default value.
-
-`Appeal.default_options()` creates both.
-
-In all three cases, if the function isn't able to map at least one option,
-it raises an `AppealConfigurationError`.
-
-Notes on the default option semantics:
-
-* When `Appeal.default_option()` converts a keyword-only parameter
-  into a long option and a short option, Appeal copies off the first
-  character as the short option, and *then* runs a conversion function
-  on the string.  The conversion function lowercases the string and
-  converts underscores into dashes.  So for the the keyword-only
-  parameter `Define`, `Appeal.default_option()`
-  would (attempt to) create the two options `-D` and `--define`.
-  For the keyword-only parameter `block_type`, it would attempt to
-  create `-b` and `--block-type`.
-
-* What if you have multiple keyword-only parameters that have
-  the same first letter?  Only the first mapping succeeds.
-  So if you use `def myoptions(*, block_type=None, bad_block=None)`
-  as an Appeal command, `-b` will map to `block_type`.  If you
-  want it to map to `bad_block`, just swap the two keyword-only
-  parameters so `bad_block` is first, or explicitly define your
-  options by decorating your function with `Appeal.option()`.
-  (As of some recent version, Python guarantees it will maintain
-  the order of keyword-only parameters when introspecting a
-  function--and it was accidentally true in every version of
-  Python before that explicit guarantee anyway.)
-
-
-`AppealConfigurationError`
-
-An exception.
-Raised when the Appeal API is used improperly.
-
-`AppealUsageError`
-
-An exception.
-Raised when Appeal processes an invalid command-line.
-Caught by `Appeal.main()`, which uses it to print usage
-information and return an error.
-
-`AppealCommandError`
-
-An exception.
-Raised when an Appeal command function returns a
-result indicating an error.  (Equivalent to `SystemExit`.)
-Caught by `Appeal.main()`, which uses it to print usage
-information and return an error.
-
-
-## Reference
+## Reference: How Parameters Map
 
 The library inspects the parameters of your function and uses
-those for the arguments, options, and opargs of your subcommand:
+those for the arguments, options, and opargs of your command:
 
 * Positional-only and positional-or-keyword parameters
   (parameters before `*,` or `*args,`) map to positional
-  arguments.  This:
+  arguments.  Required if they have no default, optional if
+  they do.
+* `*args` maps to "as many as you like", each converted by its
+  annotation (which may be a whole converter tree).
+* Keyword-only parameters *with* defaults map to options.
+* Keyword-only parameters *without* defaults map to required
+  trailing arguments, filled from the end of the line.
+* An annotation is a *converter*: any callable Appeal can
+  introspect.  Its positional parameters consume arguments (or
+  opargs); its keyword-only parameters become options; it
+  recurses.
+* No annotation, but a default?  The converter is
+  `type(default)`--except `None` means `str`, and a boolean
+  default on a keyword-only parameter means a flag that
+  negates the default.
+* No annotation and no default: `str`.
+* `list[T]` on an option: repeatable, collecting a list.
+  `dict[K, V]` on an option: repeatable `KEY=VALUE`.
+  `tuple[T1, T2, ...]` anywhere: that many arguments, one
+  tuple.  (These are option-repetition and shape spellings,
+  not general-purpose nesting--`list[dict[...]]` and friends
+  are refused by name.)
+* Exactly four built-in types are special-cased as
+  uninspectable leaves: `str`, `int`, `float`, and `bool`.
 
-  ```Python
-  @app.command()
-  def fgrep(pattern, file, file2=None):
-      ...
-  ```
+Putting it all together: if you wanted to write an `fgrep`
+command with a usage string like this:
 
-  would take two required command-line arguments, "pattern"
-  and "file", and an optional third command-line argument "file2".
-
-* Keyword-only parameters map to options.  They must have a default
-  value.  The name of the
-  parameter is the name of the option, e.g. this subcommand
-  accepts a `--verbose` argument:
-
-  ```Python
-  @app.command()
-  def foo(*, verbose=False):
-      ...
-  ```
-
-* If an argument to your function has an annotation, that
-  value is called to convert the string from the command-line
-  before passing in to your function.  e.g.
-
-  ```Python
-  @app.command()
-  def foo(level:int):
-      ...
-  ```
-
-  would call `int` on the string from the command-line before
-  passing it in to level.
-
-* If a parameter to your function doesn't have an annotation,
-  but *does* have a default value, it behaves as if you added
-  an annotation of `type(default_value)`.  e.g.
-
-  ```Python
-  @app.command()
-  def foo(level=0):
-      ...
-  ```
-
-  would also call `int` on the string from the command-line before
-  passing it in to `level`.
-
-  * Keyword-only parameters with a `bool` annotation or a boolean
-    default value are special: they don't take an argument.  Instead,
-    they toggle the default value.
-
-  * Parameters with a default value of `None` and no annotation
-    are also slightly special, in that they take a `str` argument
-    (as taking a `NoneType` argument doesn't make sense).
-
-  * Appeal automatically adds single-letter options for keyword-only
-    parameters when possible.  Since keyword-only parameters maintain
-    their order in Python*++*, Appeal gives the single-letter shortcut to
-    the first parameter that starts with that letter.  e.g.
-
-    ```Python
-    @app.command()
-    def foo(*, verbose=False, varigated=0):
-        ...
-    ```
-
-    `-v` would map to `--verbose`, not `--varigated`.
-
-Putting it all together: if you wanted to write an "fgrep" subcommand
-with a "usage" string like this:
-
-    fgrep [-v|--verbose] [--level <int>] pattern [ file1 [ file2 ... ] ]
+    fgrep [-v|--verbose] [-l|--level <int>] pattern [file]...
 
 you'd write it as follows:
 
@@ -2184,9 +2312,6 @@ you'd write it as follows:
 def fgrep(pattern, *file, verbose=False, level=0):
     ...
 ```
-
- *++* This is now guaranteed behavior in current Python, and even
-    in the Python 3 series before that, it was always true anyway.
 
 
 ## Appeal And POSIX Utility Semantics
@@ -2201,112 +2326,168 @@ things POSIX allows, and allows some things POSIX disallows.
 
 * As per required POSIX semantics (1003.1-2017, Chapter 12),
   options can never be required.  It therefore follows that
-  in Appeal, keyword arguments to command functions must
-  always have a default.
+  in Appeal, a keyword-only parameter without a default isn't
+  an option at all--it's a required trailing argument.
 * The POSIX standard makes no mention of "long options",
   so it's not clear whether or not the standard permits them.
   (Presumably they will be permitted in a future standard.)
-* POSIX requires that options that accept/require multiple opargs
+* POSIX requires that options that accept multiple opargs
   should accept them as a single string with either spaces
   or commas separating the opargs.  Appeal supports this behavior
   with `appeal.split`.  But it also permits options that consume
   multiple separate opargs from the command-line.
 * POSIX requires that all options be specified before any positional
   arguments.  Appeal doesn't enforce this, and will happily consume
-  options and positional arguments in any order.  In fact,
+  options and positional arguments in any order (subject to the
+  argument-group scoping described above).  In fact,
   "subcommands" require permitting options after positional arguments
   for anything beyond the simplest possible subcommand support.
-* POSIX requires that, if an option (short option) has a single
-  *optional* argument (oparg), its argument must be concatenated
-  to the option.  For example, if `-f` takes an optional argument,
-  and you want to specify the argument `guava`, you *must* write
-  this as `-fguava`, no other spelling is permissible.  While Appeal
-  supports this spelling, it also supports `-f=guava` and `-f guava`.
-  More importantly, if you specify `-f` on your command-line (and
-  not `-f=<something>` or `-f<something>`), Appeal *will* consume the
-  next argument on the command-line as an oparg, which is what POSIX
-  definitely does *not* want.  I feel Appeal's consistency is
-  more important than supporting this syntactic hack.  Note that
-  the oparg is still optional, so if `-f` is the last thing
-  on your command-line, that will achieve this "option with
-  default value" behavior.
+* POSIX requires that, if a short option has a single *optional*
+  oparg, the oparg must be concatenated directly onto the option:
+  if `-j` takes an optional oparg, `-j5` is the only permissible
+  spelling.  Appeal supports that spelling--plus `-j=5` and
+  `-j 5`.  Note that the space-separated form is *greedy*: `-j`
+  followed by another string consumes it as the oparg, which is
+  what POSIX definitely does *not* want.  I feel Appeal's
+  consistency is more important than supporting this syntactic
+  hack--argparse and click are greedy the same way--and if `-j`
+  shouldn't eat the next word, say `-j5` or put it last.  One
+  token outranks greed: `--`.  `make -j -- clean` is unlimited
+  jobs and a `clean` operand, exactly as in argparse and click.
+  (A *required* oparg still takes `--` verbatim--the
+  `grep -e --` idiom.  And required opargs concatenate too, per
+  getopt: `-fguava` is `-f guava`--as it is everywhere else.)
 
 
 ## Additional Subtle Features And Behaviors
 
 * You can specify options and arguments in any order on a
   command-line, Appeal doesn't care.  If you want Appeal to
-  stop recognizing arguments starting with dashes as options,
+  stop recognizing strings starting with dashes as options,
   specify `--` (two dashes with nothing else).  All subsequent
   strings on the command-line will be used as arguments, even
-  if they start with a `-`.
+  if they start with a `-`.  (The effect is local to the parse
+  in progress--in a cycling program, the next command's parse
+  starts fresh.)
+* A lone `-` is always an operand, never an option--it reaches
+  your converter verbatim.  `appeal.file()` gives it the classic
+  stdin/stdout meaning; without it, the string `'-'` is yours.
+* Long-option abbreviation (GNU getopt_long's unambiguous
+  prefixes, argparse's `allow_abbrev`) is deliberately NOT
+  supported: `--verb` never means `--verbose`.  Abbreviations
+  in scripts break when a program grows a new option; tab
+  completion serves the interactive-comfort case instead.
+  (click refuses for the same reason.)
 * Many built-in types are not introspectable.  If you call
   `inspect.signature(int)` it throws a `ValueError`.  Appeal
-  has special-cased exactly five built-in types: `bool`,
-  `int`, `str`, `complex`, and `float`.
-* `Accumulator` actually allows parameterizing multiple types,
-  separated by commas.  `Accumulator[int, float]` will take
-  two opargs each time the option is specified, and the first
-  will be an `int` and the second will be a `float`.  The
-  list returned will contain tuples of ints and floats.
-* You can't call `main()` on an Appeal object more than once.
-  The `Appeal()` instance you use has internal state that changes
-  when you execute its `main()` method.
+  special-cases exactly four built-in types as leaves: `str`,
+  `int`, `float`, and `bool`.
 * Information about a particular converter is localized to
   a particular `Appeal()` instance.  If you decorate a converter
   with `@app.option()`, every place inside that `Appeal()` instance
   that you use that converter will also pick up the changes you
   made with `@app.option()`.
-* You shouldn't call `usage()` until you've added all the
-  commands, options, and parameters information into your
-  Appeal object.  Why?  Because, for example, `usage()`
-  computes the default options for keyword-only parameters
-  that haven't gotten any explicitly defined options.
-  But if you then define one of those options, Appeal will
-  throw an error at you.
+* Appeal is *lazy* and *late-binding*: decorators only record.
+  Plans are built, docstrings parsed, and parsers compiled at
+  first use--and per command, so a program with fifty commands
+  compiles only the one the user invoked.  (Standalone
+  emission is deliberately eager: the whole-program artifact
+  must build--and refuse--everything.)
 * Almost any callable can be a converter--but not *every*
-  function.  There are two limitations.  First, as already
-  mentioned, in order for a function to be a legal converter,
-  every keyword-only parameter must have a default value.
-  The second requirement is more specific: in order to use
-  a function as a converter for a `*args*` parameter,
-  *somewhere* in the annotations tree under that function,
-  some function must take a required positional parameter.
+  callable.  A converter used for a `*args` parameter must,
+  somewhere in its annotation tree, require at least one
+  positional argument (otherwise "one more instance" would
+  consume nothing, forever).
+* Generated parsers are real Python source.  If you're curious
+  what Appeal decided about your grammar:
 
-Finally, the UNIX `make` command has an interesting
-and subtle behavior.  The `--jobs` and `-j` options to `make`
-specify how many jobs to run in parallel.  If you run
-`make` without any parameters, it runs one job at a time.
-If you run `make -j 5`, it runs five jobs at a time.  But!
-If you specify `make -j`, where `-j` is the last thing on the
-command-line it runs *as many jobs at a time as it wants*.
-In a way, the `-j` option has *two default values.*
+  ```Python
+  from appeal import build, compile_plan
+  print(compile_plan(build(your_function)).source)
+  ```
 
-Can you do this with Appeal?  Naturally!  Simply specify
-your keyword-only parameter with both an annotation and
-a default value, then design the annotation function
-to take one argument that *also* has a default value.
-Like so:
-
-```Python
-def jobs(jobs:int=math.inf):
-    return jobs
-
-@app.command()
-def make(*targets, jobs:jobs=1):
-    ...
-```
+  Tracebacks through a generated parser show its actual source
+  lines, too.
 
 
-Restrictions on Appeal command functions:
+## What Changed From v1
 
-* You may not use `inspect.Parameter.empty` as a default value
-  for any keyword-only parameter to a converter or command function.
-* The converter for a *var_positional* (`*args`) parameter
-  *must* require at least one positional argument.
+Appeal version 2 is a ground-up rewrite: the version 1
+bytecode interpreter is gone, replaced by a compiler that
+analyzes your functions once and generates a specialized
+parser (the same generated code serves in-process and
+standalone).  Version 1's test corpus runs against version 2
+as a permanent regression suite.  The *deliberate* semantic
+changes, all of them:
+
+* **Argument distribution got smarter.**  Version 1 distributed
+  operands to argument groups greedily and sometimes painted
+  itself into a corner, rejecting command-lines that had a
+  valid reading.  Version 2 accepts every command-line version
+  1 accepted (with the same meaning), plus the ones greed
+  wrongly rejected: with `def f(a='A', p: pair='P')` and two
+  operands, version 1 errored; version 2 skips `a` and fills
+  `pair`.
+* **Required trailing arguments.**  Keyword-only parameters
+  without defaults were a version 1 configuration error; in
+  version 2 they're required trailing arguments (`def cp(*src,
+  dest)`).
+* **Same option string, several groups.**  Version 1 refused a
+  converter reuse that declared the same option string twice;
+  version 2 allows it when the grammar matches, and position
+  decides which group an occurrence configures.
+* **Errors print to standard error** by default--the POSIX
+  diagnostic convention (version 1 printed them to stdout;
+  `Appeal(errors=sys.stdout)` restores that)--and usage errors
+  exit with status 2 (version 1 exited 255).
+* **Exception names.**  The `Appeal`-prefixed names
+  (`AppealUsageError`, ...) are the real class names again,
+  with the short spellings kept as aliases--and the hierarchy
+  is new: `AppealDataError` is the base, `AppealUsageError`
+  the command-line subclass.  `AppealCommandError` is gone
+  (return an integer instead).
+* **Preparers are gone.**  `app.app_class()`,
+  `app.command_method()`, and `CommandMethodPreparer` are
+  replaced by the class-as-app (`@app.global_command()` on a
+  class).
+* **`Appeal()` constructor arguments** changed: `help=` is
+  gone (help is always on), `positional_argument_usage_format=`
+  and `default_options=` are gone (see `@app.parameter()` and
+  `@app.option()` respectively); `theme=` and `repeat=` are
+  new.
+* **An `Appeal` object is reusable.**  Version 1's "you can't
+  call `main()` twice" restriction is gone; per-run state
+  lives in the `Processor`.
+* **Repeating an option is last-one-wins**, the getopt/argparse
+  behavior (version 1 errored with "specified more than once").
+  This includes different option strings sharing a parameter
+  (`--north --south` is south).  `Option` classes repeat too--
+  `option()` is called per occurrence--and `MultiOption` is now
+  an alias of `Option`; declare at-most-once by subclassing
+  `StrictOption` (which is what version 1 called `Option`).
+* One-character parameter names get only a short option (v1
+  behavior, uniformly enforced), and version 1's occasional
+  internal-repr error messages are now English.
+
+And the additions, one more time, in list form: standalone
+script emission, tab completion, composed help with templates
+and themes, cycling, class-as-app, config layering,
+`name=`, required trailing arguments, `list[T]`/`dict[K, V]`/
+`tuple[...]` spellings, the REPL, MCP servers, `app.schema()`--
+and speed: cold start (build plus first parse) is roughly 10x
+faster than version 1, warm parses roughly 700x, and a
+standalone script pays about 2.6ms of total startup where a
+version 1 program paid about 70ms.
 
 
 ## Changelog
+
+**2.0** *2026*
+
+Version 2: the rewrite.  See
+[What Changed From v1](#what-changed-from-v1) just above; the
+grammar's specification of record lives in
+[appeal.v2.grammar.md](appeal.v2.grammar.md).
 
 **0.6.4** *2026/02/24*
 
@@ -2317,7 +2498,7 @@ Restrictions on Appeal command functions:
 
 **0.6.3** *2024/09/06*
 
-* Bugfix for usage.  If conversaion fails for a command-line
+* Bugfix for usage.  If conversion fails for a command-line
   parameter, Appeal now prints a context-specific error,
   followed by usage for the command that failed.  Fixes #18.
 * Bugfix for `read_mapping`.  Previously you couldn't have
@@ -2333,168 +2514,7 @@ Restrictions on Appeal command functions:
 * Minor API change: renamed Appeal's custom exceptions, to
   remove the word `Appeal`.  So, for example, `AppealUsageError`
   is now simply `UsageError`.  I added aliases so the old names
-  still work; I'll remove them eventually, but I promise to
-  keep the old names around for at least one year.
+  still work.  (History note: version 2 flipped this back--the
+  prefixed names are the real names, the short names are the
+  aliases.)
 * Fixed usage generation, added tests.
-* Fixed a bug where using a "simple type" (e.g. bool, float)
-  as an annotation for an option would cause Appeal help to
-  raise an exception.  Fixes #15.
-
-**0.6.1**  *2023/07/22*
-
-* Fixed 3.6 and 3.7 support--some equals-sign-in-f-strings
-  uses crept in.
-* Added GitHub Actions integration.  Tests and
-  coverage are run in the cloud after every checkin.
-  Thanks to [Dan Pope](https://github.com/lordmauve)
-  for gently walking me through this!
-* Fixed metadata in the `pyproject.toml` file.
-* Added badges for testing and supported Python
-  versions.  (Didn't add the coverage badge yet...
-  it's too embarassing!)
-
-
-**0.6** *2023/07/20*
-
-A huge upgrade!
-
-* A new feature: Appeal can now read configuration files!
-  Check out the new APIs `Appeal.read_mapping`,
-  `Appeal.read_iterable`, and even `Appeal.read_csv`.
-  This was a massive undertaking and involved a big
-  overhaul of the compiler.
-
-* The biggest change to existing behavior: Appeal now
-  early-maps options.  (See issue #3.)
-  In short: when options are only defined in an optional group,
-  they get provisionally mapped (made available) *before* the first
-  argument in that group.  Using that option enters the group just
-  like specifying the first argument in that group.  You'll see
-  the difference in usage; an optional group that mapped an option
-  used to look like `[a [-v|--verbose] b c]` but now looks like
-  `[[-v|--verbose] a b c]`.
-
-* Appeal now handles multiple short options smashed together
-  (e.g. `-ace`) *identically* to them being specified separately
-  (e.g. `-a -c -e`).  This caused an observable change in behavior
-  regarding when child options get unmapped.
-
-  - Appeal only permits using child options in a limited context:
-    it must be after the parent option is executed, it
-    must be after the parent option has consumed all its required
-    *or optional* opargs, and it must be before any top-level
-    positional argument or option mapped before the parent option
-    was executed.  But Appeal was lax about enforcing these rules
-    when using multiple short options smashed together (e.g. `-ace`);
-    it would handle all the options and *then* unmap child options
-    as needed.  The good news: Appeal now enforces these rules here
-    too.  (The old behavior seems to have been *intentional* on my
-    part--what was I *thinking?!)*
-
-* The usage message raised for an unknown option is now much
-  better.  If the option is defined anywhere in the program
-  being run, it prints a different message telling you it
-  can't be used here, but also tells you where it can be used.
-  For example, if you use option `-x`, but that's a child
-  option mapped by `--parent`, the message would say
-  `-x can't be used here, it must be used immediately after --parent`.
-
-* Renamed `Appeal.argument` to `Appeal.parameter`.
-  This was one of those "what was I *thinking?"* moments.
-  The function affects the parameter, not the argument.
-  The old name still works but will be removed before 1.0.
-
-* `short_option_concatenated_oparg` is now more strictly
-  enforced: it's only permitted for short options that have
-  *exactly one* **optional** oparg, as specified by POSIX.
-
-**0.5.9**
-
-* Improved the error message generated when you have a
-  required parameter after a `VAR_POSITIONAL` parameter.
-  (This command-line can never succeed, because the
-  `VAR_POSITIONAL` consumes all remaining arguments on
-  the command-line, which means the subsequent required
-  parameter can never be satisfied.)  Fixes #6.
-* Changed README to use absolute instead of relative links
-  for images, which means images should now render properly
-  on the Appeal page at PyPI.  Thanks for the PR, Hugo!
-* Switched a bunch of internal classes to use Python "slots".
-  Hopefully a tiny memory and speed optimization.
-* Remove unused / unneeded stuff:
-    * unused `partial_replace*` functions
-    * unused Charm bytecode instructions `jump_relative` and `load_o_option`
-    * unneeded CharmInterpreter register `option` (only used in one error
-      message, obviated by instead using the program name directly)
-* Now that Appeal depends on [**big**](https://github.com/larryhastings/big)
-  anyway, switch to
-  [**big**'s `PushbackIterator`.](https://github.com/larryhastings/big#pushbackiteratoriterablenone).
-* Add peephole optimizer step for jump-to-jump optimization.
-  Honestly this was probably unnecessary, as I don't think Appeal's
-  compiler can even *generate* code with jumps-to-jumps (yet).
-
-**0.5.8**
-
-* Fixed up the "name" of the program for options.  We used to take
-  the name of the command, add all the option strings, and join it
-  together with commas, as in `'command, -o, --option'`.  Now it
-  looks like `'command -o | --option'`.
-* Fixed presentation bug: if you didn't have enough positional
-  arguments for your command function, but you ever invoked an
-  option on the command-line, the usage text would contain the
-  name of the last option invoked (aka the last Charm program run).
-  Added a regression test for this.
-* Cleaned up implementation a little: instead of using mystery
-  lists on the `CharmInterpreter` stack and context_stack, I now
-  use instances of bespoke `CharmStackEntry` and
-  `CharmContextStackEntry` classes.
-
-**0.5.7**
-
-* Rewrite the technology behind `accumulator[...]` and
-  `mapping[...]`.  It previously used `exec()`, which was
-  limiting; for example, you couldn't use your own types
-  or converters.  The new implementation should be much
-  more robust; it now manually defines an explicit signature
-  for the `option()` method of the subclass it creates.
-* This fixed a regression, where you couldn't use a locally-defined
-  class (e.g. `IntFloat`) as one of the types in the square
-  brackets for `accumulator` and `mapping`.  Added a test
-  for this.
-
-**0.5.6**
-
-* Fix formatting for usage when you have a
-  global command *and* subcommands.
-
-**0.5.5**
-
-* Add support for `typing.Annotated`, new in Python 3.9.
-* Add dependency to
-  [my **big** library.](https://github.com/larryhastings/big)
-  This gives Appeal a much better implementation of `multisplit`,
-  and I plan to switch to the **big** word wrapper and columnizer
-  functions, which are a... "big" improvement over what's in
-  Appeal right now.
-* Rename `SingleOption` to just `Option`.  (The name
-  `SingleOption` is now deprecated, but I'll leave it
-  as a redundant name for `Option`... for now.)
-
-**0.5.3**
-
-* Fix compatibility back to Python 3.6.
-
-**0.5.2**
-
-* Fix compatibility with Python 3.11.  Python's `inspect.Parameter` object
-  no longer allows a `name` that happens to be a keyword, which was a minor
-  inconvenience (Appeal used to use `lambda` here sometimes).
-
-**0.5.1**
-
-* Fixed regression, issue #5.  If you didn't supply enough required
-  parameters, you'd get a `TypeError` instead of a proper usage error.
-
-**0.5**
-
-* Initial release!

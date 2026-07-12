@@ -232,35 +232,110 @@ def merge_docs(plan, command_names=None):
     # Per node, gather: its own surfaces, and its subtree's
     # namespaces (name -> ('argument'|'option'|'internal', display)),
     # deepest first so shallower scopes override.
-    argument_rows = []     # (name, display) in plan order
-    option_rows = []       # (name, display) in plan order
-    docs = {}              # name -> lines, post-merge
+    argument_rows = []     # (rowkey, display) in plan order
+    option_rows = []       # (rowkey, display, site) in plan order:
+                           # site is (flanking-argument anchors,
+                           # depth) for qualifiers and indentation
+    docs = {}              # rowkey -> lines, post-merge
     command_names = tuple(command_names) if command_names else ()
 
-    def walk(p):
-        # returns the subtree namespace for p
+    def flanks(p, index):
+        # the nearest argument display before/after slot index, at
+        # this level--the anchors a position qualifier names
+        before = after = None
+        for s in p.slots[:index]:
+            before = s.usage_name
+        for s in p.slots[index + 1:]:
+            after = s.usage_name
+            break
+        return (before, after)
+
+    def sub_option_rows(o, depth):
+        # options of an option's converter: rows indented beneath
+        # their declaring option's row, recursively
+        rows = {}
+        if o.child is None:
+            return rows
+        for inner in o.child.options:
+            rowkey = id(inner)
+            rows.setdefault(inner.name,
+                            ('option', _option_display(inner), rowkey))
+            option_rows.append(
+                (rowkey, '  ' * depth + _option_display(inner),
+                 (None, None)))
+            for name, value in sub_option_rows(inner, depth + 1).items():
+                rows.setdefault(name, value)
+        return rows
+
+    namespaces = {}    # id(plan) -> its own subtree namespace
+
+    def walk(p, override=None, anchors=(None, None)):
+        # returns the subtree namespace for p: name -> (kind,
+        # display, rowkey).  override, when set, is the
+        # transparency rule in flight: (rowkey, display) for the
+        # subtree's sole terminal--the outer annotated parameter's
+        # name flowing through.
         namespace = {}
         for o in p.options:
             if o.name not in namespace:
-                namespace[o.name] = ('option', _option_display(o))
-                option_rows.append((o.name, _option_display(o)))
-        for s in p.slots:
+                rowkey = id(o)
+                namespace[o.name] = ('option', _option_display(o), rowkey)
+                option_rows.append((rowkey, _option_display(o), anchors))
+            for name, value in sub_option_rows(o, 1).items():
+                namespace.setdefault(name, value)
+        for index, s in enumerate(p.slots):
             if isinstance(s.child, Terminal):
-                namespace.setdefault(s.name, ('argument', s.usage_name))
-                argument_rows.append((s.name, s.usage_name))
+                if override is not None:
+                    rowkey, display = override
+                else:
+                    rowkey, display = s.name, s.usage_name
+                namespace.setdefault(s.name, ('argument', display, rowkey))
+                argument_rows.append((rowkey, display))
             else:
-                child_namespace = walk(s.child)
+                inner = s.child.sole_terminal_slot()
+                child_override = None
+                if inner is not None and override is None:
+                    # the transparency rule: this converter
+                    # consumes exactly one operand, so the
+                    # annotated parameter's name flows through.
+                    # (An explicit rename on the inner parameter
+                    # still wins the *display*.)
+                    display = (inner.usage_name
+                               if inner.usage_name != inner.name
+                               else s.usage_name)
+                    child_override = (s.name, display)
+                child_namespace = walk(s.child, child_override or override,
+                                       flanks(p, index))
                 for name, value in child_namespace.items():
+                    if (name in namespace
+                            and namespace[name][0] == 'ambiguous'):
+                        continue
+                    if (name in namespace
+                            and namespace[name][2] != value[2]
+                            and namespace[name][0] == value[0]):
+                        # the same name from two sibling subtrees:
+                        # documenting it HERE can't pick one
+                        namespace[name] = ('ambiguous', value[1], None)
+                        continue
                     namespace.setdefault(name, value)
-                namespace.setdefault(s.name, ('internal', s.usage_name))
+                if child_override is not None:
+                    namespace.setdefault(
+                        s.name, ('argument', child_override[1], s.name))
+                else:
+                    namespace.setdefault(s.name, ('internal', s.usage_name, s.name))
+        namespaces.setdefault(id(p), namespace)
         return namespace
 
-    def apply(p, namespace):
+    def apply(p, namespace=None):
         # deepest first: children's entries land, then ours
-        # overwrite (nearest enclosing scope wins).
+        # overwrite (nearest enclosing scope wins).  Each scope's
+        # entries resolve against ITS OWN subtree namespace--a
+        # converter documents its own window even when the name is
+        # ambiguous a level up.
+        namespace = namespaces[id(p)]
         for s in p.slots:
             if not isinstance(s.child, Terminal):
-                apply(s.child, namespace)
+                apply(s.child)
         where = getattr(p.callable, '__name__', repr(p.callable))
         parsed = parse_docstring(_inspect.getdoc(p.callable), where)
         for kind, heading in (('arguments', 'Arguments:'),
@@ -273,6 +348,11 @@ def merge_docs(plan, command_names=None):
                         f"is not a parameter of {where!r} or its "
                         f"converters")
                 found = entry[0]
+                if found == 'ambiguous':
+                    raise AppealConfigurationError(
+                        f"{where}: {name!r} is ambiguous in {where!r}--"
+                        f"two of its converters' windows have one; "
+                        f"document it in the converter's docstring")
                 if found == 'internal':
                     raise AppealConfigurationError(
                         f"{where}: {name!r} is not one of the visible "
@@ -281,7 +361,7 @@ def merge_docs(plan, command_names=None):
                     raise AppealConfigurationError(
                         f"{where}: {name!r} (in the {heading} section) "
                         f"is an {found}, not an {kind[:-1]}")
-                docs[name] = lines
+                docs[entry[2]] = lines
         if parsed['commands']:
             if p is not plan or not command_names:
                 raise AppealConfigurationError(
@@ -295,8 +375,25 @@ def merge_docs(plan, command_names=None):
                 docs[word] = lines
         return parsed
 
-    namespace = walk(plan)
-    parsed = apply(plan, namespace)
+    walk(plan)
+    parsed = apply(plan)
+
+    # position qualifiers, only where a display is duplicated:
+    # the flanking arguments' names say which window each row is
+    seen = {}
+    for rowkey, display, anchors in option_rows:
+        seen[display.strip()] = seen.get(display.strip(), 0) + 1
+    rows = []
+    for rowkey, display, anchors in option_rows:
+        if seen[display.strip()] > 1 and anchors != (None, None):
+            before, after = anchors
+            if before and after:
+                display += f' (after {before}, before {after})'
+            elif before:
+                display += f' (after {before})'
+            elif after:
+                display += f' (before {after})'
+        rows.append((rowkey, display))
 
     return {
         'summary': parsed['summary'],
@@ -304,21 +401,25 @@ def merge_docs(plan, command_names=None):
         'arguments': [(display, docs.get(name, []))
                       for name, display in argument_rows],
         'options': [(display, docs.get(name, []))
-                    for name, display in option_rows],
+                    for name, display in rows],
         'commands': [(word, docs.get(word, []))
                      for word in command_names],
     }
 
 
-def command_set_corpus(global_plan, entries, auto_help=True):
+def command_set_corpus(global_plan, entries, auto_help=True,
+                       auto_version=False):
     """
     The corpus for a multi-command program's listing.  entries is
     a sequence of (word, summary) pairs in declaration order.  The
     command rows' documentation comes from the global command's
     Commands: entries, falling back to each command's own summary;
-    the auto help command documents itself.
+    the auto help and version commands document themselves
+    (version before help, v1's listing order).
     """
     words = [word for word, _ in entries]
+    if auto_version:
+        words.append('version')
     if auto_help:
         words.append('help')
     if global_plan is not None:
@@ -328,6 +429,8 @@ def command_set_corpus(global_plan, entries, auto_help=True):
                   'arguments': [], 'options': [],
                   'commands': [(word, []) for word in words]}
     fallback = dict(entries)
+    if auto_version:
+        fallback['version'] = "Print the program's version."
     if auto_help:
         fallback['help'] = 'Print usage documentation on a specific command.'
     corpus['commands'] = [
@@ -360,3 +463,91 @@ def _option_display(o):
     return ' '.join(bits)
 
 
+
+
+def man_page(prog, corpus, usage, command_pages=None, version=None):
+    """
+    The help corpus in troff clothing: a man(1) page assembled
+    from the same predigested rows --help renders.  command_pages,
+    for a multi-command program, is [(word, usage, corpus), ...]--
+    each becomes a subsection under COMMANDS.  Returns the troff
+    text; installing it somewhere is packaging's business, not
+    Appeal's.
+    """
+    def esc(text):
+        # troff: escape backslashes, protect a leading control
+        # character; prose hyphens stay plain
+        text = text.replace('\\', '\\e')
+        if text.startswith(('.', "'")):
+            text = '\\&' + text
+        return text
+
+    def opt(display):
+        # option/argument display columns use troff minus signs
+        return esc(display).replace('-', '\\-')
+
+    out = []
+    line = out.append
+
+    def paragraphs(lines):
+        first = True
+        for text in '\n'.join(lines).split('\n\n'):
+            if not text.strip():
+                continue
+            if not first:
+                line('.PP')
+            first = False
+            for row in text.split('\n'):
+                line(esc(row))
+
+    def rows(section, pairs):
+        if not pairs:
+            return
+        line(f'.SH {section}')
+        for display, lines in pairs:
+            line('.TP')
+            line(f'.B {opt(display)}')
+            if lines:
+                paragraphs(lines)
+
+    source = f'{prog} {version}' if version else prog
+    line(f'.TH {prog.upper()} 1 "" "{esc(source)}" ""')
+    line('.SH NAME')
+    summary_line = ' '.join(corpus['summary']).strip()
+    line(f'{esc(prog)} \\- {esc(summary_line)}' if summary_line
+         else esc(prog))
+    line('.SH SYNOPSIS')
+    line(f'.B {opt(usage)}')
+    for word, sub_usage, _ in (command_pages or ()):
+        line('.br')
+        line(f'.B {opt(sub_usage)}')
+    if corpus['documentation']:
+        line('.SH DESCRIPTION')
+        paragraphs(corpus['documentation'])
+    rows('ARGUMENTS', corpus['arguments'])
+    rows('OPTIONS', corpus['options'])
+    if command_pages:
+        line('.SH COMMANDS')
+        for word, lines in corpus['commands']:
+            line('.TP')
+            line(f'.B {esc(word)}')
+            if lines:
+                paragraphs(lines)
+        for word, sub_usage, sub_corpus in command_pages:
+            line(f'.SS "{esc(prog)} {esc(word)}"')
+            line(f'.B {opt(sub_usage)}')
+            if sub_corpus['documentation']:
+                line('.PP')
+                paragraphs(sub_corpus['documentation'])
+            for label, pairs in (('Arguments:', sub_corpus['arguments']),
+                                 ('Options:', sub_corpus['options'])):
+                if not pairs:
+                    continue
+                line('.PP')
+                line(f'.B {label}')
+                for display, lines in pairs:
+                    line('.TP')
+                    line(f'.B {opt(display)}')
+                    if lines:
+                        paragraphs(lines)
+    return '\n'.join(out) + '\n'

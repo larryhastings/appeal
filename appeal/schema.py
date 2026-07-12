@@ -122,3 +122,64 @@ def schema_set(commands, global_plan=None, prog=None):
     if global_plan is not None:
         entry['global'] = _plan_schema(global_plan)
     return entry
+
+
+_JSON_TYPES = {'str': 'string', 'int': 'integer', 'float': 'number',
+               'bool': 'boolean'}
+
+
+def mcp_input_schema(plan):
+    """
+    The MCP inputSchema (plain JSON Schema) for one command:
+    arguments and options become properties--the read driver
+    accepts them by name--with required listing the required
+    arguments.  Converter types map where they're knowable;
+    everything else is a string (the read driver converts anyway).
+    """
+    described = schema(plan)
+    properties = {}
+    required = []
+    for operand in described['operands']:
+        entry = {}
+        kind = _JSON_TYPES.get(operand.get('converter'))
+        if operand.get('repeat'):
+            entry['type'] = 'array'
+            if kind:
+                entry['items'] = {'type': kind}
+        elif kind:
+            entry['type'] = kind
+        else:
+            entry['type'] = 'string'
+        if operand.get('doc'):
+            entry['description'] = operand['doc']
+        properties[operand['name']] = entry
+        if operand.get('required') or operand.get('trailing'):
+            required.append(operand['name'])
+    for option in described['options']:
+        entry = {}
+        kind = option.get('kind')
+        if kind == 'flag':
+            entry['type'] = 'boolean'
+        elif kind in ('accumulate', 'fold'):
+            entry['type'] = 'array'
+        elif kind == 'mapping':
+            entry['type'] = 'object'
+        elif kind == 'group':
+            entry['type'] = 'object'
+        else:
+            # value options: type from the converter when there's
+            # exactly one operand (coverage found this read a key
+            # the corpus never wrote--int options schema'd as
+            # strings); multi-operand values are arrays
+            operands = option.get('operands') or ()
+            if len(operands) > 1:
+                entry['type'] = 'array'
+            else:
+                converter = _JSON_TYPES.get(
+                    operands[0] if operands else None)
+                entry['type'] = converter or 'string'
+        if option.get('doc'):
+            entry['description'] = option['doc']
+        properties[option['name']] = entry
+    return {'type': 'object', 'properties': properties,
+            'required': required}
