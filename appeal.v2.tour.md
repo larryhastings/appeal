@@ -293,8 +293,8 @@ inventory, in snippet order:
   so a colored page strips back to monochrome byte-for-byte.
 * **help rendering**: `render_help_page` assembles a --help page
   from a predigested corpus through the templates (a plain
-  dict; the app's `usage_indent_definitions` knob works by
-  re-indenting the section templates at construction).
+  dict; the app's `indent` knob works by re-indenting the
+  section templates at construction).
   `help_margin(cap)` resolves the wrap margin at render time:
   min(terminal width, cap)--pipes get the cap, so captured
   output is stable.  `render_usage`/`usage_units` wrap the
@@ -685,7 +685,7 @@ star's enforcement mechanism: one source, two bindings.
     "what will the generated code do?"             print(compile_plan(plan).source)
     "why did standalone emission refuse?"          codegen.render_ref
     "where does --help text come from?"            help.merge_docs -> runtime.render_help_page
-    "why did the page wrap THERE?"                 runtime.help_margin (min(terminal, usage_max_columns))
+    "why did the page wrap THERE?"                 runtime.help_margin (min(terminal, margin))
     "where do 'did you mean' suggestions come from?"  runtime.did_you_mean (exceptions snippet)
     "who decided the exit code / error stream?"    runtime.run_main (and ONLY run_main)
     "where do --version / the version command live?"  run_main (the option) / _CompileOnDispatch + emit_command_set (the command)

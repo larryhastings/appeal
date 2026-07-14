@@ -1,5 +1,11 @@
 # Positional option scope (proposal, rev 2)
 
+> **Historical design exploration (superseded).** A design proposal
+> for positional-option scope; the probes it describes reshaped the
+> design, and the shipped behavior lives in
+> [appeal.v2.grammar.md](appeal.v2.grammar.md) (scoped options, the
+> interval model).  Kept for rationale/history, not as current spec.
+
 *Rev 1 designed around a counting/scoping circularity and a
 shadowing feature.  The probes killed both: this revision is
 smaller, and ends in a decision that's Larry's to make.*

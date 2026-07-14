@@ -12,29 +12,17 @@
 #     disk, and executed in a subprocess with no access to appeal,
 #     appeal2, or big--and they must work.
 
-def preload_local_appeal():
-    from os.path import abspath, dirname, isfile, join, normpath
-    import sys
-    here = abspath(dirname(sys.argv[0] or '.'))
-    candidate = here
-    while True:
-        if isfile(join(candidate, "appeal/plan.py")):   # v2 marker; dodges site-packages v1
-            break
-        parent = normpath(join(candidate, ".."))
-        if parent == candidate:
-            raise RuntimeError("couldn't find the appeal v2 tree")
-        candidate = parent
-    sys.path.insert(0, candidate)
-    return candidate
+from big import test
 
-repo_dir = preload_local_appeal()
+# the local checkout beats any installed appeal; preload() imports
+# the package and ASSERTS it came from the checkout, so a stray
+# site-packages v1 fails loudly instead of testing the wrong code
+repo_dir = str(test.preload('appeal'))
 
 import os.path
 import subprocess
 import sys
 import tempfile
-
-from big import test
 
 import appeal
 from appeal import (
@@ -3593,7 +3581,7 @@ def test_file_converter_standalone():
 
 
 def test_usage_formatter_knobs():
-    # Appeal(usage_max_columns=, usage_indent_definitions=): v1's
+    # Appeal(margin=, indent=): v1's
     # knobs, wired (they were stored-and-never-read; the dead
     # indent default of 2 was also a lie--the templates' real
     # indent is 4, v1's default).  max_columns caps the wrap
@@ -3629,17 +3617,17 @@ def test_usage_formatter_knobs():
 
     wide = helptext(make_app())
     assert max(len(l) for l in wide.splitlines()) > 40
-    narrow = helptext(make_app(usage_max_columns=40))
+    narrow = helptext(make_app(margin=40))
     assert max(len(l) for l in narrow.splitlines()) <= 40
     assert 'Serves the thing' in narrow
 
-    indented = helptext(make_app(usage_indent_definitions=8))
+    indented = helptext(make_app(indent=8))
     row = next(l for l in indented.splitlines()
                if l.strip().startswith('host'))
     assert row.startswith(' ' * 8) and row[8] != ' ', repr(row)
 
     # garbage refuses by name
-    for knob in ('usage_max_columns', 'usage_indent_definitions'):
+    for knob in ('margin', 'indent'):
         try:
             _appeal.Appeal(**{knob: 'wide'})
             assert False, 'expected AppealConfigurationError'
@@ -3666,7 +3654,7 @@ def test_usage_knobs_standalone():
             import kmod
             import importlib
             importlib.reload(kmod)
-            app = _appeal.Appeal(name='s', usage_max_columns=60)
+            app = _appeal.Appeal(name='s', margin=60)
             app.command()(kmod.serve)
             script = app.standalone()
         finally:

@@ -355,14 +355,17 @@ first line of its docstring, plus the automatic `help` command
 listing too.  A user-defined `help` command wins; the automatic
 one vanishes entirely.
 
-**Completion groundwork**: `app.complete(words, prefix)` (and the
+**Completion**: `app.complete(words, prefix)` (and the
 `complete`/`complete_set` functions) answer "what could legally
 come next?"--option strings when the partial word starts with
 `-` (minus used single-occurrence options; nothing in a value
-position or after `--`), command words at the command position,
-help topics after `help`.  An empty list means "no opinion":
-operand values are the shell's business.  Shell integration
-scripts come later, on top of this.
+position or after `--`), command words at the command position
+(including cycling boundaries), help topics after `help`.  An
+empty list means "no opinion" (the shell's business); a converter
+that carries a `.completions` supplies candidates for its own
+operand.  Shell integration scripts (`app.completion(shell)`, for
+bash/zsh/fish) build on this, and standalone scripts emit the same
+completion tables.
 
 ## The converter vocabulary
 
@@ -433,7 +436,7 @@ converter may depend on an earlier command's effects).  A
 have already run, like `make` stopping mid-build.  A nonzero int
 return halts dispatch and becomes the result (v1's early-exit
 contract, now uniform across every command on the line).
-`app.parse(argv)` returns the stage-1 artifact--a `Processor`,
+`app.parse(args)` returns the stage-1 artifact--a `Processor`,
 v1's name returned leaner--and `processor.execute()` is stage 2;
 `app.process()` is both, fused.  The Processor's `instances` list
 is the execution log, one `(command, instance)` pair per command
@@ -464,14 +467,15 @@ rebuilt version, from Larry's spec.)
 one, the listing prints to stdout and the exit status is 1.
 `app.processor()` is a v1 compat shim.
 v1's exception names (`AppealUsageError`, `ConfigurationError`)
-and `Appeal(version=..., usage_max_columns=..., ...)` constructor
-parameters are accepted--and wired: version drives `--version`
-and the `version` command; `usage_max_columns` caps the help
-margin (min'd with the terminal width at render time, v1's
-rule; default 79, v1's was 80); `usage_indent_definitions`
-re-indents the section templates (default 4, matching v1 and
-the templates themselves--v2 briefly claimed a never-wired
-default of 2).
+are accepted, and `Appeal(version=..., margin=..., indent=...)`
+wires the help formatter: version drives `--version` and the
+`version` command; `margin` caps the help width (min'd with the
+terminal width at render time, v1's rule; default 79, v1's was
+80); `indent` re-indents the section templates (default 4,
+matching the templates themselves).  The program name comes
+from `Appeal(name=...)`, else the basename of `script=`
+(default `sys.argv[0]`, captured once at import--the sole place
+Appeal reads `sys.argv[0]`).
 
 ## The v1 corpus ratchet
 
@@ -530,12 +534,12 @@ flat spelling reads the current level and is for shallow configs.
 
 ## Config layering
 
-`app.process(argv, config=...)` (and `parse`/`main`) accepts ONE
+`app.process(args, config=...)` (and `parse`/`main`) accepts ONE
 mapping--merge your layers yourself--supplying the **global
 command's options only**: config holds program-wide settings; the
 command line names the work.  Precedence is fixed and unknobbed:
-defaults < config < argv, **atomic per option** (an option argv
-mentions wins whole; repeatable kinds REPLACE, never append--the
+defaults < config < args, **atomic per option** (an option the
+args mention wins whole; repeatable kinds REPLACE, never append--the
 command line can always subtract).  Keys are **full strict**
 ("either this is ours, or it isn't"): every key must name a
 global-command option; a command name, a positional argument
@@ -560,7 +564,7 @@ window's parameter name (`{'b': {'flavor': ...}}`,
 read_mapping's group spelling)--an implementation away, not a
 redesign.  With class-as-app this is the
 argparse-replacement story: the config file helps construct your
-application object, argv picks the methods.  Standalone: config
+application object, args picks the methods.  Standalone: config
 is a per-call input, nothing to bake; emitted parse functions
 grow a config= parameter when the mapping-driver emitters land
 (until then the gap is a loud TypeError).
@@ -650,7 +654,7 @@ silently cannot be emitted; if it can't be emitted, it must say so.
 | no-repeat rule; one-char names short-only (v1, probed) | ✓ | ✓ | ✓ | ✓ |
 | multi-operand plain converters on options (`--where X Y`) | ✓ | ✓ | ✓ | ✓ |
 | optional opargs, greedy (`make -j` / `-j 5` / `-j5`) | ✓ | ✓ | ✓ | ✓ |
-| flags take `=true`/`=false` (exactly those; argv-overrules-config) | ✓ | ✓ | ✓ | ✓ |
+| flags take `=true`/`=false` (exactly those; args-overrules-config) | ✓ | ✓ | ✓ | ✓ |
 | `-fVALUE` attachment, getopt's rule (v1 refused; ruled 2026-07-09) | ✓ | ✓ | ✓ | ✓ |
 | repetition = last-one-wins (v1 errored; ruled 2026-07-09; incl. shared-parameter strings, per-window, scoped; `StrictOption` opts out) | ✓ | ✓ | ✓ | ✓ |
 | `--` outranks optional-oparg greed (v1: greed won; ruled 2026-07-09; required opargs still take `--` verbatim, `grep -e --`) | ✓ | ✓ | ✓ | ✓ |
@@ -675,8 +679,8 @@ silently cannot be emitted; if it can't be emitted, it must say so.
 | parse-before-execute (two stages; `app.parse` -> Processor) | ✓ | ✓ | ✓ | ✓ |
 | cycling (`repeat=True`, per-parent; pop-up resolution) | ✓ | ✓ | ✓ | ✓ |
 | class-based commands (§8.6: class-as-app, methods, nested classes, BIC) | ✓ | ✓ | ✓ | ✓ |
-| completion at cycling boundaries | — | — | — | — |
-| completion groundwork (`complete`, in-process; shell scripts later) | ✓ | ✓ | n/a | n/a |
+| completion at cycling boundaries | ✓ | ✓ | ✓ | ✓ |
+| completion (`complete`; in-process API, bash/zsh/fish integration scripts, emitted into standalone) | ✓ | ✓ | ✓ | ✓ |
 | JSON schema (`schema`/`schema_set`; pairs with read_mapping) | ✓ | ✓ | n/a | n/a |
 | flexible global-command operands (optional, `*args`, groups) | ✓ | ✓ | ✓ | ✓ |
 

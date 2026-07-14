@@ -118,9 +118,10 @@ Python introduced them; on older Pythons, spell those
 `appeal.accumulator` and `appeal.mapping`, which work
 everywhere.  CI exercises 3.7 through 3.14--GitHub's runners
 can't install 3.6 anymore--and 3.6 is verified locally.)
-Appeal is currently only supported for POSIX platforms
-(UNIX, Linux, BSD, OS X, etc).  It might work on Windows but
-this has not yet been tested.
+Appeal targets POSIX platforms (UNIX, Linux, BSD, macOS).  Its
+full test suite also runs on Windows in CI (Python 3.9 and
+3.14)--nothing in Appeal is structurally POSIX-only--though
+POSIX remains the primary, best-supported target.
 
 ### A New And Appealing Approach
 
@@ -1922,7 +1923,7 @@ The layering rules are fixed and unknobbed:
   Config holds program-wide settings; the command line names
   the work.  One dict--if you have several layers (system,
   user, project), merge them yourself first.
-* Precedence is **defaults < config < argv**, atomic per
+* Precedence is **defaults < config < args**, atomic per
   option: an option the command-line mentions wins *whole*
   (repeatable options replace, never append--the command line
   can always subtract).  That includes flags: config turned
@@ -1941,7 +1942,7 @@ The layering rules are fixed and unknobbed:
 
 With a class-as-app, this is the whole argparse-replacement
 story in three lines: the config file helps construct your
-application object, and argv picks the methods.
+application object, and args picks the methods.
 
 
 ## The Processor: Many Runs, One App
@@ -1953,7 +1954,7 @@ simultaneously (imagine an app server handling commands for
 many users, each with their own config):
 
 ```Python
-processor = app.parse(argv, config=config)   # stage 1: parse only
+processor = app.parse(args, config=config)   # stage 1: parse only
 status = processor.execute()                 # stage 2: run the commands
 ```
 
@@ -1968,8 +1969,8 @@ one wins, and the rest adopt the winner.)
 `processor.execute()` then runs the commands left to right.
 `processor.instances` is that run's `(command, instance)` log;
 `app.instances` is a convenience alias for the latest run's.
-`app.process(argv)` is parse-plus-execute in one call, and
-`app.main(argv)` is `process()` plus polite error printing
+`app.process(args)` is parse-plus-execute in one call, and
+`app.main(args)` is `process()` plus polite error printing
 plus the exit-code protocol.  Every layer takes `config=`.
 
 
@@ -2119,12 +2120,18 @@ spellings are the same classes--catch whichever you like.)
 
 ## API Reference
 
-`Appeal(name=None, *, theme=None, version=None, repeat=False, errors=None, usage_max_columns=79, usage_indent_definitions=2)`
+`Appeal(name=None, *, theme=None, version=None, repeat=False, errors=None, script=sys.argv[0], margin=79, indent=4)`
 
 Creates a new Appeal instance.
 
 * `name` is your program's name, as shown in usage.  If you
-  don't supply it, Appeal uses `sys.argv[0]`'s basename.
+  don't supply it, Appeal uses `script`'s basename.
+* `script` is the program's path, used to derive the displayed
+  name when `name` isn't given (its basename, or `'program'`
+  when that's empty).  It defaults to `sys.argv[0]`, read once
+  when Appeal is imported--the only place Appeal consults
+  `sys.argv[0]`, so the program name is a controllable input.
+  Tests (and embedders) pass `script=` explicitly.
 * `theme` colors Appeal's output: `None` means the stock theme
   (when the environment and terminal permit), `False` means
   never, or pass an `appeal.Theme` of your own.
@@ -2141,15 +2148,14 @@ Creates a new Appeal instance.
   `print(file=None)`).  `sys.stdout` is version 1's behavior.
   Standalone scripts can bake `sys.stderr` or `sys.stdout`;
   any other stream refuses at emission, by name.
-* `usage_max_columns` (default 79) caps the help page's wrap
-  margin; at render time the page uses the terminal's width or
-  this cap, whichever is narrower (pipes and redirects get the
-  cap, so captured output is stable).  Baked into standalone
-  scripts, where the *script's* terminal decides.
-* `usage_indent_definitions` (default 4) sets the left indent
-  of the help tables.  It works by re-indenting the section
-  templates, which own layout--overwrite `app.templates` to go
-  further.
+* `margin` (default 79) caps the help page's wrap width; at
+  render time the page uses the terminal's width or this cap,
+  whichever is narrower (pipes and redirects get the cap, so
+  captured output is stable).  Baked into standalone scripts,
+  where the *script's* terminal decides.
+* `indent` (default 4) sets the left indent of the help tables.
+  It works by re-indenting the section templates, which own
+  layout--overwrite `app.templates` to go further.
 
 Help is always on: every command answers `-h`/`--help`, and a
 program with commands gets a `help` command, unless you define
@@ -2200,19 +2206,20 @@ Used as a decorator.  Renames how one positional parameter (or
 option metavar) displays in usage: `@app.parameter('path',
 usage='FILE')`.
 
-`Appeal.main(argv=None, config=None)`
+`Appeal.main(args=None, config=None)`
 
 Processes a command-line and calls your command functions.
 Catches data errors and prints them politely (to stdout, with
 usage); returns the exit status (also usable as
-`sys.exit(app.main())`).  `argv` defaults to `sys.argv[1:]`.
+`sys.exit(app.main())`).  `args` defaults to `sys.argv[1:]`.
 
-`Appeal.process(argv, config=None)`
+`Appeal.process(args=None, config=None)`
 
 Like `main()`, but catches nothing and returns the last
-command's return value.  The automation entry point.
+command's return value.  The automation entry point.  `args`
+defaults to `sys.argv[1:]`.
 
-`Appeal.parse(argv=None, config=None)` / `Appeal.processor()`
+`Appeal.parse(args=None, config=None)` / `Appeal.processor()`
 
 Stage 1 only: returns a `Processor` holding the fully-parsed
 run.  `processor.execute()` runs it; `processor.instances` is

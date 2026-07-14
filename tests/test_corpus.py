@@ -22,21 +22,9 @@ import io
 import sys
 import unittest
 
-def preload_local_appeal():
-    from os.path import abspath, dirname, isfile, join, normpath
-    here = abspath(dirname(sys.argv[0] or '.'))
-    candidate = here
-    while True:
-        if isfile(join(candidate, "appeal/plan.py")):
-            break
-        parent = normpath(join(candidate, ".."))
-        if parent == candidate:
-            raise RuntimeError("couldn't find the appeal v2 tree")
-        candidate = parent
-    sys.path.insert(0, candidate)
-    return candidate
+from big import test
 
-repo_dir = preload_local_appeal()
+repo_dir = str(test.preload('appeal'))
 sys.path.insert(0, repo_dir + '/tests')
 
 EXPECTED_FAILURES = frozenset((

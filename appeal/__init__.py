@@ -487,9 +487,16 @@ class Appeal:
     first use (see "Laziness and late binding" in the grammar doc).
     """
     def __init__(self, name=None, *, theme=None, version=None, repeat=False,
-                 errors=None,
-                 usage_max_columns=79, usage_indent_definitions=4):
+                 errors=None, script=_sys.argv[0],
+                 margin=79, indent=4):
         self.name = name
+        # argv[0], captured HERE at the outer edge (its default is
+        # read once, when this module is imported) rather than
+        # sniffed from sys.argv deep in the machinery--so the
+        # program name is a controllable input, not ambient state.
+        # _prog() derives the displayed name from its basename;
+        # name=, if given, overrides it outright.
+        self.script = script
         # the file object main() prints error messages to,
         # default sys.stderr (the POSIX diagnostic convention, so
         # pipelines reading this program's stdout stay clean;
@@ -510,26 +517,24 @@ class Appeal:
         self.theme = theme
         self.version = version
         # the help formatter's knobs (v1's, wired 2026-07-09):
-        # max_columns caps the wrap margin (narrow terminals
-        # re-wrap below it; pipes get the cap itself), and
-        # indent_definitions is the left indent of the help
-        # tables--applied by re-indenting the section templates,
-        # which own layout; overwrite app.templates to go further
-        for knob, value in (('usage_max_columns', usage_max_columns),
-                            ('usage_indent_definitions',
-                             usage_indent_definitions)):
+        # margin caps the wrap width (narrow terminals re-wrap
+        # below it; pipes get the cap itself), and indent is the
+        # left indent of the help tables--applied by re-indenting
+        # the section templates, which own layout; overwrite
+        # app.templates to go further
+        for knob, value in (('margin', margin), ('indent', indent)):
             if not isinstance(value, int) or value <= 0:
                 raise AppealConfigurationError(
                     f"{knob} must be a positive int, not {value!r}")
-        self.usage_max_columns = usage_max_columns
-        self.usage_indent_definitions = usage_indent_definitions
+        self.margin = margin
+        self.indent = indent
         # the help templates: a plain dict, yours to overwrite
         # entry by entry (see runtime.default_templates).
         from .runtime import default_templates
         self.templates = dict(default_templates)
-        if usage_indent_definitions != 4:
+        if indent != 4:
             import re as _re
-            pad = ' ' * usage_indent_definitions
+            pad = ' ' * indent
             for key in ('arguments', 'options', 'commands'):
                 template = self.templates.get(key)
                 if template:
@@ -719,7 +724,7 @@ class Appeal:
             text = render_help_page(
                 command_set_usage(self._prog(), self.global_plan),
                 corpus, self.templates,
-                margin=help_margin(self.usage_max_columns),
+                margin=help_margin(self.margin),
                 theme=resolve_theme(self.theme, _sys.stdout)).rstrip('\n')
         else:
             from .help import merge_docs
@@ -728,7 +733,7 @@ class Appeal:
             corpus = merge_docs(plan)
             text = render_help_page(
                 plan.usage(), corpus, self.templates,
-                margin=help_margin(self.usage_max_columns),
+                margin=help_margin(self.margin),
                 theme=resolve_theme(self.theme, _sys.stdout)).rstrip('\n')
         print(text)
         return text
@@ -880,11 +885,11 @@ class Appeal:
                 parse = compile_command_set(
                     sub_plans, self.plan_for(word), prog=word,
                     templates=self.templates, theme=self.theme,
-                    max_columns=self.usage_max_columns)
+                    max_columns=self.margin)
             else:
                 parse = compile_plan(self.plan_for(word), templates=self.templates,
                                      theme=self.theme,
-                                     max_columns=self.usage_max_columns)
+                                     max_columns=self.margin)
             with self._lock:
                 if self._parses is None:
                     self._parses = {}
@@ -892,7 +897,7 @@ class Appeal:
         return parse
 
     def _prog(self):
-        return self.name or _os.path.basename(_sys.argv[0]) or 'program'
+        return self.name or _os.path.basename(self.script) or 'program'
 
     def _set_entry_for(self, word):
         """
@@ -911,7 +916,7 @@ class Appeal:
         parent_plan = self.plan_for(word)
         parent = compile_plan(parent_plan, templates=self.templates,
                               theme=self.theme, boundary='flexible',
-                              max_columns=self.usage_max_columns)
+                              max_columns=self.margin)
         subs = {}
         for name, fn in self._subs[word]:
             if name in self._subs:
@@ -922,13 +927,13 @@ class Appeal:
                 _refuse_orphan_method(fn)
             sub = compile_plan(build(fn, name=name, method_of=owner),
                                templates=self.templates, theme=self.theme,
-                               max_columns=self.usage_max_columns)
+                               max_columns=self.margin)
             subs[name] = (sub.scan, sub.run)
         entries = [(name, summary(fn)) for name, fn in self._subs[word]]
         corpus = command_set_corpus(parent_plan, entries, False)
         sub_usage = render_command_listing(
             command_set_usage(word, parent_plan), corpus,
-            self.templates, margin=self.usage_max_columns)
+            self.templates, margin=self.margin)
         entry = {'scan': parent.scan, 'run': parent.run,
                  'commands': subs,
                  'repeat': self._sub_repeat.get(word, False),
@@ -950,7 +955,7 @@ class Appeal:
             # line, options after operands and all
             fused = compile_plan(self.global_plan, templates=self.templates,
                                  theme=self.theme,
-                                 max_columns=self.usage_max_columns)
+                                 max_columns=self.margin)
             def parse(argv):
                 processor = Processor(self)
                 processor.parse(argv)
@@ -974,7 +979,7 @@ class Appeal:
         if global_plan is not None:
             fused = compile_plan(
                 global_plan, templates=self.templates, theme=self.theme,
-                max_columns=self.usage_max_columns,
+                max_columns=self.margin,
                 command_split=(global_plan.minimum, global_plan.maximum,
                                command_words))
             parse_globals = (fused.scan, fused.run)
@@ -991,14 +996,14 @@ class Appeal:
             and 'version' not in table)
         usage = render_command_listing(
             command_set_usage(self._prog(), global_plan),
-            corpus, self.templates, margin=self.usage_max_columns)
+            corpus, self.templates, margin=self.margin)
 
         commands = _CompileOnDispatch(self, usage)
         auto_help = 'help' not in table
 
         default = (compile_plan(build(self._default), templates=self.templates,
                                 theme=self.theme,
-                                max_columns=self.usage_max_columns)
+                                max_columns=self.margin)
                    if self._default is not None else None)
 
         pieces = ('set', parse_globals, commands, usage, default,
@@ -1039,24 +1044,28 @@ class Appeal:
                 plan = self._global_plan
         return plan
 
-    def parse(self, argv=None, config=None):
+    def parse(self, args=None, config=None):
         """
-        Stage 1 only: scan argv (default: sys.argv[1:]) into a
+        Stage 1 only: scan args (default: sys.argv[1:]) into a
         Processor.  The structural parse runs--zero user code; a
         malformed line raises here--and nothing executes.  Call the
         Processor's execute() for stage 2; printing it is a dry
         run.  config, if given, is ONE mapping layering the global
-        command's options: defaults < config < argv (see the
+        command's options: defaults < config < args (see the
         grammar's config layering section).
         """
         processor = Processor(self)
         return processor.parse(
-            _sys.argv[1:] if argv is None else list(argv), config)
+            _sys.argv[1:] if args is None else list(args), config)
 
-    def process(self, argv, config=None):
-        "Parse argv and invoke the command; returns its return value."
+    def process(self, args=None, config=None):
+        """
+        Parse args (default: sys.argv[1:]) and invoke the command;
+        returns its return value.
+        """
         processor = Processor(self)
-        processor.parse(list(argv), config)
+        processor.parse(
+            _sys.argv[1:] if args is None else list(args), config)
         return processor.execute()
 
     @property
@@ -1068,12 +1077,12 @@ class Appeal:
         processor = self._last_processor
         return processor.instances if processor is not None else []
 
-    def main(self, argv=None, config=None):
+    def main(self, args=None, config=None):
         "Parse-and-execute with polite error handling; returns an exit code."
         import os as _os
-        if (argv is None and '_APPEAL_COMPLETE' in _os.environ
+        if (args is None and '_APPEAL_COMPLETE' in _os.environ
                 and not _sys.argv[1:]):
-            # a shell-completion reentry: bare argv, mode in the
+            # a shell-completion reentry: bare args, mode in the
             # environment.  Answer it instead of parsing.
             from .runtime import completion_reentry
             return completion_reentry(
@@ -1082,12 +1091,12 @@ class Appeal:
         parse = self._compile()
         if config is not None:
             fused = parse
-            def parse(argv, _config=config):
+            def parse(args, _config=config):
                 processor = Processor(self)
-                processor.parse(list(argv), _config)
+                processor.parse(list(args), _config)
                 return processor.execute()
         version = str(self.version) if self.version is not None else None
-        return run_main(parse, argv, theme=self.theme, errors=self.errors,
+        return run_main(parse, args, theme=self.theme, errors=self.errors,
                         version=version)
 
     def _mcp_instance(self, config):
@@ -1273,11 +1282,11 @@ class Appeal:
                 repeat=self.repeat, subs=subs or None,
                 sub_repeat=dict(self._sub_repeat) or None,
                 errors=self.errors, version=self.version,
-                max_columns=self.usage_max_columns)
+                max_columns=self.margin)
         return emit_standalone(self.global_plan, argv0=argv0,
                                templates=self.templates, theme=self.theme,
                                errors=self.errors, version=self.version,
-                               max_columns=self.usage_max_columns)
+                               max_columns=self.margin)
 
     def standalone_mcp(self, *, argv0=None, config=None, version=None):
         """

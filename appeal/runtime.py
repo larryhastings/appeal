@@ -973,7 +973,7 @@ def check_count(n, minimum, maximum, valid_counts, usage=None, what=None):
 # --8<-- requires appeal theme --8<--
 # --8<-- requires appeal complete --8<--
 # --8<-- requires appeal exceptions --8<--
-def run_main(parse, argv=None, theme=None, completion=None,
+def run_main(parse, args=None, theme=None, completion=None,
              errors=None, version=None):
     """
     The main() driver for a generated parser: parse and execute,
@@ -981,7 +981,7 @@ def run_main(parse, argv=None, theme=None, completion=None,
     spec: None, False, a Theme, or a baked dict) paints the
     'error:' prefix when the error stream wants color; the
     environment always wins (resolve_theme).  completion, if
-    given, is (table, prog): with an empty argv and
+    given, is (table, prog): with an empty args and
     _APPEAL_COMPLETE in the environment, the invocation is a
     shell-completion reentry and is answered instead of parsed.
 
@@ -997,9 +997,9 @@ def run_main(parse, argv=None, theme=None, completion=None,
     `--version` as the first token prints it bare and exits 0,
     like -h/--help--program metadata outranks parsing.
     """
-    if argv is None:
-        argv = sys.argv[1:]
-    if completion is not None and not argv:
+    if args is None:
+        args = sys.argv[1:]
+    if completion is not None and not args:
         table, prog = completion
         if 'commands' in table:
             completer = lambda w, p: complete_command_set(table, w, p)
@@ -1008,7 +1008,7 @@ def run_main(parse, argv=None, theme=None, completion=None,
         code = completion_reentry(completer, prog)
         if code is not None:
             return code
-    if version is not None and argv and argv[0] == '--version':
+    if version is not None and args and args[0] == '--version':
         print(version)
         return 0
 
@@ -1024,7 +1024,7 @@ def run_main(parse, argv=None, theme=None, completion=None,
         return active.paint('error', 'error:')
 
     try:
-        result = parse(list(argv))
+        result = parse(list(args))
     except KeyboardInterrupt:
         # a process ended by SIGINT dies quietly with 128+SIGINT
         # (the shell already echoed ^C).  ONLY here (ruled
@@ -1127,10 +1127,10 @@ def _iterate_over_bytes(b):
 
 # --8<-- end big _iterate_over_bytes --8<--
 
-# --8<-- start big toy multisplit --8<--
+# --8<-- start big toy_multisplit --8<--
 # --8<-- requires big license --8<--
 
-def _toy_multisplit(s, separators):
+def toy_multisplit(s, separators):
     """
     A toy version of multisplit.  It lives here so the test
     suite can validate multisplit against it--the two must always
@@ -1268,7 +1268,7 @@ def _toy_multisplit(s, separators):
 
     return as_pairs(segments)
 
-# --8<-- end big toy multisplit --8<--
+# --8<-- end big toy_multisplit --8<--
 
 
 # --8<-- start big linebreaks --8<--
@@ -2199,7 +2199,7 @@ def merge_columns(*columns, column_separator=None,
 # --8<-- end big word wrap trio --8<--
 
 
-# --8<-- start big format definition list --8<--
+# --8<-- start big format_definition_list --8<--
 # --8<-- requires big license --8<--
 # --8<-- requires big word wrap trio --8<--
 
@@ -2428,7 +2428,7 @@ def format_definition_list(pairs, margin=79, *,
         append(indent + term + ribbon[width:] + wrapped[len_definition_indent:])
     return linebreak.join(lines)
 
-# --8<-- end big format definition list --8<--
+# --8<-- end big format_definition_list --8<--
 
 
 ##
@@ -3122,7 +3122,7 @@ def paint_usage(theme, text):
 # --8<-- requires appeal export shim --8<--
 # --8<-- requires appeal theme --8<--
 # --8<-- requires big word wrap trio --8<--
-# --8<-- requires big format definition list --8<--
+# --8<-- requires big format_definition_list --8<--
 def usage_units(usage):
     """
     Split a usage line into its unbreakable top-level units: the
@@ -3434,14 +3434,14 @@ def split(*separators, strip=False):
             # here--multisplit rejects an empty separator tuple--
             # so its docstring's promise is the spec.)
             return value.split()
-        # _toy_multisplit returns (text, separator) pairs (big
+        # toy_multisplit returns (text, separator) pairs (big
         # 0.14's keep=True form), with empty texts between
         # adjacent separators.  keep the texts; drop the interior
         # empties (adjacent separators count as one); and with
         # strip, drop the boundary empties too (leading and
         # trailing separators).
         texts = [text for text, _ in
-                 _toy_multisplit(value, list(separators))]
+                 toy_multisplit(value, list(separators))]
         last = len(texts) - 1
         values = [text for i, text in enumerate(texts)
                   if text or i == 0 or i == last]

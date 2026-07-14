@@ -8,20 +8,9 @@
 # standalone script, so our copies deserve behavior pins of their
 # own), or not at all (error branches, rare shapes).  3.6-clean.
 
-def preload_local_appeal():
-    from pathlib import Path
-    import sys
-    appeal_dir = Path(sys.argv[0]).resolve().parent
-    while True:
-        appeal_init = appeal_dir / "appeal" / "__init__.py"
-        if appeal_init.is_file():
-            break
-        appeal_dir = appeal_dir.parent
-    sys.path.insert(1, str(appeal_dir))
-    import appeal
-    return appeal_dir
+from big import test
 
-appeal_dir = preload_local_appeal()
+appeal_dir = test.preload('appeal')
 
 import contextlib
 import io
@@ -34,8 +23,6 @@ from appeal import (
     UsageError, build, compile_plan, interpreter_parse,
     )
 from appeal import runtime
-
-from big import test
 
 
 def both(fn, argv):
@@ -2766,6 +2753,26 @@ def test_completion_boundary_and_help():
     assert complete_command_set(st2, ['help', 'go'], '-') != []
     assert complete_command_set(st2, ['help', 'zzz'], 'x') == []
     assert 'go' in complete_command_set(st2, ['help'], 'g')
+
+
+def test_entry_points_default_to_sys_argv():
+    # main/process/parse all take `args`, defaulting to sys.argv[1:]
+    # when None (the border reads the real command line); an
+    # explicit args list bypasses sys.argv entirely
+    app = Appeal(name='ep')
+    @app.command()
+    def go(x: int):
+        return x
+    saved = sys.argv
+    try:
+        sys.argv = ['ep', 'go', '5']
+        assert app.process() == 5              # None -> sys.argv[1:]
+        assert app.parse().execute() == 5
+        assert app.main() == 5                 # go's nonzero int IS the code
+        sys.argv = ['ep']                      # a different command line
+        assert app.process(['go', '9']) == 9   # explicit wins, no sys.argv
+    finally:
+        sys.argv = saved
 
 
 if __name__ == '__main__':

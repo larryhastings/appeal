@@ -1,21 +1,6 @@
-def preload_local_appeal():
-    """
-    Pre-load the local "appeal" module, to preclude finding
-    an already-installed one on the path.
-    """
-    from pathlib import Path
-    import sys
-    appeal_dir = Path(sys.argv[0]).resolve().parent
-    while True:
-        appeal_init = appeal_dir / "appeal" / "__init__.py"
-        if appeal_init.is_file():
-            break
-        appeal_dir = appeal_dir.parent
-    sys.path.insert(1, str(appeal_dir))
-    import appeal
-    return appeal_dir
+from big import test
 
-appeal_dir = preload_local_appeal()
+appeal_dir = test.preload('appeal')
 
 import appeal
 import big.all as big

@@ -57,24 +57,9 @@ import textwrap
 import unittest
 
 
-def preload_local_appeal():
-    """
-    Pre-load the local "appeal" module, to preclude finding
-    an already-installed one on the path.
-    """
-    from os.path import abspath, dirname, isfile, join, normpath
-    import sys
-    appeal_dir = abspath(dirname(sys.argv[0]))
-    while True:
-        appeal_init = join(appeal_dir, "appeal/__init__.py")
-        if isfile(appeal_init):
-            break
-        appeal_dir = normpath(join(appeal_dir, ".."))
-    sys.path.insert(1, appeal_dir)
-    import appeal
-    return appeal_dir
+from big import test
 
-appeal_dir = preload_local_appeal()
+appeal_dir = str(test.preload('appeal'))
 
 import appeal
 
@@ -86,10 +71,10 @@ if getattr(appeal, '__version__', '').startswith('2.'):
     print("test_v1.py is the v1 corpus; this tree is v2. See tests/test_all.py.")
     sys.exit(0)
 
-# big.test adds bare-assert introspection and a runner that returns
-# control to us instead of exiting.  (Appeal already depends on big;
-# this is big.test's first customer after big itself.)
-from big import test
+# big.test (imported above, for preload) adds bare-assert
+# introspection and a runner that returns control to us instead of
+# exiting.  (Appeal already depends on big; this is big.test's
+# first customer after big itself.)
 from appeal.argument_grouping import Function, ParameterGrouper
 
 
@@ -396,8 +381,8 @@ class SmokeTests(AppealTestsBase):
         global command
         global process
         app = appeal.Appeal(
-            usage_max_columns=80,
-            usage_indent_definitions=2,
+            margin=80,
+            indent=2,
             # positional_argument_usage_format="<{name.upper()}>",
             version="0.5",
             )
@@ -1749,32 +1734,47 @@ class NewStyleTests(AppealTestsBase):
 
     def test_generate_docs_for_option_with_simple_type(self):
         import appeal
-        import sys
-        import os.path
-        app = appeal.Appeal()
 
-        @app.command()
-        def nuttall(*, verbose: bool = False):
-            """
-            Demo function, first line.
-            """
-            if verbose:
-                print(f"verbose={verbose}")
+        def assertIn(needle, haystack):
+            assert needle in haystack, f"{needle!r} not in {haystack!r}"
 
-        start, captured_print, end = make_stdout_capture()
-        start()
-        app.help()
-        text = end()
-        if 0:
-            assertIn = self.assertIn
-        else:
-            def assertIn(needle, haystack):
-                assert needle in haystack, f"{needle!r} not in {haystack!r}"
+        # The test hands Appeal the script name explicitly (the
+        # script= constructor argument), instead of depending on
+        # whatever sys.argv[0] happens to be however the suite was
+        # launched.  For an unnamed program Appeal derives the usage
+        # name from os.path.basename(script), falling back to
+        # 'program' when that's empty--so a bare or trailing-slash
+        # argv[0] never degenerates into "usage:  command".  Each
+        # expected prog is written out literally, so this pins
+        # Appeal's behavior rather than recomputing it.
+        cases = (
+            ('frobnicate',                'frobnicate'),
+            ('./frobnicate',              'frobnicate'),
+            ('/usr/local/bin/frobnicate', 'frobnicate'),
+            ('frobnicate.py',             'frobnicate.py'),
+            ('',                          'program'),
+            ('/opt/tools/',               'program'),
+        )
+        for script, expected_prog in cases:
+            app = appeal.Appeal(script=script)
 
-        assertIn(f"usage: {os.path.basename(sys.argv[0])} command", text)
-        assertIn("Commands:", text)
-        assertIn("nuttall", text)
-        assertIn("Demo function, first line.", text)
+            @app.command()
+            def nuttall(*, verbose: bool = False):
+                """
+                Demo function, first line.
+                """
+                if verbose:
+                    print(f"verbose={verbose}")
+
+            start, captured_print, end = make_stdout_capture()
+            start()
+            app.help()
+            text = end()
+
+            assertIn(f"usage: {expected_prog} command", text)
+            assertIn("Commands:", text)
+            assertIn("nuttall", text)
+            assertIn("Demo function, first line.", text)
 
 
 ##

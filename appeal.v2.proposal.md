@@ -4,6 +4,14 @@
 
 *2026/07/02*
 
+> **Historical design document.** This is the original v2 design
+> rationale, written before the implementation began.  It predates
+> most of the rulings that shaped the shipped library and does not
+> track later changes.  The **spec of record is
+> [appeal.v2.grammar.md](appeal.v2.grammar.md)**; for how the code is
+> actually organized see [appeal.v2.tour.md](appeal.v2.tour.md).  Kept
+> for design history.
+
 ## 1: Overview
 
 This document proposes a ground-up rewrite of Appeal--"Appeal v2"--and lays
