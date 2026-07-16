@@ -7,7 +7,7 @@
 # test_all runs this file when the interpreter is new enough and
 # COUNTS it out loud when it isn't (never a silent skip).
 #
-# Helpers and fixtures come from test_all: one harness, two
+# Helpers and fixtures come from test_appeal: one harness, two
 # files, split by interpreter floor (ruled 2026-07-11).
 
 import sys
@@ -18,7 +18,7 @@ if sys.version_info < (3, 9):
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from test_all import (
+from test_appeal import (
     Appeal, AppealConfigurationError, UsageError, appeal, test,
     build, run_both, run_script, subprocess_env, repo_dir,
     write_standalone_fixture,
@@ -316,7 +316,10 @@ def test_generic_scoped_overlay():
     assert got == ('ok', ('A', ('t',), {'k': 'v'})), got
 
 
+def run_tests(run=None):
+    (run or test.run)(name='appeal 3.9+ spellings', module=__name__)
+
+
 if __name__ == '__main__':
-    total, failures = test.run(name='appeal 3.9+ spellings')
-    print(f'{total} tests, {failures} failures (3.9+ spellings)')
-    sys.exit(1 if failures else 0)
+    run_tests()
+    test.finish()

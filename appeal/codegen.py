@@ -1419,6 +1419,9 @@ def _render_ref(name, obj):
                 f"can't emit a standalone script: {module}.{qualname} "
                 f"isn't importable by name (lambdas, closures, and nested "
                 f"callables can't be imported)")
+        # past the refusals, `head` IS importable from `module`, so
+        # canonicalize away a private-submodule __module__
+        module = _public_module(module, qualname.split('.')[0])
         if '.' in qualname:
             # a class's method (or a nested class): import the
             # outermost class, reach the rest by attribute
@@ -1433,6 +1436,28 @@ def _render_ref(name, obj):
     raise AppealConfigurationError(
         f"can't emit a standalone script: don't know how to render "
         f"{name} = {obj!r}")
+
+
+def _public_module(module, head):
+    """
+    The public module to import `head` from.  An object's __module__
+    can name a private implementation submodule instead of its public
+    home (CPython 3.13 reports `pathlib.Path.__module__` as
+    'pathlib._local'; 3.14 reverted it).  Returns the shortest
+    already-imported ancestor module that re-exports the SAME object
+    (identity-checked); falls back to `module` when none does, which
+    is the ordinary case.  Called only for a `head` already known
+    importable from `module` (the caller refused lambdas etc. first).
+    """
+    target = getattr(sys.modules.get(module), head, None)
+    assert target is not None
+    parts = module.split('.')
+    for depth in range(1, len(parts)):       # ancestors, shortest first
+        ancestor = '.'.join(parts[:depth])
+        mod = sys.modules.get(ancestor)
+        if mod is not None and getattr(mod, head, None) is target:
+            return ancestor
+    return module
 
 
 # every standalone script gets these; everything else is plucked

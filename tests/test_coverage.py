@@ -2864,7 +2864,486 @@ def test_entry_points_default_to_sys_argv():
         sys.argv = saved
 
 
+# ---------------------------------------------------------------------
+# The branch-coverage completion tests (2026-07-16): black-box tests
+# closing the partial branches the statement-coverage push left.
+# Larry's rule for these: no pragmas, no white-box internals-forcing.
+# 34 of 46 partial branches closed below; the WALL-LIST--the 12 that
+# would need a pragma or internals-forcing, with why--so `coverage
+# --branch` reads 99% by design, not neglect:
+#
+#   __init__.py 109->126   _config_vet(command_plan_for=None) with an
+#                          unknown key: all three callers pass plan_for
+#   __init__.py 621->619   indent= re-indents a FRESH default_templates
+#                          copy at construction; all three keys present
+#   build.py    936->826   all five Parameter kinds `continue`; the
+#                          not-VAR_KEYWORD fall-through is dead
+#   codegen.py  523->526   emit_group_count_check's only caller passes
+#                          guard=True
+#   codegen.py  617->620   option_value_expr's callers never pre-supply
+#                          default_name
+#   codegen.py 1372->1361  a duplicate plain from-line needs two
+#                          DISTINCT objects rendering identical import
+#                          lines; refs' identity-dedupe prevents it
+#   codegen.py 1545->1547  imports never empty: the command callable
+#                          always renders as an import (or refuses)
+#   codegen.py 1547->1549  constants never empty: _HELP_/_TEMPLATES_
+#                          always emitted
+#   codegen.py 1667->1669  same as 1545 for the module-sourced emitter
+#   runtime.py 1725->1742  wrap_words: col==0 only coexists with
+#                          new_line=True; every placement adds len>0
+#   runtime.py 1857->1867  split: rstrip guarantees len_indent <
+#                          len(line), the indent loop always breaks
+#   runtime.py 3307->3305  the themed-table painter's not-found
+#                          fallback: format_definition_list renders
+#                          every term at line start (and refuses
+#                          linebreak terms), so a corpus row's display
+#                          is always found
+
+def test_branch_schema_and_read_edges():
+    from appeal.schema import mcp_input_schema
+    from appeal.read import read_mapping
+
+    # a repeat operand whose converter has no JSON type maps to a
+    # bare array (no items)
+    def conv(s):
+        return s
+    def f(*tags: conv):
+        return tags
+    s = mcp_input_schema(build(f))
+    assert s['properties']['tags'] == {'type': 'array'}, s
+
+    # a flag config value that's neither str, bool, nor 0/1 refuses
+    def g(*, dry=False):
+        return dry
+    try:
+        read_mapping(build(g), {'dry': 3.5})
+        assert False, 'expected AppealDataError'
+    except AppealDataError:
+        pass
+
+    # a **kwargs-delivered option absent from the mapping is OMITTED
+    # (not defaulted)--both in read_mapping and in the group-sequence
+    # filler
+    def h(a, *, real: int = 1, **kw):
+        return (a, real, kw)
+    appeal.add_option_override(h, 'extra', ('--extra',),
+                               annotation=str, default=None)
+    assert read_mapping(build(h), {'a': 'x'}) == ('x', 1, {})
+
+    def gconv(u: int = 0, *, gopt: int = 1, **gkw):
+        return (u, gopt, gkw)
+    appeal.add_option_override(gconv, 'gextra', ('--gextra',),
+                               annotation=str, default=None)
+    def h2(a, *, where: gconv = None):
+        return (a, where)
+    got = read_mapping(build(h2), {'a': 'x', 'where': [5]})
+    assert got == ('x', (5, 1, {})), got
+
+
+def test_branch_interpreter_edges():
+    from appeal.interpreter import parse as iparse
+
+    # winner scan: a multi-rule parameter plus an UNRELATED given
+    # option (the scan iterates past the foreign key)
+    def f(z, *, direction='n', verbose=False):
+        return (z, direction, verbose)
+    appeal.add_option_override(f, 'direction', ('--north',),
+                               annotation=str, default='n')
+    appeal.add_option_override(f, 'direction', ('--south',),
+                               annotation=str, default='s')
+    got = iparse(build(f), ['--verbose', '--north', 'up', 'Z'])
+    assert got == ('Z', 'up', True), got
+
+    # an absent option group whose child declares TWO options: the
+    # owner-entry sweep iterates them all without raising
+    def grp(v: int = 0, *, alpha=False, beta=False):
+        return (v, alpha, beta)
+    def g(x, *, opts: grp = None):
+        return (x, opts)
+    assert iparse(build(g), ['X']) == ('X', None)
+
+    # a class command through the bare interpreter (no execution
+    # environment): the instance is returned, not stashed
+    class K:
+        def __init__(self, x):
+            self.x = x
+    got = iparse(build(K), ['5'])
+    assert isinstance(got, K) and got.x == '5'
+
+
+def test_branch_run_main_error_edges():
+    from appeal.runtime import run_main
+
+    def quiet_main(fn):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = run_main(lambda argv: fn(), [], theme=False)
+        return code, err.getvalue()
+
+    # a real AppealDataError WITHOUT usage: no usage line printed
+    def d():
+        raise AppealDataError('data, no usage')
+    code, err = quiet_main(d)
+    assert code == 2 and 'usage:' not in err, (code, err)
+
+    # the two-copies case: exceptions from "another appeal" match by
+    # name and home.  A foreign AppealUsageError walks the MRO past
+    # the three names to its AppealError base; a foreign
+    # AppealDataError has no usage attribute to print.
+    class FE(Exception):
+        pass
+    class FUsage(FE):
+        pass
+    FE.__name__, FE.__module__ = 'AppealError', 'other.appeal.runtime'
+    FUsage.__name__, FUsage.__module__ = ('AppealUsageError',
+                                          'other.appeal.runtime')
+    def u():
+        raise FUsage('foreign usage error')
+    code, err = quiet_main(u)
+    assert code == 1, (code, err)
+
+    class FData(Exception):
+        pass
+    FData.__name__, FData.__module__ = ('AppealDataError',
+                                        'other.appeal.runtime')
+    def fd():
+        raise FData('foreign data, no usage attr')
+    code, err = quiet_main(fd)
+    assert code == 2 and 'usage:' not in err, (code, err)
+
+
+def test_branch_negative_number_global_operand():
+    # a negative-number token is an operand even mid-scan at a
+    # command boundary check (the global command's window)
+    app = Appeal(name='t')
+    @app.global_command()
+    def glob(a: int, b: int):
+        return None
+    @app.command()
+    def addc(x: int):
+        return x
+    assert app.process(['-5', '-6', 'addc', '7']) == 7
+
+
+def test_branch_completion_edges():
+    from appeal.complete import complete_set
+    from appeal.runtime import completion_reentry
+
+    # a repeatable option already on the line still completes
+    def f(*, tag: appeal.accumulator[str] = ()):
+        return tag
+    assert '--tag' in appeal.complete(build(f), ['--tag', 'x'], '--')
+
+    # fish reentry with an EMPTY current token (cursor after a space)
+    seen = []
+    old = dict(os.environ)
+    os.environ.update({'_APPEAL_COMPLETE': 'fish',
+                       'COMP_WORDS': 'p\nx', 'COMP_CWORD': ''})
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            completion_reentry(lambda b, p: seen.append((b, p)) or [], 'p')
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+    assert seen == [(['x'], '')], seen
+
+    # `help <nested-set> <TAB>`: no opinion (a set has no one page)
+    def db_global():
+        pass
+    def mig(x):
+        pass
+    def top():
+        pass
+    commands = {'db': build(db_global), 'top': build(top)}
+    sets = {'db': {'commands': {'mig': build(mig)}, 'repeat': False}}
+    assert complete_set(commands, None, ['help', 'db'], '', sets=sets) == []
+
+    # cycling resolution: an entered, non-repeat inner set is
+    # ineligible--the word resolves to the repeat root instead
+    def rootcmd():
+        pass
+    commands2 = {'db': build(db_global), 'rootcmd': build(rootcmd)}
+    sets2 = {'db': {'commands': {'mig': build(mig)}, 'repeat': False}}
+    complete_set(commands2, None, ['db', 'mig', 'X', 'rootcmd'], '',
+                 repeat=True, sets=sets2)
+
+
+def test_branch_scoped_forced_claim_skips_taken():
+    # the same scoped key in two windows with DIFFERENT key sets:
+    # --flag forces b's window (claiming flag's occurrence); --extra
+    # then forces c's window, whose forced open re-scans flag's
+    # occurrences--skipping the claimed one and running dry
+    from appeal.interpreter import parse as iparse
+    def cb(p=0, *, flag=False):
+        return ('b', p, flag)
+    def cc(r=0, *, flag=False, extra=False):
+        return ('c', r, flag, extra)
+    def cd(s=0, *, extra=False):
+        return ('d', s, extra)
+    def mgy(a, b: cb = None, c: cc = None, d: cd = None):
+        return (a, b, c, d)
+    got = both(mgy, ['A', '--flag', '--extra'])
+    assert got == ('ok', ('A', ('b', 0, True), ('c', 0, False, True),
+                          None)), got
+
+
+def test_branch_text_formatter_edges():
+    from appeal.runtime import (wrap_words, split_text_with_code,
+                                usage_units, format_definition_list,
+                                merge_columns, OverflowStrategy,
+                                render_help_page, default_templates, Theme)
+
+    # code_indent=0 turns code detection off entirely
+    split_text_with_code('para one\n\n    indented, not code\n',
+                         code_indent=0)
+
+    # a definition that wraps to nothing renders a bare term
+    format_definition_list([('term', '')], 40)
+    format_definition_list([('term', '\n')], 40)
+
+    # bytes mode with explicit indent/spacer (the sentinels
+    # untriggered)
+    format_definition_list([(b'term', b'text')], 40,
+                           indent=b' ', spacer=b' ')
+
+    # two NON-adjacent overflows in one column stay separate regions
+    col1 = (['WWWWWWWWWWWWWWW', 'b', 'c', 'WWWWWWWWWWWWWWW', 'e'], 4, 8)
+    col2 = (['1', '2', '3', '4', '5'], 4, 10)
+    merge_columns(col1, col2,
+                  overflow_strategy=OverflowStrategy.INTRUDE_ALL)
+    merge_columns(col1, col2,
+                  overflow_strategy=OverflowStrategy.DELAY_ALL)
+
+    # usage tokenizer: doubled and trailing spaces make empty units
+    assert usage_units('prog  [x]  y ') == ['prog', '[x]', 'y']
+
+    # themed table painting walks PAST a wrapped description's
+    # continuation lines to find the next row
+    from appeal.help import merge_docs
+    def draw(shape, *, verbose=False, times: int = 1):
+        """
+        Draws.
+
+        Options:
+          verbose: a very long narration that will definitely need
+              to be wrapped across multiple lines when rendered into
+              the table column because it keeps going artisanally.
+          times: short.
+        """
+    plan = build(draw)
+    page = render_help_page(plan.usage(), merge_docs(plan),
+                            default_templates, margin=50, theme=Theme())
+    assert '\x1b[' in page
+
+
+def test_branch_help_qualifier_with_empty_format():
+    # positional_argument_usage_format='' renders operand names to
+    # nothing--the position qualifier's anchors both come up falsy
+    from appeal.help import merge_docs
+    def child(p, *, flag=False):
+        return (p, flag)
+    app = Appeal(name='f', positional_argument_usage_format='')
+    @app.global_command()
+    def mg(a, b: child = None, c: child = None):
+        return (a, b, c)
+    corpus = merge_docs(app.plan)
+    assert corpus['options'], corpus
+
+
+def test_branch_repl_data_error_without_usage():
+    # a command raising AppealDataError with no usage: the repl
+    # prints the message and prompts on
+    app = Appeal(name='r')
+    @app.command()
+    def kaboom():
+        raise AppealDataError('no usage here')
+    stdin = io.StringIO('kaboom\n')
+    out = io.StringIO()
+    old = sys.stdin
+    sys.stdin = stdin
+    try:
+        with contextlib.redirect_stdout(out):
+            app.repl()
+    finally:
+        sys.stdin = old
+    assert 'no usage here' in out.getvalue()
+
+
+def test_branch_first_parse_race_losers():
+    # the double-checked-lock LOSER branches: both threads must get
+    # past the fast path before either installs.  A gate inside the
+    # command's own signature probe (user code, run at build time)
+    # makes the race deterministic.
+    import threading
+    import inspect
+
+    def make_gate(parties=2):
+        lock, count, evt = threading.Lock(), [0], threading.Event()
+        def gate():
+            with lock:
+                count[0] += 1
+                if count[0] >= parties:
+                    evt.set()
+            evt.wait(timeout=10)
+        return gate
+
+    class SlowSig:
+        def __init__(self, gate):
+            self.__name__ = 'slowsig'
+            self._gate = gate
+        @property
+        def __signature__(self):
+            self._gate()
+            return inspect.Signature([inspect.Parameter(
+                'a', inspect.Parameter.POSITIONAL_OR_KEYWORD)])
+        def __call__(self, a):
+            return a
+
+    def race(app, argv):
+        results, errors = [], []
+        def runner():
+            try:
+                results.append(app.process(list(argv)))
+            except Exception as e:      # pragma: no cover
+                errors.append(e)
+        threads = [threading.Thread(target=runner) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, errors
+        return results
+
+    # global-command-only app: the global-plan and single-parse
+    # installs each get a loser
+    app = Appeal(name='race1')
+    app.global_command()(SlowSig(make_gate()))
+    assert race(app, ['x']) == ['x', 'x']
+
+    # command-set app: the set-pieces install gets a loser
+    app2 = Appeal(name='race2')
+    app2.global_command()(SlowSig(make_gate()))
+    @app2.command()
+    def go():
+        return 'went'
+    assert race(app2, ['y', 'go']) == ['went', 'went']
+
+
+BRANCH_EDGE_MODULE = '''\
+import appeal
+app = appeal.Appeal(name='tool')
+
+@app.global_command()
+class Tool:
+    def __init__(self, base='.', *, verbose=False):
+        self.base = base
+
+    @app.command()
+    def work(self):
+        'Works.'
+        return self.base
+
+class Sneaky(dict):
+    'A container whose repr lies: parses fine, compares unequal.'
+    def __repr__(self):
+        return '{}'
+
+class PtOpt(appeal.Option):
+    def init(self, default):
+        self.v = dict(default) if default else {}
+    def option(self, k, v):
+        self.v[k] = v
+    def render(self):
+        return self.v
+
+def sneaky_default(x, *, pt: PtOpt = Sneaky({'a': 1})):
+    print(x, pt)
+'''
+
+
+def test_branch_standalone_imports_public_module_not_private():
+    # __module__ can name a PRIVATE impl submodule (3.13's
+    # pathlib.Path.__module__ == 'pathlib._local'); the emitted
+    # standalone must import from the public parent that re-exports
+    # it, not the private name.  Three levels deep, so the search
+    # skips the top package (which does NOT re-export it) and lands
+    # on the intermediate one (which does)--exercising both the
+    # keep-looking and the found arcs.
+    import tempfile
+    from appeal import emit_standalone
+    with tempfile.TemporaryDirectory() as d:
+        top = os.path.join(d, 'pubpriv')
+        sub = os.path.join(top, 'sub')
+        os.makedirs(sub)
+        open(os.path.join(top, '__init__.py'), 'wt').close()  # no re-export
+        with open(os.path.join(sub, '__init__.py'), 'wt') as f:
+            f.write('from pubpriv.sub._impl import cmd\n')
+        with open(os.path.join(sub, '_impl.py'), 'wt') as f:
+            f.write('def cmd(x):\n    return x\n')
+        sys.path.insert(0, d)
+        try:
+            import pubpriv.sub
+            assert pubpriv.sub.cmd.__module__ == 'pubpriv.sub._impl'  # trap
+            script = emit_standalone(build(pubpriv.sub.cmd), argv0='cmd')
+            assert 'from pubpriv.sub import cmd' in script, script
+            assert '_impl' not in script, script
+        finally:
+            sys.path.remove(d)
+            for name in ('pubpriv', 'pubpriv.sub', 'pubpriv.sub._impl'):
+                sys.modules.pop(name, None)
+
+
+def test_branch_standalone_refuses_main_defined():
+    # a command defined in the user's OWN __main__ script can't be
+    # imported by the generated standalone--refused by name.  (The
+    # test suite is never __main__--the driver imports it--so
+    # reproduce the real scenario with the callable's own __module__,
+    # exactly what Python stamps on a function defined in a script.)
+    from appeal import emit_standalone
+    def cmd(x):
+        return x
+    cmd.__qualname__ = 'cmd'         # a top-level name, no '<locals>'
+    cmd.__module__ = '__main__'
+    try:
+        emit_standalone(build(cmd))
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert '__main__' in str(e), e
+
+
+def test_branch_emission_edges():
+    # standalone_mcp with an OPTIONAL __init__ operand passes the
+    # required-without-coverage sweep; a container default whose
+    # repr round-trips UNEQUAL refuses by name
+    import tempfile
+    from appeal import emit_standalone
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'branch_edge_mod.py')
+        with open(path, 'wt', encoding='utf-8') as f:
+            f.write(BRANCH_EDGE_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import branch_edge_mod
+            import importlib
+            importlib.reload(branch_edge_mod)
+            script = branch_edge_mod.app.standalone_mcp()
+            assert 'import appeal' not in script
+            try:
+                emit_standalone(build(branch_edge_mod.sneaky_default),
+                                argv0='sd')
+                assert False, 'expected refusal of the lying repr'
+            except AppealConfigurationError:
+                pass
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('branch_edge_mod', None)
+
+
+def run_tests(run=None):
+    (run or test.run)(name='appeal coverage suite', module=__name__)
+
+
 if __name__ == '__main__':
-    total, failures = test.run(name='appeal coverage suite')
-    print(f'{total} tests, {failures} failures (coverage suite)')
-    sys.exit(1 if failures else 0)
+    run_tests()
+    test.finish()

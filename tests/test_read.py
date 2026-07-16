@@ -447,5 +447,10 @@ if dataclass is not None:
 else:
     print('TestReadCSV not run on Python 3.6 (the corpus record is a dataclass, 3.7+)')
 
+def run_tests(run=None):
+    (run or test.run)(name='appeal read', module=__name__)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    run_tests()
+    test.finish()

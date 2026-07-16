@@ -43,9 +43,4 @@ test = ['perky', 'tomli']
 
 [tool.coverage.run]
 source = ["appeal"]
-omit = [
-    # v1 keepsake, not part of v2: argument_grouping is the
-    # grouping reference implementation (kept on purpose)
-    "appeal/argument_grouping.py",
-]
 

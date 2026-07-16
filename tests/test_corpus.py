@@ -92,5 +92,15 @@ def main():
     return 0 if ok else 1
 
 
+def run_tests(run=None):
+    # A custom runner: the corpus tests live in test_v1.py, exec'd
+    # and driven by hand (loader + EXPECTED_FAILURES ratchet), so
+    # they aren't discoverable by test.run(module=...).  Feed the
+    # shared aggregate so the driver's finish() sees a regression.
+    if main():
+        test.stats['failures'] += 1
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    run_tests()
+    test.finish()
