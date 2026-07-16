@@ -4,8 +4,8 @@
 # Copyright 2021-2026 by Larry Hastings
 #
 # (In the engineering docs the rewrite is nicknamed "v2" and the
-# 0.6 line "v1".)  The 0.6 source is on this branch's history;
-# argument_grouping.py stays on disk to serve as the grouping reference implementation.
+# 0.6 line "v1".)  The 0.6 source--and the old argument_grouping.py
+# parameter grouper it shipped with--lives on this branch's history.
 #
 # The spec of record is appeal.grammar.md; the design rationale
 # is appeal.proposal.md.  North star: every command must be
@@ -17,7 +17,7 @@ Appeal: give Appeal your function's signature, get a command-line
 interface--in process, or as a generated standalone script.
 """
 
-__version__ = '1.0a0'
+__version__ = '1.0'
 
 from .build import (
     add_option_override, add_parameter_usage, build,

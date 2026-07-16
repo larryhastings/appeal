@@ -29,6 +29,7 @@ import builtins
 def make_stdout_capture():
     text = []
     actual_print = builtins.print
+    saved_no_color = []
 
     def captured_print(*a, end="\n", sep=" ", flush=False):
         t = sep.join([str(o) for o in a])
@@ -36,11 +37,26 @@ def make_stdout_capture():
         text.append(t)
 
     def start():
+        # Captured output must be terminal-independent.  This helper
+        # swaps print() but NOT sys.stdout, so appeal's theme resolver
+        # still sees the real terminal--and in an interactive run
+        # (a TTY) it would paint ANSI into the text, breaking every
+        # substring assertion.  Force monochrome for the capture
+        # window; NO_COLOR always wins over a TTY or FORCE_COLOR.
+        import os
+        saved_no_color.append(os.environ.get('NO_COLOR'))
+        os.environ['NO_COLOR'] = '1'
         builtins.print = captured_print
         return captured_print
 
     def end():
+        import os
         builtins.print = actual_print
+        prior = saved_no_color.pop() if saved_no_color else None
+        if prior is None:
+            os.environ.pop('NO_COLOR', None)
+        else:
+            os.environ['NO_COLOR'] = prior
         result = "".join(text)
         return result
 
@@ -75,7 +91,6 @@ if not getattr(appeal, '__version__', '').startswith('0.'):
 # introspection and a runner that returns control to us instead of
 # exiting.  (Appeal already depends on big; this is big.test's
 # first customer after big itself.)
-from appeal.argument_grouping import Function, ParameterGrouper
 
 
 
@@ -2728,133 +2743,6 @@ class ReadmeTests(AppealTestsBase):
         self.assertEqual(lines, [
             "MyApp add self=<MyApp id='dingus'> a='f' b='g' c='h'"])
 
-
-class ArgumentGrouperTests(unittest.TestCase):
-
-    def test_everything(self):
-        def test(base, expected):
-            base_command = Function(base, collapse_degenerate=True)
-            required, optional = base_command.analyze()
-            # print(f"we got back (required={required}, optional={optional})")
-            optional2 = [[str(p) for p, fn, i in l if (p.leaf or p.var_positional)] for l in optional]
-            optional3 = [o for o in optional2 if o]
-            # for p, fn, i in required:
-            #     print(f">> str(p)={str(p)} p={p} fn={fn} i={i} p.leaf={p.leaf} p.var_positional={p.var_positional}")
-            stringized = f"required={[str(p) for p, fn, i in required if (p.leaf or p.var_positional)]} optional={optional3}"
-            self.assertEqual(stringized, expected)
-
-        def int_float(a:int, b=0.0): pass
-        def base(i_f:int_float, s): pass
-        test(base, "required=['a', 'b', 's'] optional=[]")
-
-        def int_float(i, f): return (i, f)
-        def base(s1="", a:int_float=(0, 0.0), s2=""): pass
-        test(base, "required=[] optional=[['s1'], ['i', 'f'], ['s2']]")
-
-        def int_float(i, f, *, verbose=False): return (i, f, verbose)
-        def base(s1="", a:int_float=(0, 0.0, False), s2=""): pass
-        test(base, "required=[] optional=[['s1'], ['i', 'f'], ['s2']]")
-
-        def int_int(i1: int, i2:int): return (i1, i2)
-        def int_int_float(ii:int_int=(0,0), f="", *, verbose=False): return (ii, f, verbose)
-        def base(s1="", a:int_int_float=(0, 0.0, False), s2=""): pass
-        test(base, "required=[] optional=[['s1'], ['i1', 'i2'], ['f'], ['s2']]")
-
-
-        def     conv_a1(a1w, a1x, a1y="x"): pass
-        def     conv_a2(a2w, a2x, a2y="x"): pass
-        def     conv_a3(a3w, a3x, a3y="x"): pass
-
-        def   conv_a(a1: conv_a1, a2:conv_a2, a3:conv_a3="x"): pass
-
-        def     conv_b1(b1w, b1x, b1y="x"): pass
-        def     conv_b2(b2w, b2x, b2y="x"): pass
-        def     conv_b3(b3w, b3x, b3y="x"): pass
-
-        def   conv_b(b1: conv_b1, b2:conv_b2, b3:conv_b3="x"): pass
-
-        def     conv_c1(c1w, c1x, c1y="x"): pass
-        def     conv_c2(c2w, c2x, c2y="x"): pass
-        def     conv_c3(c3w, c3x, c3y="x"): pass
-        def     conv_c4(c4w, c4x, c4y="x", c4z="x"): pass
-
-        def   conv_c(c1: conv_c1, c2:conv_c2, c3:conv_c3="x", c4:conv_c4="x"): pass
-
-        def base(a:conv_a, b:conv_b, c:conv_c="x"): pass
-        test(base,
-            "required=['a1w', 'a1x', 'a1y', 'a2w', 'a2x', 'a2y', 'a3w', 'a3x', 'a3y', 'b1w', 'b1x', 'b1y', 'b2w', 'b2x'] optional=[['b2y'], ['b3w', 'b3x'], ['b3y'], ['c1w', 'c1x', 'c1y', 'c2w', 'c2x'], ['c2y'], ['c3w', 'c3x'], ['c3y'], ['c4w', 'c4x'], ['c4y'], ['c4z']]")
-
-
-        def y_conv(e, q=0): pass
-
-        def suspicious_configuration(x, y:y_conv, *args): pass
-
-        with self.assertRaises(ValueError):
-            def base(a, b, c:suspicious_configuration, you_wont_see_me): pass
-            test(base, "xyz")
-
-        def base(a, b, c:suspicious_configuration): pass
-        test(base,
-            "required=['a', 'b', 'x', 'e'] optional=[['q'], ['args']]")
-
-
-        def int_float(i:int, f:float, *, verbose=False):
-            return (i, f, "verbose" if verbose else "silent")
-        def base(a="(a default)", s:int_float="(s default)", *args:int_float):
-            print(f"a={a} s={s} args={args}")
-        test(base,
-            "required=[] optional=[['a'], ['i', 'f'], ['args', 'i', 'f']]")
-
-
-        def int_float(i:int, f:float):
-            return (i, f, "verbose" if verbose else "silent")
-        def rip(a:int_float, b:int_float="(s default)", s:int_float="(s default)"): pass
-        test(rip,
-            "required=['i', 'f'] optional=[['i', 'f'], ['i', 'f']]")
-
-
-    """Regression tests for last_in_group with only_leaves=True.
-
-    Bug: when a group ended with non-leaf parameters that would be
-    skipped by only_leaves iteration, last_in_group was False for
-    the last *visible* leaf, because the code checked whether the
-    deque was empty rather than whether any remaining items would
-    actually be yielded.
-    """
-
-    def test_mixin_pattern(self):
-        """Logger has only keyword-only params, so log is non-leaf
-        with no positional children.  filename is the only leaf
-        in the required group."""
-        class Logger:
-            def __init__(self, *, verbose=False, log_level='info'): pass
-        def mixin(filename, log:Logger): pass
-
-        pg = ParameterGrouper(mixin)
-        leaves = list(pg)
-
-        self.assertEqual(len(leaves), 1)
-        self.assertEqual(leaves[0].name, "filename")
-        self.assertTrue(leaves[0].first_in_group)
-        self.assertTrue(leaves[0].last_in_group)
-
-    def test_non_leaf_trailing_in_required_group(self):
-        """Required group contains [x, y:conv].  y is non-leaf.
-        Iterating leaves-only, x is the only visible member
-        of the required group."""
-        def conv(a='x'): pass
-        def base(x, y:conv): pass
-
-        pg = ParameterGrouper(base)
-        leaves = list(pg)
-
-        self.assertEqual(len(leaves), 2)
-        self.assertEqual(leaves[0].name, "x")
-        self.assertTrue(leaves[0].first_in_group)
-        self.assertTrue(leaves[0].last_in_group)
-        self.assertEqual(leaves[1].name, "a")
-        self.assertTrue(leaves[1].first_in_group)
-        self.assertTrue(leaves[1].last_in_group)
 
 class BugfixRegressionTests(AppealTestsBase):
     #
