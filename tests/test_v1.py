@@ -63,7 +63,7 @@ appeal_dir = str(test.preload('appeal'))
 
 import appeal
 
-if getattr(appeal, '__version__', '').startswith('2.'):
+if not getattr(appeal, '__version__', '').startswith('0.'):
     # This tree is the v2 rewrite now.  This file is the v1 test
     # corpus, kept as the source of truth for migration (proposal
     # §9: "keep the tests, not the code")--its cases move into
@@ -429,7 +429,7 @@ class SmokeTests(AppealTestsBase):
     def test_test_3(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(test)
         self.assert_process(
             "test -g gloopy abc def -i 1 3.0 -v 336",
@@ -1222,7 +1222,7 @@ class SmokeTests(AppealTestsBase):
     def test_options_stack_4(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
             "options_stack --option --nested -ace",
@@ -1232,7 +1232,7 @@ class SmokeTests(AppealTestsBase):
     def test_options_stack_5(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
             "options_stack --option --nested -ace -b",
@@ -1242,7 +1242,7 @@ class SmokeTests(AppealTestsBase):
     def test_options_stack_6(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
             "options_stack --option --nested -ace -bdf",
@@ -1252,7 +1252,7 @@ class SmokeTests(AppealTestsBase):
     def test_options_stack_7(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
             "options_stack --option --nested -a -e",
@@ -1262,7 +1262,7 @@ class SmokeTests(AppealTestsBase):
     def test_options_stack_8(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
             "options_stack --option --nested -a -c",
@@ -1272,7 +1272,7 @@ class SmokeTests(AppealTestsBase):
     def test_options_stack_9(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
             "options_stack --option --nested -a -c",
@@ -1318,7 +1318,7 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_6(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
             "five_level_stack -a -d -g -j -me -n",
@@ -1343,7 +1343,7 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_9(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
             "five_level_stack -a -d -g -j -mh -k",
@@ -1353,7 +1353,7 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_10(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
             "five_level_stack -a -d -g -j -mh -n",
@@ -1371,7 +1371,7 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_12(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
             "five_level_stack -a -d -g -j -mb -e",
@@ -1381,7 +1381,7 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_13(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
             "five_level_stack -a -d -g -j -mb -h",
@@ -1391,7 +1391,7 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_14(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
             "five_level_stack -a -d -g -j -mb -k",
@@ -1401,7 +1401,7 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_15(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
             "five_level_stack -a -d -g -j -mb -n",
@@ -1411,7 +1411,7 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_16(self):
         # converted from a v1 scope-rejection pin (ruled
         # 2026-07-08): the line is legal now--pin what it
-        # means (see appeal.v2.grammar.md, scoped options)
+        # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.maxDiff = None
         self.assert_process(

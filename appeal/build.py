@@ -237,7 +237,47 @@ def _validate_completions(plan):
     walk(plan)
 
 
-def build(callable, name=None, method_of=None):
+def _long_option(name):
+    "The long option string for a parameter name: color -> --color."
+    return '--' + name.replace('_', '-')
+
+
+def _short_option(name):
+    "The short option string for a parameter name: color -> -c."
+    return '-' + name[0]
+
+
+# --- the default_options policy (v1's constructor knob, restored) ---
+#
+# A policy decides the option strings an automatically-mapped
+# keyword-only parameter proposes: given (name, annotation,
+# default), it returns a list of option strings.  Appeal claims
+# every long ('--xxx') unconditionally (they must be unique) and
+# every short ('-x') if its letter is still free.  The policy runs
+# at build time only; its output--the strings--is what the
+# compiled parser bakes, so a custom policy never rides along into
+# a standalone script.
+
+def default_options(name, annotation, default):
+    "Both a long (names >= 2 chars) and a short--v1's default."
+    strings = []
+    if len(name) >= 2:
+        strings.append(_long_option(name))
+    strings.append(_short_option(name))
+    return strings
+
+
+def default_long_option(name, annotation, default):
+    "Long only, no short (the common 'suppress all shorts' policy)."
+    return [_long_option(name)] if len(name) >= 2 else []
+
+
+def default_short_option(name, annotation, default):
+    "Short only, no long."
+    return [_short_option(name)]
+
+
+def build(callable, name=None, method_of=None, default_options=default_options):
     """
     Analyze a callable's signature and produce its Plan.
 
@@ -270,7 +310,8 @@ def build(callable, name=None, method_of=None):
                   memo={}, stack=(), top=True,
                   skip_first=method_of is not None
                   and not isinstance(callable, type)
-                  and not wrapped_class)
+                  and not wrapped_class,
+                  default_options=default_options)
     if isinstance(callable, type) or wrapped_class:
         plan.constructs = callable.__qualname__
     if method_of is not None:
@@ -562,6 +603,7 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
     def finish(rule):
         rule.explicit = explicit
         rule.usage_name = metavar
+        rule.annotation = annotation
         return rule
 
     if is_option(annotation):
@@ -749,7 +791,7 @@ def add_option_override(callable, parameter_name, strings,
 
 
 def _build(callable, name, memo, stack, top, skip_first=False,
-           allow_trailing=None):
+           allow_trailing=None, default_options=default_options):
     if callable in stack:
         cycle = ' -> '.join(getattr(c, '__name__', repr(c)) for c in stack)
         raise AppealConfigurationError(
@@ -933,7 +975,7 @@ def _build(callable, name, memo, stack, top, skip_first=False,
     if not top:
         memo[callable] = plan
     else:
-        _finalize_options(plan)
+        _finalize_options(plan, default_options)
         plan.gated = _mark_barriers(plan, certain=True)
     return plan
 
@@ -962,6 +1004,9 @@ def help_option_strings(plan):
     there is no automatic help at all--the user wins.  Help strings
     never appear in usage (v1, probed).
     """
+    if not plan.auto_help:
+        # the app's help= knob is off: no automatic help at all
+        return ()
     taken = {s for _, o in all_options(plan) for s in o.strings}
     if '--help' in taken:
         return ()
@@ -1038,7 +1083,7 @@ def _count_sites(plan):
     return sites
 
 
-def _finalize_options(plan):
+def _finalize_options(plan, default_options=default_options):
     """
     The whole-command view of the options.  A string declared by
     several windows is *scoped*: legal when every declaration
@@ -1047,13 +1092,28 @@ def _finalize_options(plan):
     docstrings may differ per window), and occurrences bind by
     position.  A string declared twice in ONE window is refused
     (no position can distinguish them), as is a grammar mismatch.
-    Each option gets a short string--its parameter's first
-    letter--if that letter is still free.  First declared, first
+
+    First, the option-string policy (default_options) runs over
+    every automatically-mapped option: it returns that option's
+    proposed strings from its (name, annotation, default).  Longs
+    are claimed here; shorts are proposed, and each is claimed
+    below if its letter is still free.  First declared, first
     served (walk order: a rule's own options, then its children's,
-    depth-first).
+    depth-first).  @app.option declarations are explicit and skip
+    the policy--their strings are the whole story.
     """
     sites = _count_sites(plan)
     pairs = all_options(plan)
+    for owner, option in pairs:
+        if option.explicit:
+            continue
+        longs, shorts = [], []
+        for s in default_options(option.name, option.annotation,
+                                 option.default):
+            validate_option_string(s)
+            (longs if s.startswith('--') else shorts).append(s)
+        option.strings = tuple(longs)
+        option.auto_shorts = tuple(shorts)
     declared = {}     # string -> [(owner, option)]
     for owner, option in pairs:
         for s in option.strings:
@@ -1100,14 +1160,14 @@ def _finalize_options(plan):
             # but belt and braces)
             continue   # pragma: no cover
         seen_rules.add(id(option))
-        short = '-' + option.name[0]
-        if short not in taken:
-            taken.add(short)
-            option.strings = (short,) + option.strings
-            if option.strings[-1] in scoped:
-                # the short rides its long's scopedness
-                scoped.add(short)
-                plan.scoped_keys = frozenset(scoped)
+        for short in option.auto_shorts:
+            if short not in taken:
+                taken.add(short)
+                option.strings = (short,) + option.strings
+                if option.strings[-1] in scoped:
+                    # the short rides its long's scopedness
+                    scoped.add(short)
+                    plan.scoped_keys = frozenset(scoped)
     for owner, option in pairs:
         if not option.strings:
             raise AppealConfigurationError(

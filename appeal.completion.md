@@ -6,7 +6,7 @@ marked ✔).  As of 2026/07/08 it is IMPLEMENTED--completion and
 colorization both; bash, zsh, and fish--and Part 3 below is the user
 walkthrough.*
 
-Terms used below, defined first: **the north star** is v2's
+Terms used below, defined first: **the north star** is Appeal 1.0's
 standing rule that every feature must work in generated standalone
 scripts or refuse by name.  **Scissors** snippets are marked,
 self-contained source regions one project borrows from another;
@@ -163,7 +163,7 @@ north star's whole point is that features don't get to skip it.
 The two humans-look-at-it surfaces: `--help` output and error
 messages.  Concretely, these spans:
 
-    usage: mytool [-v|--verbose] [-t|--times <int>] shape [width]
+    usage: mytool [-v|--verbose] [-t|--times times] shape [width]
     ^prefix ^prog  ^option        ^option  ^metavar  ^operand
 
     arguments:            <- heading

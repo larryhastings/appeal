@@ -18,7 +18,7 @@ stdlib.  Versions read:
 | Fire     | 0.7.1 | |
 | Typer    | 0.26.8 | vendors Click **8.3.1** in `typer/_click/` (not a normal dependency) |
 
-Appeal's column reflects Appeal v2 as built (see the grammar doc and
+Appeal's column reflects Appeal 1.0 as built (see the grammar doc and
 README).
 
 Columns are ordered Appeal-first, then Click, argparse, docopt, Fire,

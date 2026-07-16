@@ -98,11 +98,16 @@ def _ident(name):
 
 class _Emitter:
     def __init__(self, plan, refs=None, fill_names=None, templates=None, theme=None,
-                 boundary='saturation', max_columns=79):
+                 boundary='saturation', max_columns=79, symbol=None):
         # refs and fill_names may be shared across the emitters of
         # a command set, so converters common to several commands
-        # keep one name (and one rendering) in the combined source
+        # keep one name (and one rendering) in the combined source.
+        # symbol is the base for every emitted top-level name
+        # (scan_X, run_X, _USAGE_X, ...): a command set numbers it
+        # per plan OBJECT, so two classes each exposing `run` get
+        # run_run and run_run2 instead of silently sharing one.
         self.plan = plan
+        self.symbol = symbol or _ident(plan.name)
         self.templates = default_templates if templates is None else templates
         self.theme = theme
         self.max_columns = max_columns
@@ -123,7 +128,7 @@ class _Emitter:
         # option strings bound by position: fills thread the
         # shared occurrence queues
         self.scoped = frozenset(getattr(plan, 'scoped_keys', ()) or ())
-        self.usage_const = f'_USAGE_{_ident(plan.name)}'
+        self.usage_const = f'_USAGE_{self.symbol}'
 
     def line(self, s=''):
         self.lines.append(s)
@@ -520,7 +525,7 @@ class _Emitter:
             pad = pad + '    '
         self.line(f'{pad}check_count(len(given[{key!r}]), {child.minimum}, '
                   f'{child.maximum}, {counts}, {self.usage_const}, '
-                  f'what="option {key}")')
+                  f'what="option {key}", param={key!r})')
 
     def forcing_condition(self, keys):
         ns = [k for k in keys if k not in self.scoped]
@@ -576,7 +581,8 @@ class _Emitter:
                     if child.valid_counts is not None else 'None')
                 self.line(f'{pad}    check_count(len(_vals[0]), '
                           f'{child.minimum}, {child.maximum}, {counts}, '
-                          f'{self.usage_const}, what="option {o.key}")')
+                          f'{self.usage_const}, what="option {o.key}", '
+                          f'param={o.key!r})')
                 self.line(f'{pad}    _overlay[{o.key!r}] = _vals[0]')
             else:
                 self.line(f'{pad}    _overlay[{o.key!r}] = _vals[0]')
@@ -700,8 +706,8 @@ class _Emitter:
 
     def emit_parse_function(self, command_split=None):
         plan = self.plan
-        fname = f'parse_{_ident(plan.name)}'
-        options_const = f'_OPTIONS_{_ident(plan.name)}'
+        fname = f'parse_{self.symbol}'
+        options_const = f'_OPTIONS_{self.symbol}'
 
         table_items = []
         for owner, o in all_options(plan):
@@ -726,7 +732,7 @@ class _Emitter:
 
         # stage 1: the structural parse--no user code.  A malformed
         # line dies here, before anything runs.
-        self.line(f'def scan_{_ident(plan.name)}(argv, command_words=None):')
+        self.line(f'def scan_{self.symbol}(argv, command_words=None):')
         if self.gated:
             self.line(f'    positions = {{}}')
         gate_kwarg = ', positions=positions' if self.gated else ''
@@ -829,15 +835,15 @@ class _Emitter:
 
         # stage 2: build bottom-up and call--the conversions (user
         # code) and the command itself
-        self.line(f'def run_{_ident(plan.name)}(operands, given, positions=None, '
+        self.line(f'def run_{self.symbol}(operands, given, positions=None, '
                   f'env=None):')
         if help_keys:
             # compiled means the documentation too: the corpus is
             # predigested at build time, formatted at runtime
             corpus = merge_docs(plan)
-            corpus_name = self.refs.add(f'_HELP_{_ident(plan.name)}', corpus, dedupe=False)
-            templates_name = self.refs.add(f'_TEMPLATES_{_ident(plan.name)}', self.templates, dedupe=False)
-            theme_name = self.refs.add(f'_THEME_{_ident(plan.name)}', self.theme, dedupe=False)
+            corpus_name = self.refs.add(f'_HELP_{self.symbol}', corpus, dedupe=False)
+            templates_name = self.refs.add(f'_TEMPLATES_{self.symbol}', self.templates, dedupe=False)
+            theme_name = self.refs.add(f'_THEME_{self.symbol}', self.theme, dedupe=False)
             self.line(f"    if given.pop('--help', False):")
             self.line(f'        print(render_help_page({self.usage_const}, '
                       f'{corpus_name}, {templates_name}, '
@@ -929,11 +935,11 @@ class _Emitter:
 
         # both stages, glued: the fused convenience
         self.line(f'def {fname}(argv):')
-        self.line(f'    operands, given, rest, positions = scan_{_ident(plan.name)}(argv)')
+        self.line(f'    operands, given, rest, positions = scan_{self.symbol}(argv)')
         if command_split is None:
-            self.line(f'    return run_{_ident(plan.name)}(operands, given, positions)')
+            self.line(f'    return run_{self.symbol}(operands, given, positions)')
         else:
-            self.line(f'    return run_{_ident(plan.name)}(operands, given, positions), rest')
+            self.line(f'    return run_{self.symbol}(operands, given, positions), rest')
         self.line()
 
     def emit_completion_table(self):
@@ -964,7 +970,7 @@ class _Emitter:
                    options, table['help'], values,
                    operands, comma, conv_expr(table['repeat']),
                    table['minimum'], table['maximum']))
-        self.constant(f'_COMPLETE_{_ident(self.plan.name)}', src)
+        self.constant(f'_COMPLETE_{self.symbol}', src)
 
     def emit(self, command_split=None):
         children = []
@@ -1046,18 +1052,19 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
     return parse
 
 
-def emit_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79):
+def emit_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True):
     """
     Generate the source for a multi-command program: one parse
     function per command, an optional global-command parse function
     (command mode), and a dispatcher named parse_command_set.
     commands maps command-word -> Plan.  Returns (source, refs).
+    help=False suppresses the automatic `help` command (v1's knob).
     """
     templates = default_templates if templates is None else templates
     refs = Refs()
     fill_names = {}
     chunks = []
-    auto_help = 'help' not in commands
+    auto_help = help and 'help' not in commands
     auto_version = version is not None and 'version' not in commands
     command_words = (frozenset(commands)
                      | ({'help'} if auto_help else set())
@@ -1069,17 +1076,31 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
         chunks.append(emitter.emit(command_split=split)[0])
     subs = subs or {}
     sub_repeat = sub_repeat or {}
-    emitted_names = set()
+    # every plan OBJECT gets its own emitted symbol--the base for
+    # scan_X/run_X/_SET_X/_COMPLETE_X--numbered on collision, so
+    # two classes each exposing `run` emit run_run and run_run2
+    # (identity is the plan, never the bare word)
+    symbols = {}
+    taken = set()
+    def sym(plan):
+        symbol = symbols.get(id(plan))
+        if symbol is None:
+            base = symbol = _ident(plan.name)
+            counter = 1
+            while symbol in taken:
+                counter += 1
+                symbol = f'{base}{counter}'
+            taken.add(symbol)
+            symbols[id(plan)] = symbol
+        return symbol
+    emitted = set()
     def emit_one(plan, boundary='saturation'):
-        if plan.name in emitted_names:
-            raise AppealConfigurationError(
-                f"two commands named {plan.name!r} in one standalone "
-                f"script (a subcommand sharing a name?); the emitted "
-                f"functions would collide--rename one")
-        emitted_names.add(plan.name)
+        if id(plan) in emitted:
+            return
+        emitted.add(id(plan))
         emitter = _Emitter(plan, refs, fill_names, templates=templates,
                            theme=theme, boundary=boundary,
-                           max_columns=max_columns)
+                           max_columns=max_columns, symbol=sym(plan))
         chunks.append(emitter.emit()[0])
     for word, plan in commands.items():
         emit_one(plan, boundary='flexible' if word in subs
@@ -1113,9 +1134,8 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
         parent_plan = all_plans[parent_word]
         sub_plan_tables[parent_word] = sub_plans
         for w, plan in sub_plans.items():
-            if plan.name not in emitted_names:
-                emit_one(plan, boundary='flexible' if w in subs
-                         else 'saturation')
+            emit_one(plan, boundary='flexible' if w in subs
+                     else 'saturation')
         sub_entries = [(w, summary(p.callable))
                        for w, p in sub_plans.items()]
         sub_corpus = command_set_corpus(parent_plan, sub_entries, False)
@@ -1123,14 +1143,14 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
             command_set_usage(parent_word, parent_plan), sub_corpus,
             templates or default_templates, margin=max_columns)
         sub_table = ', '.join(
-            (f'{w!r}: _SET_{_ident(p.name)}' if w in subs
-             else f'{w!r}: (scan_{_ident(p.name)}, run_{_ident(p.name)})')
+            (f'{w!r}: _SET_{sym(p)}' if w in subs
+             else f'{w!r}: (scan_{sym(p)}, run_{sym(p)})')
             for w, p in sub_plans.items())
         sub_words = ', '.join(repr(w) for w in sorted(sub_plans))
         sub_lines.append(
-            f"_SET_{_ident(parent_plan.name)} = "
-            f"{{'scan': scan_{_ident(parent_plan.name)}, "
-            f"'run': run_{_ident(parent_plan.name)}, "
+            f"_SET_{sym(parent_plan)} = "
+            f"{{'scan': scan_{sym(parent_plan)}, "
+            f"'run': run_{sym(parent_plan)}, "
             f"'commands': {{{sub_table}}}, "
             f"'repeat': {sub_repeat.get(parent_word, False)!r}, "
             f"'words': frozenset(({sub_words},)), "
@@ -1145,24 +1165,24 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
     corpus_name = refs.add('_HELP_command_set', corpus, dedupe=False)
     templates_name = refs.add('_TEMPLATES_command_set', templates, dedupe=False)
     theme_name = refs.add('_THEME_command_set', theme, dedupe=False)
-    globals_name = (f'(scan_{_ident(global_plan.name)}, run_{_ident(global_plan.name)})'
+    globals_name = (f'(scan_{sym(global_plan)}, run_{sym(global_plan)})'
                     if global_plan is not None else 'None')
     table = ', '.join(
-        (f'{word!r}: _SET_{_ident(plan.name)}' if word in subs
-         else f'{word!r}: (scan_{_ident(plan.name)}, run_{_ident(plan.name)})')
+        (f'{word!r}: _SET_{sym(plan)}' if word in subs
+         else f'{word!r}: (scan_{sym(plan)}, run_{sym(plan)})')
         for word, plan in commands.items())
     def complete_entry(word, plan):
         # recursive: a child that is itself a parent nests its own
         # {'parent', 'commands', 'repeat'} entry (the completion
         # walker pushes on any such dict, at any depth)
         if word not in subs:
-            return f'_COMPLETE_{_ident(plan.name)}'
+            return f'_COMPLETE_{sym(plan)}'
         inner = ', '.join(
             f'{w!r}: {complete_entry(w, p)}'
             for w, p in sub_plan_tables[word].items())
         return ("{'parent': _COMPLETE_%s, 'commands': {%s}, "
                 "'repeat': %r}" % (
-                    _ident(plan.name), inner,
+                    sym(plan), inner,
                     sub_repeat.get(word, False)))
     version_complete = (
         ", 'version': {'options': {}, 'help': (), 'values': {}, "
@@ -1174,7 +1194,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
             ', '.join(f'{word!r}: {complete_entry(word, plan)}'
                       for word, plan in commands.items()),
             version_complete,
-            ("dict(_COMPLETE_%s, help=())" % _ident(global_plan.name)
+            ("dict(_COMPLETE_%s, help=())" % sym(global_plan)
              if global_plan is not None else 'None'),
             global_plan.minimum if global_plan is not None else 0,
             auto_help, repeat))
@@ -1252,13 +1272,13 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
     return '\n\n'.join(chunks), refs
 
 
-def compile_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, max_columns=79):
+def compile_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, max_columns=79, help=True):
     """
     In-process mode for a multi-command program.  Returns the
     dispatching parse function.
     """
     source, refs = emit_command_set(commands, global_plan, prog, templates,
-                                    theme, max_columns=max_columns)
+                                    theme, max_columns=max_columns, help=help)
     filename = '<appeal generated: command set>'
     linecache.cache[filename] = (
         len(source), None, source.splitlines(keepends=True), filename)
@@ -1287,14 +1307,72 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, t
     return parse
 
 
-def render_ref(name, obj):
+def _recipe_arg(value, refs):
+    """
+    One recipe argument as source.  Literals render by repr;
+    builtin converters render bare; any other class or callable
+    goes through the reference table, which supplies the import
+    under a collision-safe name (this is what lets
+    `validate(..., type=float)` and `accumulator[Path]` survive
+    emission with their semantics intact).
+    """
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        return repr(value)
+    builtin = _builtin_converters.get(value)
+    if builtin:
+        return builtin
+    preferred = '_' + getattr(value, '__name__', 'ref')
+    return refs.add(preferred, value)
+
+
+def render_ref(name, obj, refs=None):
     recipe = getattr(obj, '__appeal_recipe__', None)
     if recipe:
         # a vocabulary product (split(':'), counter(), ...): the
-        # standalone script re-runs the factory; the vocabulary
-        # travels with the streamed runtime
-        return f'{name} = {recipe}'
+        # standalone script re-runs the factory--the vocabulary
+        # travels with the streamed runtime--with each argument
+        # rendered from the structured recipe (kind, factory,
+        # args, kwargs); class arguments add refs of their own
+        kind, factory, args, kwargs = recipe
+        bits = [_recipe_arg(a, refs) for a in args]
+        bits.extend(f'{k}={_recipe_arg(v, refs)}'
+                    for k, v in kwargs.items())
+        if kind == 'subscript':
+            return f'{name} = {factory}[{", ".join(bits)}]'
+        return f'{name} = {factory}({", ".join(bits)})'
     return _render_ref(name, obj)
+
+
+def render_refs(refs):
+    """
+    Render every ref, sorted into (imports, constants) for the
+    script header.  A worklist, not a plain loop: rendering a
+    recipe may ADD refs (its class arguments), and those must
+    be rendered too.
+    """
+    imports = []
+    constants = []
+    done = set()
+    while True:
+        pending = [(n, o) for n, o in refs.objects.items()
+                   if n not in done]
+        if not pending:
+            return imports, constants
+        for name, obj in pending:
+            done.add(name)
+            rendered = render_ref(name, obj, refs)
+            if rendered.startswith('from ') and '\n' in rendered:
+                # a dotted ref: the import line and the
+                # attribute reach
+                line, _, assignment = rendered.partition('\n')
+                if line not in imports:
+                    imports.append(line)
+                constants.append(assignment)
+            elif rendered.startswith('from '):
+                if rendered not in imports:
+                    imports.append(rendered)
+            else:
+                constants.append(rendered)
 
 
 def _render_ref(name, obj):
@@ -1424,21 +1502,7 @@ def _standalone_script(source, refs, prog, description, entry, theme=None, compl
     Renders every ref *first*, so refusals happen before we commit
     to anything.
     """
-    imports = []
-    constants = []
-    for name, obj in refs.objects.items():
-        rendered = render_ref(name, obj)
-        if rendered.startswith('from ') and '\n' in rendered:
-            # a dotted ref: the import line and the attribute reach
-            line, _, assignment = rendered.partition('\n')
-            if line not in imports:
-                imports.append(line)
-            constants.append(assignment)
-        elif rendered.startswith('from '):
-            if rendered not in imports:
-                imports.append(rendered)
-        else:
-            constants.append(rendered)
+    imports, constants = render_refs(refs)
 
     header = (
         f'#!/usr/bin/env python3\n'
@@ -1548,22 +1612,7 @@ def emit_standalone_mcp(commands, *, argv0=None, version='0',
     tools = ('\n'.join(startup) + '\n\n'
              + '_TOOLS = {\n' + '\n'.join(entries) + '\n}\n')
 
-    imports = []
-    constants = []
-    for name, obj in refs.objects.items():
-        rendered = render_ref(name, obj)
-        if rendered.startswith('from ') and '\n' in rendered:
-            line, _, assignment = rendered.partition('\n')
-            if line not in imports:
-                imports.append(line)
-            constants.append(assignment)
-        elif rendered.startswith('from '):
-            if rendered not in imports:
-                imports.append(rendered)
-        else:
-            # every MCP ref is a callable, and callables render as
-            # imports; belt and braces
-            constants.append(rendered)   # pragma: no cover
+    imports, constants = render_refs(refs)
 
     def module_text(module):
         with open(module.__file__, 'rt', encoding='utf-8') as f:
@@ -1622,7 +1671,7 @@ def emit_standalone(plan, *, argv0=None, templates=None, theme=None,
         version=version)
 
 
-def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79):
+def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79, help=True):
     """
     Standalone mode for a multi-command program: every command\'s
     parser plus the dispatcher, in one dependency-free script.
@@ -1630,7 +1679,8 @@ def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templ
     prog = argv0 or 'program'
     source, refs = emit_command_set(commands, global_plan, prog, templates,
                                     theme, repeat, subs, sub_repeat,
-                                    version=version, max_columns=max_columns)
+                                    version=version, max_columns=max_columns,
+                                    help=help)
     return _standalone_script(
         source, refs, prog,
         f'command-line parsing ({", ".join(commands)})',

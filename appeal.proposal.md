@@ -8,9 +8,11 @@
 > rationale, written before the implementation began.  It predates
 > most of the rulings that shaped the shipped library and does not
 > track later changes.  The **spec of record is
-> [appeal.v2.grammar.md](appeal.v2.grammar.md)**; for how the code is
-> actually organized see [appeal.v2.tour.md](appeal.v2.tour.md).  Kept
-> for design history.
+> [appeal.grammar.md](appeal.grammar.md)**; for how the code is
+> actually organized see [appeal.tour.md](appeal.tour.md).  Kept
+> for design history.  (Naming: the rewrite shipped as **Appeal
+> 1.0**; "v2" was its working nickname, and "v1" here means the
+> 0.6 line.)
 
 ## 1: Overview
 
@@ -1225,7 +1227,7 @@ and then Larry ruled on them:
   became flat recognition--every option in the tree recognized
   anywhere on the line.  When this surfaced as a semantic
   question, Larry ruled it the DESIRED behavior ("easy breezy";
-  see appeal.v2.grammar.md, Options), with two riders: the gate
+  see appeal.grammar.md, Options), with two riders: the gate
   rule (a required group walls off later options until fed) and
   windows (position binds occurrences to instances under *args
   repetition).

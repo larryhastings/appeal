@@ -1,9 +1,16 @@
 # The Appeal grammar
 
-*The v2 spec-of-record for how Python signatures read as command-line
+*Appeal 1.0's spec-of-record for how Python signatures read as command-line
 grammars.  Everything else--the plan builder, both parser rungs, usage
 generation, the JSON schema--is tested against this document.
 (Proposal §10 step 2.)*
+
+> **A note on names.**  This release is **Appeal 1.0**; the previous
+> releases were the 0.6 line.  In the engineering docs (this one, the
+> tour, the proposal) the rewrite is nicknamed **v2** and shipping
+> Appeal 0.6.x is **v1**--the codenames the rewrite was carried out
+> under.  Wherever this document says "v1 semantics" or "probed
+> against v1," read "the 0.6 line."
 
 ## The one rule
 
@@ -57,6 +64,15 @@ one command-line string.
   declared-first-served (walk order: a rule's own options, then its
   children's, depth-first); an option whose letter is taken gets no
   short.  (Matches v1's observed behavior.)
+* This long-and-short default is the constructor knob
+  `default_options` (v1's, restored): a policy `(name, annotation,
+  default) -> list[str]` run at build time on every
+  automatically-mapped keyword-only parameter.  The stock
+  `default_options` yields the long plus the short; `default_long_option`
+  drops the short (the "no auto shorts" policy), `default_short_option`
+  drops the long, or supply your own.  It runs on the build host and
+  only its output--the strings--rides into a standalone script, never
+  the callable.
 * **`@app.option(parameter_name, *strings, annotation=…, default=…)`
   blows away ALL default mappings** for one keyword-only parameter
   and maps *only* the strings you specify--no auto long, no auto
@@ -80,15 +96,18 @@ one command-line string.
   that produces a value by calling it.
 * **`@app.parameter(name, *, usage=...)`** renames one parameter
   wherever it shows: an operand's name in usage lines and help
-  tables, or an option's metavar (`[-t|--times <COUNT>]`).  v1's
-  API, extended--v1's `@app.parameter` only reached operands; the
+  tables, or an option's metavar (`[-t|--times COUNT]`--the rename
+  is literal, unadorned by `positional_argument_usage_format`).
+  v1's API, extended--v1's `@app.parameter` only reached operands; the
   option metavar was unrenamable.  Decorate a converter directly
   to rename its parameters.  `argument` is v1's deprecated alias,
   kept.  Naming a parameter the function doesn't have is a config
   error.
 * An option's own parameters are its operands: `def serve(*, port: int)`
-  gives `--port <int>`.  An option converter with several parameters
-  consumes several operands per use (`--where X Y`; v1, probed).
+  gives `--port port` (the operand shows the parameter name, per
+  `positional_argument_usage_format`).  An option converter with
+  several parameters consumes several operands per use, each shown
+  by its own parameter name (`--where x y`; v1, probed).
   Parameters with defaults make those operands *optional*--the
   `make -j` shape--and consumption is **unconditionally greedy** to
   the converter's maximum: a pending operand takes the next token
@@ -324,10 +343,17 @@ polite `main()` handling catches the whole data family.
 
 ## Help
 
-Usage lines render symbolic names as `<int>`-style metavars
-(`[-t|--times <int>]`; a deliberate polish over v1's bare `int`)
-and wrap at whole units--a bracket group never splits across
-lines--with continuations aligned under the first.
+Usage lines render an operand as its **parameter name**
+(`[-t|--times times]`, `[--width width]`)--v1's default, restored.
+The exact rendering is the constructor knob
+`positional_argument_usage_format` (default `'{name}'`; the only
+interpolations are `{name}` and `{name.upper()}`, so `'<{name}>'`
+gives `<times>` and `'{name.upper()}'` gives `TIMES`).  It decorates
+positional operands and option operands (opargs) alike; an explicit
+`@app.parameter(usage=...)` rename is literal and overrides the
+format outright.  Usage lines wrap at whole units--a bracket group
+never splits across lines--with continuations aligned under the
+first.
 
 `-h` and `--help` exist automatically (v1, probed): they print the
 usage line, then the command's docstring re-wrapped to the margin
@@ -336,13 +362,16 @@ not the text; indented paragraphs pass through intact).  Help wins
 even when required operands are missing, exits successfully, and
 never appears in the usage line.  The user's options always win
 the strings: claim `-h` and help keeps only `--help`; claim
-`--help` and there is no automatic help at all.
+`--help` and there is no automatic help at all.  The constructor's
+`help=False` is the blanket off switch: no automatic `-h`/`--help`
+and (for a program with commands) no automatic `help` command--the
+program answers only what it declares itself.
 
 **Parameter documentation**: a top-level docstring line shaped
 `name: description` (indented lines continue it) documents the
 parameter of that name--anywhere in the command's tree, converter
 parameters included.  Entries render as `arguments:` and
-`options:` tables (labels from the plan: `-t|--times <int>`,
+`options:` tables (labels from the plan: `-t|--times times`,
 usage names for operands), descriptions wrapped into the column
 by the trio.  A name matching no parameter stays prose
 (`Note: remember this` is safe).  The structure is parsed at
@@ -558,11 +587,37 @@ is refused **by design** (ruled 2026-07-09): position is the
 essence of a scoped option, and a mapping has no position--the
 two transports don't compose.  The refusal names the workaround
 (set it on the command line, or give the uses distinct parameter
-names via `@app.option`).  Should a real need ever appear, the
-designed relax-later shape is nested addressing through the
-window's parameter name (`{'b': {'flavor': ...}}`,
-read_mapping's group spelling)--an implementation away, not a
-redesign.  With class-as-app this is the
+names via `@app.option`).
+
+**Deferred feature -- scoped-option config addressing (post-1.0).**
+If you need to set a *scoped* option (one string declared by
+several windows--e.g. a converter reused across sibling slots) from
+config, 1.0 cannot do it; use the workaround above.  The designed
+(ruled) shape for when we build it is nested addressing through the
+window's parameter name: for `mg(a, b: child, c: child)` with
+`child(p, *, flavor='')`, `{'b': {'flavor': ...}}` targets flavor
+in b's window.  This is *not* the same, cheap change as a group
+*option*'s by-name sub-mapping (which Med 5 already delivers,
+because a group option is one rule): a scoped option is one rule
+bound to a window **by position at scan time**, and config injects
+flat, by key, at **execute** time--so delivery must reach into the
+scoped-binding machinery to place the value in the named window's
+own given (or synthesize a positioned occurrence pre-binding).  Two
+semantics settled in advance: (1) the named window must actually be
+*entered* by argv first--config does no structural rescue, same as
+`--deep` without `--where`; (2) inside `{'b': {...}}` only b's
+window's OPTIONS are addressable, never its operands (config
+supplies options, never positionals).  Forward-compatible: 1.0
+keeps `{positional-group-slot: {...}}` refused (rejected as a
+positional), so the shape stays reserved; adding support later only
+turns that error into acceptance--monotonic, breaking no existing
+program and changing nothing for anyone who doesn't write the new
+shape.  (Entry point for a future fix: `_config_vet` /
+`_config_inject` in `appeal/__init__.py`, `plan.scoped_keys`, and
+the scan/bind path in `runtime.window_options` + the interpreter/
+codegen scoped-window handling.)
+
+With class-as-app this is the
 argparse-replacement story: the config file helps construct your
 application object, args picks the methods.  Standalone: config
 is a per-call input, nothing to bake; emitted parse functions
@@ -639,6 +694,9 @@ silently cannot be emitted; if it can't be emitted, it must say so.
 | `Annotated[T, converter]` (provisional import, v1's shim) | ✓ | ✓ | ✓ | ✓ |
 | `@app.option` string/annotation/default overrides | ✓ | ✓ | ✓ | ✓ |
 | `@app.parameter` usage renames (operands + option metavars) | ✓ | ✓ | ✓ | ✓ |
+| `Appeal(positional_argument_usage_format=)`: operand metavar format (v1 knob, default `'{name}'`) | ✓ | ✓ | ✓ | ✓ |
+| `Appeal(default_options=)`: pluggable option-string policy (v1 knob; `default_long_option`/`default_short_option`) | ✓ | ✓ | ✓ | ✓ |
+| `Appeal(help=False)`: disable automatic `-h`/`--help` + `help` command (v1 knob) | ✓ | ✓ | ✓ | ✓ |
 | `list[T]` accumulator options | ✓ | ✓ | ✓ | ✓ |
 | `dict[K, V]` mapping options | ✓ | ✓ | ✓ | ✓ |
 | scoped options (position-decides, the interval model) | ✓ | ✓ | ✓ | ✓ |
@@ -663,7 +721,7 @@ silently cannot be emitted; if it can't be emitted, it must say so.
 | ^C exits 130, quietly--in run_main ONLY (ruled: process()/parse() raw; no other signal handling, ever) | ✓ | n/a | n/a | ✓ |
 | subcommand sets nested to any depth (the last named standalone refusal, lifted; plan_for finds nested parents; recursive _SET_/completion tables, children emitted first) | ✓ | ✓ | ✓ | ✓ |
 | `app.documentation('man')` (troff from the help corpus; unknown formats refuse by name) | ✓ | n/a | n/a | n/a |
-| long-option abbreviation | REFUSED BY DESIGN (ruled 2026-07-09: script fragility; completion covers comfort; click agrees, argparse regrets) |||| 
+| long-option abbreviation | REFUSED BY DESIGN (ruled 2026-07-09: script fragility; completion covers comfort; click agrees, argparse regrets) ||||
 | `tuple[T1, T2]` options (`--span 3 4`) | ✓ | ✓ | ✓ | ✓ |
 | `*args` converter groups with windowed options | ✓ | ✓ | ✓ | ✓ |
 | the gate rule (required groups wall off later options) | ✓ | ✓ | ✓ | ✓ |

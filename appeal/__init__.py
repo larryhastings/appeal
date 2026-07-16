@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 #
-# appeal -- Appeal v2, under construction.
+# appeal -- Appeal 1.0, the ground-up rewrite of the 0.6 line.
 # Copyright 2021-2026 by Larry Hastings
 #
-# This tree is the v2 rewrite; the shipping v1 lives in site-packages
-# (and other checkouts).  v1's source is on this branch's history;
+# (In the engineering docs the rewrite is nicknamed "v2" and the
+# 0.6 line "v1".)  The 0.6 source is on this branch's history;
 # argument_grouping.py stays on disk to serve as the grouping reference implementation.
 #
-# The spec of record is appeal.v2.grammar.md; the design rationale
-# is appeal.v2.proposal.md.  North star: every command must be
+# The spec of record is appeal.grammar.md; the design rationale
+# is appeal.proposal.md.  North star: every command must be
 # emittable as a *standalone*, dependency-free Python script
 # (see codegen.emit_standalone).
 
 """
-Appeal v2: give Appeal your function's signature, get a command-line
+Appeal: give Appeal your function's signature, get a command-line
 interface--in process, or as a generated standalone script.
 """
 
-__version__ = '2.0a0'
+__version__ = '1.0a0'
 
 from .build import (
     add_option_override, add_parameter_usage, build,
+    default_options, default_long_option, default_short_option,
     strip_first_argument_from_signature, strip_self_from_signature,
     )
 from .codegen import (
@@ -30,6 +31,7 @@ from .codegen import (
 from .interpreter import dispatch as interpreter_dispatch
 from .interpreter import parse as interpreter_parse
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
+from .plan import _validate_arg_format
 from .complete import complete, complete_set
 from .read import read_csv, read_iterable, read_mapping
 from .schema import schema, schema_set
@@ -126,21 +128,23 @@ def _config_vet(plan, table_words, config, command_plan_for=None):
     return vetted
 
 
-def _config_inject(vetted, config, given, usage):
+def _config_inject(vetted, config, given, usage, scoped_keys=frozenset()):
     """
     The merge, atomic per option: an option argv mentioned wins
     whole; otherwise the config value enters `given` shaped like
     the command line would have shaped it, and stage 2 converts it
-    through the ordinary pipeline.  Returns the injected keys.
+    through the ordinary pipeline.  A group's mapping value reads
+    read_mapping style--its parameters by name AND its own options,
+    recursively.  Returns the injected keys.
     """
     from .read import _read_bool
     from .runtime import AppealError
     injected = {}
-    for name, rule in vetted.items():
+
+    def shape(name, rule, value):
         key = rule.key
         if key in given:
-            continue        # argv wins, whole
-        value = config[name]
+            return          # argv wins, whole
         kind = rule.kind
         if kind in ('flag', 'nullary'):
             try:
@@ -151,7 +155,7 @@ def _config_inject(vetted, config, given, usage):
             if wanted:
                 given[key] = True if kind == 'flag' else ()
                 injected[name] = key
-            continue
+            return
         if kind in ('accumulate', 'fold'):
             if not isinstance(value, (list, tuple)):
                 raise AppealDataError(
@@ -161,7 +165,7 @@ def _config_inject(vetted, config, given, usage):
                            else (v,) for v in value]
                           if kind == 'fold' else list(value))
             injected[name] = key
-            continue
+            return
         if kind == 'mapping':
             if not isinstance(value, dict):
                 raise AppealDataError(
@@ -169,29 +173,48 @@ def _config_inject(vetted, config, given, usage):
                     f"give it a mapping", usage)
             given[key] = [f'{k}={v}' for k, v in value.items()]
             injected[name] = key
-            continue
+            return
         if kind == 'group':
             if isinstance(value, dict):
-                # by name, read_mapping style: order the child's
-                # parameters
+                # by name, read_mapping style: the child's
+                # parameters in order, and its own options
+                # recursively (each still atomic vs argv)
+                option_rules = {o.name: o for o in rule.child.options}
                 ordered = []
                 for s in rule.child.slots:
                     if s.name in value:
                         ordered.append(value[s.name])
+                        injected[f'{name}.{s.name}'] = key
                     else:
                         break
-                extra = set(value) - {s.name for s in rule.child.slots}
+                extra = (set(value)
+                         - {s.name for s in rule.child.slots}
+                         - set(option_rules))
                 if extra:
                     raise AppealDataError(
                         f"config: {name!r}: unknown group "
                         f"argument(s) {sorted(extra)}", usage)
                 given[key] = tuple(ordered)
+                injected[name] = key
+                for inner_name, inner_rule in option_rules.items():
+                    if inner_name not in value:
+                        continue
+                    if inner_rule.key in scoped_keys:
+                        # same ruling as the top level: a scoped
+                        # option has no position in a mapping
+                        raise AppealConfigurationError(
+                            f"config: {name!r}.{inner_name!r} names "
+                            f"a scoped option; set it on the "
+                            f"command line")
+                    shape(f'{name}.{inner_name}', inner_rule,
+                          value[inner_name])
             elif isinstance(value, (list, tuple)):
                 given[key] = tuple(value)
+                injected[name] = key
             else:
                 given[key] = (value,)
-            injected[name] = key
-            continue
+                injected[name] = key
+            return
         if kind == 'value' and len(rule.converters) > 1:
             if not isinstance(value, (list, tuple)):
                 raise AppealDataError(
@@ -200,9 +223,12 @@ def _config_inject(vetted, config, given, usage):
                     f"sequence", usage)
             given[key] = list(value)
             injected[name] = key
-            continue
+            return
         given[key] = value
         injected[name] = key
+
+    for name, rule in vetted.items():
+        shape(name, rule, config[name])
     return injected
 
 
@@ -296,18 +322,24 @@ class Processor:
         return '<Processor: ' + '; '.join(parts) + '>'
 
     def _command_for(self, word):
-        "The registered callable behind a word (None: the global)."
+        """
+        The registered callable behind a word, for the instances
+        log (None: the global).  A bare word naming DIFFERENT
+        callables under different parents is ambiguous from here
+        (invocations don't carry their parent), so the log
+        answers None rather than guess wrong.
+        """
         if word is None:
             return None
         command = self.app._table().get(word)
         if command is not None:
             return command
-        for subs in self.app._subs.values():
-            for name, fn in subs:
-                if name == word:
-                    return fn
-        return None   # pragma: no cover -- every dispatched word is
-                      # registered or claimed in _subs; belt and braces
+        matches = {id(fn): fn for subs in self.app._subs.values()
+                   for name, fn in subs if name == word}
+        if len(matches) == 1:
+            (fn,) = matches.values()
+            return fn
+        return None
 
     def parse(self, argv, config=None):
         "Stage 1: scan argv.  Nothing executes.  Returns self."
@@ -318,14 +350,18 @@ class Processor:
             # strict keys, stage 1: a bad config does no work
             global_plan = app.global_plan
             if global_plan is None:
+                # no global command: any key is a refusal by
+                # name; an empty mapping lays nothing over
+                # nothing, a no-op
                 for key in config:
                     raise AppealDataError(
                         f"config: {key!r} isn't an option of this "
                         f"program (it has no global command)")
-            table = app._table()
-            vetted = _config_vet(global_plan, frozenset(table), config,
-                                 app.plan_for)
-            self._config = (vetted, dict(config))
+            else:
+                table = app._table()
+                vetted = _config_vet(global_plan, frozenset(table),
+                                     config, app.plan_for)
+                self._config = (vetted, dict(config))
         kind = app._pieces[0]
         if kind == 'single':
             _, fused = app._pieces
@@ -367,14 +403,27 @@ class Processor:
                 # atomic per option, global command only
                 vetted, mapping = self._config
                 usage = self.app.global_plan.usage()
-                injected = _config_inject(vetted, mapping, given,
-                                          usage)
+                injected = _config_inject(
+                    vetted, mapping, given, usage,
+                    self.app.global_plan.scoped_keys)
+            injected_params = set()
+            for injected_name, injected_key in (injected or {}).items():
+                # 'where.deep' attributes errors about 'where'
+                # OR 'deep'; keys ('--where') attribute count
+                # errors, which name the option string
+                injected_params.update(injected_name.split('.'))
+                injected_params.add(injected_key)
             try:
                 result = run(operands, given, positions, env)
             except UsageError as e:
-                if injected and any(name in str(e) or key in str(e)
-                                    for name, key in injected.items()):
-                    raise AppealDataError(f"config: {e}") from None
+                # provenance travels structurally: the error says
+                # WHICH parameter it's about (e.param), and only
+                # an error about something config supplied becomes
+                # a config error--never a substring guess
+                if getattr(e, 'param', None) in injected_params:
+                    raise AppealDataError(
+                        f"config: {e}", getattr(e, 'usage', None),
+                        param=e.param) from None
                 raise
             command = self._command_for(word)
             instance = result if _is_class_command(command) or (
@@ -432,7 +481,7 @@ class _CompileOnDispatch:
                         'version takes no arguments', self.usage)
                 print(self.app.version)
             return parse_version
-        if word == 'help' and 'help' not in table:
+        if word == 'help' and self.app._help_enabled and 'help' not in table:
             def parse_help(argv):
                 # `help` alone: the listing; `help CMD`: CMD's
                 # --help; the auto commands describe themselves
@@ -488,8 +537,40 @@ class Appeal:
     """
     def __init__(self, name=None, *, theme=None, version=None, repeat=False,
                  errors=None, script=_sys.argv[0],
-                 margin=79, indent=4):
+                 margin=79, indent=4,
+                 positional_argument_usage_format='{name}',
+                 default_options=default_options, help=True):
         self.name = name
+        # whether Appeal supplies automatic help (v1's knob): the
+        # per-command -h/--help option AND, for a program with
+        # commands, the `help` command.  help=False suppresses all
+        # of it--the program answers -h/--help only if it declares
+        # them itself.  (A command that defines its own help still
+        # wins even when help=True; this is the blanket off switch.)
+        self._help_enabled = bool(help)
+        # the option-string policy (v1's knob, restored): a callable
+        # (name, annotation, default) -> list of option strings, run
+        # at build time on every automatically-mapped keyword-only
+        # parameter.  The stock policy adds a long and a short;
+        # default_long_option drops the short, default_short_option
+        # drops the long, or supply your own.  Its output--the
+        # strings--is baked into the compiled parser, so a custom
+        # policy never needs to ride into a standalone script.
+        if not callable(default_options):
+            raise AppealConfigurationError(
+                f"default_options must be callable, not {default_options!r}")
+        self.default_options = default_options
+        # how an operand renders in usage lines and help tables:
+        # a format string over the parameter NAME (v1's knob,
+        # restored).  '{name}' (default) shows the bare name; the
+        # only interpolations are {name} and {name.upper()}, so
+        # '<{name}>' gives <name> and '{name.upper()}' gives NAME.
+        # Applies to positional operands AND option operands
+        # (opargs) alike; an explicit @app.parameter usage= wins
+        # outright over the format.
+        _validate_arg_format(positional_argument_usage_format)
+        self.positional_argument_usage_format = \
+            positional_argument_usage_format
         # argv[0], captured HERE at the outer edge (its default is
         # read once, when this module is imported) rather than
         # sniffed from sys.argv deep in the machinery--so the
@@ -549,8 +630,7 @@ class Appeal:
         self._commands = []       # (name, callable), in declaration order
         self._subs = {}           # parent name -> [(name, callable)]
         self._sub_repeat = {}     # parent name -> its set cycles
-        self._method_owner = {}   # command word -> owning class's env key
-        self._class_parents = {}  # command word -> the class itself
+        self._method_owner = {}   # id(callable) -> owning class's env key
         self._default = None      # v1's default_command
         self._global = None
         self._parse = None
@@ -638,8 +718,17 @@ class Appeal:
         members = list(target.__dict__.values())
         claimed = [(name, fn) for name, fn in self._commands
                    if any(fn is m for m in members)]
+        seen = set()
         for name, fn in claimed:
-            self._method_owner[name] = key
+            # ownership is keyed by the CALLABLE, never the bare
+            # word: two classes may each expose `run`, and each
+            # method must bind to its own class's instance
+            self._method_owner[id(fn)] = key
+            if name in seen:
+                raise AppealConfigurationError(
+                    f"class {cls.__name__!r} claims two commands "
+                    f"named {name!r}")
+            seen.add(name)
         if global_:
             # the class IS the app: its set is the top-level set;
             # the claimed commands stay top-level, now bound
@@ -651,8 +740,14 @@ class Appeal:
                               if id(f) not in claimed_ids]
             self._commands.append((word, cls))
             if claimed:
+                if word in self._subs:
+                    # _subs is flat, one entry per parent at any
+                    # depth--so parent words must be unique
+                    # (restrictive now; path-addressed sets can
+                    # relax it later)
+                    raise AppealConfigurationError(
+                        f"two nested command sets named {word!r}")
                 self._subs[word] = claimed
-                self._class_parents[word] = cls
                 if repeat:
                     self._sub_repeat[word] = True
             # no decorated methods: a leaf command that constructs
@@ -694,8 +789,8 @@ class Appeal:
         for parent, entries in self._subs.items():
             sets[parent] = {
                 'commands': {
-                    name: build(fn, name=name,
-                                method_of=self._method_owner.get(name))
+                    name: self._build(fn, name=name,
+                                method_of=self._method_owner.get(id(fn)))
                     for name, fn in entries},
                 'repeat': self._sub_repeat.get(parent, False),
             }
@@ -703,7 +798,8 @@ class Appeal:
                         and 'version' not in table)
         return complete_set(self.plans, self.global_plan, words, prefix,
                             auto_version=auto_version,
-                            repeat=self.repeat, sets=sets or None)
+                            repeat=self.repeat, sets=sets or None,
+                            help=self._help_enabled)
 
     def help(self):
         """
@@ -717,7 +813,7 @@ class Appeal:
             from .runtime import render_help_page
             entries = [(w, summary(c)) for w, c in table.items()]
             corpus = command_set_corpus(self.global_plan, entries,
-                                        'help' not in table,
+                                        self._help_enabled and 'help' not in table,
                                         auto_version=self.version is not None
                                         and 'version' not in table)
             from .runtime import help_margin, resolve_theme
@@ -761,7 +857,7 @@ class Appeal:
                             version=version)
         entries = [(w, summary(c)) for w, c in table.items()]
         corpus = command_set_corpus(
-            self.global_plan, entries, 'help' not in table,
+            self.global_plan, entries, self._help_enabled and 'help' not in table,
             auto_version=self.version is not None
             and 'version' not in table)
         pages = [(word,
@@ -844,6 +940,18 @@ class Appeal:
                 "no commands: use @app.command() or @app.global_command()")
         return table
 
+    def _build(self, callable, **kwargs):
+        """
+        build() a top plan and stamp it with the app's operand
+        usage format (positional_argument_usage_format).  Every
+        top plan the app renders funnels through here; child plans
+        read the format off their root at render time.
+        """
+        plan = build(callable, default_options=self.default_options, **kwargs)
+        plan.arg_format = self.positional_argument_usage_format
+        plan.auto_help = self._help_enabled
+        return plan
+
     def plan_for(self, word):
         "The named command's Plan, built at first request."
         with self._lock:
@@ -851,19 +959,31 @@ class Appeal:
         if plan is None:
             callable = self._table().get(word)
             if callable is None:
-                # a nested parent lives only in ITS parent's
+                # a nested command lives only in ITS parent's
                 # children (self._subs is flat, one entry per
-                # parent at any depth)
-                callable = next(
-                    (fn for entries in self._subs.values()
-                     for name, fn in entries if name == word),
-                    None)
+                # parent at any depth).  The bare word is enough
+                # only when it means ONE callable--several classes
+                # may each expose `run`, and this cache is keyed
+                # by word, so an ambiguous word refuses by name
+                # (dispatch itself is per-parent and unaffected).
+                matches = {id(fn): (parent, fn)
+                           for parent, entries in self._subs.items()
+                           for name, fn in entries if name == word}
+                if len(matches) > 1:
+                    parents = ', '.join(repr(p) for p, _ in
+                                        sorted(matches.values(),
+                                               key=lambda pf: pf[0]))
+                    raise AppealConfigurationError(
+                        f"plan_for({word!r}): ambiguous--commands "
+                        f"named {word!r} exist under {parents}")
+                if matches:
+                    (_, callable), = matches.values()
             if callable is None:
                 raise AppealConfigurationError(f"no command named {word!r}")
-            owner = self._method_owner.get(word)
+            owner = self._method_owner.get(id(callable))
             if owner is None:
                 _refuse_orphan_method(callable)
-            plan = build(callable, name=word, method_of=owner)
+            plan = self._build(callable, name=word, method_of=owner)
             with self._lock:
                 if self._plans is None:
                     self._plans = {}
@@ -879,13 +999,13 @@ class Appeal:
                 # the parent is its global command, so parent options
                 # come before the subcommand word and the parent runs
                 # first--all machinery reused
-                sub_plans = {name: build(fn, name=name,
-                                         method_of=self._method_owner.get(name))
+                sub_plans = {name: self._build(fn, name=name,
+                                         method_of=self._method_owner.get(id(fn)))
                              for name, fn in self._subs[word]}
                 parse = compile_command_set(
                     sub_plans, self.plan_for(word), prog=word,
                     templates=self.templates, theme=self.theme,
-                    max_columns=self.margin)
+                    max_columns=self.margin, help=self._help_enabled)
             else:
                 parse = compile_plan(self.plan_for(word), templates=self.templates,
                                      theme=self.theme,
@@ -922,10 +1042,10 @@ class Appeal:
             if name in self._subs:
                 subs[name] = self._set_entry_for(name)
                 continue
-            owner = self._method_owner.get(name)
+            owner = self._method_owner.get(id(fn))
             if owner is None:
                 _refuse_orphan_method(fn)
-            sub = compile_plan(build(fn, name=name, method_of=owner),
+            sub = compile_plan(self._build(fn, name=name, method_of=owner),
                                templates=self.templates, theme=self.theme,
                                max_columns=self.margin)
             subs[name] = (sub.scan, sub.run)
@@ -973,7 +1093,7 @@ class Appeal:
         from .runtime import run_command_set
         global_plan = self.global_plan
         command_words = frozenset(table) | (
-            {'help'} if 'help' not in table else set()) | (
+            {'help'} if self._help_enabled and 'help' not in table else set()) | (
             {'version'} if self.version is not None
             and 'version' not in table else set())
         if global_plan is not None:
@@ -989,7 +1109,7 @@ class Appeal:
         from .runtime import render_command_listing
         entries = [(word, summary(callable))
                    for word, callable in table.items()]
-        auto = 'help' not in table
+        auto = self._help_enabled and 'help' not in table
         corpus = command_set_corpus(
             global_plan, entries, auto,
             auto_version=self.version is not None
@@ -999,9 +1119,9 @@ class Appeal:
             corpus, self.templates, margin=self.margin)
 
         commands = _CompileOnDispatch(self, usage)
-        auto_help = 'help' not in table
+        auto_help = self._help_enabled and 'help' not in table
 
-        default = (compile_plan(build(self._default), templates=self.templates,
+        default = (compile_plan(self._build(self._default), templates=self.templates,
                                 theme=self.theme,
                                 max_columns=self.margin)
                    if self._default is not None else None)
@@ -1037,7 +1157,7 @@ class Appeal:
         with self._lock:
             plan = self._global_plan
         if plan is None and self._global is not None:
-            plan = build(self._global)
+            plan = self._build(self._global)
             with self._lock:
                 if self._global_plan is None:
                     self._global_plan = plan
@@ -1142,8 +1262,8 @@ class Appeal:
         if plan.constructs is not None:
             # a bound inner class: construction goes through the
             # parent instance's attribute (BIC composes)
-            return build(getattr(instance, plan.name), name=plan.name)
-        return build(plan.callable.__get__(instance), name=plan.name)
+            return self._build(getattr(instance, plan.name), name=plan.name)
+        return self._build(plan.callable.__get__(instance), name=plan.name)
 
     def mcp(self, *, config=None, version=None):
         """
@@ -1269,9 +1389,11 @@ class Appeal:
             def sub_plan(name, fn):
                 # nested parents are fine: self._subs is flat
                 # (every parent maps its own children), and the
-                # emitter reassembles the tree, deepest first
-                return build(fn, name=name,
-                             method_of=self._method_owner.get(name))
+                # emitter reassembles the tree, deepest first.
+                # _build stamps the app's arg_format, help, and
+                # option policy so nested commands match the root.
+                return self._build(fn, name=name,
+                             method_of=self._method_owner.get(id(fn)))
             subs = {parent: {name: sub_plan(name, fn)
                              for name, fn in entries}
                     for parent, entries in self._subs.items()}
@@ -1282,7 +1404,7 @@ class Appeal:
                 repeat=self.repeat, subs=subs or None,
                 sub_repeat=dict(self._sub_repeat) or None,
                 errors=self.errors, version=self.version,
-                max_columns=self.margin)
+                max_columns=self.margin, help=self._help_enabled)
         return emit_standalone(self.global_plan, argv0=argv0,
                                templates=self.templates, theme=self.theme,
                                errors=self.errors, version=self.version,

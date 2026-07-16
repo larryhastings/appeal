@@ -10,7 +10,51 @@
 # the JSON schema--never here.  Nothing at parse time ever writes to
 # the tree.
 
+def _validate_arg_format(fmt):
+    "Only {name} and {name.upper()} may interpolate."
+    from .runtime import AppealConfigurationError
+    if not isinstance(fmt, str):
+        raise AppealConfigurationError(
+            f"positional_argument_usage_format must be a string, "
+            f"not {fmt!r}")
+    probe = fmt.replace('{name.upper()}', '').replace('{name}', '')
+    if '{' in probe or '}' in probe:
+        raise AppealConfigurationError(
+            f"positional_argument_usage_format {fmt!r}: the only "
+            f"interpolations are {{name}} and {{name.upper()}}")
+
+
 # --8<-- start appeal plan classes --8<--
+DEFAULT_ARG_FORMAT = '{name}'
+
+
+def format_arg(fmt, name):
+    "Render one operand's usage name through the format string."
+    return fmt.replace('{name.upper()}', name.upper()).replace(
+        '{name}', name)
+
+
+def _oparg_names(o):
+    """
+    The bare operand names an option's value(s) render as, before
+    the format string decorates them.  A single-operand option
+    echoes its own parameter name (--width -> 'width'); a
+    multi-parameter converter (--where X Y) borrows its
+    parameters' names; a tuple option falls back to element type
+    names (no natural names to borrow).
+    """
+    if len(o.converters) <= 1:
+        return [o.name]
+    if o.converters[0] is tuple:
+        return [getattr(c, '__name__', o.name) for c in o.converters[1:]]
+    import inspect
+    try:
+        params = inspect.signature(o.converters[0]).parameters.values()
+        return [p.name for p in params]
+    except (ValueError, TypeError):
+        return [getattr(c, '__name__', o.name) for c in o.converters[1:]]
+
+
 class Terminal:
     """
     Marker for a terminal slot's converter: consumes one command-line
@@ -102,7 +146,8 @@ class OptionRule:
     default       the value when the option never appears
     """
     __slots__ = ('strings', 'name', 'kind', 'converters', 'default', 'explicit',
-                 'usage_name', 'kwargs_delivered', 'child', 'fold_minimum')
+                 'usage_name', 'kwargs_delivered', 'child', 'fold_minimum',
+                 'annotation', 'auto_shorts')
 
     def __init__(self, strings, name, kind, converters, default):
         self.strings = strings
@@ -116,6 +161,11 @@ class OptionRule:
                                         # omitted from the call when absent
         self.child = None        # kind='group': the converter's Plan
         self.fold_minimum = None # fold kinds: option()'s required count
+        self.annotation = None   # the parameter's annotation, kept so
+                                 # default_options (the option-string
+                                 # policy) can see it at finalize time
+        self.auto_shorts = ()    # short strings the policy proposes;
+                                 # the finalize pass claims each if free
 
     def table_entry(self, windowed=False):
         """
@@ -188,10 +238,19 @@ class Plan:
     __slots__ = ('callable', 'name', 'slots', 'options',
                  'minimum', 'maximum', 'valid_counts', 'windowed', 'gated',
                  'certain', 'var_keyword', 'constructs', 'binds',
-                 'tree_trailing', 'scoped_keys')
+                 'tree_trailing', 'scoped_keys', 'arg_format', 'auto_help')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
+        # how operands render in usage/help: a format string over
+        # the operand name (the app's positional_argument_usage_format,
+        # stamped onto the top plan at build time; children inherit
+        # the default and read it off the root at render time).
+        self.arg_format = DEFAULT_ARG_FORMAT
+        # whether this command answers -h/--help (the app's help=
+        # knob, stamped at build time; False suppresses the
+        # automatic help option entirely).
+        self.auto_help = True
         self.windowed = False   # True: a *args group; options bind by window
         self.gated = False      # True on the top plan: barriers exist somewhere
         self.certain = True     # False: this group might never be entered
@@ -234,18 +293,30 @@ class Plan:
         bracket reads left-to-right as something you can type
         (announce-first, truth in advertising).
         """
+        fmt = self.arg_format
+
+        def name_text(slot):
+            # a positional operand's rendered metavar: an explicit
+            # @app.parameter/add_parameter_usage rename (usage_name
+            # != name) is the literal text and wins outright;
+            # otherwise the name flows through the format string.
+            if slot.usage_name != slot.name:
+                return slot.usage_name
+            return format_arg(fmt, slot.usage_name)
+
         def transparent_name(slot):
             # the outer slot's name flows through iff the child
             # consumes exactly one operand AND that terminal wasn't
             # explicitly renamed (usage_name != name means
             # @app.parameter or add_parameter_usage spoke; explicit
-            # wins).
+            # wins).  Returns the FINAL display text (formatted, or
+            # literal if the outer slot was itself renamed).
             inner = slot.child.sole_terminal_slot()
             if inner is None:
                 return None
             if inner.usage_name != inner.name:
                 return None
-            return slot.usage_name
+            return name_text(slot)
 
         def option_text(o):
             bits = ['|'.join(o.strings)]
@@ -253,22 +324,23 @@ class Plan:
                 bits.append(body_text(o.child))
             elif o.kind not in ('flag', 'nullary'):
                 if o.usage_name is not None:
-                    # @app.parameter renamed the metavar
-                    bits.append(f'<{o.usage_name}>')
+                    # @app.parameter renamed the metavar: explicit
+                    # wins outright over the format string
+                    bits.append(o.usage_name)
                 else:
-                    converters = o.converters[1:] if len(o.converters) > 1 else o.converters
-                    for c in converters:
-                        if c is str or c is tuple:
-                            name = o.name
-                        else:
-                            name = getattr(c, '__name__', o.name)
-                        bits.append(f'<{name}>')
+                    # v1's knob: an option operand shows the NAME
+                    # (the parameter's, or the converter parameters'
+                    # for a multi-operand option), formatted through
+                    # positional_argument_usage_format
+                    for name in _oparg_names(o):
+                        bits.append(format_arg(fmt, name))
             return '[' + ' '.join(bits) + ']'
 
         def slot_text(slot, rename=None):
             child = slot.child
             if isinstance(child, Terminal):
-                name = rename if rename is not None else slot.usage_name
+                # rename, when present, is already final display text
+                name = rename if rename is not None else name_text(slot)
                 if slot.repeat:
                     return f'[{name}]...'
                 if slot.required:

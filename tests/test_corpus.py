@@ -40,7 +40,7 @@ def main():
     corpus_path = os.path.join(repo_dir, 'tests', 'test_v1.py')
     source = open(corpus_path, 'rt', encoding='utf-8').read()
     source = source.replace(
-        "if getattr(appeal, '__version__', '').startswith('2.'):",
+        "if not getattr(appeal, '__version__', '').startswith('0.'):",
         "if False:")
     namespace = {'__name__': 'test_all_corpus', '__file__': corpus_path}
     exec(compile(source, corpus_path, 'exec'), namespace)

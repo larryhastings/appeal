@@ -59,18 +59,26 @@ def _option_schema(o, docs):
         converters = o.converters[1:] if len(o.converters) > 1 else o.converters
         entry['operands'] = [_converter_name(c) for c in converters]
     entry['default'] = _default(o.default)
+    if o.usage_name and o.usage_name != o.name:
+        entry['usage'] = o.usage_name
     if o.name in docs:
         entry['doc'] = docs[o.name]
     return entry
 
 
 def _slot_schema(slot, docs):
+    # 'name' is the IDENTITY name--the Python parameter, the key
+    # read_mapping pulls by.  A presentation rename
+    # (@app.parameter usage=) rides along as 'usage'; it must
+    # never leak into the property keys machines send back.
     entry = {
-        'name': slot.usage_name,
+        'name': slot.name,
         'required': bool(slot.required),
         'repeat': bool(slot.repeat),
         'trailing': bool(slot.trailing),
     }
+    if slot.usage_name and slot.usage_name != slot.name:
+        entry['usage'] = slot.usage_name
     if isinstance(slot.child, Terminal):
         entry['converter'] = _converter_name(slot.child.converter)
     else:
@@ -128,44 +136,62 @@ _JSON_TYPES = {'str': 'string', 'int': 'integer', 'float': 'number',
                'bool': 'boolean'}
 
 
-def mcp_input_schema(plan):
+def _mcp_object_schema(described):
     """
-    The MCP inputSchema (plain JSON Schema) for one command:
-    arguments and options become properties--the read driver
-    accepts them by name--with required listing the required
-    arguments.  Converter types map where they're knowable;
-    everything else is a string (the read driver converts anyway).
+    One plan description as a JSON-Schema object--recursive, so a
+    converter group advertises its real structure (the properties
+    read_mapping accepts), not an opaque string.  (read_mapping
+    also accepts a group as a positional sequence, and its keys
+    flat at the parent level; the schema advertises the mapping
+    shape, the roomiest to generate against.)
     """
-    described = schema(plan)
+    def group_entry(group):
+        # mirror read_mapping's shapes exactly: a group always
+        # reads a mapping; a group that can take exactly one
+        # operand (minimum <= 1, maximum allows 1) also reads a
+        # bare scalar in place--Path('/tmp/x')--so the schema
+        # offers both
+        obj = _mcp_object_schema(group)
+        counts = group.get('operand_counts') or {}
+        minimum = counts.get('minimum') or 0
+        maximum = counts.get('maximum')
+        if minimum <= 1 and (maximum is None or maximum >= 1):
+            first = next(iter(group.get('operands') or ()), None)
+            kind = (_JSON_TYPES.get(first.get('converter'))
+                    if first else None)
+            return {'anyOf': [{'type': kind or 'string'}, obj]}
+        return obj
+
     properties = {}
     required = []
     for operand in described['operands']:
-        entry = {}
-        kind = _JSON_TYPES.get(operand.get('converter'))
-        if operand.get('repeat'):
-            entry['type'] = 'array'
-            if kind:
-                entry['items'] = {'type': kind}
-        elif kind:
-            entry['type'] = kind
+        if 'group' in operand:
+            entry = group_entry(operand['group'])
+            if operand.get('repeat'):
+                entry = {'type': 'array', 'items': entry}
         else:
-            entry['type'] = 'string'
+            kind = _JSON_TYPES.get(operand.get('converter'))
+            if operand.get('repeat'):
+                entry = {'type': 'array'}
+                if kind:
+                    entry['items'] = {'type': kind}
+            else:
+                entry = {'type': kind or 'string'}
         if operand.get('doc'):
             entry['description'] = operand['doc']
         properties[operand['name']] = entry
         if operand.get('required') or operand.get('trailing'):
             required.append(operand['name'])
     for option in described['options']:
-        entry = {}
         kind = option.get('kind')
-        if kind == 'flag':
-            entry['type'] = 'boolean'
+        if kind == 'group':
+            entry = group_entry(option['group'])
+        elif kind == 'flag':
+            entry = {'type': 'boolean'}
         elif kind in ('accumulate', 'fold'):
-            entry['type'] = 'array'
+            entry = {'type': 'array'}
         elif kind == 'mapping':
-            entry['type'] = 'object'
-        elif kind == 'group':
-            entry['type'] = 'object'
+            entry = {'type': 'object'}
         else:
             # value options: type from the converter when there's
             # exactly one operand (coverage found this read a key
@@ -173,13 +199,26 @@ def mcp_input_schema(plan):
             # strings); multi-operand values are arrays
             operands = option.get('operands') or ()
             if len(operands) > 1:
-                entry['type'] = 'array'
+                entry = {'type': 'array'}
             else:
                 converter = _JSON_TYPES.get(
                     operands[0] if operands else None)
-                entry['type'] = converter or 'string'
+                entry = {'type': converter or 'string'}
         if option.get('doc'):
             entry['description'] = option['doc']
         properties[option['name']] = entry
     return {'type': 'object', 'properties': properties,
             'required': required}
+
+
+def mcp_input_schema(plan):
+    """
+    The MCP inputSchema (plain JSON Schema) for one command:
+    arguments and options become properties--keyed by PARAMETER
+    name, exactly what read_mapping() accepts--with required
+    listing the required arguments, and converter groups
+    recursing into nested object schemas.  Converter types map
+    where they're knowable; everything else is a string (the
+    read driver converts anyway).
+    """
+    return _mcp_object_schema(schema(plan))

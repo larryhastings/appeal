@@ -1,7 +1,7 @@
 # Appeal review notes — Claude Fable 5, July 2, 2026
 
 > **Companion document:** the full, Larry-voiced v2 design proposal now lives
-> in `appeal.v2.proposal.md` (written July 2026). That's the polished spec;
+> in `appeal.proposal.md` (written July 2026). That's the polished spec;
 > this file is the raw working notes / decision log behind it.
 
 Distilled findings, decisions, and proposals from the Fable 5 review session.

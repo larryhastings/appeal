@@ -98,14 +98,15 @@ _VERSION_ENTRY = {
 
 
 def completion_set_table(commands, global_plan, repeat=False,
-                         sets=None, auto_version=False):
+                         sets=None, auto_version=False, help=True):
     """
     The completion table for a multi-command program (see
     runtime.complete_command_set for the shape).  repeat: the root
     set cycles.  sets, if given, maps a parent word to
     {'commands': {sub: Plan}, 'repeat': bool}--a nested set.
     auto_version: the program supplies the automatic version
-    command, so the word completes.
+    command, so the word completes.  help=False suppresses the
+    automatic `help` command (v1's knob).
     """
     sets = sets or {}
 
@@ -132,7 +133,7 @@ def completion_set_table(commands, global_plan, repeat=False,
         'global': dict(completion_table(global_plan), help=())
                   if global_plan is not None else None,
         'minimum': global_plan.minimum if global_plan is not None else 0,
-        'auto_help': 'help' not in commands,
+        'auto_help': help and 'help' not in commands,
         'repeat': repeat,
     }
 
@@ -148,7 +149,7 @@ def complete(plan, words, prefix=''):
 
 
 def complete_set(commands, global_plan, words, prefix='',
-                 repeat=False, sets=None, auto_version=False):
+                 repeat=False, sets=None, auto_version=False, help=True):
     """
     Completion for a multi-command program: the global command's
     options and the command words before the command word; that
@@ -157,5 +158,5 @@ def complete_set(commands, global_plan, words, prefix='',
     """
     return complete_command_set(
         completion_set_table(commands, global_plan, repeat, sets,
-                             auto_version),
+                             auto_version, help=help),
         words, prefix)

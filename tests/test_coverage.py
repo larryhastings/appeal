@@ -249,8 +249,9 @@ def test_completion_reentry_in_process():
     assert code is None and out == ''
 
     # bash-style reentry: candidates, one per line
+    # couriers NEWLINE-join the words (so args with spaces survive)
     code, out = reenter({'_APPEAL_COMPLETE': 'bash',
-                         'COMP_WORDS': 'prog x a', 'COMP_CWORD': '2'})
+                         'COMP_WORDS': 'prog\nx\na', 'COMP_CWORD': '2'})
     assert code == 0
     assert out.splitlines() == ['alpha', 'arid']
 
@@ -268,6 +269,68 @@ def test_completion_reentry_in_process():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'powershell' in str(e)
+
+
+def test_completion_word_boundaries_and_prog_quoting():
+    # Med 8: the shell hands over its words with the QUOTE CHARACTERS
+    # still attached ("New York" as one element), so the reentry runs
+    # them back through a shell lexer--boundaries survive AND the
+    # quotes come off.  The program name is shell-quoted in the
+    # emitted courier (no breakage/injection).
+    import shlex
+    from appeal.runtime import (completion_reentry, completion_script,
+                                _split_arg_string)
+
+    # the lexer strips quotes, keeps a word with a space whole, and
+    # tolerates the half-typed current word's unterminated quote
+    assert _split_arg_string('p "New York" fo') == ['p', 'New York', 'fo']
+    assert _split_arg_string('p "New Yo') == ['p', 'New Yo']
+    assert _split_arg_string("p 'a b'") == ['p', 'a b']
+
+    seen = []
+    def completer(before, prefix):
+        seen.append((before, prefix))
+        return []
+
+    def reenter(env):
+        old = dict(os.environ)
+        os.environ.update(env)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                completion_reentry(completer, 'p')
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+        return seen[-1]
+
+    # bash/zsh: the quoted word arrives WITH its quotes (as bash's
+    # COMP_WORDS really holds it); it stays one word, unquoted, and
+    # the trailing empty word (cursor after a space) gives ''
+    for mode in ('bash', 'zsh'):
+        got = reenter({'_APPEAL_COMPLETE': mode,
+                       'COMP_WORDS': 'p\n"New York"\n', 'COMP_CWORD': '2'})
+        assert got == (['New York'], ''), (mode, got)
+    # fish: same, its current-token text rides in COMP_CWORD
+    got = reenter({'_APPEAL_COMPLETE': 'fish',
+                   'COMP_WORDS': 'p\n"New York"\nfo', 'COMP_CWORD': 'fo'})
+    assert got == (['New York'], 'fo'), got
+    # empty COMP_WORDS means no words at all (not [''])
+    got = reenter({'_APPEAL_COMPLETE': 'bash',
+                   'COMP_WORDS': '', 'COMP_CWORD': '0'})
+    assert got == ([], ''), got
+
+    # prog is shell-quoted: a hostile name can't inject when sourced
+    nasty = 'x";rm -rf ~;"'
+    q = shlex.quote(nasty)
+    for shell in ('bash', 'zsh', 'fish'):
+        script = completion_script(shell, nasty)
+        assert q in script, (shell, script)
+        assert 'rm -rf ~;"' not in script.replace(q, ''), shell
+    # the reentry invocation and the completion registration both
+    # carry the quoted form
+    bash = completion_script('bash', 'my prog')
+    assert "_APPEAL_COMPLETE=bash 'my prog'" in bash, bash
+    assert bash.rstrip().endswith("'my prog'"), bash
 
 
 # ---------------------------------------------------------------------
@@ -414,7 +477,10 @@ def test_schema_branches():
     # is the object (pinned in test_39's territory)
     assert p['env']['type'] == 'array'
     assert p['level']['type'] == 'integer'
-    assert p['where']['type'] == 'object'
+    # a scalar-acceptable group (min 1): both shapes, like the reader
+    assert {'type': 'string'} in p['where']['anyOf']
+    assert p['where']['anyOf'][1]['type'] == 'object'
+    assert 'host' in p['where']['anyOf'][1]['properties']
     assert p['tags']['type'] == 'array'
 
     # app.schema() with a global command covers the set flavor
@@ -953,8 +1019,26 @@ def test_schema_leaf_fallbacks():
         return (p, spot)
     schema = mcp_input_schema(build(cmd))
     props = schema['properties']
-    assert props['p']['type'] == 'string'
+    # Path builds as a scalar-acceptable *args group: the schema
+    # offers the string AND the object, like the reader
+    assert props['p']['anyOf'][0] == {'type': 'string'}
     assert props['spot']['type'] == 'array'
+    # an option metavar rename rides along as 'usage'
+    from appeal.build import add_parameter_usage
+    from appeal.schema import schema as describe
+    def q(*, level: int = 0):
+        return level
+    add_parameter_usage(q, 'level', 'LVL')
+    opt = describe(build(q))['options'][0]
+    assert (opt['name'], opt['usage']) == ('level', 'LVL')
+    # a repeat slot with a strict group child: array of objects
+    def pt2(x: int, y: int):
+        return (x, y)
+    def paint(*spots: pt2):
+        return spots
+    spots = mcp_input_schema(build(paint))['properties']['spots']
+    assert spots['type'] == 'array'
+    assert set(spots['items']['properties']) == {'x', 'y'}
 
 
 def test_plan_body_valid_counts_none():
@@ -1211,7 +1295,7 @@ def test_main_completion_reentry():
     old_argv = sys.argv
     old_env = dict(os.environ)
     os.environ.update({'_APPEAL_COMPLETE': 'bash',
-                       'COMP_WORDS': 'mainc al', 'COMP_CWORD': '1'})
+                       'COMP_WORDS': 'mainc\nal', 'COMP_CWORD': '1'})
     out = io.StringIO()
     try:
         sys.argv = ['mainc']
@@ -1786,7 +1870,7 @@ def test_run_main_completion_param():
     parse = compile_plan(build(go))
     old_env = dict(os.environ)
     os.environ.update({'_APPEAL_COMPLETE': 'bash',
-                       'COMP_WORDS': 'go -', 'COMP_CWORD': '1'})
+                       'COMP_WORDS': 'go\n-', 'COMP_CWORD': '1'})
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out):
@@ -1855,10 +1939,10 @@ def test_absorb_take_edges():
 
 
 def test_toy_multisplit_and_bytes_iter():
-    from appeal.runtime import _toy_multisplit, _iterate_over_bytes
+    from appeal.runtime import toy_multisplit, _iterate_over_bytes
     assert list(_iterate_over_bytes('ab')) == ['a', 'b']
-    assert _toy_multisplit('a,b', ',') == [('a', ','), ('b', '')]
-    assert _toy_multisplit(b'a,b', [b',']) == [(b'a', b','), (b'b', b'')]
+    assert toy_multisplit('a,b', ',') == [('a', ','), ('b', '')]
+    assert toy_multisplit(b'a,b', [b',']) == [(b'a', b','), (b'b', b'')]
 
 
 def test_expand_tabs_pins():
@@ -2125,11 +2209,11 @@ def test_completion_bad_candidates_and_fish():
         seen.append((words, prefix))
         return ['alpha']
     code, out = reenter({'_APPEAL_COMPLETE': 'fish',
-                         'COMP_WORDS': 'prog x a', 'COMP_CWORD': 'a'},
+                         'COMP_WORDS': 'prog\nx\na', 'COMP_CWORD': 'a'},
                         completer)
     assert code == 0 and 'alpha' in out
     code, out = reenter({'_APPEAL_COMPLETE': 'bash',
-                         'COMP_WORDS': 'prog x', 'COMP_CWORD': 'zz'},
+                         'COMP_WORDS': 'prog\nx', 'COMP_CWORD': 'zz'},
                         completer)
     assert code == 0
 
@@ -2273,12 +2357,17 @@ def test_emit_command_set_refusals():
         return x
     def fb(y):
         return y
-    try:
-        emit_command_set({'a': build(fa, name='dup'),
-                          'b': build(fb, name='dup')})
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError:
-        pass
+    # two plans sharing a NAME emit fine: symbols are per plan
+    # object, numbered on collision (this used to refuse)
+    source, _ = emit_command_set({'a': build(fa, name='dup'),
+                                  'b': build(fb, name='dup')})
+    assert 'def run_dup(' in source and 'def run_dup2(' in source
+    # ...and the SAME plan under two words emits once, referenced
+    # twice (aliases for free)
+    shared = build(fa, name='go')
+    source, _ = emit_command_set({'go': shared, 'run': shared})
+    assert source.count('def run_go(') == 1
+    assert source.count('(scan_go, run_go)') == 2
     try:
         emit_command_set({'a': build(fa, name='a'),
                           'b': build(fb, name='b')},
@@ -2481,7 +2570,7 @@ def test_run_main_themed_and_set_completion():
     assert 'commands' in table
     old_env = dict(os.environ)
     os.environ.update({'_APPEAL_COMPLETE': 'bash',
-                       'COMP_WORDS': 'prog g', 'COMP_CWORD': '1'})
+                       'COMP_WORDS': 'prog\ng', 'COMP_CWORD': '1'})
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out):

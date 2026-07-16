@@ -141,7 +141,8 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None):
             # greedy consumption grabs up to the maximum; the count
             # grabbed must still be one the group can accept
             check_count(len(operands), child.minimum, child.maximum,
-                        child.valid_counts, usage, what=f"option {key}")
+                        child.valid_counts, usage, what=f"option {key}",
+                        param=key)
             child_args, _, _ = _fill(child, operands, 0, len(operands),
                                      given, usage)
             kwargs[o.name] = child.callable(
@@ -392,7 +393,8 @@ def scan(plan, argv, command_split=None):
             # the count grabbed must be one the group accepts
             child = o.child
             check_count(len(given[o.key]), child.minimum, child.maximum,
-                        child.valid_counts, usage, what=f"option {o.key}")
+                        child.valid_counts, usage, what=f"option {o.key}",
+                        param=o.key)
         if o.child is not None and o.key not in given:
             # (an absent option group: checked here so the error
             # lands in stage 1)
@@ -496,18 +498,19 @@ def parse(plan, argv, command_split=None):
     return result
 
 
-def dispatch(commands, global_plan, argv, prog=None, repeat=False):
+def dispatch(commands, global_plan, argv, prog=None, repeat=False, help=True):
     """
     Rung 1 of the multi-command program: interpret the dispatch the
     same way the generated parse_command_set executes it.  commands
     maps command-word -> Plan.  repeat is Appeal's cycling: after a
     command's arguments--all of them--the next token may name
-    another command.
+    another command.  help=False suppresses the automatic `help`
+    command (v1's knob).
     """
     from .plan import command_set_usage
     from .help import summary, command_set_corpus
     entries = [(word, summary(plan.callable)) for word, plan in commands.items()]
-    auto_help = 'help' not in commands
+    auto_help = help and 'help' not in commands
     usage_line = command_set_usage(prog or 'program', global_plan)
     corpus = command_set_corpus(global_plan, entries, auto_help)
     set_usage = render_command_listing(usage_line, corpus, default_templates)

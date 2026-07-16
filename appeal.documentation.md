@@ -1,10 +1,10 @@
 # Documenting an Appeal program (and coloring its output)
 
-*The user guide for Appeal v2's help system: how docstrings become
+*The user guide for Appeal 1.0's help system: how docstrings become
 `--help` pages, how documentation composes across converters, how
 to reshape the output with templates, and how to color it with a
 theme.  The design and its rulings live in the proposal (§8.7,
-§8.7.1, §8.8) and in appeal.v2.completion.md; this document is the
+§8.7.1, §8.8) and in appeal.completion.md; this document is the
 walkthrough.  Every example here is executed by the test suite.*
 
 
@@ -261,7 +261,7 @@ Two guarantees worth knowing:
 
 Tab completion is the third face of the same design--the grammar
 answering questions about itself.  Its walkthrough (zsh and bash)
-lives in appeal.v2.completion.md, Part 3.
+lives in appeal.completion.md, Part 3.
 
 ## 6: The famous `make -j`
 

@@ -65,9 +65,14 @@ class AppealDataError(AppealError):
     or (the most common data of all) the command line.  Carries
     the command's usage text when there is one to show.
     """
-    def __init__(self, message, usage=None):
+    def __init__(self, message, usage=None, param=None):
         super().__init__(message)
         self.usage = usage
+        # the parameter/option name the error is ABOUT, when one
+        # is knowable--structural provenance, so callers (the
+        # config layer) can attribute errors by identity instead
+        # of grepping the message
+        self.param = param
 
 
 class AppealUsageError(AppealDataError):
@@ -123,7 +128,7 @@ def convert(converter, text, name, usage=None):
         detail = str(e) or f'not a valid {converter_name}'
         raise UsageError(
             f"invalid value for {name!r}: {text!r} ({detail})",
-            usage) from None
+            usage, param=name) from None
 # --8<-- end appeal convert --8<--
 
 
@@ -597,7 +602,8 @@ def fold(cls, converters, occurrences, default, name, usage=None):
         try:
             instance.option(*arguments)
         except (ValueError, TypeError) as e:
-            raise UsageError(f"{name}: {e}", usage) from None
+            raise UsageError(f"{name}: {e}", usage,
+                             param=name) from None
     return instance.render()
 # --8<-- end appeal option protocol --8<--
 
@@ -667,7 +673,7 @@ def call_converter(fn, converters, values, name, usage=None):
         fn_name = getattr(fn, '__name__', 'converter')
         raise UsageError(
             f"invalid value for {name!r}: {values!r} "
-            f"(not a valid {fn_name})", usage) from None
+            f"(not a valid {fn_name})", usage, param=name) from None
 # --8<-- end appeal call converter --8<--
 
 
@@ -696,7 +702,7 @@ def collect_mapping(key_converter, value_converter, values, name, usage=None):
         if not equals:
             raise UsageError(
                 f"invalid value for {name!r}: {text!r} (expected KEY=VALUE)",
-                usage)
+                usage, param=name)
         key = convert(key_converter, key_text, name, usage)
         if key in result:
             raise UsageError(
@@ -943,7 +949,8 @@ def scoped_next(scopes, key):
     return queue.next_values()
 
 
-def check_count(n, minimum, maximum, valid_counts, usage=None, what=None):
+def check_count(n, minimum, maximum, valid_counts, usage=None, what=None,
+                param=None):
     """
     The exact-arity error, phrased as English, computed from the
     valid-count set.  what, if given, names the offender (e.g.
@@ -960,12 +967,12 @@ def check_count(n, minimum, maximum, valid_counts, usage=None, what=None):
             wanted = ', '.join(str(c) for c in counts[:-1]) + f' or {counts[-1]}'
         raise UsageError(
             f"wrong number of arguments{where}: got {n}, expected {wanted}",
-            usage)
+            usage, param=param)
     if n < minimum:
         raise UsageError(
             f"wrong number of arguments{where}: got {n}, "
             f"expected at least {minimum}",
-            usage)
+            usage, param=param)
 # --8<-- end appeal check count --8<--
 
 
@@ -1074,13 +1081,6 @@ def run_main(parse, args=None, theme=None, completion=None,
 ##
 
 
-# --8<-- start appeal export shim --8<--
-def export(fn):
-    # big's @export maintains its __all__; here it's a no-op
-    return fn
-# --8<-- end appeal export shim --8<--
-
-
 # --8<-- start big license --8<--
 _big_license = """
 big
@@ -1130,43 +1130,40 @@ def _iterate_over_bytes(b):
 # --8<-- start big toy_multisplit --8<--
 # --8<-- requires big license --8<--
 
+def _toy_multisplit_as_pairs(segments, empty):
+    # segments alternates non-separator and separator strings,
+    # always starting and ending with a (possibly empty)
+    # non-separator string.  pair each non-separator string
+    # with its subsequent separator--appending the always-empty
+    # trailing separator--to make the keep=True 2-tuple form.
+    segments.append(empty)
+    return list(zip(segments[::2], segments[1::2]))
+
+
 def toy_multisplit(s, separators):
     """
-    A toy version of multisplit.  It lives here so the test
-    suite can validate multisplit against it--the two must always
-    agree--and so I can borrow it in other projects, instead of
-    borrowing all of multisplit.  Deliberately not exported;
-    the test suite imports it by hand.
+    A toy version of multisplit.
 
-    s is a str or bytes.
-    separators is a str or iterable of str,
-      or bytes or iterable of bytes.
+    s should be str or bytes.  separators should be a list or
+    tuple of str (or bytes, matching s); if separators is itself
+    a single str or bytes, every character (or byte) in it is a
+    separator.  separators must be non-empty and must not contain
+    the empty string.
 
-    Returns a list equivalent to
-        list(big.multisplit(s, separators, keep=True, separate=True))
-    which is to say, a list of 2-tuples of
-        (non-separator string, subsequent separator string)
-    where the separator string in the final 2-tuple is
-    always empty.
+    Returns a list of 2-tuples of
 
-    (Doesn't support any other arguments--maxsplit etc.)
+        (string, separator)
 
-    This is my second version of toy_multisplit, a needless
-    (but fun to write) optimized improvement over the original.
-    (You'll find toy_multisplit_original later in the file,
-    lovingly preserved for posterity.)
+    where string is a (possibly empty) substring of s containing
+    no separators, and separator is the separator that followed
+    it.  The final 2-tuple's separator is always the empty string.
+    Splitting is greedy: at each position, the longest matching
+    separator wins.  The result is identical to
 
-    toy_multisplit is *usually* faster than toy_multisplit_original,
-    and it's *way* faster when there are lots of separators--or exactly
-    one separator.  it's only a bit slower than toy_multisplit_original
-    when there are only a handful of separators, and even then it's
-    only sometimes, and it's not a lot slower.
+        list(multisplit(s, separators, keep=True, separate=True))
 
-    And it turns out: toy_multisplit is a lot faster than the real
-    multisplit!  I guess that's the price you pay for regular expressions,
-    and general-purpose code.  (Though it does make me think... a couple
-    of specialized versions of multisplit we dispatch to for the most
-    common use cases might speed things up quite a bit!)
+    Why use this instead of multisplit?  It has no startup time.
+    It's also available as a snippet.
     """
     if not isinstance(separators, (list, tuple)):
         separators = [separators[i:i+1] for i in range(len(separators))]
@@ -1176,15 +1173,6 @@ def toy_multisplit(s, separators):
     else:
         empty = ''
     # assert empty not in separators
-
-    def as_pairs(segments):
-        # segments alternates non-separator and separator strings,
-        # always starting and ending with a (possibly empty)
-        # non-separator string.  pair each non-separator string
-        # with its subsequent separator--appending the always-empty
-        # trailing separator--to make the keep=True 2-tuple form.
-        segments.append(empty)
-        return list(zip(segments[::2], segments[1::2]))
 
     # special-cased only one separator,
     # for PEDAL TO THE MEDAL HYPER-SPEED
@@ -1204,7 +1192,7 @@ def toy_multisplit(s, separators):
             s = s[index2:]
         if s is not None:
             segments.append(s)
-        return as_pairs(segments)
+        return _toy_multisplit_as_pairs(segments, empty)
 
     # separators_by_length is a list of tuples:
     #    (length, bucket_of_separators_of_that_length)
@@ -1266,14 +1254,13 @@ def toy_multisplit(s, separators):
             s = s[1:]
     flush_word()
 
-    return as_pairs(segments)
+    return _toy_multisplit_as_pairs(segments, empty)
 
 # --8<-- end big toy_multisplit --8<--
 
 
 # --8<-- start big linebreaks --8<--
 # --8<-- requires big license --8<--
-export('str_linebreaks')
 str_linebreaks = (
     # char    decimal   hex      identity
     ##########################################
@@ -1297,27 +1284,20 @@ str_linebreaks = (
     # Also: welcome to big, Acorn and RISC OS users!
     # What are you doing here?  You can't run Python 3.6+!
     )
-export('str_linebreaks_without_crlf')
 str_linebreaks_without_crlf = tuple(s for s in str_linebreaks if s != '\r\n')
 
-export('linebreaks')
 linebreaks = str_linebreaks
-export('linebreaks_without_crlf')
 linebreaks_without_crlf = str_linebreaks_without_crlf
 
 # Whitespace as defined by Unicode.  The same as Python's definition,
 # except we again remove the four ASCII separator characters.
-export('unicode_linebreaks')
 unicode_linebreaks = tuple(s for s in str_linebreaks if not ('\x1c' <= s <= '\x1f'))
-export('unicode_linebreaks_without_crlf')
 unicode_linebreaks_without_crlf = tuple(s for s in unicode_linebreaks if s != '\r\n')
 
 # Linebreaks as defined by ASCII.  The same as Unicode,
 # but only within the first 128 code points.
 # Note: these are still *str* objects.
-export('ascii_linebreaks')
 ascii_linebreaks = tuple(s for s in unicode_linebreaks if s < '\x80')
-export('ascii_linebreaks_without_crlf')
 ascii_linebreaks_without_crlf = tuple(s for s in ascii_linebreaks if s != '\r\n')
 
 # Whitespace as defined by the Python bytes object.
@@ -1354,7 +1334,6 @@ ascii_linebreaks_without_crlf = tuple(s for s in ascii_linebreaks if s != '\r\n'
 # linebreak character, because str.splitlines (and bytes.splitlines)
 # rstrips the string of linebreak characters before it splits lines, sigh.
 
-export('bytes_linebreaks')
 bytes_linebreaks = (
     b'\n'    , #   10 0x000a - linebreak
     )
@@ -1374,7 +1353,6 @@ bytes_linebreaks += (
     b'\r\n'  , # bonus! the classic DOS linebreak sequence!
     )
 
-export('bytes_linebreaks_without_crlf')
 bytes_linebreaks_without_crlf = tuple(s for s in bytes_linebreaks if s != b'\r\n')
 # --8<-- end big linebreaks --8<--
 
@@ -1415,7 +1393,6 @@ def _expand_tabs(s, column, tab_width, tab, space, first_column=1):
     return s[:0].join(result)
 
 
-@export
 def expand_tabs(s, *, column=1, first_column=1, tab_width=8):
     """
     Expands the tabs in s to spaces and returns the result.
@@ -1528,7 +1505,6 @@ def _normalize_indents(indent, name, margin, tab_width, left_column, indent_type
     return tuple(expanded), columns
 
 
-@export
 def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, tab_width=8, two_spaces=True):
     """
     Combines 'words' into lines and returns the result as a string.
@@ -1792,7 +1768,6 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
     return s
 
 
-@export
 def split_text_with_code(s, *, code_indent=4, tab_width=8):
     """
     Splits the string s into individual words,
@@ -1937,7 +1912,6 @@ def split_text_with_code(s, *, code_indent=4, tab_width=8):
     return words
 
 
-@export
 class OverflowStrategy(enum.Enum):
     """
     Enum providing constants to specify how merge_columns
@@ -1950,7 +1924,6 @@ class OverflowStrategy(enum.Enum):
     DELAY_ALL = enum.auto()
     # DELAY_MINIMUM = enum.auto()  # not implemented yet
 
-@export
 def merge_columns(*columns, column_separator=None,
     overflow_strategy=OverflowStrategy.RAISE,
     overflow_before=0,
@@ -2206,7 +2179,6 @@ def merge_columns(*columns, column_separator=None,
 _default_definition_list_indent = '  '
 _default_definition_list_spacer = '  '
 
-@export
 def format_definition_list(pairs, margin=79, *,
         definition_left_column=None,
         definition_relative_tabs=True,
@@ -2736,7 +2708,7 @@ complete -o default -F _appeal_{ident}_completion {prog}
 _ZSH_COMPLETION_SCRIPT = """\
 _appeal_{ident}_completion() {{
     local -a completions
-    completions=("${{(@f)$(COMP_WORDS="${{words[*]}}" \\
+    completions=("${{(@f)$(COMP_WORDS="${{(pj:\\n:)words}}" \\
                           COMP_CWORD=$((CURRENT-1)) \\
                           _APPEAL_COMPLETE=zsh {prog})}}")
     if (( ${{#completions}} )) && [ -n "${{completions[1]}}" ]; then
@@ -2751,9 +2723,10 @@ compdef _appeal_{ident}_completion {prog}
 
 _FISH_COMPLETION_SCRIPT = """\
 function _appeal_{ident}_completion
-    set -l response (env COMP_WORDS=(commandline -cp) \\
-                         COMP_CWORD=(commandline -ct) \\
-                         _APPEAL_COMPLETE=fish {prog})
+    set -lx _APPEAL_COMPLETE fish
+    set -lx COMP_WORDS (commandline -co | string collect)
+    set -lx COMP_CWORD (commandline -ct)
+    set -l response ({prog})
     if set -q response[1]
         printf '%s\\n' $response
     else
@@ -2774,8 +2747,17 @@ def completion_script(shell, prog):
     `-o default`, zsh via `_files`, fish via __fish_complete_path.
     (zsh needs compsys loaded--the standard
     `autoload -U compinit && compinit`.)
+
+    Every courier serializes the words the shell is completing as a
+    NEWLINE-joined string (a newline can't occur inside a single
+    command-line word), so arguments that contain spaces survive
+    intact--the reentry splits on newlines, not whitespace.  prog
+    is shell-quoted so an odd or hostile program name can't break
+    (or inject into) the sourced script.
     """
+    import shlex
     ident = ''.join(c if c.isalnum() else '_' for c in prog)
+    prog = shlex.quote(prog)
     if shell == 'bash':
         return _BASH_COMPLETION_SCRIPT.format(ident=ident, prog=prog)
     if shell == 'zsh':
@@ -2785,6 +2767,33 @@ def completion_script(shell, prog):
     raise AppealConfigurationError(
         f"unsupported completion shell {shell!r} "
         f"(supported: 'bash', 'zsh', 'fish')")
+
+
+def _split_arg_string(string):
+    """
+    Split a command line into words the way a shell would, tolerating
+    an unterminated quote or escape at the very end--the word the
+    user is mid-typing (`prog "New Yo<TAB>`), which a strict parse
+    would reject.  The partial token is kept as-is.
+
+    (This is Click's split_arg_string, adopted: the shell hands the
+    reentry its word array with the quote CHARACTERS still attached,
+    so a plain split would leave `"New York"` quoted; a shell lexer
+    recovers the logical value.  shlex is stdlib, so it rides into a
+    standalone script for free.)
+    """
+    import shlex
+    lex = shlex.shlex(string, posix=True)
+    lex.whitespace_split = True
+    lex.commenters = ''
+    out = []
+    try:
+        out.extend(lex)
+    except ValueError:
+        # end-of-string mid-quote/escape: keep the partial token
+        # (it's in lex.token, not yet emitted)
+        out.append(lex.token)
+    return out
 
 
 def completion_reentry(completer, prog):
@@ -2804,13 +2813,24 @@ def completion_reentry(completer, prog):
         shell = mode.partition('_')[2] or 'bash'
         print(completion_script(shell, prog))
         return 0
-    words = os.environ.get('COMP_WORDS', '').split()
+    # The couriers NEWLINE-join the shell's words so each stays its
+    # own line; but the shell hands them over with the QUOTE
+    # CHARACTERS still attached ("New York" arrives as one word,
+    # literally quoted), so we run the reconstructed line back
+    # through a shell lexer to recover the logical value (New York,
+    # unquoted).  _split_arg_string tolerates the half-typed current
+    # word's unterminated quote.  Because each shell word is on its
+    # own line, the lexer's tokens line up with the shell's own word
+    # count, so COMP_CWORD still indexes them.
+    raw = os.environ.get('COMP_WORDS', '')
+    words = _split_arg_string(raw)
     if mode == 'fish':
         # fish can't cheaply produce a word INDEX; its courier
         # sends the current token's TEXT in COMP_CWORD instead
-        # (commandline -ct: empty when the cursor follows a
-        # space).  COMP_WORDS is the line up to the cursor.
+        # (commandline -ct: empty when the cursor follows a space).
         prefix = os.environ.get('COMP_CWORD', '')
+        if prefix:
+            prefix = _split_arg_string(prefix)[0]
         before = words[1:]
         if prefix and before and before[-1] == prefix:
             before = before[:-1]
@@ -2818,7 +2838,8 @@ def completion_reentry(completer, prog):
         # bash and zsh answer identically: the courier normalizes
         # the shell's own variables into COMP_WORDS/COMP_CWORD
         # (zsh's 1-based CURRENT becomes 0-based COMP_CWORD in
-        # the courier).
+        # the courier).  A cword past the last token--the cursor
+        # sits at a fresh, empty word--yields an empty prefix.
         try:
             cword = int(os.environ.get('COMP_CWORD', '0') or 0)
         except ValueError:
@@ -3119,7 +3140,6 @@ def paint_usage(theme, text):
 
 
 # --8<-- start appeal help --8<--
-# --8<-- requires appeal export shim --8<--
 # --8<-- requires appeal theme --8<--
 # --8<-- requires big word wrap trio --8<--
 # --8<-- requires big format_definition_list --8<--
@@ -3395,25 +3415,20 @@ def render_command_listing(usage, corpus, templates, margin=79):
 ##
 ## v1's converter vocabulary: split, validate, validate_range,
 ## counter, accumulator, mapping.  All semantics probed against
-## shipping v1 0.6.4.  Factory *products* carry a recipe string
-## (__appeal_recipe__): a standalone script re-runs the factory,
-## so closures and dynamic classes survive emission--the north
-## star holds without importing appeal.
+## shipping v1 0.6.4.  Factory *products* carry a structured
+## recipe (__appeal_recipe__ = (kind, factory, args, kwargs),
+## kind 'call' or 'subscript', args/kwargs holding LIVE objects):
+## a standalone script re-runs the factory, with literal arguments
+## rendered by repr and classes/callables rendered through the
+## reference table (so `type=float` and `accumulator[Path]` both
+## survive emission)--the north star holds without importing
+## appeal.
 ##
-
-
-# --8<-- start appeal recipe repr --8<--
-def _recipe_repr(*args, **kwargs):
-    bits = [repr(a) for a in args]
-    bits.extend(f'{k}={v!r}' for k, v in kwargs.items())
-    return ', '.join(bits)
-# --8<-- end appeal recipe repr --8<--
 
 
 # --8<-- start appeal split --8<--
 # --8<-- requires appeal exceptions --8<--
-# --8<-- requires appeal recipe repr --8<--
-# --8<-- requires big toy multisplit --8<--
+# --8<-- requires big toy_multisplit --8<--
 def split(*separators, strip=False):
     """
     Creates a converter that splits a string on the separators,
@@ -3453,8 +3468,8 @@ def split(*separators, strip=False):
         return values
     split_converter.__name__ = 'split'
     split_converter.__appeal_recipe__ = (
-        f'split({_recipe_repr(*separators, strip=strip)})'
-        if strip else f'split({_recipe_repr(*separators)})')
+        'call', 'split', tuple(separators),
+        {'strip': True} if strip else {})
     split_converter.__appeal_snippet__ = 'appeal split'
     return split_converter
 split.__appeal_factory__ = "split(':')"
@@ -3463,7 +3478,6 @@ split.__appeal_factory__ = "split(':')"
 
 # --8<-- start appeal validate --8<--
 # --8<-- requires appeal exceptions --8<--
-# --8<-- requires appeal recipe repr --8<--
 def validate(*values, type=None):
     """
     Creates a converter that only accepts the given values.  The
@@ -3487,7 +3501,8 @@ def validate(*values, type=None):
             raise ValueError(f"must be one of {allowed}")
         return value
     validate_converter.__name__ = 'validate'
-    validate_converter.__appeal_recipe__ = f'validate({_recipe_repr(*values)})'
+    validate_converter.__appeal_recipe__ = (
+        'call', 'validate', tuple(values), {'type': type})
     validate_converter.__appeal_snippet__ = 'appeal validate'
     return validate_converter
 validate.__appeal_factory__ = "validate('red', 'green')"
@@ -3495,7 +3510,6 @@ validate.__appeal_factory__ = "validate('red', 'green')"
 
 
 # --8<-- start appeal validate range --8<--
-# --8<-- requires appeal recipe repr --8<--
 def validate_range(start, stop=None, *, type=None, clamp=False):
     """
     Creates a converter that checks start <= value <= stop.  With
@@ -3519,11 +3533,11 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
             raise ValueError(f"must be in range {start}..{stop}")
         return value
     validate_range_converter.__name__ = 'validate_range'
-    recipe_args = _recipe_repr(start, stop)
+    recipe_kwargs = {'type': type}
     if clamp:
-        recipe_args += ', clamp=True'
+        recipe_kwargs['clamp'] = True
     validate_range_converter.__appeal_recipe__ = (
-        f'validate_range({recipe_args})')
+        'call', 'validate_range', (start, stop), recipe_kwargs)
     validate_range_converter.__appeal_snippet__ = 'appeal validate range'
     return validate_range_converter
 validate_range.__appeal_factory__ = "validate_range(0, 10)"
@@ -3540,7 +3554,8 @@ def counter(*, max=None, step=1):
     ceiling = max
 
     class Counter(MultiOption):
-        __appeal_recipe__ = (f'counter(max={ceiling!r}, step={step!r})')
+        __appeal_recipe__ = ('call', 'counter', (),
+                             {'max': ceiling, 'step': step})
         __appeal_snippet__ = 'appeal counter'
 
         def init(self, default):
@@ -3560,7 +3575,6 @@ counter.__appeal_factory__ = "counter()"
 
 
 # --8<-- start appeal file --8<--
-# --8<-- requires appeal recipe repr --8<--
 class _ProcessStream:
     """
     The safe wrapper file() puts around a process-standard stream
@@ -3657,7 +3671,7 @@ def file(mode='r', *, buffering=-1, encoding=None, errors=None,
                         ('newline', newline, None))
                     if v != default}
         file_converter.__appeal_recipe__ = (
-            f'file({_recipe_repr(mode, **settings)})')
+            'call', 'file', (mode,), settings)
         file_converter.__appeal_snippet__ = 'appeal file'
     return file_converter
 file.__appeal_factory__ = "file()"
@@ -3716,8 +3730,8 @@ class accumulator(MultiOption, metaclass=_Subscriptable):
             types = (types,)
         sub = _Subscriptable('accumulator', (cls,),
                              {'option': _folder('accumulator', types)})
-        sub.__appeal_recipe__ = (
-            f'accumulator[{", ".join(t.__name__ for t in types)}]')
+        sub.__appeal_recipe__ = ('subscript', 'accumulator',
+                                 tuple(types), {})
         return sub
 
 
@@ -3748,8 +3762,8 @@ class mapping(MultiOption, metaclass=_Subscriptable):
                             "and one value type")
         sub = _Subscriptable('mapping', (cls,),
                              {'option': _folder('mapping', types)})
-        sub.__appeal_recipe__ = (
-            f'mapping[{", ".join(t.__name__ for t in types)}]')
+        sub.__appeal_recipe__ = ('subscript', 'mapping',
+                                 tuple(types), {})
         return sub
 # --8<-- end appeal folds --8<--
 

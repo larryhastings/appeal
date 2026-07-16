@@ -1,9 +1,16 @@
-# A guided tour of the Appeal v2 implementation
+# A guided tour of the Appeal 1.0 implementation
 
 *For Larry, who looked at it on the plane and asked "where is the
 engine?"  Slowly, with a lot of context.  Refreshed 2026-07-09,
 after the conventions audit; every count and claim below was
 checked against the tree that day.*
+
+> **A note on names.**  This release is **Appeal 1.0**; the previous
+> releases were the 0.6 line.  In the engineering docs (this one, the
+> tour, the proposal) the rewrite is nicknamed **v2** and shipping
+> Appeal 0.6.x is **v1**--the codenames the rewrite was carried out
+> under.  Wherever this document says "v1 semantics" or "probed
+> against v1," read "the 0.6 line."
 
 
 ## Where the engine went
@@ -695,7 +702,7 @@ star's enforcement mechanism: one source, two bindings.
     "how does '-' become stdin?"                   runtime.file / _ProcessStream (the 'appeal file' snippet)
     "how does a man page happen?"                  help.man_page <- app.documentation('man')
     "why did except AppealError not catch it?"     it did--or see foreign_appeal_error (two-copies)
-    "what are the exact grammar rules?"            appeal.v2.grammar.md  (the spec of record)
+    "what are the exact grammar rules?"            appeal.grammar.md  (the spec of record)
 
 
 ## Things to type at it

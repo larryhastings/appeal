@@ -62,66 +62,29 @@ if __name__ == "__main__":
 ## Overview
 
 Appeal is a command-line argument processing library for
-Python, like `argparse`, `optparse`, `getopt`,
-`docopt`, `Typer`, and `click`.  But Appeal takes a
-refreshing new approach.
+Python, in the same class of solution as *argparse*,
+*optparse*, *getopt*, *docopt*, *Typer*, *Google Fire*,
+and *click*.  But Appeal takes a refreshing new approach.
 
 Other libraries have complicated, cumbersome interfaces
 that force you to repeat yourself over and over.
 Appeal leverages Python's rich function call interface,
 making it effortless to define your command-line interface.
-You write Python functions, and Appeal translates them into
-command-line options and arguments.
+You write Python, and Appeal translates it into
+command-line interfaces with options and arguments.
 
 Appeal provides amazing power and flexibility--but it's
 also intuitive, because it mirrors Python itself.
-If you understand how to write Python functions,
-you're already halfway to understanding Appeal!
+If you can write Python, you're ready to use Appeal!
 
-This is Appeal version 2--a ground-up rewrite of the engine
-under the same API.  Version 2 keeps version 1's semantics
-(there's a [list of the deliberate changes](#what-changed-from-v1)
-near the end of this document), runs its whole test corpus,
-and adds some marquee powers of its own:
 
-* **Standalone scripts.**  Appeal can write your command-line
-  parser out as a *standalone Python script*: stdlib plus your
-  own module, no appeal installed, no dependencies at all.
-  Parsing decisions are made ahead of time and compiled to
-  ordinary Python, so the emitted script is also *fast*--a
-  standalone Appeal parser costs about 2.6ms over the price
-  of starting Python itself.
-* **Tab completion** for bash, zsh, and fish, answered by the
-  same grammar that parses your command line--and it works in
-  the standalone scripts too.
-* **Documentation that composes**, rendered through templates
-  you can reshape and a color theme you can restyle.
-* **Cycling**: several commands on one command-line, run left
-  to right, like `busybox` or your favorite build tool.
-* **A class as your whole program**: `__init__` handles the
-  global options, decorated methods are the commands.
-* **Config layering**: hand `main()` a dict of settings from
-  your config file; the command line still wins.
-* An interactive **REPL** and an **MCP server** (the protocol
-  AI agents use to call tools), each one method call away,
-  each built on the same grammar as everything else.
-
-Appeal's *only* dependency is
+Appeal's only dependency is
 [my **big** library](https://github.com/larryhastings/big)--and
-even that is only consulted when *emitting* standalone scripts.
-Parsing needs nothing but Appeal itself, and the emitted scripts
-need nothing but the stdlib and your module.
+that's only at compile-time.
 
-Appeal supports Python 3.6 and up.  (The `list[T]` and
-`dict[K, V]` annotation spellings require Python 3.9, where
-Python introduced them; on older Pythons, spell those
-`appeal.accumulator` and `appeal.mapping`, which work
-everywhere.  CI exercises 3.7 through 3.14--GitHub's runners
-can't install 3.6 anymore--and 3.6 is verified locally.)
-Appeal targets POSIX platforms (UNIX, Linux, BSD, macOS).  Its
-full test suite also runs on Windows in CI (Python 3.9 and
-3.14)--nothing in Appeal is structurally POSIX-only--though
-POSIX remains the primary, best-supported target.
+Appeal supports Python 3.6 and up.  It provides POSIX-style
+command line semantics, making it best-in-class for UNIX,
+Linux, BSD, and macOS--and, increasingly, Windows.
 
 ### A New And Appealing Approach
 
@@ -141,10 +104,37 @@ then translates the user's command-line back into calls to your API.
 This raises another good point: the API you build using Appeal
 also often makes for a very nice *automation API,* allowing
 your program to also be used as a library by other programs
-with minimal effort.  (Appeal v2 leans into this hard: the same
-functions can be driven by the command line, by a config file,
-by a JSON blob, by a shell-completion request, or by an AI
-agent over MCP--and it's the same grammar answering every time.)
+with minimal effort.
+
+### New features in Appeal 1.0
+
+Appeal 1.0 is a major rewrite.  It keeps Appeal 0.6's semantics and
+APIs--it runs all the old tests--but adds a bounty of new marquee powers:
+
+* **Standalone scripts.**  Appeal can *compile* your command-line
+  parser, producing a *standalone Python script*.  The resulting
+  script has no dependencies beyond Python itself--it doesn't even
+  need Appeal installed!  The emitted script is also *fast*--a
+  standalone Appeal parser takes single-digit *microseconds* to run.
+  Not *mille-*, *micro-*.
+* **Composable documentation**, rendered through templates
+  you can reshape, and a color theme you can restyle.
+* **Tab completion** for bash, zsh, and fish, answered by the
+  same grammar that parses your command line--and it works in
+  the standalone scripts too.
+* **A class as your whole program**: `__init__` handles the
+  global options, decorated methods are the commands.  The
+  old "preparers" are gone, it *just works.*
+* **Config layering**: hand `main()` a dict of settings from
+  your config file; the command line still wins.
+* An interactive **REPL**, turning your command-line interface
+  into a mini-shell.
+* **MCP support.**  Writing tools for AI robots?  Appeal will
+  not only ingest a JSON tool call blob, it'll generate the JSON
+  Schema from your program.  And unlike other competing tools,
+  Appeal supports not only nesting but full recursion.  You
+  write Appeal like normal; the only new API is just "do the MCP
+  thing now please".
 
 
 ## Basics
@@ -430,7 +420,7 @@ fifty filenames--as many as they want!  They'd all be
 collected in a tuple and passed in to `fgrep()` in the
 `filenames` parameter.
 
-One more parameter shape, new in Appeal version 2: a
+One more parameter shape, new in Appeal 1.0: a
 *keyword-only parameter without a default value*.  On the
 command-line, options are always optional (we'll get to
 that)--so a keyword-only parameter that *must* be supplied
@@ -455,8 +445,8 @@ The usage reads:
 
 Run `script.py cp a b c`, and Appeal calls `cp('a', 'b',
 dest='c')`--the *last* argument lands in `dest`, and everything
-before it is collected into `src`.  (Appeal version 1 refused
-this signature; version 2 makes it mean the obvious thing.)
+before it is collected into `src`.  (Appeal 0.6 refused
+this signature; 1.0 makes it mean the obvious thing.)
 
 
 ## Options, Opargs, And Keyword-Only Parameters
@@ -478,7 +468,7 @@ app.main()
 
 Now the `fgrep` command-line usage looks like this:
 
-    fgrep [-c|--color <color>] [-n|--number <int>] [-i|--ignore-case] pattern [filenames]...
+    fgrep [-c|--color color] [-n|--number number] [-i|--ignore-case] pattern [filenames]...
 
 Again, a lot just happened.
 
@@ -713,7 +703,7 @@ it exactly as written.
 
 ### Cycling: several commands on one line
 
-Here's a version 2 superpower.  Pass `repeat=True` to
+Here's an Appeal 1.0 superpower.  Pass `repeat=True` to
 `Appeal()`, and once a command's arguments are all satisfied,
 the next argument may name *another* command--and the line
 starts over.  The commands run left to right:
@@ -835,7 +825,7 @@ Here, Appeal would introspect `fgrep()`, then also
 introspect `int_and_float()`.  The resulting usage
 string would now look like this:
 
-    fgrep [-p|--position <int> <float>] pattern [filenames]...
+    fgrep [-p|--position integer real] pattern [filenames]...
 
 `--position` takes *two* opargs.  Appeal would
 call `int` on the first one and `float` on the second
@@ -1010,7 +1000,7 @@ where an option can be specified either zero times or
 one time.  What if you want the user to be able to
 specify an option three times?  Or ten?
 
-The simplest spelling is new in version 2: annotate the
+The simplest spelling is new in 1.0: annotate the
 keyword-only parameter with `list[T]`, and the option is
 repeatable--each occurrence takes one oparg, converted with
 `T`, and they're all collected into a list.  Its sibling
@@ -1081,7 +1071,7 @@ fgrep(verbose=3)
 `accumulator` handles options that take a single oparg.
 It remembers them all and returns them in a single list--
 the same job as `list[str]`.  Using crazy science magic
-from the future, `accumulator` is parameterized: 
+from the future, `accumulator` is parameterized:
 `accumulator[int]` converts every oparg with `int`, and
 `accumulator[int, float]` makes the option take *two*
 opargs per occurrence, collecting `(int, float)` tuples.
@@ -1115,7 +1105,7 @@ class Option:
 
 Subclasses are *required* to override
 `option()` and `render()`.  But `init()` is optional.
-(`MultiOption` is an alias of `Option`, kept from version 1;
+(`MultiOption` is an alias of `Option`, kept from 0.6;
 use whichever name you like.)
 
 If you then specify a subclass of `Option` as an
@@ -1169,7 +1159,7 @@ One sibling: `StrictOption`.  It behaves identically to
 second occurrence is `specified more than once`, loudly.
 Everywhere else repetition means last-one-wins; subclassing
 `StrictOption` is how an option declares, by name, that
-repeating it is a mistake.  (In version 1 this behavior was
+repeating it is a mistake.  (In 0.6 this behavior was
 spelled `Option`; strictness is opt-in now, so it gets the
 louder name.)
 
@@ -1579,7 +1569,7 @@ app.main()
 Can you guess what usage for `mixin` looks like?  (Probably!)
 It looks like this:
 
-    mixin [-v|--verbose] [-l|--log-level <log_level>]
+    mixin [-v|--verbose] [-l|--log-level log_level]
 
 Even though `log` is a positional parameter, it doesn't consume
 any positional arguments on the command-line.  The `Logging`
@@ -1662,7 +1652,7 @@ outranks greed.
 
 Maybe you've noticed--all the examples so far have used
 standard Python functions as Appeal commands.  What about
-methods?  Can you use those for commands?  In version 2, the
+methods?  Can you use those for commands?  In 1.0, the
 answer isn't just "yes"--it's the nicest way to structure a
 whole program.
 
@@ -1716,7 +1706,7 @@ everything else in this document composes with it: cycling
 the *same* instance), config layering (the config dict feeds
 `__init__`--see below), standalone emission, the REPL, MCP.
 
-(Appeal version 1 handled methods with "preparer" objects--
+(Appeal 0.6 handled methods with "preparer" objects--
 `app.app_class()`, `app.command_method()`, and friends.  The
 class-as-app replaces all of that.  If you just want to bind
 one existing instance's method as a command, the old direct
@@ -1732,18 +1722,76 @@ explaining what those commands and arguments and options
 actually *do.*  You write it where a Python programmer would
 want to write it anyway: in docstrings.
 
-The docstring is *input*, never output.  Appeal reads it as
-data--a summary, prose, and named `Arguments:` / `Options:` /
-`Commands:` sections--and generates the help page fresh from
-that data, laid out by templates, optionally painted by a
-color theme:
+Appeal parses your docstrings; they become input to Appeal's
+documentation processor.  Appeal splits up the information,
+digests it, reformats it, and presents it to the user in
+various output formats.  This means Appeal imposes a small
+amount of structure onto your docstrings.  It's gentle, and
+highly human-readable--you're gonna like it, honest!
+
+A docstring for an Appeal command function should be in this shape:
+```
+Summary line.
+
+Full description of the documentation.  Multiple lines
+and paragraphs are all fine.
+
+This is a second paragraph.
+
+Arguments:
+    parametername1: Description of what this argument does.
+
+    parametername2: Documentation for the second argument.
+
+Options:
+
+    keywordargument_a: Description of the option(s) that feed this
+      parameter.
+
+Text at the left column goes back into the "full documentation"
+section.
+```
+
+First, Appeal outdents the entire docstring by its leftmost
+nonwhite column.  I talk about the "left column" below; this
+is the relative leftmost column, column 1 after outdenting.
+
+The "summary line" is the first line of the docstring.  It should
+be a standalone line (or paragraph) that explains what the
+command does.  It ends at the first empty line.  You should
+keep these short; it should just be a summary, not full
+documentation.
+
+The prose, of course, should explain what the command does.
+It should be written as it should be presented to the user;
+it should talk about options by name (`--version`), not
+about keyword-only parameters (`version`).
+
+`Arguments:` and `Options:` are special markers parsed by
+Appeal.  They need to be at the left column, and they need
+that exact spelling, with the leading capital letter and the
+trailing colon without whitespace.  These start the "arguments"
+and "options" sections.
+
+The format of these sections is simple.  Every line must be
+indented, and every entry starts with the name of a parameter,
+followed by a colon, followed by the documentation for that
+parameter.  The documentation can cross multiple lines, but
+subsequent lines should be indented further.  A line at
+the left column ends the section.
+
+It's worth repeating, and pointing out: you define the
+documentation by specifying the *parameter name*, not
+the *option* or argument name from the command-line.
+
+Here's an example program with full documentation:
 
 ```Python
 import appeal
 
 app = appeal.Appeal(name='serve')
 
-@app.global_command()
+@app.command()
 def serve(host, port: int = 8080, *, verbose=False):
     """
     Serves the thing.
@@ -1763,8 +1811,39 @@ def serve(host, port: int = 8080, *, verbose=False):
 app.main()
 ```
 
-The headline feature is that documentation *composes* the same
-way converters do: document a converter's parameters once, in
+If you write this to `serve.py` and ask for help on the
+serve command, you are rewarded with:
+```
+% python3 serve.py help serve
+Serves the thing.
+
+usage: serve [-v|--verbose] host [port]
+
+Longer prose about serving, wrapped and formatted for you.
+
+Arguments:
+    host  The host to serve on.
+    port  The port.  Defaults to 8080.
+
+Options:
+    -v|--verbose  Print more output.
+```
+
+Already this is pretty good.  You specify the parameter name,
+and Appeal rewrites it using the actual options and final argument
+names on the command-line.  And Appeal makes the real thing
+pretty, with bold and color and such.
+
+But it gets better!  In the same way that Appeal command-lines
+are composable using recursion, your *documentation* is *also*
+composable in the same way!  When you use a converter, you
+automatically pull in the documentation for *its* arguments
+and options--and all of its children, too.  You document
+the arguments and options once, in the command function or
+converter where it's defined, and everyone who uses it gets
+the documentation for free.
+
+ document a converter's parameters once, in
 the converter's own docstring, and every command that uses the
 converter inherits that documentation--with the command able
 to override any entry it wants (nearest scope wins).  Your
@@ -1783,7 +1862,7 @@ back to the monochrome page byte-for-byte).
 
 The full walkthrough--every rule, every template placeholder,
 the theme vocabulary--lives in
-[appeal.v2.documentation.md](appeal.v2.documentation.md).
+[appeal.documentation.md](appeal.documentation.md).
 Every example in it is executed by the test suite.
 
 And the same corpus renders one more dialect:
@@ -1816,7 +1895,7 @@ completion baked in--the emitted script answers its own
 completion requests with no appeal installed.
 
 The full walkthrough lives in
-[appeal.v2.completion.md](appeal.v2.completion.md).
+[appeal.completion.md](appeal.completion.md).
 
 
 ## The REPL
@@ -1872,7 +1951,7 @@ Everything composes, just like the command-line:
   *nested* dict under the parameter's name--or, equivalently,
   flat keys at the same level.  (Both spellings always work;
   use the nested one when two branches of your tree each have
-  a parameter named `x`.  Version 1's `@app.unnested()` is
+  a parameter named `x`.  Appeal 0.6's `@app.unnested()` is
   accepted as a no-op.)
 * `list[T]`, `dict[K, V]`, tuples, `*args`--they all read the
   obvious shapes.
@@ -1897,7 +1976,7 @@ row's values to parameters *by name*, read_mapping-style.
 
 ### Config layering
 
-New in version 2, and better than calling `read_mapping`
+New in 1.0, and better than calling `read_mapping`
 yourself for the common case: hand the config dict directly to
 `main()` (or `process()`, or `parse()`):
 
@@ -1976,7 +2055,7 @@ plus the exit-code protocol.  Every layer takes `config=`.
 
 ## Standalone Scripts: The North Star
 
-Here is version 2's defining feature.  Appeal can write your
+Here is 1.0's defining feature.  Appeal can write your
 command-line parser out as a *standalone Python script:*
 
 ```Python
@@ -2000,8 +2079,8 @@ The emitted script:
 * is *fast*.  Appeal decides everything decidable ahead of
   time and compiles the decisions to ordinary Python `if`
   statements.  A standalone Appeal parser adds about 2.6ms to
-  Python's own startup; version 1 added about 70ms.  (Warm
-  in-process parses are about 700x faster than version 1's.)
+  Python's own startup; 0.6 added about 70ms.  (Warm
+  in-process parses are about 700x faster than 0.6's.)
 
 This "north star" disciplines the whole library: any feature
 that works in-process must either work in a standalone script
@@ -2096,7 +2175,7 @@ filter's stdout clean, so `mytool --oops | jq .` shows the user
 Appeal's message instead of feeding it to `jq`.  If you'd
 rather have everything on one stream--or somewhere else
 entirely--`errors=` takes any writable file object:
-`Appeal(errors=sys.stdout)` is version 1's behavior, and a log
+`Appeal(errors=sys.stdout)` is 0.6's behavior, and a log
 file works too.  (Requested help is always on stdout,
 regardless.)  Configuration errors are bugs, so they raise.
 `app.process()` catches nothing--automation and tests get real
@@ -2104,7 +2183,7 @@ exceptions.
 
 `AppealError` is the umbrella--every exception Appeal raises
 derives from it, so `except AppealError` means "anything Appeal
-raised" (version 1 spelled the umbrella `AppealBaseException`;
+raised" (0.6 spelled the umbrella `AppealBaseException`;
 that name is kept as an alias).  And it has one job of its own:
 raise it *from your command* for a runtime failure that should
 end the program politely--`raise AppealError("couldn't reach
@@ -2120,7 +2199,7 @@ spellings are the same classes--catch whichever you like.)
 
 ## API Reference
 
-`Appeal(name=None, *, theme=None, version=None, repeat=False, errors=None, script=sys.argv[0], margin=79, indent=4)`
+`Appeal(name=None, *, theme=None, version=None, repeat=False, errors=None, script=sys.argv[0], margin=79, indent=4, positional_argument_usage_format='{name}', default_options=default_options, help=True)`
 
 Creates a new Appeal instance.
 
@@ -2145,7 +2224,7 @@ Creates a new Appeal instance.
   several commands, left to right.
 * `errors` is the file object error messages print to,
   default `sys.stderr` (resolved at error time, like
-  `print(file=None)`).  `sys.stdout` is version 1's behavior.
+  `print(file=None)`).  `sys.stdout` is 0.6's behavior.
   Standalone scripts can bake `sys.stderr` or `sys.stdout`;
   any other stream refuses at emission, by name.
 * `margin` (default 79) caps the help page's wrap width; at
@@ -2156,12 +2235,38 @@ Creates a new Appeal instance.
 * `indent` (default 4) sets the left indent of the help tables.
   It works by re-indenting the section templates, which own
   layout--overwrite `app.templates` to go further.
+* `positional_argument_usage_format` (default `'{name}'`) is a
+  format string that decorates how operands appear in usage
+  lines and help tables--positional arguments and option opargs
+  alike.  It interpolates the parameter's `{name}` (and, if you
+  like, `{name.upper()}`), and nothing else: `'<{name}>'` wraps
+  every operand in angle brackets (`--number <number>`),
+  `'{name.upper()}'` shouts them (`--number NUMBER`).  An
+  explicit `@app.parameter(usage=...)` rename is literal and
+  overrides the format outright.  Baked into standalone scripts.
+* `default_options` is the policy that turns an automatically-
+  mapped keyword-only parameter into option strings: a callable
+  `(name, annotation, default)` returning a list of option
+  strings.  The stock `default_options` adds a long and a short
+  (Appeal claims the long outright and the short if its letter is
+  free); `default_long_option` drops the short (the "no auto
+  shorts" policy), `default_short_option` drops the long, or pass
+  your own.  It runs at build time; only its output--the
+  strings--rides into a standalone script, never the callable
+  itself.  All three ship on the `appeal` namespace.
+* `help` (default `True`) is Appeal's automatic help.  `True`
+  gives every command `-h`/`--help` and, for a program with
+  commands, a `help` command.  `help=False` suppresses all of
+  it--the program answers `-h`/`--help` only if it declares them
+  itself.  (Even with `help=True`, a command that claims its own
+  `--help` still wins; `help=False` is the blanket off switch.)
 
-Help is always on: every command answers `-h`/`--help`, and a
+Help is on by default: every command answers `-h`/`--help`, and a
 program with commands gets a `help` command, unless you define
-your own.  Version works the same way, when you supply one:
-`Appeal(version='1.2.3')` gives you `--version` and a `version`
-command for free, and both are baked into standalone scripts.
+your own or pass `help=False`.  Version works the same way, when
+you supply one: `Appeal(version='1.2.3')` gives you `--version`
+and a `version` command for free, and both are baked into
+standalone scripts.
 
 `Appeal.command(parent=None, repeat=False, name=None)`
 
@@ -2310,7 +2415,7 @@ those for the arguments, options, and opargs of your command:
 Putting it all together: if you wanted to write an `fgrep`
 command with a usage string like this:
 
-    fgrep [-v|--verbose] [-l|--level <int>] pattern [file]...
+    fgrep [-v|--verbose] [-l|--level level] pattern [file]...
 
 you'd write it as follows:
 
@@ -2417,36 +2522,36 @@ things POSIX allows, and allows some things POSIX disallows.
   lines, too.
 
 
-## What Changed From v1
+## What Changed From Appeal 0.6
 
-Appeal version 2 is a ground-up rewrite: the version 1
+Appeal 1.0 is a ground-up rewrite: the 0.6
 bytecode interpreter is gone, replaced by a compiler that
 analyzes your functions once and generates a specialized
 parser (the same generated code serves in-process and
-standalone).  Version 1's test corpus runs against version 2
+standalone).  Appeal 0.6's test corpus runs against 1.0
 as a permanent regression suite.  The *deliberate* semantic
 changes, all of them:
 
-* **Argument distribution got smarter.**  Version 1 distributed
+* **Argument distribution got smarter.**  Appeal 0.6 distributed
   operands to argument groups greedily and sometimes painted
   itself into a corner, rejecting command-lines that had a
-  valid reading.  Version 2 accepts every command-line version
+  valid reading.  Appeal 1.0 accepts every command-line version
   1 accepted (with the same meaning), plus the ones greed
   wrongly rejected: with `def f(a='A', p: pair='P')` and two
-  operands, version 1 errored; version 2 skips `a` and fills
+  operands, 0.6 errored; 1.0 skips `a` and fills
   `pair`.
 * **Required trailing arguments.**  Keyword-only parameters
-  without defaults were a version 1 configuration error; in
-  version 2 they're required trailing arguments (`def cp(*src,
+  without defaults were a 0.6 configuration error; in
+  1.0 they're required trailing arguments (`def cp(*src,
   dest)`).
-* **Same option string, several groups.**  Version 1 refused a
+* **Same option string, several groups.**  Appeal 0.6 refused a
   converter reuse that declared the same option string twice;
-  version 2 allows it when the grammar matches, and position
+  1.0 allows it when the grammar matches, and position
   decides which group an occurrence configures.
 * **Errors print to standard error** by default--the POSIX
-  diagnostic convention (version 1 printed them to stdout;
+  diagnostic convention (0.6 printed them to stdout;
   `Appeal(errors=sys.stdout)` restores that)--and usage errors
-  exit with status 2 (version 1 exited 255).
+  exit with status 2 (0.6 exited 255).
 * **Exception names.**  The `Appeal`-prefixed names
   (`AppealUsageError`, ...) are the real class names again,
   with the short spellings kept as aliases--and the hierarchy
@@ -2462,18 +2567,18 @@ changes, all of them:
   and `default_options=` are gone (see `@app.parameter()` and
   `@app.option()` respectively); `theme=` and `repeat=` are
   new.
-* **An `Appeal` object is reusable.**  Version 1's "you can't
+* **An `Appeal` object is reusable.**  Appeal 0.6's "you can't
   call `main()` twice" restriction is gone; per-run state
   lives in the `Processor`.
 * **Repeating an option is last-one-wins**, the getopt/argparse
-  behavior (version 1 errored with "specified more than once").
+  behavior (0.6 errored with "specified more than once").
   This includes different option strings sharing a parameter
   (`--north --south` is south).  `Option` classes repeat too--
   `option()` is called per occurrence--and `MultiOption` is now
   an alias of `Option`; declare at-most-once by subclassing
-  `StrictOption` (which is what version 1 called `Option`).
-* One-character parameter names get only a short option (v1
-  behavior, uniformly enforced), and version 1's occasional
+  `StrictOption` (which is what 0.6 called `Option`).
+* One-character parameter names get only a short option (0.6
+  behavior, uniformly enforced), and 0.6's occasional
   internal-repr error messages are now English.
 
 And the additions, one more time, in list form: standalone
@@ -2482,19 +2587,19 @@ and themes, cycling, class-as-app, config layering,
 `name=`, required trailing arguments, `list[T]`/`dict[K, V]`/
 `tuple[...]` spellings, the REPL, MCP servers, `app.schema()`--
 and speed: cold start (build plus first parse) is roughly 10x
-faster than version 1, warm parses roughly 700x, and a
+faster than 0.6, warm parses roughly 700x, and a
 standalone script pays about 2.6ms of total startup where a
-version 1 program paid about 70ms.
+0.6 program paid about 70ms.
 
 
 ## Changelog
 
-**2.0** *2026*
+**1.0** *2026*
 
-Version 2: the rewrite.  See
-[What Changed From v1](#what-changed-from-v1) just above; the
+Appeal 1.0: the rewrite.  See
+[What Changed From Appeal 0.6](#what-changed-from-appeal-06) just above; the
 grammar's specification of record lives in
-[appeal.v2.grammar.md](appeal.v2.grammar.md).
+[appeal.grammar.md](appeal.grammar.md).
 
 **0.6.4** *2026/02/24*
 
@@ -2521,7 +2626,7 @@ grammar's specification of record lives in
 * Minor API change: renamed Appeal's custom exceptions, to
   remove the word `Appeal`.  So, for example, `AppealUsageError`
   is now simply `UsageError`.  I added aliases so the old names
-  still work.  (History note: version 2 flipped this back--the
+  still work.  (History note: 1.0 flipped this back--the
   prefixed names are the real names, the short names are the
   aliases.)
 * Fixed usage generation, added tests.

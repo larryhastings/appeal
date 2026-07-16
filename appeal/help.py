@@ -12,7 +12,7 @@
 import inspect as _inspect
 import re as _re
 
-from .plan import Terminal
+from .plan import Terminal, format_arg, _oparg_names
 from .runtime import AppealConfigurationError
 
 
@@ -238,36 +238,64 @@ def merge_docs(plan, command_names=None):
                            # depth) for qualifiers and indentation
     docs = {}              # rowkey -> lines, post-merge
     command_names = tuple(command_names) if command_names else ()
+    fmt = plan.arg_format  # positional_argument_usage_format: how
+                           # operand names decorate in the tables
+    arg = lambda name: format_arg(fmt, name)
+
+    def arg_name(s):
+        # an operand's rendered metavar: an explicit rename
+        # (usage_name != name) is literal and wins; otherwise the
+        # name flows through the format string
+        if s.usage_name != s.name:
+            return s.usage_name
+        return format_arg(fmt, s.usage_name)
 
     def flanks(p, index):
         # the nearest argument display before/after slot index, at
         # this level--the anchors a position qualifier names
         before = after = None
         for s in p.slots[:index]:
-            before = s.usage_name
+            before = arg_name(s)
         for s in p.slots[index + 1:]:
-            after = s.usage_name
+            after = arg_name(s)
             break
         return (before, after)
 
-    def sub_option_rows(o, depth):
-        # options of an option's converter: rows indented beneath
-        # their declaring option's row, recursively
-        rows = {}
-        if o.child is None:
-            return rows
-        for inner in o.child.options:
-            rowkey = id(inner)
-            rows.setdefault(inner.name,
-                            ('option', _option_display(inner), rowkey))
-            option_rows.append(
-                (rowkey, '  ' * depth + _option_display(inner),
-                 (None, None)))
-            for name, value in sub_option_rows(inner, depth + 1).items():
-                rows.setdefault(name, value)
-        return rows
-
     namespaces = {}    # id(plan) -> its own subtree namespace
+
+    def option_subtree(child, depth):
+        # An option's converter subtree: its inner options become
+        # rows indented beneath the declaring option's row (full
+        # depth), and its operands are named--so the converter may
+        # document them--though they show inline in the option
+        # display, not as rows of their own.  Builds
+        # namespaces[id(child)] so apply() can resolve the
+        # converter's own docstring against its own window (a
+        # converter documents its own options even when the name
+        # is ambiguous a level up), and returns the names to merge
+        # into the declaring plan's namespace.
+        ns = {}
+        for inner in child.options:
+            rowkey = id(inner)
+            display = _option_display(inner, fmt)
+            ns.setdefault(inner.name, ('option', display, rowkey))
+            option_rows.append(
+                (rowkey, '  ' * depth + display, (None, None)))
+            if inner.child is not None:
+                for name, value in option_subtree(inner.child,
+                                                  depth + 1).items():
+                    ns.setdefault(name, value)
+        for s in child.slots:
+            # an operand of the option: shown inline in the option
+            # display, so no row--but named, so the converter may
+            # document it (with nowhere to show, the text is
+            # dropped) rather than erroring
+            ns.setdefault(s.name, ('argument', s.usage_name, id(s)))
+            if not isinstance(s.child, Terminal):
+                for name, value in option_subtree(s.child, depth).items():
+                    ns.setdefault(name, value)
+        namespaces.setdefault(id(child), ns)
+        return ns
 
     def walk(p, override=None, anchors=(None, None)):
         # returns the subtree namespace for p: name -> (kind,
@@ -279,16 +307,19 @@ def merge_docs(plan, command_names=None):
         for o in p.options:
             if o.name not in namespace:
                 rowkey = id(o)
-                namespace[o.name] = ('option', _option_display(o), rowkey)
-                option_rows.append((rowkey, _option_display(o), anchors))
-            for name, value in sub_option_rows(o, 1).items():
-                namespace.setdefault(name, value)
+                namespace[o.name] = ('option', _option_display(o, fmt), rowkey)
+                option_rows.append((rowkey, _option_display(o, fmt), anchors))
+            if o.child is not None:
+                for name, value in option_subtree(o.child, 1).items():
+                    namespace.setdefault(name, value)
         for index, s in enumerate(p.slots):
             if isinstance(s.child, Terminal):
                 if override is not None:
+                    # override display is already final (formatted or
+                    # literal, decided where it was captured)
                     rowkey, display = override
                 else:
-                    rowkey, display = s.name, s.usage_name
+                    rowkey, display = s.name, arg_name(s)
                 namespace.setdefault(s.name, ('argument', display, rowkey))
                 argument_rows.append((rowkey, display))
             else:
@@ -302,7 +333,7 @@ def merge_docs(plan, command_names=None):
                     # still wins the *display*.)
                     display = (inner.usage_name
                                if inner.usage_name != inner.name
-                               else s.usage_name)
+                               else arg_name(s))
                     child_override = (s.name, display)
                 child_namespace = walk(s.child, child_override or override,
                                        flanks(p, index))
@@ -333,9 +364,16 @@ def merge_docs(plan, command_names=None):
         # converter documents its own window even when the name is
         # ambiguous a level up.
         namespace = namespaces[id(p)]
+        # children (positional converters AND option converters)
+        # land their docstrings first, deepest scope first; this
+        # plan's own docstring then overwrites, so the nearest
+        # enclosing scope wins on a name clash
         for s in p.slots:
             if not isinstance(s.child, Terminal):
                 apply(s.child)
+        for o in p.options:
+            if o.child is not None:
+                apply(o.child)
         where = getattr(p.callable, '__name__', repr(p.callable))
         parsed = parse_docstring(_inspect.getdoc(p.callable), where)
         for kind, heading in (('arguments', 'Arguments:'),
@@ -445,21 +483,18 @@ def summary(callable):
     return doc.splitlines()[0] if doc else ''
 
 
-def _option_display(o):
-    "The option as shown in help tables: '-t|--times <int>'."
+def _option_display(o, fmt):
+    "The option as shown in help tables: '-t|--times times'."
     bits = ['|'.join(o.strings)]
     if o.kind == 'group':
         bits.append('...')
     elif o.kind not in ('flag', 'nullary'):
         if o.usage_name is not None:
-            bits.append(f'<{o.usage_name}>')
+            # @app.parameter renamed the metavar: explicit wins
+            bits.append(o.usage_name)
         else:
-            converters = o.converters[1:] if len(o.converters) > 1 else o.converters
-            for c in converters:
-                if c is str or c is tuple:
-                    bits.append(f'<{o.name}>')
-                else:
-                    bits.append(f'<{getattr(c, "__name__", o.name)}>')
+            for name in _oparg_names(o):
+                bits.append(format_arg(fmt, name))
     return ' '.join(bits)
 
 
