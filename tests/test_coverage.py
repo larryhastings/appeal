@@ -1198,14 +1198,12 @@ def test_processor_repr_and_stage_errors():
 
 
 def test_registration_errors():
+    # registering the same word twice REPLACES (v1, probed
+    # 2026-07-18: redefinition wins, it doesn't error)
     app = Appeal(name='dup')
-    app.command(name='x')(lambda: None)
-    app.command(name='x')(lambda: None)
-    try:
-        app._table()
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'two commands' in str(e)
+    app.command(name='x')(lambda: 'first')
+    app.command(name='x')(lambda: 'second')
+    assert app.process(['x']) == 'second'
     app2 = Appeal(name='clash')
     @app2.global_command()
     def go():

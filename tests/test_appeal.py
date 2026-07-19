@@ -517,8 +517,8 @@ def test_star_args_option_windows():
     # ...but an option with NO sizes at all has nothing to bind to
     got = run_both(draw, ['a', '--bold'])
     assert got[0] == 'usage' and 'at least one' in got[1], got
-    # two occurrences on one instance: last wins (ruled
-    # 2026-07-09), which for a flag is just True twice
+    # two occurrences on one instance: idempotent store-not-
+    # default (Larry's ruling, 2026-07-18)--bold twice is bold
     got = run_both(draw, ['a', '1', '--bold', '--bold', '2'])
     assert got == ('ok', ('a', (('s', 1.0, False), ('s', 2.0, True)))), got
 
@@ -636,24 +636,325 @@ def test_option_class_repetition():
     got = run_both(g, ['--where', '1', '2', '--where', '5', '6'])
     assert got[0] == 'usage' and 'more than once' in got[1], got
 
-def test_options_last_wins():
-    # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09): repeating
-    # a flag or value option is the universal last-one-wins
-    # (getopt, argparse, click)--it's what makes append-to-
-    # override wrappers and aliases work.  Repeatable kinds
-    # still collect every occurrence.
+def test_flag_presence_stores_not_default():
+    # v1 semantics, restored 2026-07-18 (Larry's break #1): a
+    # flag's presence stores `not default`--so `verbose=True`
+    # makes --verbose the OFF switch, and v2's old "a flag's
+    # default must be False" refusal is gone.  Truthiness, not
+    # identity: None and 0 defaults store True (v1, probed).
+    def f(*, verbose=True):
+        return verbose
+    assert run_both(f, []) == ('ok', True)
+    assert run_both(f, ['--verbose']) == ('ok', False)
+    assert run_both(f, ['-v']) == ('ok', False)
+    # the explicit spellings set the literal value, presence
+    # semantics notwithstanding
+    assert run_both(f, ['--verbose=true']) == ('ok', True)
+    assert run_both(f, ['--verbose=false']) == ('ok', False)
+
+    def g(*, mark: bool = None):
+        return mark
+    assert run_both(g, []) == ('ok', None)
+    assert run_both(g, ['--mark']) == ('ok', True)
+
+    def h(*, level: bool = 0):
+        return level
+    assert run_both(h, []) == ('ok', 0)
+    assert run_both(h, ['--level']) == ('ok', True)
+
+    # default False is unchanged
+    def k(*, loud=False):
+        return loud
+    assert run_both(k, ['--loud']) == ('ok', True)
+
+
+def test_default_mappings_design():
+    # Larry's design (2026-07-19): default_mappings(app) runs once
+    # at first compile; the stock policy maps the version/help
+    # commands and the precommand's -V/--version, each only if
+    # free; None banishes all default semantics; the precommand's
+    # options live in the pre-command-word era and yield to user
+    # declarations; overriding Appeal.default_version customizes.
+    import appeal as _appeal
+    import contextlib, io
+
+    def main(app, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = app.main(argv)
+        return code, out.getvalue()
+
+    app = _appeal.Appeal(name='tool', version='3.5')
+    @app.command()
+    def work(*, verbose=False): return 0
+    # both spellings, and mid-segment (a real option, not a
+    # first-token special case): metadata outranks the rest
+    assert main(app, ['-V']) == (0, '3.5\n')
+    assert main(app, ['--version']) == (0, '3.5\n')
+    assert main(app, ['--version', 'garbage']) == (0, '3.5\n')
+    # the introspection API
+    assert list(app.commands) == ['work', 'version', 'help']
+    assert app.commands['work'].handler is work
+    assert set(app.options) == {'-V', '--version', '-h', '--help'}
+
+    # yielding: a user -V (from Verbose) keeps -V; only --version
+    # gets mapped
+    app2 = _appeal.Appeal(name='t2', version='9')
+    @app2.global_command()
+    def g(*, Verbose=False): return None
+    @app2.command()
+    def go(): return 0
+    assert '-V' in app2.options and app2.options['-V'] is not None
+    assert app2.options['--version'] is None   # the precommand's
+    assert main(app2, ['--version'])[0] == 0
+
+    # banishment: None means NO default semantics
+    app3 = _appeal.Appeal(name='t3', version='9',
+                          default_mappings=None)
+    @app3.command()
+    def go3(): return 0
+    assert main(app3, ['--version'])[0] == 2
+    assert main(app3, ['version'])[0] == 2
+    assert 'version' not in app3.commands
+    assert 'version' not in app3.complete([], '')
+
+    # subclass override reaches every spelling
+    class Deluxe(_appeal.Appeal):
+        def default_version(self):
+            print(f'deluxe v{self.version}')
+    app4 = Deluxe(name='t4', version='7')
+    @app4.command()
+    def go4(): return 0
+    assert main(app4, ['-V']) == (0, 'deluxe v7\n')
+    assert main(app4, ['version']) == (0, 'deluxe v7\n')
+
+    # default_options=None: only explicit @app.option maps
+    app5 = _appeal.Appeal(name='t5', default_options=None)
+    @app5.command()
+    @app5.option('loud', '-L', default=False)
+    def go5(*, loud=False, quiet=False): return (loud, quiet)
+    assert app5.process(['go5', '-L']) == (True, False)
+    try:
+        app5.process(['go5', '-q'])
+        assert False, 'unmapped option must be unknown'
+    except _appeal.AppealUsageError:
+        pass
+
+    # a custom default_mappings policy composes with the stock one
+    def custom(app_):
+        _appeal.default_mappings(app_)
+        app_.command('about')(app_.default_version)
+    app6 = _appeal.Appeal(name='t6', version='2', default_mappings=custom)
+    @app6.command()
+    def go6(): return 0
+    assert main(app6, ['about']) == (0, '2\n')
+    assert main(app6, ['-V']) == (0, '2\n')
+
+
+def test_underscore_parameters_are_private():
+    # Larry's rule (2026-07-19): the stock default_options policy
+    # returns nothing for _underscore names--no default mapping,
+    # the default always fills.  A policy returning an empty
+    # iterable for ANY name means the same (drop, not the
+    # "no option strings" starvation refusal); @app.option is
+    # the escape hatch.
+    import appeal as _appeal
+
+    app = _appeal.Appeal(name='p')
+    @app.command()
+    def go(*, loud=False, _cache=None): return (loud, _cache)
+    assert go and app.process(['go', '--loud']) == (True, None)
+    assert '--_cache' not in app.commands['go'].options
+    try:
+        app.process(['go', '--_cache', 'x'])
+        assert False, 'private parameter must not map'
+    except _appeal.AppealUsageError:
+        pass
+
+    # the escape hatch: explicit strings still map it
+    app2 = _appeal.Appeal(name='q')
+    @app2.command()
+    @app2.option('_cache', '--cache')
+    def go2(*, _cache=''): return _cache
+    assert app2.process(['go2', '--cache', 'hot']) == 'hot'
+
+    # a custom policy dropping one name by returning []
+    def policy(app_, name, annotation, default):
+        if name == 'quiet':
+            return []
+        return _appeal.default_options(app_, name, annotation, default)
+    app3 = _appeal.Appeal(name='r', default_options=policy)
+    @app3.command()
+    def go3(*, loud=False, quiet=False): return (loud, quiet)
+    assert app3.process(['go3', '--loud']) == (True, False)
+    try:
+        app3.process(['go3', '--quiet'])
+        assert False
+    except _appeal.AppealUsageError:
+        pass
+
+
+def test_same_word_at_different_depths():
+    # Larry's ruling (2026-07-19): depth takes precedence.  A has
+    # subcommand X; X has its own subcommand X; `A X X` runs A,
+    # A's X, then X's X--the deepest unentered set resolves the
+    # word first (descent is free; re-entering an ancestor's set
+    # is what repeat gates).  The compile side addresses plans by
+    # NODE, so same-word-different-depth builds and runs.
+    import appeal as _appeal
+    import contextlib, io
+    calls = []
+    app = _appeal.Appeal(name='t', repeat=True)
+    def A(): calls.append('A')
+    def ax(): calls.append('AX')
+    def axx(): calls.append('XX')
+    app.command()(A)
+    a = app.command('A', repeat=True)
+    a.command('X')(ax)
+    x = a.command('X')
+    x.command('X')(axx)
+    app.process(['A', 'X', 'X'])
+    assert calls == ['A', 'AX', 'XX'], calls
+    # a fourth X pops back to A's cycling set and re-enters X the
+    # PARENT--which, dangling at end of line, demands a subcommand
+    calls.clear()
+    try:
+        app.process(['A', 'X', 'X', 'X'])
+        assert False, 'expected a dangling-parent refusal'
+    except _appeal.AppealUsageError as e:
+        assert 'no command specified' in str(e), e
+    # ...and a fifth X satisfies it: the cycle breathes in and out
+    calls.clear()
+    app.process(['A', 'X', 'X', 'X', 'X'])
+    assert calls == ['A', 'AX', 'XX', 'AX', 'XX'], calls
+
+
+def test_command_listings_are_definition_order():
+    # Larry's ruling (2026-07-19): commands and subcommands are
+    # DISPLAYED in definition order--the tree's dicts iterate in
+    # insertion order and every display path derives from them.
+    # (Shell completion stays sorted: bash re-sorts candidates
+    # anyway, so sorted-at-source keeps zsh/fish matching it.)
+    import appeal as _appeal
+    import contextlib, io
+    app = _appeal.Appeal(name='p')
+    @app.command()
+    def zebra(): "Z."
+    @app.command()
+    def mango(): "M."
+    @app.command()
+    def apple(): "A."
+    z = app.command('zebra')
+    @z.command()
+    def walk(): "W."
+    @z.command()
+    def crawl(): "C."
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.process(['help'])
+    words = [l.split()[0] for l in out.getvalue().splitlines()
+             if l.startswith('    ')]
+    assert words == ['zebra', 'mango', 'apple', 'help'], words
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.process(['help', 'zebra'])
+    words = [l.split()[0] for l in out.getvalue().splitlines()
+             if l.startswith('    ')]
+    assert words == ['walk', 'crawl', 'help'], words
+
+    # completion stays sorted, deliberately
+    candidates = app.complete([], '')
+    assert candidates == sorted(candidates), candidates
+    assert set(candidates) == {'zebra', 'mango', 'apple', 'help'}, candidates
+
+
+def test_sibling_option_groups():
+    # Larry's ruling (2026-07-18, review item 8): two keyword-only
+    # parameters sharing a converter (e1: extras, e2: extras) are
+    # SIBLING option groups.  Their shared child options bind by
+    # announcement (--e1/--e2): each occurrence belongs to the
+    # nearest announced parent before it.  With NO announcement
+    # they summon the FIRST declared sibling with defaults--and
+    # never cascade: there is no way to say which sibling an
+    # unannounced option means, so e2 exists only when announced.
+    def extras(a='', *, fiddle=False, booper=False):
+        return ('e', a, fiddle, booper)
+    def cmd(x, *, e1: extras = None, e2: extras = None):
+        return (x, e1, e2)
+
+    # nothing: both default
+    assert run_both(cmd, ['x']) == ('ok', ('x', None, None))
+    # a bare child option summons e1
+    got = run_both(cmd, ['--fiddle', 'x'])
+    assert got == ('ok', ('x', ('e', '', True, False), None)), got
+    # repetition stays in e1--it NEVER cascades to e2
+    got = run_both(cmd, ['--fiddle', '--fiddle', 'x'])
+    assert got == ('ok', ('x', ('e', '', True, False), None)), got
+    got = run_both(cmd, ['--fiddle', '--booper', 'x'])
+    assert got == ('ok', ('x', ('e', '', True, True), None)), got
+    # e2 announced alone: e1 stays None
+    got = run_both(cmd, ['x', '--e2', 'A2'])
+    assert got == ('ok', ('x', None, ('e', 'A2', False, False))), got
+    # a child option after an announcement binds to it
+    got = run_both(cmd, ['x', '--e2', 'A2', '--booper'])
+    assert got == ('ok', ('x', None, ('e', 'A2', False, True))), got
+    # both announced: each window claims its own
+    got = run_both(cmd, ['x', '--e1', 'A1', '--fiddle',
+                         '--e2', 'A2', '--booper'])
+    assert got == ('ok', ('x', ('e', 'A1', True, False),
+                          ('e', 'A2', False, True))), got
+    # announced out of declaration order: fine while no shared
+    # option was spoken (nothing to misbind)...
+    got = run_both(cmd, ['x', '--e2', 'A2', '--e1', 'A1'])
+    assert got == ('ok', ('x', ('e', 'A1', False, False),
+                          ('e', 'A2', False, False))), got
+    # ...but a loud refusal once one was
+    got = run_both(cmd, ['x', '--e2', 'A2', '--booper', '--e1', 'A1'])
+    assert got[0] == 'usage' and 'declaration order' in got[1], got
+
+    # a first sibling with a REQUIRED argument can't be summoned
+    def needy(a, *, fiddle=False):
+        return ('n', a, fiddle)
+    def cmd2(x, *, e1: needy = None, e2: needy = None):
+        return (x, e1, e2)
+    got = run_both(cmd2, ['--fiddle', 'x'])
+    assert got[0] == 'usage' and 'requires' in got[1], got
+
+
+def test_options_repeat_semantics():
+    # RULED by Larry, 2026-07-18 (review item 6, superseding both
+    # v1's "specified more than once" and the July session's
+    # self-ruling): repetition is for overriding defaults--a
+    # shell alias baking in `--north` is harmlessly overridden by
+    # a later `--south`.  VALUE options are last-one-wins; bare
+    # FLAGS idempotently store `not default` (-v -v -v is -v; a
+    # default-True flag idempotently stores False).  Repeatable
+    # kinds still collect every occurrence.
     from appeal import accumulator as _acc
     def f(*, num: int = 0, loud=False, tag: _acc[str] = ()):
         return (num, loud, tag)
-    got = run_both(f, ['--loud', '--loud'])
+    got = run_both(f, ['--loud', '--loud'])           # idempotent
     assert got == ('ok', (0, True, ())), got
-    got = run_both(f, ['--num', '1', '--num', '2'])
+    got = run_both(f, ['--loud', '--loud', '--loud'])
+    assert got == ('ok', (0, True, ())), got
+    got = run_both(f, ['--num', '1', '--num', '2'])   # value: last wins
     assert got == ('ok', (2, False, ())), got
     got = run_both(f, ['--tag', 'a', '--tag', 'b'])   # multi: all
     assert got == ('ok', (0, False, ['a', 'b'])), got
     # ...including across spellings, in command-line order
     got = run_both(f, ['-n', '1', '--num', '2', '-n', '3'])
     assert got == ('ok', (3, False, ())), got
+    # a default-True flag idempotently stores False
+    def g(*, verbose=True):
+        return verbose
+    assert run_both(g, ['-v']) == ('ok', False)
+    assert run_both(g, ['-v', '-v']) == ('ok', False)
+    # explicit spellings are absolute; bare presence after one
+    # stores not-default again; last spoken wins
+    assert run_both(g, ['--verbose=true', '-v']) == ('ok', False)
+    assert run_both(g, ['-v', '--verbose=true']) == ('ok', True)
     # flags compose with the explicit spellings
     got = run_both(f, ['--loud', '--loud=false'])
     assert got == ('ok', (0, False, ())), got
@@ -915,13 +1216,13 @@ def test_plan_configuration_errors():
     except AppealConfigurationError as e:
         assert 'z' in str(e)
 
-    def bad_flag(*, verbose=True):
+    # a default-True flag is LEGAL (v1, restored 2026-07-18--
+    # Larry's break #1: v2's first cut refused it): presence
+    # stores `not default`
+    def true_flag(*, verbose=True):
         pass
-    try:
-        build(bad_flag)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'verbose' in str(e)
+    (option,) = build(true_flag).options
+    assert option.kind == 'flag' and option.present is False, option
 
     # **kwargs is legal now (it receives @app.option declarations);
     # bare, it just gets nothing
@@ -1464,13 +1765,22 @@ def test_set_level_help_flag():
     assert (oresult, otext) == (result, text)
     _, htext = grab(lambda: parse(['help']))
     assert htext == text                              # same listing
-    # facade
+    # facade: -h is a precommand option now (2026-07-19) and the
+    # precommand EXITS--sys.exit(0)--after printing the listing;
+    # main() converts that to a return code, raw process()
+    # propagates it honestly
     app = Appeal(name='pile')
     @app.command()
     def add_item2(name):
         return name
-    result, text = grab(lambda: app.process(['-h']))
-    assert result is None and 'add_item2' in text
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            app.process(['-h'])
+        assert False, 'expected SystemExit(0)'
+    except SystemExit as e:
+        assert (e.code or 0) == 0
+    assert 'add_item2' in out.getvalue()
 
 def test_completion():
     from appeal import complete, complete_set
@@ -1960,15 +2270,15 @@ def test_default_options_policy():
     # short only
     assert options_of(default_short_option) == {'-w', '-d'}
     # a custom policy is honored verbatim (uppercased longs, no short)
-    def shout(name, annotation, default):
+    def shout(app_, name, annotation, default):
         return ['--' + name.upper()]
     assert options_of(shout) == {'--WIDTH', '--DRY'}
 
     # the policy sees the annotation and default it's handed
     seen = []
-    def spy(name, annotation, default):
+    def spy(app_, name, annotation, default):
         seen.append((name, annotation, default))
-        return default_options(name, annotation, default)
+        return default_options(app_, name, annotation, default)
     options_of(spy)
     by_name = {name: (annotation, default) for name, annotation, default in seen}
     assert by_name['width'] == (int, 80), by_name['width']
@@ -1995,7 +2305,9 @@ def test_default_options_policy_standalone():
             import demo_cmds
             import importlib
             importlib.reload(demo_cmds)
-            plan = build(demo_cmds.greet, default_options=default_long_option)
+            plan = build(demo_cmds.greet,
+                         default_options=lambda n, a, d:
+                             default_long_option(None, n, a, d))
             script = emit_standalone(plan, argv0='greet')
         finally:
             sys.path.remove(d)
@@ -3564,8 +3876,9 @@ def test_flag_explicit_boolean():
     for bad in ('maybe', 'True', '1', 'yes'):
         got = run_both(f, [f'--verbose={bad}'])
         assert got[0] == 'usage' and "'true' or" in got[1], got
-    # repetition is last-wins (ruled 2026-07-09): the explicit
-    # spelling can take back a bare flag, and vice versa
+    # explicit spellings are absolute (set); bare presence
+    # idempotently stores not-default; last spoken wins (Larry's
+    # ruling, 2026-07-18)
     got = run_both(f, ['--verbose', '--verbose=false'])
     assert got == ('ok', False), got
     got = run_both(f, ['--verbose=false', '-v'])
@@ -4017,9 +4330,11 @@ def test_deep_nested_sets():
         app = _appeal.Appeal(name='t', repeat=True)
         app.command()(mod.status)
         app.command()(mod.db)
-        app.command('db', repeat=True).command()(mod.migrate)
-        app.command('migrate', repeat=True).command()(mod.up)
-        app.command('migrate').command()(mod.down)
+        db = app.command('db', repeat=True)
+        db.command()(mod.migrate)
+        migrate = db.command('migrate', repeat=True)
+        migrate.command()(mod.up)
+        migrate.command()(mod.down)
         return app
 
     with tempfile.TemporaryDirectory() as d:
@@ -4087,6 +4402,219 @@ def test_deep_nested_sets():
                         'status'])
         assert r.returncode == 2
         assert r.stdout.startswith('db main\nmigrate two\n'), r.stdout
+
+
+TREE_MODULE = """\
+def db(*, host='local'):
+    print('db', host)
+def deploy(n: int):
+    print('deploy', n)
+def db_default():
+    print('db-default')
+def root_default():
+    print('root-default')
+def some_function(a):
+    print('renamed', a)
+"""
+
+
+def test_appeal_tree_registration():
+    # The command tree is a tree of Appeal instances (v1's model,
+    # restored 2026-07-18 by Larry's ruling: no registrar objects,
+    # ever).  @app.command('x') RENAMES--the word is 'x', the
+    # function's name is ignored and does not dispatch.
+    import appeal as _appeal
+    import contextlib, io
+
+    app = _appeal.Appeal(name='t')
+    @app.command('x')
+    def some_function(a):
+        return ('x', a)
+    assert app.process(['x', 'hi']) == ('x', 'hi')
+    try:
+        app.process(['some_function', 'z'])
+        assert False, 'function name must not dispatch'
+    except _appeal.AppealUsageError:
+        pass
+
+    # app.command('word') returns a full Appeal, the same node
+    # every time; the tree is linked by .parent
+    node = app.command('x')
+    assert isinstance(node, _appeal.Appeal)
+    assert app.command('x') is node
+    assert node.parent is app
+    assert node.root is app
+
+    # the older v2 kwarg spelling is the same fetch
+    assert app.command(parent='x') is node
+
+    # re-registration replaces (v1: the second wins)
+    @app.command('x')
+    def replacement(a):
+        return ('replaced', a)
+    assert app.process(['x', 'hi']) == ('replaced', 'hi')
+
+    # Appeal(parent=) hangs a node in the tree directly
+    app2 = _appeal.Appeal(name='u')
+    child = _appeal.Appeal('sub', parent=app2)
+    @child.command()
+    def leaf():
+        return 'leaf!'
+    assert app2.process(['sub', 'leaf']) == 'leaf!'
+
+    # chained .option() works (the child is an Appeal, so every
+    # registration method is there)
+    app3 = _appeal.Appeal(name='v')
+    @app3.command()
+    def serve(*, quiet=False):
+        pass
+    @app3.command('serve').command()
+    @app3.command('serve').option('port', '-p')
+    def start(*, port=80):
+        return ('start', port)
+    assert app3.process(['serve', 'start', '-p', '99']) == ('start', '99')
+
+
+def test_appeal_tree_default_commands():
+    # default_command at every level: the root's runs on an empty
+    # line; a subcommand node's (@app.command('db')
+    # .default_command()) runs when the line stops at the parent.
+    # Both rungs: in-process and the standalone script.
+    import appeal as _appeal
+    import contextlib, io
+
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'treemod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(TREE_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import treemod
+            import importlib
+            importlib.reload(treemod)
+            app = _appeal.Appeal(name='t')
+            app.command()(treemod.db)
+            db = app.command('db')
+            db.default_command()(treemod.db_default)
+            db.command()(treemod.deploy)
+            app.default_command()(treemod.root_default)
+
+            # in-process: line stops at the parent -> its default
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                app.process(['db', '--host', 'prod'])
+            assert out.getvalue() == 'db prod\ndb-default\n', out.getvalue()
+            # a named subcommand still dispatches
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                app.process(['db', 'deploy', '5'])
+            assert out.getvalue() == 'db local\ndeploy 5\n', out.getvalue()
+            # empty line -> the root default
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                app.process([])
+            assert out.getvalue() == 'root-default\n', out.getvalue()
+
+            # the standalone rung agrees on all three
+            script = app.standalone(argv0='t')
+            script_path = os.path.join(d, 'tree_cli.py')
+            with open(script_path, 'wt', encoding='utf-8') as f:
+                f.write(script)
+            env = subprocess_env(PYTHONPATH=d + os.pathsep + repo_dir)
+            r = run_script(script_path, ['db', '--host', 'prod'], env=env)
+            assert (r.returncode, r.stdout) == (0, 'db prod\ndb-default\n'), r
+            r = run_script(script_path, ['db', 'deploy', '5'], env=env)
+            assert (r.returncode, r.stdout) == (0, 'db local\ndeploy 5\n'), r
+            r = run_script(script_path, [], env=env)
+            assert (r.returncode, r.stdout) == (0, 'root-default\n'), r
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('treemod', None)
+
+
+REPEAT_MODULE = '\n'.join(
+    f"def {name}():\n    print({name!r})"
+    for name in ('A', 'Ax', 'AxA', 'AxB', 'Ay', 'AyA', 'AyB',
+                 'B', 'C', 'Ca', 'CaX')) + '\n'
+
+
+def test_subcommands_interacting_with_repeat():
+    # Larry's spec (2026-07-18): commands A B C; subcommands named
+    # parent-first (Ax under A, AxB under Ax), three levels deep,
+    # repeat exercised at every level.  One line touches it all:
+    #   A Ax AxA AxB Ay AyA AyB B C Ca CaX B
+    # AxB needs Ax's set to cycle, Ay needs A's set to cycle (and
+    # pops Ax's frame), B needs the root to cycle (and pops both),
+    # the final B pops back out of Ca's depth-3 set.
+    import appeal as _appeal
+    import contextlib, io
+
+    line = ['A', 'Ax', 'AxA', 'AxB', 'Ay', 'AyA', 'AyB',
+            'B', 'C', 'Ca', 'CaX', 'B']
+    expected = '\n'.join(line) + '\n'
+
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'repeatmod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write(REPEAT_MODULE)
+        sys.path.insert(0, d)
+        try:
+            import repeatmod
+            import importlib
+            importlib.reload(repeatmod)
+
+            app = _appeal.Appeal(name='t', repeat=True)
+            app.command()(repeatmod.A)
+            a = app.command('A', repeat=True)
+            a.command()(repeatmod.Ax)
+            ax = a.command('Ax', repeat=True)
+            ax.command()(repeatmod.AxA)
+            ax.command()(repeatmod.AxB)
+            a.command()(repeatmod.Ay)
+            ay = a.command('Ay', repeat=True)
+            ay.command()(repeatmod.AyA)
+            ay.command()(repeatmod.AyB)
+            app.command()(repeatmod.B)
+            app.command()(repeatmod.C)
+            c = app.command('C', repeat=True)
+            c.command()(repeatmod.Ca)
+            ca = c.command('Ca', repeat=True)
+            ca.command()(repeatmod.CaX)
+
+            # in-process
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                app.process(list(line))
+            assert out.getvalue() == expected, out.getvalue()
+
+            # a set whose repeat is OFF refuses re-entry: with
+            # everything else identical, a second Ax-set command
+            # can't resolve once the walk has left the set
+            app2 = _appeal.Appeal(name='t2', repeat=True)
+            app2.command()(repeatmod.A)
+            a2 = app2.command('A', repeat=True)
+            a2.command()(repeatmod.Ax)
+            ax2 = a2.command('Ax')          # no repeat
+            ax2.command()(repeatmod.AxA)
+            ax2.command()(repeatmod.AxB)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    app2.process(['A', 'Ax', 'AxA', 'AxB'])
+                assert False, 'expected AppealUsageError'
+            except _appeal.AppealUsageError as e:
+                assert 'AxB' in str(e), e
+
+            # the standalone rung agrees, token for token
+            script = app.standalone(argv0='t')
+            script_path = os.path.join(d, 'repeat_cli.py')
+            with open(script_path, 'wt', encoding='utf-8') as f:
+                f.write(script)
+            env = subprocess_env(PYTHONPATH=d + os.pathsep + repo_dir)
+            r = run_script(script_path, list(line), env=env)
+            assert (r.returncode, r.stdout) == (0, expected), r
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('repeatmod', None)
 
 
 def test_documentation_man():
@@ -4463,7 +4991,8 @@ def test_version():
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         code, out = main(app, ['version', 'extra'])
-    assert code == 2 and 'takes no arguments' in err.getvalue()
+    assert code == 2 and ('takes no arguments' in err.getvalue()
+                          or 'expected 0' in err.getvalue())
     # the listing documents it (before help, v1's order)
     code, out = main(app, ['help'])
     assert code == 0
@@ -4493,7 +5022,7 @@ def test_version():
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         code, out = main(app3, ['--version'])
-    assert code == 2 and 'unknown command' in err.getvalue()
+    assert code == 2 and '--version' in err.getvalue()
 
     # a global-only program answers --version too
     app4 = _appeal.Appeal(name='solo', version='4.5')
@@ -5142,23 +5671,21 @@ def test_two_classes_same_method_name():
         r = run_script(script_path, ['beta', 'run'], env=env)
         assert (r.returncode, r.stdout.strip()) == (0, 'beta-run'), r.stderr
 
-    # loud refusals where a bare word IS genuinely ambiguous:
-    # a duplicate name= within one class...
-    try:
-        bad = Appeal(name='d')
-        @bad.command(name='gamma')
-        class Gamma:
-            def __init__(self):
-                pass
-            @bad.command(name='x')
-            def one(self):
-                pass
-            @bad.command(name='x')
-            def two(self):
-                pass
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert "two commands named 'x'" in str(e)
+    # a duplicate name= within one class replaces, like every
+    # other re-registration (v1's rule: the second wins)
+    dup = Appeal(name='d')
+    @dup.command(name='gamma')
+    class Gamma:
+        def __init__(self):
+            pass
+        @dup.command(name='x')
+        def one(self):
+            pass
+        @dup.command(name='x')
+        def two(self):
+            pass
+    (word_fn,) = [fn for w, fn in dup._subs['gamma'] if w == 'x']
+    assert word_fn.__name__ == 'two', word_fn
     # ...and two nested parents sharing a word (restrictive now;
     # path-addressed sets can relax it later)
     try:
@@ -5185,9 +5712,64 @@ def test_two_classes_same_method_name():
                 @bad2.command()
                 def nuke(self):
                     pass
+        # registration is lazy; the flat-view refusal fires at
+        # first compile-side use
+        bad2._subs
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert "nested command sets named 'db'" in str(e)
+
+
+def test_app_class_compat_layer():
+    # v1's class-based-commands API (README: "Classes, Instances,
+    # And Preparers"), kept as a thin layer over class-as-app
+    # (ruled 2026-07-18, review item 4).  The README example must
+    # run unmodified.
+    import appeal as _appeal
+    import contextlib, io
+
+    app = _appeal.Appeal(name='p')
+    app_class, command_method = app.app_class()
+
+    @app_class()
+    class MyApp:
+        def __init__(self, *, verbose=False):
+            print(f"init verbose={verbose!r}")
+            self.verbose = verbose
+        @command_method()
+        def add(self, a: int, b: int):
+            print(f"add {a + b} verbose={self.verbose!r}")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.process(['--verbose', 'add', '1', '2'])
+    assert out.getvalue() == 'init verbose=True\nadd 3 verbose=True\n', \
+        out.getvalue()
+    # a fresh instance per parse, defaults refilled
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.process(['add', '4', '5'])
+    assert out.getvalue() == 'init verbose=False\nadd 9 verbose=False\n', \
+        out.getvalue()
+
+    # command_method(name=...) renames, same as @app.command(name)
+    app2 = _appeal.Appeal(name='q')
+    app_class2, command_method2 = app2.app_class()
+
+    @app_class2()
+    class Tool:
+        def __init__(self):
+            pass
+        @command_method2('list')
+        def list_(self):
+            return 'listed'
+
+    assert app2.process(['list']) == 'listed'
+    try:
+        app2.process(['list_'])
+        assert False, 'the method name must not dispatch'
+    except _appeal.AppealUsageError:
+        pass
 
 
 def test_class_as_app():

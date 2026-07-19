@@ -258,8 +258,15 @@ def _short_option(name):
 # compiled parser bakes, so a custom policy never rides along into
 # a standalone script.
 
-def default_options(name, annotation, default):
-    "Both a long (names >= 2 chars) and a short--v1's default."
+def default_options(app, name, annotation, default):
+    """
+    Both a long (names >= 2 chars) and a short--v1's default.
+    A leading underscore means "not public surface" in Python and
+    here too: no default mapping at all (Larry's rule,
+    2026-07-19; @app.option is the escape hatch).
+    """
+    if name.startswith('_'):
+        return []
     strings = []
     if len(name) >= 2:
         strings.append(_long_option(name))
@@ -267,17 +274,22 @@ def default_options(name, annotation, default):
     return strings
 
 
-def default_long_option(name, annotation, default):
+def default_long_option(app, name, annotation, default):
     "Long only, no short (the common 'suppress all shorts' policy)."
     return [_long_option(name)] if len(name) >= 2 else []
 
 
-def default_short_option(name, annotation, default):
+def default_short_option(app, name, annotation, default):
     "Short only, no long."
     return [_short_option(name)]
 
 
-def build(callable, name=None, method_of=None, default_options=default_options):
+def _stock_options(name, annotation, default):
+    "build()'s own default: the stock policy, no app in sight."
+    return default_options(None, name, annotation, default)
+
+
+def build(callable, name=None, method_of=None, default_options=_stock_options):
     """
     Analyze a callable's signature and produce its Plan.
 
@@ -620,11 +632,16 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
     if (annotation is bool) or (
             annotation is inspect.Parameter.empty
             and isinstance(grammar_default, bool)):
-        if grammar_default is not False:
-            raise AppealConfigurationError(
-                f"{context}: a flag's default must be False")
-        return finish(OptionRule(
-            strings, name, kind='flag', converters=(), default=default))
+        # presence stores `not default` (v1, restored 2026-07-18--
+        # Larry's break #1: v2's first cut refused any default but
+        # False, wrongly assuming a flag must store True.  v1's
+        # rule is better: a default-True flag is how you spell
+        # "turn this default-on thing OFF").  The explicit
+        # --flag=true/false spellings set the literal value.
+        rule = OptionRule(
+            strings, name, kind='flag', converters=(), default=default)
+        rule.present = not grammar_default
+        return finish(rule)
 
     if (callable(annotation)
             and not isinstance(annotation, type)
@@ -1104,16 +1121,33 @@ def _finalize_options(plan, default_options=default_options):
     """
     sites = _count_sites(plan)
     pairs = all_options(plan)
+    doomed = []
     for owner, option in pairs:
         if option.explicit:
             continue
+        proposed = ([] if default_options is None
+                    else list(default_options(option.name,
+                                              option.annotation,
+                                              option.default)))
         longs, shorts = [], []
-        for s in default_options(option.name, option.annotation,
-                                 option.default):
+        for s in proposed:
             validate_option_string(s)
             (longs if s.startswith('--') else shorts).append(s)
         option.strings = tuple(longs)
         option.auto_shorts = tuple(shorts)
+        if not proposed:
+            # the policy declined (None, or an empty iterable--
+            # e.g. the stock policy's _underscore rule): this
+            # parameter simply isn't an option, its default always
+            # fills.  The "has no option strings" refusal below is
+            # reserved for STARVATION: strings proposed, none
+            # available.
+            doomed.append((owner, option))
+    for owner, option in doomed:
+        owner.options = [o for o in owner.options if o is not option]
+    if doomed:
+        pairs = all_options(plan)
+        sites = _count_sites(plan)
     declared = {}     # string -> [(owner, option)]
     for owner, option in pairs:
         for s in option.strings:
@@ -1174,6 +1208,33 @@ def _finalize_options(plan, default_options=default_options):
                 f"option {option.name!r} (of {owner.name!r}) has no option "
                 f"strings: its name is too short for a long option and its "
                 f"letter is already taken")
+
+    # sibling option groups (Larry's ruling, 2026-07-18): a scoped
+    # key whose EVERY declarer is the direct child of a top-level
+    # group OPTION (e1: extras, e2: extras) binds by announcement
+    # (--e1/--e2), not operand position.  Child options may summon
+    # the first declared sibling; later siblings exist only when
+    # announced.
+    option_children = {id(o.child): o.key for o in plan.options
+                       if o.kind == 'group' and o.child is not None}
+    sibling_keys = set()
+    for s in plan.scoped_keys:
+        declarers = [owner for owner, o in pairs if s in o.strings]
+        if declarers and all(id(d) in option_children
+                             for d in declarers):
+            sibling_keys.add(s)
+    if sibling_keys:
+        parents = []
+        for o in plan.options:
+            if o.kind != 'group' or o.child is None:
+                continue
+            keys = tuple(k for k in sorted(sibling_keys)
+                         if any(owner is o.child and k in opt.strings
+                                for owner, opt in pairs))
+            if keys:
+                parents.append((o.key, keys))
+        plan.sibling_parents = tuple(parents)
+        plan.sibling_keys = frozenset(sibling_keys)
 
 
 def _analyze(plan):

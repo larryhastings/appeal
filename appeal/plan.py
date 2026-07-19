@@ -147,7 +147,7 @@ class OptionRule:
     """
     __slots__ = ('strings', 'name', 'kind', 'converters', 'default', 'explicit',
                  'usage_name', 'kwargs_delivered', 'child', 'fold_minimum',
-                 'annotation', 'auto_shorts')
+                 'annotation', 'auto_shorts', 'present')
 
     def __init__(self, strings, name, kind, converters, default):
         self.strings = strings
@@ -155,6 +155,10 @@ class OptionRule:
         self.kind = kind
         self.converters = converters
         self.default = default
+        self.present = True      # kind='flag': the value presence
+                                 # stores--v1: `not default`, so a
+                                 # default-True flag turns its
+                                 # thing OFF
         self.explicit = False    # True when @app.option supplied the strings
         self.usage_name = None   # @app.parameter metavar override
         self.kwargs_delivered = False   # @app.option into **kwargs:
@@ -191,6 +195,11 @@ class OptionRule:
             entry = (self.key, self.kind, m, n)
         elif self.kind == 'value' and len(self.converters) > 1:
             entry = (self.key, 'value', len(self.converters) - 1)
+        elif self.kind == 'flag':
+            # a flag entry always carries the value presence
+            # stores (v1: `not default`)--never an operand count,
+            # flags consume nothing
+            entry = (self.key, 'flag', self.present)
         else:
             entry = (self.key, self.table_kind)
         if not windowed:
@@ -238,7 +247,8 @@ class Plan:
     __slots__ = ('callable', 'name', 'slots', 'options',
                  'minimum', 'maximum', 'valid_counts', 'windowed', 'gated',
                  'certain', 'var_keyword', 'constructs', 'binds',
-                 'tree_trailing', 'scoped_keys', 'arg_format', 'auto_help')
+                 'tree_trailing', 'scoped_keys', 'arg_format', 'auto_help',
+                 'sibling_parents', 'sibling_keys', 'pre_plan')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
@@ -271,6 +281,24 @@ class Plan:
         # agreeing on the grammar): occurrences record positionally
         # and bind by stream order.  Set on the top plan.
         self.scoped_keys = frozenset()
+        # SIBLING OPTION GROUPS (Larry's ruling, 2026-07-18): when
+        # every declarer of a scoped key is the direct child of a
+        # top-level group OPTION (e1: extras, e2: extras), the
+        # windows are announced by the parent options, not by
+        # operand position.  sibling_parents: ((parent key,
+        # (its scoped child keys...)), ...) in declaration order;
+        # sibling_keys: the union.  Child options may summon the
+        # FIRST declared sibling into existence; later siblings
+        # exist only when announced.  Set on the top plan.
+        self.sibling_parents = ()
+        self.sibling_keys = frozenset()
+        # the precommand's mini plan (program metadata: -V,
+        # --version, ...), attached to the global-era plan at
+        # compile when default_mappings mapped anything to it.
+        # Its options scan in the same era; the run stage resolves
+        # and pops them FIRST, then proceeds (Larry's design,
+        # 2026-07-19).
+        self.pre_plan = None
         self.callable = callable
         self.name = name
         self.slots = slots

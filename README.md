@@ -2268,17 +2268,24 @@ you supply one: `Appeal(version='1.2.3')` gives you `--version`
 and a `version` command for free, and both are baked into
 standalone scripts.
 
-`Appeal.command(parent=None, repeat=False, name=None)`
+`Appeal.command(name=None, *, repeat=False)`
 
 Used as a decorator; registers the decorated callable as a
 command.  The command word is the callable's `__name__`,
-verbatim--or `name=`, verbatim, if you pass it.  Decorating a
-*class* registers a constructing command whose decorated
-methods are its subcommands.
+verbatim--or `name`, verbatim, if you pass it
+(`@app.command('sync-all')`: dashes welcome, the function's own
+name is ignored).  Decorating a *class* registers a constructing
+command whose decorated methods are its subcommands.
+Registering a word twice replaces: the second wins.
 
-`app.command('db')` (naming an existing command) returns a
-registrar whose `.command()` decorator attaches subcommands to
-`db`; `repeat=True` there makes that subcommand set cycle.
+`app.command('db')` returns the child **Appeal instance** for
+the word `db`, creating it if needed--the command tree is a tree
+of Appeal instances, linked by `.parent`.  Everything chains:
+`.command()` attaches subcommands, `.default_command()` picks
+what runs when the line stops at `db`, `.option()` remaps a
+subcommand's options, and so on--the child is an Appeal, not a
+wrapper.  `repeat=True` makes that node's subcommand set cycle.
+`Appeal(name, parent=app)` hangs a node in the tree directly.
 
 `Appeal.global_command()`
 
@@ -2292,7 +2299,9 @@ and its decorated methods are the commands.
 
 Used as a decorator.  Sets the command run when the program
 has commands but the user names none.  Takes no parameters, by
-definition.
+definition.  On a subcommand node
+(`@app.command('db').default_command()`) it sets what runs when
+the line stops at the parent.
 
 `Appeal.option(parameter_name, *options, annotation=..., default=...)`
 

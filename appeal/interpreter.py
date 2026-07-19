@@ -20,7 +20,7 @@ from .runtime import (
     default_templates, did_you_mean, help_margin, render_command_listing,
     render_help_page,
     scoped_forces, scoped_next, scoped_resolve, scoped_rewind,
-    scoped_window, scopes_for, window_options,
+    scoped_window, scopes_for, sibling_scopes, window_options,
     )
 
 
@@ -48,12 +48,20 @@ def _shared_winner(plan, given, name):
     return winner
 
 
-def _option_kwargs(plan, given, usage, overlay=None, scopes=None):
+def _option_kwargs(plan, given, usage, overlay=None, scopes=None,
+                   sib=None):
     """
     Resolve a rule's own options from the parse's given table.
     overlay carries this window's claimed values for scoped keys
     (whose raw `given` entries are positional records, not values).
+    sib is (scopes, summon) for sibling option groups: each
+    parent's fill pops its window's claimed child options, and
+    `summon` names the parent to conjure with defaults when child
+    options appeared with no announcement (Larry's ruling,
+    2026-07-18).
     """
+    sib_scopes, sib_summon = sib if sib is not None else (None, None)
+    sibling_keys = plan.sibling_keys
     kwargs = {}
     defaults = {}
     given_names = set()
@@ -100,11 +108,25 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None):
             # (a scoped key's raw entry is positional records, not
             # a value; a window that claimed nothing sees ABSENT--
             # the default fills)
+            if sib_summon is not None and key == sib_summon:
+                # conjure the first declared sibling: zero
+                # operands, defaults throughout, the unannounced
+                # child options bound to it
+                child = o.child
+                child_overlay = _claim_own(child, sib_scopes)
+                child_args, _, _ = _fill(child, [], 0, 0, given, usage)
+                kwargs[o.name] = child.callable(
+                    *child_args,
+                    **_option_kwargs(child, given, usage,
+                                     overlay=child_overlay,
+                                     scopes=sib_scopes))
+                continue
             if o.child is not None:
                 # an option group that wasn't given: its inner
-                # options have nothing to attach to
+                # options have nothing to attach to (sibling keys
+                # excepted: another window may claim them)
                 for inner in subtree_option_keys(o.child):
-                    if inner in given:
+                    if inner in given and inner not in sibling_keys:
                         raise UsageError(
                             f"option {inner} requires {key}", usage)
             # several rules may share a parameter (per-declaration
@@ -143,10 +165,20 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None):
             check_count(len(operands), child.minimum, child.maximum,
                         child.valid_counts, usage, what=f"option {key}",
                         param=key)
+            child_overlay = child_scopes = None
+            if (sib_scopes is not None
+                    and any(key == pk
+                            for pk, _ in plan.sibling_parents)):
+                # an announced sibling: pop this window's claimed
+                # child options
+                child_overlay = _claim_own(child, sib_scopes)
+                child_scopes = sib_scopes
             child_args, _, _ = _fill(child, operands, 0, len(operands),
                                      given, usage)
             kwargs[o.name] = child.callable(
-                *child_args, **_option_kwargs(child, given, usage))
+                *child_args, **_option_kwargs(child, given, usage,
+                                              overlay=child_overlay,
+                                              scopes=child_scopes))
         elif o.kind == 'fold':
             kwargs[o.name] = fold(o.converters[0], o.converters[1:],
                                   given[key], o.default, o.name, usage)
@@ -164,12 +196,33 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None):
 def _scopes_for(plan, given):
     specs = {}
     for owner, o in all_options(plan):
-        if o.key in plan.scoped_keys:
+        if (o.key in plan.scoped_keys
+                and o.key not in plan.sibling_keys):
+            # sibling-group keys bind by announcement, not by the
+            # positional walk (see _sibling_scopes)
             specs[o.key] = (
                 'multi' if o.kind in ('accumulate', 'mapping', 'fold')
                 else 'strict' if o.kind == 'fold1'
                 else 'last')
     return scopes_for(specs, given)
+
+
+def _sibling_scopes(plan, given, positions, usage):
+    "The announcement-ordered scopes for sibling option groups."
+    if not plan.sibling_parents:
+        return None, None
+    specs = {}
+    for owner, o in all_options(plan):
+        if o.key in plan.sibling_keys:
+            specs[o.key] = (
+                'multi' if o.kind in ('accumulate', 'mapping', 'fold')
+                else 'strict' if o.kind == 'fold1'
+                else 'last')
+    first_key = plan.sibling_parents[0][0]
+    (first,) = [o for o in plan.options if o.key == first_key]
+    return sibling_scopes(plan.sibling_parents, specs, given,
+                          positions, usage,
+                          summonable=first.child.minimum == 0)
 
 
 def _claim_own(plan, scopes):
@@ -356,10 +409,22 @@ def scan(plan, argv, command_split=None):
     usage = plan.usage()
     options = {}
     for owner, o in all_options(plan):
-        marked = (getattr(owner, 'windowed', False)
-                  or o.key in plan.scoped_keys)
+        sibling = o.key in plan.sibling_keys
+        marked = (not sibling
+                  and (getattr(owner, 'windowed', False)
+                       or o.key in plan.scoped_keys))
         for s in o.strings:
-            options[s] = o.table_entry(windowed=marked)
+            entry = o.table_entry(windowed=marked)
+            if sibling:
+                # sibling-group keys record by announcement seq,
+                # not operand position: the 's:' kinds
+                entry = (entry[0], 's:' + entry[1]) + entry[2:]
+            options[s] = entry
+    if plan.pre_plan is not None:
+        # the precommand's options scan in the same era
+        for owner, o in all_options(plan.pre_plan):
+            for s in o.strings:
+                options[s] = o.table_entry()
     help_keys = help_option_strings(plan) if command_split is None else ()
     for s in help_keys:
         options[s] = ('--help', 'flag')
@@ -372,6 +437,20 @@ def scan(plan, argv, command_split=None):
     else:
         operands, given = parse_tokens(argv, options, usage,
                                        positions=positions)
+    pre = plan.pre_plan
+    if pre is None and getattr(plan.callable, 'appeal_precommand',
+                               False):
+        pre = plan      # no global command: the precommand IS the
+                        # global plan
+    if pre is not None:
+        # the precommand acts at SCAN time, pinned like help:
+        # program metadata (-V) outranks a malformed line and the
+        # empty-line listing.  Its keys pop; stage 2 never sees
+        # them.  A no-op when none of its options were given.
+        pre_kwargs = _option_kwargs(pre, given, usage)
+        for o in pre.options:
+            given.pop(o.key, None)
+        pre.callable(**pre_kwargs)
     if help_keys and given.get('--help'):
         # the auto-help option outranks a malformed line (pinned
         # order); a program's OWN --help is an ordinary option
@@ -399,9 +478,10 @@ def scan(plan, argv, command_split=None):
             # (an absent option group: checked here so the error
             # lands in stage 1)
             # an absent option group: its inner options have
-            # nothing to attach to
+            # nothing to attach to (sibling keys excepted: another
+            # window may claim them, or they summon the first)
             for inner in subtree_option_keys(o.child):
-                if inner in given:
+                if inner in given and inner not in plan.sibling_keys:
                     raise UsageError(
                         f"option {inner} requires {o.key}", usage)
     body = n - plan.tree_trailing
@@ -459,7 +539,9 @@ def run(plan, operands, given, positions=None, env=None):
     assert remaining == 0 and i == len(operands), \
         f"automaton bug: consumed {i}/{len(operands)}"
 
-    kwargs.update(_option_kwargs(plan, given, usage, overlay, scopes))
+    kwargs.update(_option_kwargs(
+        plan, given, usage, overlay, scopes,
+        sib=_sibling_scopes(plan, given, positions or {}, usage)))
     if plan.binds is not None and plan.constructs is not None:
         # a nested class: constructed via attribute access on the
         # parent instance, so a bound inner class composes without
@@ -520,7 +602,7 @@ def dispatch(commands, global_plan, argv, prog=None, repeat=False, help=True):
         print(render_help_page(usage_line, corpus, default_templates,
                                margin=help_margin()), end='')
 
-    if auto_help and argv and argv[0] in ('-h', '--help'):
+    if help and argv and argv[0] in ('-h', '--help'):
         listing()
         return None
 

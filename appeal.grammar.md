@@ -417,12 +417,18 @@ is a config error ("call it first, e.g. split(':')").  Converter
 
 ## Nested subcommands and the default command
 
-`app.command('db').command()` attaches subcommands to `db`: the
-parent runs first, its options come before the subcommand word,
-and a parent invoked alone (with subs defined) is a usage error--
-implemented as a nested command set with the parent as its global
-command, so it's the same machinery one level down.  Emits: the
-standalone dispatcher carries one nested table per parent's set.
+`app.command('db')` returns the child Appeal instance for `db`
+(the command tree is a tree of Appeal instances--v1's model,
+restored 2026-07-18); `.command()` on it attaches subcommands:
+the parent runs first, its options come before the subcommand
+word, and a parent invoked alone is a usage error--unless the
+node has a `.default_command()`, which then runs--implemented as
+a nested command set with the parent as its global command, so
+it's the same machinery one level down.  `@app.command('x')`
+also RENAMES: the word is `'x'`, the decorated function's name
+is ignored.  Emits: the standalone dispatcher carries one nested
+table per parent's set, each with its own default slot; the root
+default command emits too.
 
 ## Class-based commands (§8.6, July 2026 rulings)
 

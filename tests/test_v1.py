@@ -726,10 +726,12 @@ class SmokeTests(AppealTestsBase):
             )
 
     def test_go2_6(self):
-        # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09):
-        # options sharing a parameter are last-one-wins in
-        # command-line order (argparse with a shared dest), not
-        # "specified more than once".
+        # v1 -> v2 DIVERGENCE, RULED by Larry 2026-07-18 (review
+        # item 6): value options sharing a parameter are
+        # last-one-wins in command-line order--kinder for
+        # overriding defaults (an alias baking in --north is
+        # harmlessly overridden by a later --south).  v1's golden
+        # was assert_process_raises(AppealUsageError).
         self.bind_go2()
         self.assert_process(
             "go2 --north --south",

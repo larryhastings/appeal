@@ -33,14 +33,19 @@ def completion_table(plan):
     for owner, o in all_options(plan):
         entry = o.table_entry(windowed=getattr(owner, 'windowed', False))
         kind = entry[1]
-        base = kind[2:] if kind.startswith('w:') else kind
-        if len(entry) > 3:
+        base = kind[2:] if kind[:2] in ('w:', 's:') else kind
+        if base in ('flag', 'nullary'):
+            # flags consume nothing; a flag entry's [2] is the
+            # value presence stores, never an operand count
+            nargs = 0
+        elif len(entry) > 3:
             # folds and groups carry (minimum, maximum); the parser
             # consumes greedily to the maximum, so completion does too
             nargs = entry[3]
         else:
-            nargs = entry[2] if len(entry) > 2 else (0 if base == 'flag' else 1)
-        repeatable = base in ('multi', 'fold') or kind.startswith('w:')
+            nargs = entry[2] if len(entry) > 2 else 1
+        repeatable = (base in ('multi', 'fold')
+                      or kind[:2] in ('w:', 's:'))
         for s in o.strings:
             options[s] = (o.key, nargs, repeatable)
         if nargs:

@@ -172,13 +172,29 @@ def parse_tokens(argv, options, usage=None, command_split=None,
     it = iter(argv)
     force_positional = False
 
+    seq = [0]
+
     def record(key, kind, value):
-        if positions is not None and key not in positions:
-            positions[key] = len(operands)
+        # seq is the token clock: adjacent options share an
+        # operand position, so sibling-group announcement order
+        # needs a finer tick.  Every key's LAST occurrence seq is
+        # stamped under ('seq', key)--tuple keys are invisible to
+        # the gate logic, which reads plain string keys.
+        seq[0] += 1
+        if positions is not None:
+            positions[('seq', key)] = seq[0]
+            if key not in positions:
+                positions[key] = len(operands)
         if kind.startswith('w:'):
             # a *args group's option: binding to an instance
             # happens later, by operand position (window_options)
             given.setdefault(key, []).append((len(operands), kind[2:], value))
+            return
+        if kind.startswith('s:'):
+            # a sibling option group's shared option: binding is
+            # by announcement (--e1/--e2), resolved after the
+            # scan (sibling_scopes); the seq is the position
+            given.setdefault(key, []).append((seq[0], kind[2:], value))
             return
         if kind == 'fold1':
             # a StrictOption: at most once, by declaration
@@ -187,12 +203,17 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                     f"option {key} specified more than once", usage)
             given[key] = value
         elif kind in ('flag', 'nullary', 'value', 'group'):
-            # last one wins (ruled 2026-07-09: the universal
-            # rule--getopt, argparse, click--and what makes
-            # append-to-override wrappers work).  Reinsertion
-            # keeps `given` in last-occurrence order, which is
-            # how a parameter shared by several option strings
-            # knows which string spoke last.
+            # last one wins (RULED by Larry 2026-07-18, review
+            # item 6: repetition is for overriding defaults--a
+            # shell alias baking in `--north` is harmlessly
+            # overridden by a later `--south`).  A bare flag
+            # idempotently stores `not default` (its entry's
+            # presence value): -v -v is -v.  The explicit
+            # spellings (--verbose=false) are absolute; a bare
+            # occurrence after one simply stores not-default
+            # again.  Reinsertion keeps `given` in last-occurrence
+            # order, which is how a parameter shared by several
+            # option strings knows which string spoke last.
             if key in given:
                 del given[key]
             given[key] = value
@@ -235,7 +256,7 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                 raise UsageError(
                     f"unknown option {name_part!r}{tail}", usage)
             key, kind = entry[0], entry[1]
-            base = kind[2:] if kind.startswith('w:') else kind
+            base = kind[2:] if kind[:2] in ('w:', 's:') else kind
             if base in ('fold', 'fold1', 'group'):
                 minimum = entry[2]
                 maximum = entry[3] if len(entry) > 3 else entry[2]
@@ -253,8 +274,13 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                     # overrides anything a config layer said
                     record(key, kind, flag_value(name_part, value_part))
                     continue
+                # a flag's presence stores the value in its table
+                # entry (v1: `not default`; a bare entry--the auto
+                # help flag--stores True); nullary presence is
+                # just True (the converter supplies the value)
                 record(key, kind,
-                       True if base in ('flag', 'nullary') else ())
+                       entry[2] if base == 'flag' and len(entry) > 2
+                       else True if base in ('flag', 'nullary') else ())
                 continue
             if equals:
                 if maximum > 1:
@@ -312,7 +338,7 @@ def parse_tokens(argv, options, usage=None, command_split=None,
             if entry is None:
                 raise UsageError(f"unknown option {'-' + c!r}", usage)
             key, kind = entry[0], entry[1]
-            base = kind[2:] if kind.startswith('w:') else kind
+            base = kind[2:] if kind[:2] in ('w:', 's:') else kind
             if base in ('fold', 'fold1', 'group'):
                 minimum = entry[2]
                 maximum = entry[3] if len(entry) > 3 else entry[2]
@@ -328,7 +354,8 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                     record(key, kind, flag_value('-' + c, rest[1:]))
                     break
                 record(key, kind,
-                       True if base in ('flag', 'nullary') else ())
+                       entry[2] if base == 'flag' and len(entry) > 2
+                       else True if base in ('flag', 'nullary') else ())
                 continue
             rest = chars[index + 1:]
             if rest:
@@ -456,6 +483,7 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
                           'repeat': entry['repeat'],
                           'words': entry['words'],
                           'usage': entry['usage'],
+                          'default': entry.get('default'),
                           'entered': False})
             boundary = resolvable_words()
             operands, given, rest, positions = entry['scan'](
@@ -475,8 +503,15 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
                             positions))
 
     if len(stack) > 1 and not stack[-1]['entered']:
-        # a parent was named but its set never got a command
-        raise UsageError("no command specified.", stack[-1]['usage'])
+        # a parent was named but its set never got a command: the
+        # set's default command (a (scan, run) pair) fills in, or
+        # the line is an error
+        d = stack[-1].get('default')
+        if d is None:
+            raise UsageError("no command specified.", stack[-1]['usage'])
+        scan_d, run_d = d
+        operands, given, _, positions = scan_d([], None)
+        invocations.append((None, run_d, operands, given, positions))
     return invocations, None
 
 
@@ -910,6 +945,8 @@ def scopes_for(specs, given):
 
 def scoped_forces(scopes, keys):
     "Does a pending occurrence force this window?  (Or replay it.)"
+    if scopes is None:
+        return False
     answer = False
     for key in keys:
         queue = scopes.get(key)
@@ -920,6 +957,8 @@ def scoped_forces(scopes, keys):
 
 def scoped_window(scopes, keys, edge, i, forced=False):
     "Open ('in') or close ('out') a window for each declared key."
+    if scopes is None:
+        return
     for key in keys:
         queue = scopes.get(key)
         if queue is None:
@@ -932,21 +971,77 @@ def scoped_window(scopes, keys, edge, i, forced=False):
 
 def scoped_resolve(scopes, usage=None):
     "After the structural walk: bind every occurrence, loudly."
+    if scopes is None:
+        return
     for key, queue in scopes.items():
         queue.resolve(key, usage)
 
 
 def scoped_rewind(scopes):
+    if scopes is None:
+        return
     for queue in scopes.values():
         queue.rewind()
 
 
 def scoped_next(scopes, key):
     "The live walk's pop for one key (None: no occurrences at all)."
+    if scopes is None:
+        return None
     queue = scopes.get(key)
     if queue is None:
         return None
     return queue.next_values()
+
+
+def sibling_scopes(parents, specs, given, positions, usage=None,
+                   summonable=True):
+    """
+    Sibling option groups (`e1: extras, e2: extras`): occurrences
+    of the shared child options bind by ANNOUNCEMENT--each belongs
+    to the announced parent (--e1/--e2) nearest before it, and
+    occurrences before every announcement reach back to the first.
+    With no announcement at all they SUMMON the first declared
+    sibling into existence (Larry's ruling, 2026-07-18); the later
+    siblings exist only when announced--there is no way to say
+    which sibling an unannounced option means, so it never
+    cascades.  summonable=False (the first sibling takes required
+    arguments) turns the summon into a loud refusal.
+
+    parents: ((parent key, (child keys...)), ...) in declaration
+    order.  Returns (scopes, summon): scopes ready for the fills'
+    live pops, summon the parent key to conjure (or None).
+    """
+    scopes = scopes_for(specs, given)
+    if not scopes:
+        return None, None
+    announced = [(positions.get(('seq', pk), 0), pk, keys)
+                 for pk, keys in parents if pk in given]
+    seqs = [s for s, _, _ in announced]
+    if seqs != sorted(seqs):
+        spoken = ' '.join(pk for _, pk, _ in
+                          sorted(announced, key=lambda a: a[0]))
+        order = ', '.join(pk for pk, _ in parents)
+        raise UsageError(
+            f"sibling option groups share options and bind in "
+            f"declaration order ({order}); they were given as "
+            f"{spoken}", usage)
+    summon = None
+    if not announced:
+        pk, keys = parents[0]
+        if not summonable:
+            shared = ', '.join(sorted(scopes))
+            raise UsageError(
+                f"option {shared} requires one of " +
+                ', '.join(pk for pk, _ in parents), usage)
+        summon = pk
+        announced = [(0, pk, keys)]
+    for s, pk, keys in announced:
+        scoped_window(scopes, keys, 'in', s)
+        scoped_window(scopes, keys, 'out', s)
+    scoped_resolve(scopes, usage)
+    scoped_rewind(scopes)
+    return scopes, summon
 
 
 def check_count(n, minimum, maximum, valid_counts, usage=None, what=None,
@@ -1015,9 +1110,9 @@ def run_main(parse, args=None, theme=None, completion=None,
         code = completion_reentry(completer, prog)
         if code is not None:
             return code
-    if version is not None and args and args[0] == '--version':
-        print(version)
-        return 0
+    # (--version/-V are ordinary precommand options now--Larry's
+    # design, 2026-07-19--scanned in the pre-command-word era and
+    # yielding to user declarations; no first-token special case)
 
     def error_stream():
         # None resolves at error time, not at call time (tests
@@ -1032,6 +1127,12 @@ def run_main(parse, args=None, theme=None, completion=None,
 
     try:
         result = parse(list(args))
+    except SystemExit as e:
+        # the precommand exits (program metadata: -V, ...);
+        # main()'s contract is to RETURN the exit code
+        code = e.code
+        return code if isinstance(code, int) else (0 if code is None
+                                                   else 1)
     except KeyboardInterrupt:
         # a process ended by SIGINT dies quietly with 128+SIGINT
         # (the shell already echoed ^C).  ONLY here (ruled

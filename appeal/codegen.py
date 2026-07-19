@@ -37,6 +37,7 @@ from .runtime import (
     accumulate, call_converter, collect_mapping, convert, fold,
     parse_tokens, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
+    sibling_scopes,
     Theme, default_templates, render_command_listing, render_help_page,
     resolve_theme,
     did_you_mean, help_margin,
@@ -128,6 +129,14 @@ class _Emitter:
         # option strings bound by position: fills thread the
         # shared occurrence queues
         self.scoped = frozenset(getattr(plan, 'scoped_keys', ()) or ())
+        # sibling option groups (Larry's ruling, 2026-07-18):
+        # their shared child keys bind by announcement--the run
+        # body builds their scopes (sibling_scopes) and passes
+        # them into the group fills; the positional walk's own
+        # scopes exclude them
+        self.sibling = frozenset(getattr(plan, 'sibling_keys', ()) or ())
+        self.sibling_parents = tuple(
+            getattr(plan, 'sibling_parents', ()) or ())
         self.usage_const = f'_USAGE_{self.symbol}'
 
     def line(self, s=''):
@@ -474,8 +483,11 @@ class _Emitter:
                 self.line(f'{pad}        {sel} = _key')
             if legality and o.child is not None and not scoped_key:
                 # an absent option group: its inner options have
-                # nothing to attach to
+                # nothing to attach to (sibling keys excepted:
+                # another window may claim them, or they summon)
                 for inner in subtree_option_keys(o.child):
+                    if inner in self.sibling:
+                        continue
                     self.line(f'{pad}if {inner!r} in given and {o.key!r} not in given:')
                     self.line(f'{pad}    raise UsageError(f"option {inner} '
                               f'requires {o.key}", {self.usage_const})')
@@ -507,6 +519,15 @@ class _Emitter:
             else:
                 self.line(f'{pad}if {key!r} in {source}:')
             self.line(f'{pad}    {_local(o.name)} = {expr}')
+            if (self.sibling_parents
+                    and key == self.sibling_parents[0][0]):
+                # the first declared sibling: child options with
+                # no announcement summon it (Larry's ruling,
+                # 2026-07-18)--zero operands, defaults throughout
+                fill = self.fill_names[id(o.child)]
+                self.line(f'{pad}elif _sib_summon == {key!r}:')
+                self.line(f'{pad}    {_local(o.name)} = '
+                          f'{fill}([], 0, 0, given, scopes=_sib)[0]')
 
     def emit_group_count_check(self, o, key, pad, guard=False):
         """
@@ -545,7 +566,20 @@ class _Emitter:
     def scoped_specs_literal(self):
         specs = {}
         for owner, o in all_options(self.plan):
-            if o.key in self.scoped:
+            if o.key in self.scoped and o.key not in self.sibling:
+                specs[o.key] = (
+                    'multi' if o.kind in ('accumulate', 'mapping',
+                                          'fold')
+                    else 'strict' if o.kind == 'fold1'
+                    else 'last')
+        return ('{' + ', '.join(f'{k!r}: {v!r}'
+                                for k, v in sorted(specs.items()))
+                + '}')
+
+    def sibling_specs_literal(self):
+        specs = {}
+        for owner, o in all_options(self.plan):
+            if o.key in self.sibling:
                 specs[o.key] = (
                     'multi' if o.kind in ('accumulate', 'mapping',
                                           'fold')
@@ -594,11 +628,16 @@ class _Emitter:
             return f'{self.leaf_expr(o.converters[0])}()'
         if o.kind == 'group':
             # the option's inline operands fill the converter group;
-            # inner options resolve from the same `given`
+            # inner options resolve from the same `given`.  A
+            # sibling parent passes its announcement scopes so the
+            # fill pops this window's claimed child options.
             fill = self.fill_names[id(o.child)]
             extra = ', gate, positions' if self.gated else ''
+            sib = (', scopes=_sib'
+                   if any(key == pk for pk, _ in self.sibling_parents)
+                   else '')
             return (f'{fill}(list({source}[{key!r}]), 0, '
-                    f'len({source}[{key!r}]), given{extra})[0]')
+                    f'len({source}[{key!r}]), given{extra}{sib})[0]')
         if o.kind == 'value' and len(o.converters) == 1:
             conv = self.leaf_expr(o.converters[0])
             return (f'convert({conv}, {source}[{key!r}], '
@@ -711,10 +750,22 @@ class _Emitter:
 
         table_items = []
         for owner, o in all_options(plan):
-            marked = (getattr(owner, 'windowed', False)
-                      or o.key in self.scoped)
+            sibling = o.key in self.sibling
+            marked = (not sibling
+                      and (getattr(owner, 'windowed', False)
+                           or o.key in self.scoped))
             for s in o.strings:
-                table_items.append(f'{s!r}: {o.table_entry(windowed=marked)!r}')
+                entry = o.table_entry(windowed=marked)
+                if sibling:
+                    # sibling-group keys record by announcement
+                    # seq, not operand position: the 's:' kinds
+                    entry = (entry[0], 's:' + entry[1]) + entry[2:]
+                table_items.append(f'{s!r}: {entry!r}')
+        if plan.pre_plan is not None:
+            # the precommand's options scan in the same era
+            for owner, o in all_options(plan.pre_plan):
+                for s in o.strings:
+                    table_items.append(f'{s!r}: {o.table_entry()!r}')
         help_keys = help_option_strings(plan) if command_split is None else ()
         for s in help_keys:
             table_items.append(f"{s!r}: ('--help', 'flag')")
@@ -725,6 +776,11 @@ class _Emitter:
             # a nested class constructs via the parent instance's
             # attribute: no direct reference to bake
             command_name = None
+        elif getattr(plan.callable, 'appeal_stock', False):
+            # the stock precommand hosting the global plan (no
+            # global command): its behavior bakes as literals, no
+            # reference to carry
+            command_name = None
         else:
             command_name = self.refs.add('_' + plan.name.lstrip('_'),
                                          plan.callable)
@@ -733,9 +789,10 @@ class _Emitter:
         # stage 1: the structural parse--no user code.  A malformed
         # line dies here, before anything runs.
         self.line(f'def scan_{self.symbol}(argv, command_words=None):')
-        if self.gated:
+        track_positions = self.gated or bool(self.sibling_parents)
+        if track_positions:
             self.line(f'    positions = {{}}')
-        gate_kwarg = ', positions=positions' if self.gated else ''
+        gate_kwarg = ', positions=positions' if track_positions else ''
         if command_split is None:
             if self.boundary == 'saturation' and plan.maximum is None:
                 self.line(f'    # unbounded arguments: never saturates, so '
@@ -774,7 +831,50 @@ class _Emitter:
             self.line(f'    # operand naming a command (or at the maximum)')
             self.line(f'    operands, given, rest = parse_tokens(argv, {options_const}, '
                       f'{self.usage_const}, command_split={command_split!r}{gate_kwarg})')
-        positions_expr = 'positions' if self.gated else 'None'
+        positions_expr = 'positions' if track_positions else 'None'
+        pre = plan.pre_plan
+        if pre is None and getattr(plan.callable, 'appeal_precommand',
+                                   False):
+            pre = plan      # the precommand IS the global plan
+        if pre is not None:
+            # the precommand acts at SCAN time, pinned like help:
+            # program metadata (-V) outranks a malformed line and
+            # the empty-line listing.  The stock behavior bakes as
+            # literals (standalone-safe); an overridden precommand
+            # family rides as a reference (standalone then refuses
+            # by name--the north star's teeth).
+            fn = pre.callable
+            version_rule = next((o for o in pre.options
+                                 if o.name == 'version'), None)
+            if version_rule is not None:
+                pops = ' or '.join(f'given.pop({s!r}, False)'
+                                   for s in version_rule.strings)
+                if getattr(fn, 'appeal_stock', False):
+                    literal = getattr(fn, 'appeal_version', None)
+                    self.line(f'    if {pops}:')
+                    self.line(f'        print({literal!r})')
+                    self.line(f'        raise SystemExit(0)')
+                else:
+                    ref = self.refs.add('_precommand', fn)
+                    self.line(f'    if {pops}:')
+                    self.line(f'        {ref}(version=True)')
+            help_rule = next((o for o in pre.options
+                              if o.name == 'help'), None)
+            if help_rule is not None:
+                # the help group's greedy optional topic: given
+                # holds the consumed operands; bare -h is []
+                helper = getattr(fn, 'appeal_help', None)
+                ref = self.refs.add('_default_help',
+                                    helper if helper is not None
+                                    else fn)
+                self.line(f'    _topic = None')
+                for s in help_rule.strings:
+                    self.line(f'    if _topic is None and '
+                              f'{s!r} in given:')
+                    self.line(f'        _topic = list(given.pop({s!r}))')
+                self.line(f'    if _topic is not None:')
+                self.line(f"        {ref}(_topic[0] if _topic else '')")
+                self.line(f'        raise SystemExit(0)')
         if help_keys:
             self.line(f"    if given.get('--help'):")
             self.line(f'        # help outranks a malformed line (pinned order)')
@@ -797,8 +897,10 @@ class _Emitter:
                                             guard=True)
             if o.child is not None:
                 # an absent option group: its inner options have
-                # nothing to attach to
+                # nothing to attach to (sibling keys excepted)
                 for inner in subtree_option_keys(o.child):
+                    if inner in self.sibling:
+                        continue
                     self.line(f'    if {inner!r} in given and '
                               f'{o.key!r} not in given:')
                     self.line(f'        raise UsageError(f"option {inner} '
@@ -852,6 +954,17 @@ class _Emitter:
                       f"end='')")
             self.line(f'        return')
         self.line(f'    n = len(operands)')
+        if self.sibling_parents:
+            first_key = self.sibling_parents[0][0]
+            (first,) = [o for o in plan.options if o.key == first_key]
+            self.line(f'    # sibling option groups: bind the shared')
+            self.line(f'    # child options by announcement (Larry''s')
+            self.line(f'    # ruling, 2026-07-18)')
+            self.line(f'    _sib, _sib_summon = sibling_scopes('
+                      f'{self.sibling_parents!r}, '
+                      f'{self.sibling_specs_literal()}, given, '
+                      f'positions or {{}}, {self.usage_const}, '
+                      f'summonable={(first.child.minimum == 0)!r})')
 
         if self.reserves:
             k = plan.tree_trailing
@@ -911,7 +1024,15 @@ class _Emitter:
         if any(o.kwargs_delivered for o in plan.options):
             args.append('**_extra')
         call = f'{command_name}({", ".join(args)})'
-        if plan.binds is not None and plan.constructs is not None:
+        if getattr(plan.callable, 'appeal_stock', False):
+            # stock precommand-as-global: inline the behavior
+            literal = getattr(plan.callable, 'appeal_version', None)
+            if any(o.name == 'version' for o in plan.options):
+                self.line(f'    if {_local("version")}:')
+                self.line(f'        print({literal!r})')
+                self.line(f'        raise SystemExit(0)')
+            self.line(f'    return None')
+        elif plan.binds is not None and plan.constructs is not None:
             # a nested class: constructed via attribute access on
             # the parent instance (bound inner classes compose)
             self.line(f'    _instance = getattr(env[{plan.binds!r}], '
@@ -1034,6 +1155,7 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
         'check_count': check_count,
         'absorb_take': absorb_take,
         'scopes_for': scopes_for,
+        'sibling_scopes': sibling_scopes,
         'scoped_forces': scoped_forces,
         'scoped_window': scoped_window,
         'scoped_resolve': scoped_resolve,
@@ -1052,13 +1174,16 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
     return parse
 
 
-def emit_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True):
+def emit_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None):
     """
     Generate the source for a multi-command program: one parse
     function per command, an optional global-command parse function
     (command mode), and a dispatcher named parse_command_set.
     commands maps command-word -> Plan.  Returns (source, refs).
     help=False suppresses the automatic `help` command (v1's knob).
+    default is the root default command's Plan (run when the line
+    names no command); sub_defaults maps parent word -> that set's
+    default Plan.
     """
     templates = default_templates if templates is None else templates
     refs = Refs()
@@ -1076,6 +1201,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
         chunks.append(emitter.emit(command_split=split)[0])
     subs = subs or {}
     sub_repeat = sub_repeat or {}
+    sub_defaults = sub_defaults or {}
     # every plan OBJECT gets its own emitted symbol--the base for
     # scan_X/run_X/_SET_X/_COMPLETE_X--numbered on collision, so
     # two classes each exposing `run` emit run_run and run_run2
@@ -1147,6 +1273,12 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
              else f'{w!r}: (scan_{sym(p)}, run_{sym(p)})')
             for w, p in sub_plans.items())
         sub_words = ', '.join(repr(w) for w in sorted(sub_plans))
+        d_plan = sub_defaults.get(parent_word)
+        if d_plan is not None:
+            emit_one(d_plan)
+            d_literal = f"(scan_{sym(d_plan)}, run_{sym(d_plan)})"
+        else:
+            d_literal = 'None'
         sub_lines.append(
             f"_SET_{sym(parent_plan)} = "
             f"{{'scan': scan_{sym(parent_plan)}, "
@@ -1154,10 +1286,15 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
             f"'commands': {{{sub_table}}}, "
             f"'repeat': {sub_repeat.get(parent_word, False)!r}, "
             f"'words': frozenset(({sub_words},)), "
-            f"'usage': {sub_usage!r}}}")
+            f"'usage': {sub_usage!r}, "
+            f"'default': {d_literal}}}")
 
     entries = [(word, summary(plan.callable)) for word, plan in commands.items()]
-    usage_line = command_set_usage(prog or 'program', global_plan)
+    display_global = (None if global_plan is not None
+                      and getattr(global_plan.callable,
+                                  'appeal_precommand', False)
+                      else global_plan)
+    usage_line = command_set_usage(prog or 'program', display_global)
     corpus = command_set_corpus(global_plan, entries, auto_help,
                                 auto_version=auto_version)
     usage = render_command_listing(usage_line, corpus, templates,
@@ -1254,14 +1391,41 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
         '',
         ])
     body = ['def parse_command_set(argv):']
-    if auto_help:
+    pre_src = None
+    if global_plan is not None:
+        pre_src = global_plan.pre_plan
+        if pre_src is None and getattr(global_plan.callable,
+                                       'appeal_precommand', False):
+            pre_src = global_plan
+    pre_help = (pre_src is not None
+                and any(o.name == 'help' for o in pre_src.options))
+    if help and not pre_help:
+        # gated on help= (the knob), not auto_help: a REAL `help`
+        # command owns the word, but -h/--help at the set level
+        # still shows the listing.  When the precommand maps the
+        # help option, IT handles every form (-h, -h TOPIC)--no
+        # first-token shortcut, it would shadow the topic.
         body.extend([
             "    if argv and argv[0] in ('-h', '--help'):",
             '        _print_listing()',
             '        return',
             ])
+    if default is not None:
+        emit_one(default)
+        lines.extend([
+            'def parse_default(argv):',
+            '    # the root default command: an empty line runs it',
+            f'    operands, given, rest, positions = '
+            f'scan_{sym(default)}(argv)',
+            f'    return run_{sym(default)}(operands, given, positions)',
+            '',
+            ])
+        default_arg = 'default=parse_default, '
+    else:
+        default_arg = ''
     body.append(f'    return run_command_set(argv, {globals_name}, '
                 f'_COMMANDS, _USAGE_command_set, '
+                f'{default_arg}'
                 f'repeat={repeat!r}, words=_COMMAND_WORDS, '
                 f'listing=_print_listing)')
     words_literal = ', '.join(repr(w) for w in sorted(command_words))
@@ -1272,13 +1436,15 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
     return '\n\n'.join(chunks), refs
 
 
-def compile_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, max_columns=79, help=True):
+def compile_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, max_columns=79, help=True, default=None, sub_defaults=None):
     """
     In-process mode for a multi-command program.  Returns the
     dispatching parse function.
     """
     source, refs = emit_command_set(commands, global_plan, prog, templates,
-                                    theme, max_columns=max_columns, help=help)
+                                    theme, max_columns=max_columns, help=help,
+                                    default=default,
+                                    sub_defaults=sub_defaults)
     filename = '<appeal generated: command set>'
     linecache.cache[filename] = (
         len(source), None, source.splitlines(keepends=True), filename)
@@ -1298,6 +1464,14 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, t
         'check_count': check_count,
         'run_command_set': run_command_set,
         'UsageError': UsageError,
+        'scopes_for': scopes_for,
+        'scoped_forces': scoped_forces,
+        'scoped_next': scoped_next,
+        'scoped_resolve': scoped_resolve,
+        'scoped_rewind': scoped_rewind,
+        'scoped_window': scoped_window,
+        'sibling_scopes': sibling_scopes,
+        'absorb_take': absorb_take,
         }
     namespace.update(refs.objects)
     code = compile(source, filename, 'exec')
@@ -1382,6 +1556,21 @@ def _render_ref(name, obj):
     naming the offender, for anything unrenderable.  This refusal
     is the north star\'s teeth.
     """
+    # the precommand help option's topic converter is appeal
+    # plumbing: bake it, never import it (standalone scripts are
+    # dependency-free)
+    if (getattr(obj, '__name__', '') == '_help_topic'
+            and getattr(obj, '__module__', '') == 'appeal'):
+        return f"def {name}(topic=''):\n    return topic"
+    # the STOCK default_help rides into a standalone script as a
+    # shim over its generated parse_help (an overridden
+    # default_help refuses below, by name--the north star)
+    func = getattr(obj, '__func__', None)
+    if (func is not None
+            and getattr(func, '__qualname__', '')
+            == 'Appeal.default_help'):
+        return (f'def {name}(topic):\n'
+                f'    parse_help([topic] if topic else [])')
     # the three process streams render by identity: `sys` is in
     # every standalone script's import footprint (the canonical
     # appeal.file() usage has `= sys.stdout` as a default)
@@ -1696,7 +1885,7 @@ def emit_standalone(plan, *, argv0=None, templates=None, theme=None,
         version=version)
 
 
-def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79, help=True):
+def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None):
     """
     Standalone mode for a multi-command program: every command\'s
     parser plus the dispatcher, in one dependency-free script.
@@ -1705,7 +1894,8 @@ def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templ
     source, refs = emit_command_set(commands, global_plan, prog, templates,
                                     theme, repeat, subs, sub_repeat,
                                     version=version, max_columns=max_columns,
-                                    help=help)
+                                    help=help, default=default,
+                                    sub_defaults=sub_defaults)
     return _standalone_script(
         source, refs, prog,
         f'command-line parsing ({", ".join(commands)})',
