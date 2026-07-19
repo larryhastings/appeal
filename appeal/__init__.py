@@ -1382,6 +1382,7 @@ class Appeal:
             if owner is None:
                 _refuse_orphan_method(callable)
             plan = self._build(callable, name=word, method_of=owner)
+            plan.prog = self.root._prog()
             with self._lock:
                 if self._plans is None:
                     self._plans = {}

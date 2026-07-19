@@ -3292,9 +3292,9 @@ def render_usage(usage, margin=79):
 
 default_templates = {
     'help': (
-        '{summary}\n'
-        '\n'
         '{usage}\n'
+        '\n'
+        '{summary}\n'
         '\n'
         '{documentation}\n'
         '\n'
@@ -3303,9 +3303,9 @@ default_templates = {
         '{options}\n'
     ),
     'help commands': (
-        '{summary}\n'
-        '\n'
         '{usage}\n'
+        '\n'
+        '{summary}\n'
         '\n'
         '{documentation}\n'
         '\n'

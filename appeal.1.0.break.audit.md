@@ -121,12 +121,13 @@ with each construct.*
   era enforcement) awaits a help-rendering refactor--`help go`
   internally rides the per-command --help path today.  Tests:
   test_default_mappings_design.
-* **D2. `help CMD` demoted the usage line.**  v1 leads with
-  `usage: prog go [-f|--flag]  [a]`, then the docstring.  1.0
-  prints the docstring summary FIRST, the usage line later, and
-  drops the program name (`usage: go ...`, not `usage: prog
-  go ...`).  (Supersedes B5 -- the line exists, but moved and
-  shortened.)
+* **D2. Help layout.**  RULED and IMPLEMENTED (Larry,
+  2026-07-19, review item 10): **usage first (0.6.4's order),
+  prog prefix restored.**  The master templates lead with the
+  usage line; app-built command plans stamp `plan.prog`, so the
+  line reads `usage: prog go ...`--pasteable into a shell.
+  Direct build() plans carry no prefix (no app to name).
+  Supersedes B5.
 
 ## E. Public API deleted (surface diff, v1 site-packages vs 1.0;
 ## corpus never imports these, so round 1 was blind to them)

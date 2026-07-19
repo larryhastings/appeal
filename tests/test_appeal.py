@@ -1509,15 +1509,18 @@ def test_help_flag():
     for argv in (['--help'], ['-h'], ['--help', 'ignored', 'operands']):
         result, text = run_both_stdout(draw, argv)
         assert result is None
-        # the page opens with the summary; usage follows
-        assert text.splitlines()[0] == 'Draws a shape.', text
+        # the page opens with usage (0.6.4's order, ruled
+        # 2026-07-19); the summary follows
+        assert text.splitlines()[0].startswith('usage: '), text
+        assert 'Draws a shape.' in text
         assert 'usage: draw [-v|--verbose] shape [[-b|--bold] width]' in text
         assert '--help' not in text                  # never advertised (v1)
         assert '    indented code paragraphs pass through intact' in text
         assert max(len(line) for line in text.splitlines()) <= 79
     # help wins even when required operands are missing
     result, text = run_both_stdout(draw, ['--help'])
-    assert result is None and text.startswith('Draws a shape.')
+    assert result is None and text.startswith('usage: ')
+    assert 'Draws a shape.' in text
 
 def test_usage_metavars_and_wrapping():
     # operands render as parameter-NAME metavars (v1's default
@@ -1701,8 +1704,12 @@ def test_command_set_help():
     _, by_help = grab(lambda: parse(['help', 'add_item']))
     _, by_flag = grab(lambda: parse(['add_item', '--help']))
     assert by_help == by_flag
-    assert by_help.startswith('Adds an item to the pile.')
-    assert 'usage: add_item' in by_help
+    # usage first (0.6.4's order, ruled 2026-07-19), with
+    # the prog prefix restored
+    assert by_help.startswith('usage: '), by_help
+    assert 'Adds an item to the pile.' in by_help
+    assert 'usage: add_item' in by_help   # direct-built plans
+    # carry no prog prefix; app-built ones do (ruled 2026-07-19)
     assert '    name   what to call it.' in by_help   # 'count' row widens the column
     _, interpreter_help = grab(lambda: interpreter_dispatch(plans, None, ['help', 'add_item'], prog='pile'))
     assert interpreter_help == by_help
@@ -1740,8 +1747,10 @@ def test_command_set_help_facade():
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.process(['help', 'add_item'])
-    assert out.getvalue().startswith('Adds an item to the pile.')
-    assert 'usage: add_item' in out.getvalue()
+    assert out.getvalue().startswith('usage: '), out.getvalue()
+    assert 'Adds an item to the pile.' in out.getvalue()
+    # app-built plans carry the prog prefix (ruled 2026-07-19)
+    assert 'usage: pile add_item' in out.getvalue()
 
 def test_set_level_help_flag():
     # `tool --help` (or -h) at position 0: the command listing,
@@ -2368,7 +2377,8 @@ def test_help_disabled():
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         assert app2.process(['--help']) is None
-    assert out.getvalue().startswith('Do g.')
+    assert out.getvalue().startswith('usage: '), out.getvalue()
+    assert 'Do g.' in out.getvalue()
 
     # a command set: no `help` command, no per-command --help
     app3 = Appeal(name='tool', help=False)
@@ -5983,7 +5993,8 @@ def test_standalone_help_sections():
         script_path, script = write_standalone_fixture(d, 'mark')
         r = run_script(script_path, ['--help'])
         assert r.returncode == 0, r.stderr
-        assert r.stdout.startswith('Marks a label on the canvas.')
+        assert r.stdout.startswith('usage: '), r.stdout
+        assert 'Marks a label on the canvas.' in r.stdout
         assert 'usage: mark' in r.stdout
         assert 'Arguments:' in r.stdout and 'Options:' in r.stdout
         assert '    label  the text to place.' in r.stdout
@@ -6019,7 +6030,8 @@ def test_standalone_command_set_help():
         r = run_script(script_path, ['help', 'mark'])
         r2 = run_script(script_path, ['mark', '--help'])
         assert r.returncode == 0 and r.stdout == r2.stdout
-        assert r.stdout.startswith('Marks a label on the canvas.')
+        assert r.stdout.startswith('usage: '), r.stdout
+        assert 'Marks a label on the canvas.' in r.stdout
         assert '    label  the text to place.' in r.stdout
 
 def test_standalone_help():
