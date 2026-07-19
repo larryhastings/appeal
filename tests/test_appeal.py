@@ -87,6 +87,16 @@ def ambig(a='A', p: pair='P'):
 # ---------------------------------------------------------------------
 # the plan/build layer
 
+
+def exit_code(fn):
+    """main() EXITS (0.6.4's contract, restored 2026-07-19);
+    run it and hand back the exit code."""
+    try:
+        fn()
+        return 0
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 0
+
 def test_plan_basics():
     plan = build(hello)
     assert plan.name == 'hello'
@@ -679,9 +689,14 @@ def test_default_mappings_design():
     import contextlib, io
 
     def main(app, argv):
+        # main() EXITS (0.6.4's contract, restored 2026-07-19)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = app.main(argv)
+            try:
+                app.main(argv)
+                code = 0
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 0
         return code, out.getvalue()
 
     app = _appeal.Appeal(name='tool', version='3.5')
@@ -827,6 +842,34 @@ def test_same_word_at_different_depths():
     calls.clear()
     app.process(['A', 'X', 'X', 'X', 'X'])
     assert calls == ['A', 'AX', 'XX', 'AX', 'XX'], calls
+
+
+def test_main_exits_the_process():
+    # 0.6.4's contract, RESTORED (Larry's ruling 2026-07-19,
+    # review item J1): main() EXITS--a script whose last line is
+    # bare app.main() reports its code to the shell.  Usage
+    # errors exit 2 (getopt/argparse convention); a command's
+    # nonzero int is the code; success exits 0.  process() is
+    # the API that returns.
+    import appeal as _appeal
+    import contextlib, io
+    app = _appeal.Appeal(name='t')
+    @app.command()
+    def ok(): pass
+    @app.command()
+    def fail(): return 3
+    for argv, expected in ([['ok'], 0], [['fail'], 3],
+                           [['bogus'], 2], [[], 1]):
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                app.main(list(argv))
+            code = 'returned'
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 0
+        assert code == expected, (argv, code)
+    # process() still returns, raw
+    assert app.process(['fail']) == 3
 
 
 def test_command_listings_are_definition_order():
@@ -1467,12 +1510,12 @@ def test_appeal_facade_dispatch():
     # errors print to stderr by default (the POSIX diagnostic
     # convention, ruled 2026-07-09); errors='stdout' opts out
     with contextlib.redirect_stderr(io.StringIO()) as err:
-        assert app.main(['bogus']) == 2
+        assert exit_code(lambda: app.main(['bogus'])) == 2
     assert 'unknown command' in err.getvalue()
     # a bare line is orientation, not a diagnostic: the listing
     # on stdout, exit 1 (ruled 2026-07-09, git-style)
     with contextlib.redirect_stdout(io.StringIO()) as out:
-        assert app.main([]) == 1
+        assert exit_code(lambda: app.main([])) == 1
     assert 'Commands:' in out.getvalue()
 
 def run_both_stdout(command, argv):
@@ -3811,7 +3854,7 @@ def test_error_stream_knob():
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), \
          contextlib.redirect_stderr(err):
-        code = make_app().main(['greet'])       # missing argument
+        code = exit_code(lambda: make_app().main(['greet']))  # missing argument
     assert code == 2
     assert out.getvalue() == '', out.getvalue()
     assert 'error:' in err.getvalue() and 'usage:' in err.getvalue()
@@ -3820,7 +3863,7 @@ def test_error_stream_knob():
     sink = io.StringIO()
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        code = make_app(errors=sink).main(['greet'])
+        code = exit_code(lambda: make_app(errors=sink).main(['greet']))
     assert code == 2
     assert out.getvalue() == ''
     assert 'error:' in sink.getvalue() and 'usage:' in sink.getvalue()
@@ -4132,7 +4175,7 @@ def test_usage_formatter_knobs():
     def helptext(app):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            app.main(['--help'])
+            exit_code(lambda: app.main(['--help']))
         return out.getvalue()
 
     wide = helptext(make_app())
@@ -4217,7 +4260,7 @@ def test_did_you_mean():
         err = io.StringIO()
         with contextlib.redirect_stderr(err), \
              contextlib.redirect_stdout(io.StringIO()):
-            assert app.main(argv) == 2
+            assert exit_code(lambda: app.main(argv)) == 2
         return err.getvalue().split('\n')[0]
 
     assert main_err(['stauts']) == \
@@ -4277,7 +4320,7 @@ def test_keyboard_interrupt():
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), \
          contextlib.redirect_stderr(err):
-        code = app.main(['boom'])
+        code = exit_code(lambda: app.main(['boom']))
     assert code == 130
     assert out.getvalue() == '' and err.getvalue() == ''
 
@@ -4378,8 +4421,8 @@ def test_deep_nested_sets():
             err = io.StringIO()
             with contextlib.redirect_stderr(err), \
                  contextlib.redirect_stdout(io.StringIO()):
-                assert app.main(['db', 'main', 'migrate', 'two',
-                                 'up']) == 2
+                assert exit_code(lambda: app.main(
+                    ['db', 'main', 'migrate', 'two', 'up'])) == 2
 
             script = app.standalone()
         finally:
@@ -4712,7 +4755,7 @@ def test_appeal_error_umbrella():
     err = io.StringIO()
     with contextlib.redirect_stderr(err), \
          contextlib.redirect_stdout(io.StringIO()):
-        assert app.main(['fetch']) == 1
+        assert exit_code(lambda: app.main(['fetch'])) == 1
     assert err.getvalue() == "error: couldn't reach the server\n"
 
     # configuration errors are bugs: main() lets them raise, even
@@ -4723,7 +4766,7 @@ def test_appeal_error_umbrella():
         pass
     try:
         with contextlib.redirect_stderr(io.StringIO()):
-            app2.main(['c', '1'])
+            exit_code(lambda: app2.main(['c', '1']))
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -4984,9 +5027,14 @@ def test_version():
     import contextlib, io
 
     def main(app, argv):
+        # main() EXITS (0.6.4's contract, restored 2026-07-19)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = app.main(argv)
+            try:
+                app.main(argv)
+                code = 0
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 0
         return code, out.getvalue()
 
     app = _appeal.Appeal(name='tool', version='1.2.3')

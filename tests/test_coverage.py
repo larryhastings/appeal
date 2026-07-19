@@ -1161,7 +1161,11 @@ def test_config_inject_shapes():
             assert complaint in str(e), (config, str(e))
     # and the fused main() spelling drives the same machinery
     seen[:] = []
-    code = make_app().main(['go'], config={'flag': True})
+    try:
+        make_app().main(['go'], config={'flag': True})
+        code = 0
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 0
     assert code == 0 and seen[0][4] is True, (code, seen)
 
 
@@ -1298,7 +1302,11 @@ def test_main_completion_reentry():
     try:
         sys.argv = ['mainc']
         with contextlib.redirect_stdout(out):
-            code = app.main()
+            try:
+                app.main()
+                code = 0
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 0
     finally:
         sys.argv = old_argv
         os.environ.clear()
@@ -2855,7 +2863,12 @@ def test_entry_points_default_to_sys_argv():
         sys.argv = ['ep', 'go', '5']
         assert app.process() == 5              # None -> sys.argv[1:]
         assert app.parse().execute() == 5
-        assert app.main() == 5                 # go's nonzero int IS the code
+        try:
+            app.main()
+            code = 0
+        except SystemExit as e:
+            code = e.code
+        assert code == 5                    # go's nonzero int IS the code
         sys.argv = ['ep']                      # a different command line
         assert app.process(['go', '9']) == 9   # explicit wins, no sys.argv
     finally:

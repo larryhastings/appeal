@@ -317,13 +317,14 @@ outcome, value, AND type.  22 raw divergences, clustering into:
 ## J. Axis sweep (2026-07-18): batteries A-G, v1 0.6.4 vs 1.0.
 ## ACCUMULATED ONLY -- nothing fixed.
 
-* **J1. `main()` no longer exits the process.**  v1's `main()`
-  calls sys.exit itself (usage error -> exit -1; command's
-  nonzero int -> exit that code; help -> exit None).  1.0's
-  `main()` RETURNS the exit code.  A v1-style script ending in
-  bare `app.main()` -- tron, cq, and utimify all do exactly this
-  -- silently exits 0 no matter what failed.  Probably the
-  highest-impact unfixed item on this list.
+* **J1. `main()` no longer exits the process.**  RULED and
+  FIXED (Larry, 2026-07-19, review item J1): **main() EXITS
+  again** (0.6.4's contract)--bare `app.main()` scripts (tron,
+  cq, utimify) report their codes to the shell.  Usage errors
+  exit 2 (getopt/argparse convention, chosen over 0.6.4's -1);
+  a command's nonzero int is the code; empty line exits 1;
+  process() remains the returning API.  Verified end-to-end from
+  the shell.  Tests: test_main_exits_the_process.
 * **J2. Errors moved from stdout to stderr.**  v1 prints "Error:
   ..." to STDOUT; 1.0 prints "error: ..." to stderr (the
   constructor comment even records "sys.stdout is v1's

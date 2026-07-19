@@ -1693,16 +1693,25 @@ class Appeal:
         return processor.instances if processor is not None else []
 
     def main(self, args=None, config=None):
-        "Parse-and-execute with polite error handling; returns an exit code."
+        """
+        Parse-and-execute with polite error handling, then EXIT
+        the process with the result--0.6.4's contract, restored
+        2026-07-19 (Larry's ruling, review item J1): a script
+        whose last line is bare `app.main()` reports its exit
+        code to the shell.  Usage errors exit 2 (the getopt/
+        argparse convention); a command's nonzero int return is
+        the exit code; success exits 0.  Want the code returned
+        instead?  That's process().
+        """
         import os as _os
         if (args is None and '_APPEAL_COMPLETE' in _os.environ
                 and not _sys.argv[1:]):
             # a shell-completion reentry: bare args, mode in the
             # environment.  Answer it instead of parsing.
             from .runtime import completion_reentry
-            return completion_reentry(
+            _sys.exit(completion_reentry(
                 lambda words, prefix: self.complete(words, prefix),
-                self._prog())
+                self._prog()))
         parse = self._compile()
         if config is not None:
             fused = parse
@@ -1710,8 +1719,8 @@ class Appeal:
                 processor = Processor(self)
                 processor.parse(list(args), _config)
                 return processor.execute()
-        return run_main(parse, args, theme=self.theme,
-                        errors=self.errors)
+        _sys.exit(run_main(parse, args, theme=self.theme,
+                           errors=self.errors))
 
     def _mcp_instance(self, config):
         """
