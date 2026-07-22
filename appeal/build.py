@@ -258,38 +258,73 @@ def _short_option(name):
 # compiled parser bakes, so a custom policy never rides along into
 # a standalone script.
 
-def default_options(app, name, annotation, default):
+def default_options(app, callable, name, annotation, default):
     """
-    Both a long (names >= 2 chars) and a short--v1's default.
-    A leading underscore means "not public surface" in Python and
-    here too: no default mapping at all (Larry's rule,
-    2026-07-19; @app.option is the escape hatch).
+    The stock option-string policy, arglet style (Larry's design,
+    2026-07-22): the policy REGISTERS its mappings through the
+    same app.option() spelling users write--one mechanism.
+    Declining is simply not calling.  Both a long (names >= 2
+    chars) and a short--v1's default; the short is a wish, claimed
+    only if its letter is still free.  A leading underscore means
+    "not public surface" in Python and here too: no default
+    mapping at all (@app.option is the escape hatch).
     """
     if name.startswith('_'):
-        return []
+        return
     strings = []
     if len(name) >= 2:
         strings.append(_long_option(name))
     strings.append(_short_option(name))
-    return strings
+    app.option(name, *strings)(callable)
 
 
-def default_long_option(app, name, annotation, default):
+def default_long_option(app, callable, name, annotation, default):
     "Long only, no short (the common 'suppress all shorts' policy)."
-    return [_long_option(name)] if len(name) >= 2 else []
+    if len(name) >= 2:
+        app.option(name, _long_option(name))(callable)
 
 
-def default_short_option(app, name, annotation, default):
+def default_short_option(app, callable, name, annotation, default):
     "Short only, no long."
-    return [_short_option(name)]
+    app.option(name, _short_option(name))(callable)
 
 
-def _stock_options(name, annotation, default):
-    "build()'s own default: the stock policy, no app in sight."
-    return default_options(None, name, annotation, default)
+class _PolicyRegistrar:
+    """
+    The `app` a default_options policy is handed: .option()
+    records into THIS build (nothing persists onto callables, so
+    shared converters can't poison other apps and rebuilds can't
+    double-register); every other attribute forwards to the real
+    app (None for appless build() calls).
+    """
+    def __init__(self, app):
+        self._app = app
+        self.claims = {}    # (id(callable), parameter) -> strings
+
+    def option(self, parameter_name, *strings,
+               annotation=inspect.Parameter.empty,
+               default=inspect.Parameter.empty):
+        if (annotation is not inspect.Parameter.empty
+                or default is not inspect.Parameter.empty):
+            raise AppealConfigurationError(
+                "a default_options policy registers option "
+                "STRINGS; annotation=/default= overrides belong "
+                "to an explicit @app.option declaration")
+        if not strings:
+            raise AppealConfigurationError(
+                "default_options policy: no option strings "
+                "(decline by not calling)")
+        def decorator(callable):
+            self.claims[(id(callable), parameter_name)] = strings
+            return callable
+        return decorator
+
+    def __getattr__(self, attr):
+        return getattr(self._app, attr)
 
 
-def build(callable, name=None, method_of=None, default_options=_stock_options):
+def build(callable, name=None, method_of=None,
+          default_options=default_options, app=None):
     """
     Analyze a callable's signature and produce its Plan.
 
@@ -323,7 +358,7 @@ def build(callable, name=None, method_of=None, default_options=_stock_options):
                   skip_first=method_of is not None
                   and not isinstance(callable, type)
                   and not wrapped_class,
-                  default_options=default_options)
+                  default_options=default_options, app=app)
     if isinstance(callable, type) or wrapped_class:
         plan.constructs = callable.__qualname__
     if method_of is not None:
@@ -808,7 +843,8 @@ def add_option_override(callable, parameter_name, strings,
 
 
 def _build(callable, name, memo, stack, top, skip_first=False,
-           allow_trailing=None, default_options=default_options):
+           allow_trailing=None, default_options=default_options,
+           app=None):
     if callable in stack:
         cycle = ' -> '.join(getattr(c, '__name__', repr(c)) for c in stack)
         raise AppealConfigurationError(
@@ -992,7 +1028,7 @@ def _build(callable, name, memo, stack, top, skip_first=False,
     if not top:
         memo[callable] = plan
     else:
-        _finalize_options(plan, default_options)
+        _finalize_options(plan, default_options, app)
         plan.gated = _mark_barriers(plan, certain=True)
     return plan
 
@@ -1100,7 +1136,8 @@ def _count_sites(plan):
     return sites
 
 
-def _finalize_options(plan, default_options=default_options):
+def _finalize_options(plan, default_options=default_options,
+                      app=None):
     """
     The whole-command view of the options.  A string declared by
     several windows is *scoped*: legal when every declaration
@@ -1122,13 +1159,19 @@ def _finalize_options(plan, default_options=default_options):
     sites = _count_sites(plan)
     pairs = all_options(plan)
     doomed = []
+    registrar = _PolicyRegistrar(app)
     for owner, option in pairs:
         if option.explicit:
             continue
-        proposed = ([] if default_options is None
-                    else list(default_options(option.name,
-                                              option.annotation,
-                                              option.default)))
+        proposed = ()
+        if default_options is not None:
+            # the policy registers through the registrar's
+            # app.option() (arglet style, Larry's design
+            # 2026-07-22); declining is not calling
+            default_options(registrar, owner.callable, option.name,
+                            option.annotation, option.default)
+            proposed = registrar.claims.pop(
+                (id(owner.callable), option.name), ())
         longs, shorts = [], []
         for s in proposed:
             validate_option_string(s)

@@ -1327,16 +1327,12 @@ class Appeal:
         top plan the app renders funnels through here; child plans
         read the format off their root at render time.
         """
-        policy = self.root.default_options
-        if policy is None:
-            bound = None
-        else:
-            # the public signature is (app, name, annotation,
-            # default); build()'s internal contract stays 3-arg
-            root = self.root
-            def bound(name, annotation, default):
-                return policy(root, name, annotation, default)
-        plan = build(callable, default_options=bound, **kwargs)
+        # the policy registers via the registrar-proxy's
+        # app.option() (arglet style, Larry's design 2026-07-22);
+        # build constructs the proxy around the real app
+        plan = build(callable,
+                     default_options=self.root.default_options,
+                     app=self.root, **kwargs)
         plan.arg_format = self.positional_argument_usage_format
         plan.auto_help = self._help_enabled
         return plan

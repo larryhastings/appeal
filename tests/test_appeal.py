@@ -794,10 +794,10 @@ def test_underscore_parameters_are_private():
     assert app2.process(['go2', '--cache', 'hot']) == 'hot'
 
     # a custom policy dropping one name by returning []
-    def policy(app_, name, annotation, default):
+    def policy(app_, fn, name, annotation, default):
         if name == 'quiet':
-            return []
-        return _appeal.default_options(app_, name, annotation, default)
+            return          # decline by not calling
+        _appeal.default_options(app_, fn, name, annotation, default)
     app3 = _appeal.Appeal(name='r', default_options=policy)
     @app3.command()
     def go3(*, loud=False, quiet=False): return (loud, quiet)
@@ -2322,15 +2322,17 @@ def test_default_options_policy():
     # short only
     assert options_of(default_short_option) == {'-w', '-d'}
     # a custom policy is honored verbatim (uppercased longs, no short)
-    def shout(app_, name, annotation, default):
-        return ['--' + name.upper()]
+    def shout(app_, fn, name, annotation, default):
+        # arglet style (2026-07-22): the policy REGISTERS via
+        # app.option(); declining is not calling
+        app_.option(name, '--' + name.upper())(fn)
     assert options_of(shout) == {'--WIDTH', '--DRY'}
 
     # the policy sees the annotation and default it's handed
     seen = []
-    def spy(app_, name, annotation, default):
+    def spy(app_, fn, name, annotation, default):
         seen.append((name, annotation, default))
-        return default_options(app_, name, annotation, default)
+        default_options(app_, fn, name, annotation, default)
     options_of(spy)
     by_name = {name: (annotation, default) for name, annotation, default in seen}
     assert by_name['width'] == (int, 80), by_name['width']
@@ -2358,8 +2360,7 @@ def test_default_options_policy_standalone():
             import importlib
             importlib.reload(demo_cmds)
             plan = build(demo_cmds.greet,
-                         default_options=lambda n, a, d:
-                             default_long_option(None, n, a, d))
+                         default_options=default_long_option)
             script = emit_standalone(plan, argv0='greet')
         finally:
             sys.path.remove(d)

@@ -106,7 +106,10 @@ with each construct.*
   options scan the pre-command-word era and act at scan time
   (metadata outranks a malformed line).  `Appeal(default_mappings
   =None)` banishes ALL default semantics; `default_options` also
-  accepts None and gained `app` as its first parameter.  Public
+  accepts None; re-ported 2026-07-22 to the arglet style:
+  `(app, callable, name, annotation, default)`, and the
+  policy REGISTERS via app.option() on a per-build registrar
+  proxy--one mechanism, declining is not calling.  Public
   introspection: .commands/.handler/.default_handler/.options.
   Subclass Appeal and override default_version/default_help to
   customize.  Stage B DONE (2026-07-19): `-h`/`--help` are
