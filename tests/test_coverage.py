@@ -1706,11 +1706,9 @@ def test_build_override_validation_and_names():
     import functools
     def f(x, *, mode=''):
         return (x, mode)
-    try:
-        add_option_override(f, 'mode', ())
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError:
-        pass
+    # zero strings is LEGAL now (ruled 2026-07-25): the explicit
+    # per-parameter unmap--configured, no rule, default fills
+    add_option_override(f, 'mode', ())
     try:
         add_parameter_usage(f, 'mode', '')
         assert False, 'expected AppealConfigurationError'

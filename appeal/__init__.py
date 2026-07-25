@@ -1671,8 +1671,10 @@ class Appeal:
         if not mapped:
             return None
         app = self.root
-        want_v = 'version' in mapped
-        want_h = 'help' in mapped
+        # empty strings = the explicit unmap (ruled
+        # 2026-07-25): treated as not mapped at all
+        want_v = bool(mapped.get('version'))
+        want_h = bool(mapped.get('help'))
         # the closures mirror Appeal.precommand's signature; the
         # grammar (optional_str topic, version flag) rides the
         # annotations/defaults--option() derives it (ruled

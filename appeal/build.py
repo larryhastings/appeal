@@ -311,9 +311,12 @@ class _PolicyRegistrar:
                 "STRINGS; annotation=/default= overrides belong "
                 "to an explicit @app.option declaration")
         if not strings:
-            raise AppealConfigurationError(
-                "default_options policy: no option strings "
-                "(decline by not calling)")
+            # same meaning as everywhere (ruled 2026-07-25):
+            # zero strings = this parameter isn't an option.
+            # Equivalent to declining by not calling.
+            def unmapped(callable):
+                return callable
+            return unmapped
         def decorator(callable):
             self.claims[(id(callable), parameter_name)] = strings
             return callable
@@ -823,9 +826,10 @@ def add_option_override(callable, parameter_name, strings,
     a different annotation and/or default.  Multiple calls for the
     same parameter accumulate strings.
     """
-    if not strings:
-        raise AppealConfigurationError(
-            f"@option for {parameter_name!r}: no option strings specified")
+    # zero strings is legal (ruled 2026-07-25): "I'm speaking
+    # for this parameter: nothing"--the explicit per-parameter
+    # unmap, symmetric with a policy declining.  The parameter
+    # stays keyword-only, its default always fills.
     for s in strings:
         validate_option_string(s)
     overrides = getattr(callable, OPTION_OVERRIDES_ATTRIBUTE, None)
@@ -983,6 +987,11 @@ def _build(callable, name, memo, stack, top, skip_first=False,
             # its own rule (v1: go2's --north and --south each map
             # `direction` through a different converter).
             for declaration in declarations:
+                if not declaration['strings']:
+                    # the explicit unmap: configured, no rule.
+                    # Alongside a real declaration it's just
+                    # noise, not a veto.
+                    continue
                 decl_annotation = declaration['annotation']
                 if decl_annotation is inspect.Parameter.empty:
                     decl_annotation = annotation
@@ -1009,6 +1018,12 @@ def _build(callable, name, memo, stack, top, skip_first=False,
         for extra_name in list(overrides):
             metavar = usage_names.pop(extra_name, None)
             for declaration in overrides.pop(extra_name):
+                if not declaration['strings']:
+                    raise AppealConfigurationError(
+                        f"@option for {extra_name!r}: no option "
+                        f"strings, and no parameter to unmap--"
+                        f"a **kwargs-delivered option IS its "
+                        f"strings")
                 rule = _build_option_rule(
                     extra_name, declaration['strings'], True,
                     declaration['annotation'], declaration['default'],

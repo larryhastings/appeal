@@ -234,6 +234,45 @@ def test_app_option_derives_from_parameter():
         return level
     assert app2.process(['-L', '3']) == 3      # int, from the annotation
 
+def test_app_option_no_strings_unmaps():
+    # Ruled 2026-07-25: @app.option('foo') with zero strings means
+    # "foo is a keyword-only parameter and we don't map any
+    # options to it"--the explicit per-parameter unmap, symmetric
+    # with a policy declining.  The default always fills.
+    app = Appeal()
+    @app.option('quiet')
+    @app.global_command()
+    def f(*, loud=False, quiet=False):
+        return (loud, quiet)
+    assert app.process(['--loud']) == (True, False)
+    for argv in (['--quiet'], ['-q']):
+        try:
+            app.process(list(argv))
+            assert False, f'{argv} must be unmapped'
+        except UsageError:
+            pass
+    # alongside a REAL declaration, the empty one is noise, not
+    # a veto
+    app2 = Appeal()
+    @app2.option('quiet')
+    @app2.option('quiet', '-Q')
+    @app2.global_command()
+    def g(*, quiet=False):
+        return quiet
+    assert app2.process(['-Q']) is True
+    # a **kwargs-delivered option IS its strings: zero refuses
+    app3 = Appeal()
+    @app3.option('mystery')
+    @app3.global_command()
+    def h(**kwargs):
+        return kwargs
+    try:
+        app3.process([])
+        assert False, 'expected ConfigurationError'
+    except AppealConfigurationError:
+        pass
+
+
 def test_app_option_overrides_annotation_and_default():
     # @option's (annotation, default) pair declares the option's
     # GRAMMAR (converter, flag-ness); the value when absent is
