@@ -1559,7 +1559,7 @@ def _render_ref(name, obj):
     # the precommand help option's topic converter is appeal
     # plumbing: bake it, never import it (standalone scripts are
     # dependency-free)
-    if (getattr(obj, '__name__', '') == '_help_topic'
+    if (getattr(obj, '__name__', '') in ('_help_topic', 'optional_str')
             and getattr(obj, '__module__', '') == 'appeal'):
         return f"def {name}(topic=''):\n    return topic"
     # the STOCK default_help rides into a standalone script as a
@@ -1568,7 +1568,7 @@ def _render_ref(name, obj):
     func = getattr(obj, '__func__', None)
     if (func is not None
             and getattr(func, '__qualname__', '')
-            == 'Appeal.default_help'):
+            in ('Appeal.default_help', 'Appeal.help')):
         return (f'def {name}(topic):\n'
                 f'    parse_help([topic] if topic else [])')
     # the three process streams render by identity: `sys` is in

@@ -258,7 +258,7 @@ def _short_option(name):
 # compiled parser bakes, so a custom policy never rides along into
 # a standalone script.
 
-def default_options(app, callable, name, annotation, default):
+def default_options(app, callable, name):
     """
     The stock option-string policy, arglet style (Larry's design,
     2026-07-22): the policy REGISTERS its mappings through the
@@ -278,13 +278,13 @@ def default_options(app, callable, name, annotation, default):
     app.option(name, *strings)(callable)
 
 
-def default_long_option(app, callable, name, annotation, default):
+def default_long_option(app, callable, name):
     "Long only, no short (the common 'suppress all shorts' policy)."
     if len(name) >= 2:
         app.option(name, _long_option(name))(callable)
 
 
-def default_short_option(app, callable, name, annotation, default):
+def default_short_option(app, callable, name):
     "Short only, no long."
     app.option(name, _short_option(name))(callable)
 
@@ -973,16 +973,25 @@ def _build(callable, name, memo, stack, top, skip_first=False,
                     False, annotation, grammar_default, default, metavar,
                     stack))
                 continue
-            # @app.option is a FRESH DECLARATION (v1 semantics, by
-            # ruling): it blows away all default mappings--that's
-            # how you suppress an unwanted short--and each call is
+            # @app.option maps STRINGS (ruled 2026-07-25, the
+            # arglet style, superseding the July fresh-declaration
+            # rule): the grammar comes from the PARAMETER unless
+            # the declaration overrides it--annotation=/default=
+            # are escape hatches, not obligations.  Blow-away
+            # still applies to the strings (that's how you
+            # suppress an unwanted short), and each call is still
             # its own rule (v1: go2's --north and --south each map
-            # `direction` through a different converter).  The
-            # parameter's own annotation and default do not leak in.
+            # `direction` through a different converter).
             for declaration in declarations:
+                decl_annotation = declaration['annotation']
+                if decl_annotation is inspect.Parameter.empty:
+                    decl_annotation = annotation
+                decl_default = declaration['default']
+                if decl_default is inspect.Parameter.empty:
+                    decl_default = grammar_default
                 options.append(_build_option_rule(
                     parameter.name, declaration['strings'], True,
-                    declaration['annotation'], declaration['default'],
+                    decl_annotation, decl_default,
                     default, metavar, stack))
             continue
 
@@ -1168,8 +1177,7 @@ def _finalize_options(plan, default_options=default_options,
             # the policy registers through the registrar's
             # app.option() (arglet style, Larry's design
             # 2026-07-22); declining is not calling
-            default_options(registrar, owner.callable, option.name,
-                            option.annotation, option.default)
+            default_options(registrar, owner.callable, option.name)
             proposed = registrar.claims.pop(
                 (id(owner.callable), option.name), ())
         longs, shorts = [], []

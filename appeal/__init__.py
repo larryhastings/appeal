@@ -516,44 +516,85 @@ class _CompileOnDispatch:
         return parse   # pragma: no cover
 
 
-def _help_topic(topic=''):
-    "The precommand help option's optional greedy oparg."
+def optional_str(topic=''):
+    """
+    The "option with an optional value" converter: annotate a
+    keyword-only parameter with it and the option's oparg becomes
+    optional--bare gives '', a value gives the value (greedy, v1
+    opargs).  The precommand's help topic uses it; yours can too.
+    Same name, same meaning, in arglet.
+    """
     return topic
 
 
-def default_mappings(app):
-    """
-    The stock program-level defaults pass (Larry's design,
-    2026-07-19).  Runs once, at first compile, after all
-    registration.  Maps, each only if not already mapped:
+# the default_mappings menu, importable (spell your subset with
+# these: default_mappings(*default_mappings_help))
+default_mappings_help = ('-h', '--help', 'help')
+default_mappings_version = ('-V', '--version', 'version')
 
-      * the `version` command -> app.default_version, and
-        -V/--version -> the precommand (when version= is set);
-      * the `help` command -> app.default_help (when help=).
 
-    Replace it (Appeal(default_mappings=...)) to change the
-    policy; pass None for no default mappings at all.  This
-    function is importable, so a custom policy can call it and
-    then adjust.
+def default_mappings(*options):
     """
-    # snapshot FIRST: the version/help COMMANDS only make sense
-    # for a program that has commands (v1's rule; an ls-style
-    # global-only program gets the options, never command words)
-    has_commands = bool(app.commands)
-    if app.version is not None:
-        if has_commands and 'version' not in app.commands:
-            app.command('version')(app.default_version)
-        free = [s for s in ('-V', '--version')
-                if s not in app.options]
-        if free:
-            app.precommand_option('version', *free)
-    if app._help_enabled and has_commands:
-        if 'help' not in app.commands:
-            app.command('help')(app.default_help)
-        free = [s for s in ('-h', '--help')
-                if s not in app.options]
-        if free:
-            app.precommand_option('help', *free)
+    The FACTORY for the stock program-level defaults policy
+    (Larry's design, 2026-07-25).  List the mappings you want:
+    '-h', '--help', '-V', '--version' (precommand options),
+    'help', 'version' (commands); empty means all of them.
+    Returns the policy callable--the constructor default is
+    default_mappings=default_mappings().  Pass
+    default_mappings=None for no default mappings at all.
+
+    Order is insignificant (the listing keeps v1's order, version
+    before help).  Version mappings apply only when the app has a
+    version string.  Each mapping lands only if not already
+    mapped--user declarations always win.
+    """
+    if not options:
+        options = default_mappings_help + default_mappings_version
+    valid = set(default_mappings_help + default_mappings_version)
+    for o in options:
+        if o in valid:
+            continue
+        if isinstance(o, str):
+            near = {'-v': '-V', '--h': '--help', '-help': '--help',
+                    '-version': '--version'}.get(o)
+            hint = f" (did you mean {near!r}?)" if near else ''
+            raise AppealConfigurationError(
+                f"default_mappings: unknown mapping {o!r}{hint}; "
+                f"the menu is {sorted(valid)}")
+        raise AppealConfigurationError(
+            f"default_mappings: {o!r} isn't a mapping name.  "
+            f"default_mappings is a factory--pass the constructor "
+            f"default_mappings=default_mappings(), not the "
+            f"factory itself")
+    requested = frozenset(options)
+
+    def default_mappings_policy(app):
+        # snapshot FIRST: the version/help COMMANDS only make
+        # sense for a program that has commands (v1's rule; an
+        # ls-style global-only program gets the options, never
+        # command words)
+        has_commands = bool(app.commands)
+        if app.version is not None:
+            if ('version' in requested and has_commands
+                    and 'version' not in app.commands):
+                app.command('version')(app.print_version)
+            free = [s for s in ('-V', '--version')
+                    if s in requested and s not in app.options]
+            if free:
+                app.option('version', *free)(app.precommand)
+        if has_commands:
+            if 'help' in requested and 'help' not in app.commands:
+                app.command('help')(app.help)
+            free = [s for s in ('-h', '--help')
+                    if s in requested and s not in app.options]
+            if free:
+                app.option('help', *free)(app.precommand)
+
+    # _finalize reads this to drive the legacy help machinery
+    # (per-command --help, bare-app -h) until the era unification
+    # retires it: the requested tokens are the truth
+    default_mappings_policy.appeal_requested = requested
+    return default_mappings_policy
 
 
 class Appeal:
@@ -577,7 +618,7 @@ class Appeal:
                  margin=79, indent=4,
                  positional_argument_usage_format='{name}',
                  default_options=default_options,
-                 default_mappings=default_mappings, help=True):
+                 default_mappings=default_mappings()):
         self.name = name
         # the command tree (v1's model, restored 2026-07-18 by
         # Larry's ruling): a tree of Appeal instances, one per
@@ -617,7 +658,11 @@ class Appeal:
         # of it--the program answers -h/--help only if it declares
         # them itself.  (A command that defines its own help still
         # wins even when help=True; this is the blanket off switch.)
-        self._help_enabled = bool(help)
+        # the v1 help= knob is dead (ruled 2026-07-25):
+        # default_mappings is the policy switch.  The legacy
+        # bare-app help machinery still keys off this flag;
+        # approximate it until the era unification lands
+        self._help_enabled = default_mappings is not None
         # the option-string policy (v1's knob, restored): a callable
         # (name, annotation, default) -> list of option strings, run
         # at build time on every automatically-mapped keyword-only
@@ -788,7 +833,7 @@ class Appeal:
         """
         Read-only mapping: command word -> the child Appeal node,
         in definition order.  The node IS the configuration
-        object: .handler is its function, .commands its
+        object: .callable is its function, .commands its
         subcommands, .options its option table, .default_handler
         its default command.
         """
@@ -796,11 +841,12 @@ class Appeal:
         return _types.MappingProxyType(self._children)
 
     @property
-    def handler(self):
+    def callable(self):
         """
-        This node's command function.  On the root, the global
-        command; on a child, the function bound to its word.
-        None if never bound.
+        This node's command function (spelled like plan.callable
+        one layer down; ruled 2026-07-25).  On the root, the
+        global command; on a child, the function bound to its
+        word.  None if never bound.
         """
         return self._impl
 
@@ -857,23 +903,31 @@ class Appeal:
                                     # must not recurse
         if root.default_mappings is not None:
             root.default_mappings(root)
+            requested = getattr(root.default_mappings,
+                                'appeal_requested', None)
+            if requested is not None:
+                # the stock factory says what was asked for
+                root._help_enabled = bool(
+                    requested & {'-h', '--help', 'help'})
+            else:
+                # a custom policy: judge by what it actually mapped
+                root._help_enabled = bool(
+                    root._precommand_options.get('help')
+                    or 'help' in root._children)
 
-    def default_version(self):
+    def print_version(self):
         "Print the program's version."
         print(self.root.version)
 
-    def default_help(self, topic=''):
-        "Print usage documentation on a specific command."
+    def _help_topic_page(self, topic):
+        "help(topic)'s command-page path, split for readability."
         root = self.root
         table = root._table()
-        if not topic:
-            root.help()
-            return
         if topic == 'help':
             print('Print usage documentation on a specific command.')
             return
         fn = table.get(topic)
-        if getattr(fn, '__func__', None) is Appeal.default_version:
+        if getattr(fn, '__func__', None) is Appeal.print_version:
             # a stock command describes itself with its summary
             print(_inspect.getdoc(fn))
             return
@@ -886,35 +940,20 @@ class Appeal:
                 command_set_usage(root._prog(), root._display_global()))
         root._parse_for(topic)(['--help'])
 
-    def precommand(self, *, version=False, help=None):
+    def precommand(self, *, help: optional_str = None,
+                   version=False):
         """
         The stage ahead of the global command: program metadata.
         Its options live in the precommand+global era and unmap at
         the first command word.  Absent from the grammar entirely
-        when default_mappings mapped nothing to it.
+        when default_mappings mapped nothing to it.  Map options
+        onto it the ordinary way:
+        app.option('help', '-h', '--help')(app.precommand).
         """
         if version:
-            _sys.exit(self.default_version())
+            _sys.exit(self.print_version())
         if help is not None:
-            _sys.exit(self.default_help(help))
-
-    def precommand_option(self, parameter_name, *strings):
-        """
-        Map option strings to a precommand parameter ('version' or
-        'help').  The public mutation API default_mappings uses;
-        strings must be free (the caller checks .options first).
-        """
-        if parameter_name not in ('version', 'help'):
-            raise AppealConfigurationError(
-                f"precommand_option: no precommand parameter "
-                f"named {parameter_name!r} (only 'version' and "
-                f"'help')")
-        if not strings:
-            raise AppealConfigurationError(
-                "precommand_option: no option strings given")
-        root = self.root
-        root._precommand_options[parameter_name] = tuple(strings)
-        root._invalidate()
+            _sys.exit(self.help(help))
 
     def _command_callable(self):
         """
@@ -1113,22 +1152,39 @@ class Appeal:
             # (the class-as-namespace pattern)
         self._invalidate()
 
-    def option(self, parameter_name, *options,
-               annotation=_inspect.Parameter.empty,
+    def option(self, name, *options, annotation=None,
                default=_inspect.Parameter.empty):
         """
-        Additional decorator for @command functions: blows away all
-        default mappings for one keyword-only parameter and maps
-        only the strings you specify (so naming just the long
-        suppresses the auto short).  A fresh declaration, v1
-        semantics: annotation/default here declare the option's
-        grammar (converter, flag-ness); the parameter's own
-        annotation and default don't leak in, and the parameter's
-        default still fills when the option is absent.  Stack
-        several to accumulate strings.
+        Additional decorator for @command functions: maps only the
+        strings you specify for one keyword-only parameter,
+        blowing away the default mappings (so naming just the long
+        suppresses the auto short).  The option's grammar--
+        converter, flag-ness--comes from the PARAMETER (ruled
+        2026-07-25, arglet style): its annotation, else
+        type(default), else str.  annotation=/default= override
+        that when the option should genuinely differ from the
+        parameter.  Stack several to accumulate strings; each call
+        is its own rule.
         """
+        if annotation is None:
+            annotation = _inspect.Parameter.empty
         def decorator(callable):
-            add_option_override(callable, parameter_name, options,
+            if (_inspect.ismethod(callable)
+                    and isinstance(callable.__self__, Appeal)
+                    and callable.__func__
+                        is type(callable.__self__).precommand):
+                # the bound precommand: Python mints a fresh bound
+                # object per attribute access, so attribute-marking
+                # can't stick--record in the app's own table
+                if name not in ('version', 'help'):
+                    raise AppealConfigurationError(
+                        f"option: the precommand has no parameter "
+                        f"{name!r} (only 'help' and 'version')")
+                callable.__self__.root._precommand_options[name] = \
+                    tuple(options)
+                callable.__self__.root._invalidate()
+                return callable
+            add_option_override(callable, name, options,
                                 annotation=annotation, default=default)
             self._invalidate()
             return callable
@@ -1160,11 +1216,18 @@ class Appeal:
                             repeat=self.repeat, sets=sets or None,
                             help=False)
 
-    def help(self):
+    def help(self, topic=''):
         """
-        Print the --help text (bare apps) or the command listing
-        (sets), v1-style; also returns it.
+        Print usage documentation on a specific command.
+        (That summary line doubles as the help command's listing
+        row.)  Bare: the --help text (bare apps) or the command
+        listing (sets), v1-style--also returned.  With a topic:
+        that command's help page.  This method IS the help
+        command (and -h/--help, via the precommand); subclass and
+        override to customize every spelling at once.
         """
+        if topic:
+            return self._help_topic_page(topic)
         table = self._table()
         if table:
             from .plan import command_set_usage
@@ -1189,7 +1252,10 @@ class Appeal:
                 margin=help_margin(self.margin),
                 theme=resolve_theme(self.theme, _sys.stdout)).rstrip('\n')
         print(text)
-        return text
+        # returns None: help is a COMMAND implementation now
+        # (ruled 2026-07-25), and a command's return value is its
+        # exit status--text would sys.exit(text).  Capture stdout
+        # for the text.
 
     def documentation(self, format):
         """
@@ -1607,28 +1673,32 @@ class Appeal:
         app = self.root
         want_v = 'version' in mapped
         want_h = 'help' in mapped
+        # the closures mirror Appeal.precommand's signature; the
+        # grammar (optional_str topic, version flag) rides the
+        # annotations/defaults--option() derives it (ruled
+        # 2026-07-25), no override smuggling
         if want_v and want_h:
-            def precommand(*, version=False, help=None):
-                app.precommand(version=version, help=help)
+            def precommand(*, help: optional_str = None,
+                           version=False):
+                app.precommand(help=help, version=version)
         elif want_v:
             def precommand(*, version=False):
                 app.precommand(version=version)
         else:
-            def precommand(*, help=None):
+            def precommand(*, help: optional_str = None):
                 app.precommand(help=help)
         if want_v:
             add_option_override(precommand, 'version',
-                                mapped['version'], default=False)
+                                mapped['version'])
         if want_h:
-            add_option_override(precommand, 'help', mapped['help'],
-                                annotation=_help_topic, default=None)
+            add_option_override(precommand, 'help', mapped['help'])
         cls = type(app)
-        precommand.appeal_help = app.default_help
+        precommand.appeal_help = app.help
         precommand.appeal_precommand = True
         precommand.appeal_stock = (
             cls.precommand is Appeal.precommand
-            and cls.default_version is Appeal.default_version
-            and cls.default_help is Appeal.default_help)
+            and cls.print_version is Appeal.print_version
+            and cls.help is Appeal.help)
         precommand.appeal_version = (str(app.version)
                                      if app.version is not None else None)
         return self._build(precommand, name=self.root._prog())
@@ -1894,7 +1964,7 @@ class Appeal:
         cls = Appeal
         defaults = {w for w, fn in table.items()
                     if getattr(fn, '__func__', None) in
-                    (cls.default_help, cls.default_version)}
+                    (cls.help, cls.print_version)}
         if set(table) - defaults:
             def sub_plan(name, fn):
                 # nested parents are fine: self._subs is flat

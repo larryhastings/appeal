@@ -213,24 +213,26 @@ def test_app_option_suppresses_auto_short():
     except UsageError as e:
         assert '-q' in str(e)
 
-def test_app_option_is_a_fresh_declaration():
-    # v1 semantics, probed: the parameter's own annotation and
-    # default do NOT leak into @app.option's grammar.  A bare
-    # @app.option makes a plain str value option--even on a bool
-    # parameter--and the parameter's default still fills when the
-    # option is absent.
+def test_app_option_derives_from_parameter():
+    # Ruled 2026-07-25 (arglet style, superseding the July
+    # fresh-declaration rule): @app.option maps STRINGS; the
+    # option's grammar comes from the PARAMETER--a bare
+    # @app.option on a bool parameter is a FLAG, on an int
+    # parameter an int option.  annotation=/default= remain the
+    # escape hatches when the option should genuinely differ.
     app = Appeal()
     @app.option('verbose', '-V')
     @app.global_command()
     def f(*, verbose=False):
         return verbose
-    assert app.process(['-V', 'chatty']) == 'chatty'
+    assert app.process(['-V']) is True         # a flag, not a value
     assert app.process([]) is False            # parameter's default
-    try:
-        app.process(['-V'])
-        assert False, 'expected UsageError'
-    except UsageError as e:
-        assert 'value' in str(e)
+    app2 = Appeal()
+    @app2.option('level', '-L')
+    @app2.global_command()
+    def g(*, level: int = 0):
+        return level
+    assert app2.process(['-L', '3']) == 3      # int, from the annotation
 
 def test_app_option_overrides_annotation_and_default():
     # @option's (annotation, default) pair declares the option's
@@ -709,7 +711,7 @@ def test_default_mappings_design():
     assert main(app, ['--version', 'garbage']) == (0, '3.5\n')
     # the introspection API
     assert list(app.commands) == ['work', 'version', 'help']
-    assert app.commands['work'].handler is work
+    assert app.commands['work'].callable is work
     assert set(app.options) == {'-V', '--version', '-h', '--help'}
 
     # yielding: a user -V (from Verbose) keeps -V; only --version
@@ -735,7 +737,7 @@ def test_default_mappings_design():
 
     # subclass override reaches every spelling
     class Deluxe(_appeal.Appeal):
-        def default_version(self):
+        def print_version(self):
             print(f'deluxe v{self.version}')
     app4 = Deluxe(name='t4', version='7')
     @app4.command()
@@ -756,9 +758,10 @@ def test_default_mappings_design():
         pass
 
     # a custom default_mappings policy composes with the stock one
+    # (the factory returns the policy; call it, then adjust)
     def custom(app_):
-        _appeal.default_mappings(app_)
-        app_.command('about')(app_.default_version)
+        _appeal.default_mappings()(app_)
+        app_.command('about')(app_.print_version)
     app6 = _appeal.Appeal(name='t6', version='2', default_mappings=custom)
     @app6.command()
     def go6(): return 0
@@ -794,10 +797,10 @@ def test_underscore_parameters_are_private():
     assert app2.process(['go2', '--cache', 'hot']) == 'hot'
 
     # a custom policy dropping one name by returning []
-    def policy(app_, fn, name, annotation, default):
+    def policy(app_, fn, name):
         if name == 'quiet':
             return          # decline by not calling
-        _appeal.default_options(app_, fn, name, annotation, default)
+        _appeal.default_options(app_, fn, name)
     app3 = _appeal.Appeal(name='r', default_options=policy)
     @app3.command()
     def go3(*, loud=False, quiet=False): return (loud, quiet)
@@ -2322,7 +2325,7 @@ def test_default_options_policy():
     # short only
     assert options_of(default_short_option) == {'-w', '-d'}
     # a custom policy is honored verbatim (uppercased longs, no short)
-    def shout(app_, fn, name, annotation, default):
+    def shout(app_, fn, name):
         # arglet style (2026-07-22): the policy REGISTERS via
         # app.option(); declining is not calling
         app_.option(name, '--' + name.upper())(fn)
@@ -2330,9 +2333,11 @@ def test_default_options_policy():
 
     # the policy sees the annotation and default it's handed
     seen = []
-    def spy(app_, fn, name, annotation, default):
-        seen.append((name, annotation, default))
-        default_options(app_, fn, name, annotation, default)
+    def spy(app_, fn, name):
+        import inspect
+        p = inspect.signature(fn).parameters[name]
+        seen.append((name, p.annotation, p.default))
+        default_options(app_, fn, name)
     options_of(spy)
     by_name = {name: (annotation, default) for name, annotation, default in seen}
     assert by_name['width'] == (int, 80), by_name['width']
@@ -2393,13 +2398,12 @@ def test_help_yields_to_user_options():
     assert got == ('ok', True), got
 
 def test_help_disabled():
-    # v1's help= knob, restored: help=False suppresses the
-    # automatic -h/--help option AND (for programs with commands)
-    # the help command entirely.
+    # the help= knob is dead (ruled 2026-07-25): suppression is
+    # spelled through default_mappings now.
     import io, contextlib
 
     # a single global command: --help is no longer recognized
-    app = Appeal(name='solo', help=False)
+    app = Appeal(name='solo', default_mappings=None)
     @app.global_command()
     def f(a, *, verbose=False):
         "Do."
@@ -2425,7 +2429,9 @@ def test_help_disabled():
     assert 'Do g.' in out.getvalue()
 
     # a command set: no `help` command, no per-command --help
-    app3 = Appeal(name='tool', help=False)
+    app3 = Appeal(name='tool',
+                  default_mappings=appeal.default_mappings(
+                      *appeal.default_mappings_version))
     @app3.command()
     def add(x: int, y: int):
         "Add."
@@ -2487,7 +2493,9 @@ def test_help_disabled_parity_and_standalone():
             import demo_cmds
             import importlib
             importlib.reload(demo_cmds)
-            app = Appeal(name='tool', help=False)
+            app = Appeal(name='tool',
+                         default_mappings=appeal.default_mappings(
+                             *appeal.default_mappings_version))
             app.command()(demo_cmds.greet)
             app.command()(demo_cmds.cp)
             script = app.standalone()
@@ -4526,7 +4534,8 @@ def test_appeal_tree_registration():
     @app3.command('serve').option('port', '-p')
     def start(*, port=80):
         return ('start', port)
-    assert app3.process(['serve', 'start', '-p', '99']) == ('start', '99')
+    # -p derives int from port=80 (ruled 2026-07-25)
+    assert app3.process(['serve', 'start', '-p', '99']) == ('start', 99)
 
 
 def test_appeal_tree_default_commands():
