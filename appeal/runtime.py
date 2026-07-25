@@ -48,7 +48,7 @@ class AppealError(Exception):
     """
 
 
-class AppealConfigurationError(AppealError):
+class ConfigurationError(AppealError):
     """
     Raised at *build* time: the program's signature (or a request,
     like standalone emission) doesn't make sense.  Always names the
@@ -58,7 +58,7 @@ class AppealConfigurationError(AppealError):
     """
 
 
-class AppealDataError(AppealError):
+class DataError(AppealError):
     """
     The data handed to the program is wrong--whatever its
     provenance: a config mapping, a mapping or CSV row being read,
@@ -75,18 +75,19 @@ class AppealDataError(AppealError):
         self.param = param
 
 
-class AppealUsageError(AppealDataError):
+class UsageError(DataError):
     """
-    The command line specifically is wrong (v1's name, kept).
-    Printing it shows the message and the command's usage.
+    The command line specifically is wrong.  Printing it shows
+    the message and the command's usage.
     """
 
 
-# the short spellings, for terse qualified use (appeal.UsageError)--
-# and v1's name for the umbrella
-UsageError = AppealUsageError
-DataError = AppealDataError
-ConfigurationError = AppealConfigurationError
+# the old prefixed names (0.6.4 called them exactly that--"old
+# names"--and kept them as aliases; ruled again 2026-07-25:
+# the unprefixed spellings are canonical, appeal.UsageError)
+AppealUsageError = UsageError
+AppealDataError = DataError
+AppealConfigurationError = ConfigurationError
 AppealBaseException = AppealError
 
 

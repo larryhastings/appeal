@@ -4908,7 +4908,9 @@ def test_config_error_provenance_is_structural():
             make().process(['banana', 'go'], config=config)
             assert False, 'expected UsageError'
         except AppealDataError as e:
-            assert type(e).__name__ == 'AppealUsageError', (config, e)
+            # unprefixed canonical (ruled 2026-07-25; matches 0.6.4,
+            # whose prefixed spellings were the 'old names' aliases)
+            assert type(e).__name__ == 'UsageError', (config, e)
             assert not str(e).startswith('config:')
     # a bad CONFIG value converts, and says so
     try:
