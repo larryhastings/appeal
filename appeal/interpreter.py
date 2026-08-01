@@ -17,7 +17,7 @@ from .plan import Terminal, NO_DEFAULT
 from .runtime import (
     UsageError, absorb_take, accumulate, call_converter,
     collect_mapping, convert, fold, parse_tokens, check_count,
-    default_templates, did_you_mean, help_margin, render_command_listing,
+    default_template, did_you_mean, help_margin, render_command_listing,
     render_help_page,
     scoped_forces, scoped_next, scoped_resolve, scoped_rewind,
     scoped_window, scopes_for, sibling_scopes, window_options,
@@ -503,7 +503,7 @@ def run(plan, operands, given, positions=None, env=None):
     usage = plan.usage()
     if help_option_strings(plan) and given.pop('--help', False):
         corpus = merge_docs(plan)
-        print(render_help_page(usage, corpus, default_templates,
+        print(render_help_page(usage, corpus, default_template,
                                margin=help_margin()), end='')
         return None
     n = len(operands)
@@ -595,11 +595,11 @@ def dispatch(commands, global_plan, argv, prog=None, repeat=False, help=True):
     auto_help = help and 'help' not in commands
     usage_line = command_set_usage(prog or 'program', global_plan)
     corpus = command_set_corpus(global_plan, entries, auto_help)
-    set_usage = render_command_listing(usage_line, corpus, default_templates)
+    set_usage = render_command_listing(usage_line, corpus, default_template)
     command_words = frozenset(commands) | ({'help'} if auto_help else set())
 
     def listing():
-        print(render_help_page(usage_line, corpus, default_templates,
+        print(render_help_page(usage_line, corpus, default_template,
                                margin=help_margin()), end='')
 
     if help and argv and argv[0] in ('-h', '--help'):

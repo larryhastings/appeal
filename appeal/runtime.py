@@ -3281,126 +3281,95 @@ def render_usage(usage, margin=79):
 
 
 ##
-## Templates (proposal §8.7.1).  A template is a name and a value,
-## both strings.  Master templates are ordinary format strings,
-## rendered line by line so the empty-line rule can apply.  Section
-## templates are read structurally: the literal text around their
-## two {argument}/{documentation} pairs configures the definition
-## list--and any literal lines before the first pair are the
-## section's heading, so an empty section takes its heading with
-## it by construction.
+## Templates (Larry's single-template model, ruled 2026-08-01).
+## ONE template string defines the help page: five {sections}--
+## usage, doc, options, arguments, commands--all required.  The
+## text between placeholders is each section's "header"; the
+## whitespace after the header's last newline is the section
+## body's per-line indent.  usage is special: single-line, always
+## rendered.  Empty sections are suppressed, header and all.  The
+## user's own docstring section headers (detected liberally,
+## decoration preserved) override the template's, and the user's
+## section ORDER wins for the sections they wrote.
 ##
 
-default_templates = {
-    'help': (
-        '{usage}\n'
-        '\n'
-        '{summary}\n'
-        '\n'
-        '{documentation}\n'
-        '\n'
-        '{arguments}\n'
-        '\n'
-        '{options}\n'
-    ),
-    'help commands': (
-        '{usage}\n'
-        '\n'
-        '{summary}\n'
-        '\n'
-        '{documentation}\n'
-        '\n'
-        '{commands}\n'
-    ),
-    'arguments': (
-        'Arguments:\n'
-        '    {argument}  {documentation}\n'
-        '    {argument}  {documentation}\n'
-    ),
-    'options': (
-        'Options:\n'
-        '    {argument}  {documentation}\n'
-        '    {argument}  {documentation}\n'
-    ),
-    'commands': (
-        'Commands:\n'
-        '    {argument}  {documentation}\n'
-        '    {argument}  {documentation}\n'
-    ),
-}
+default_template = (
+    'usage: {usage}\n'
+    '\n'
+    '{doc}\n'
+    '\n'
+    'Arguments:\n'
+    '    {arguments}\n'
+    '\n'
+    'Options:\n'
+    '    {options}\n'
+    '\n'
+    'Commands:\n'
+    '    {commands}\n'
+)
+
+_TEMPLATE_SECTIONS = ('usage', 'doc', 'options', 'arguments',
+                      'commands')
 
 
-def parse_section_template(name, template):
+def parse_help_template(template):
     """
-    Reads a section template's structure.  The template contains
-    exactly two {argument}/{documentation} pairs, alternating,
-    {argument} first.  A pair whose placeholders share a line is
-    the definition-list form: the literal text before {argument}
-    is the indent, the text between them is the spacer.  Literal
-    lines before the first pair are the heading.  The text between
-    the first {documentation} and the second {argument} is the
-    separator between items.
-
-    Returns (heading, indent, spacer, separator).  Malformed
-    templates raise AppealConfigurationError naming the template.
+    Partition a help template at its five {section} placeholders.
+    Returns [(name, header, indent), ...] in template order:
+    header is the text since the previous placeholder (leading
+    newlines included); indent is the header text after its last
+    newline--the body's per-line indent.  All five sections must
+    appear exactly once; anything else in braces refuses.
     """
-    def fail(why):
-        raise AppealConfigurationError(f"template {name!r}: {why}")
-
-    heading, found, rest = template.partition('{argument}')
-    if not found:
-        fail("no {argument} placeholder")
-    heading, _, indent = heading.rpartition('\n')
-    if heading:
-        heading += '\n'
-    spacer, found, rest = rest.partition('{documentation}')
-    if not found:
-        fail("{argument} without a {documentation} after it")
-    if '\n' in spacer:
-        fail("the hanging form isn't supported yet; put {argument} "
-             "and {documentation} on one line")
-    separator, found, rest = rest.partition('{argument}')
-    if not found:
-        fail("a section template contains exactly two "
-             "{argument}/{documentation} pairs; found one")
-    spacer2, found, rest = rest.partition('{documentation}')
-    if not found or spacer2 != spacer:
-        fail("the second pair must match the first")
-    if separator != '\n' + indent:
-        fail("items render adjacently for now: the second pair "
-             "must start on the very next line, indented like "
-             "the first")
-    if '{argument}' in rest or '{documentation}' in rest:
-        fail("a section template contains exactly two "
-             "{argument}/{documentation} pairs; found more")
-    return heading, indent, spacer, separator
+    import re as _re
+    template = '\n'.join(line.rstrip()
+                         for line in template.split('\n'))
+    sections = []
+    seen = set()
+    pos = 0
+    for m in _re.finditer(r'\{([A-Za-z_]+)\}', template):
+        name = m.group(1)
+        if name not in _TEMPLATE_SECTIONS:
+            raise AppealConfigurationError(
+                f"help template: unknown section {{{name}}}")
+        if name in seen:
+            raise AppealConfigurationError(
+                f"help template: {{{name}}} appears twice")
+        seen.add(name)
+        header = template[pos:m.start()]
+        nl = header.rfind('\n')
+        indent = header[nl + 1:] if nl >= 0 else ''
+        if not indent.strip() == '':
+            indent = ''
+        sections.append((name, header, indent))
+        pos = m.end()
+    missing = [s for s in _TEMPLATE_SECTIONS if s not in seen]
+    if missing:
+        raise AppealConfigurationError(
+            f"help template: missing section(s): "
+            f"{', '.join('{' + s + '}' for s in missing)}")
+    return sections
 
 
-_SECTION_TERM_SLOTS = {
-    'arguments': 'operand',
-    'options': None,        # atoms: option strings + metavars
-    'commands': 'program',
-}
+_SECTION_TERM_SLOTS = {'arguments': 'operand', 'commands': None,
+                       'options': None}
 
 
-def render_section(name, template, rows, margin=79, theme=None):
+def _render_rows(name, rows, indent, margin=79, theme=None):
     """
-    Renders one section--rows of (display, documentation-lines)--
-    through its template, laying out the definition list with
-    format_definition_list.  No rows renders as the empty string,
-    heading and all.
-
-    With a theme, painting happens after layout: heading lines are
-    painted whole, and each row's term is painted where it landed
-    (terms are never wrapped, so the span survived layout intact).
+    One definition-list section body--no heading.  rows of
+    (display, documentation-lines) through format_definition_list
+    at the given indent.  With a theme, each row's term is
+    painted where it landed (terms never wrap, so the span
+    survived layout intact).
     """
     if not rows:
         return ''
-    heading, indent, spacer, separator = parse_section_template(name, template)
     pairs = [(display, '\n'.join(lines)) for display, lines in rows]
-    body = format_definition_list(pairs, margin, indent=indent, spacer=spacer)
+    body = format_definition_list(pairs, margin, indent=indent,
+                                  spacer='  ')
     if theme is None:
-        return heading + body
+        return body
     slot = _SECTION_TERM_SLOTS.get(name)
     lines = body.split('\n')
     cursor = 0
@@ -3413,39 +3382,101 @@ def render_section(name, template, rows, margin=79, theme=None):
                 lines[i] = indent + painted + lines[i][len(prefix):]
                 cursor = i + 1
                 break
-    body = '\n'.join(lines)
-    heading = '\n'.join(
-        theme.paint('heading', line) if line else line
-        for line in heading.split('\n'))
-    return heading + body
+    return '\n'.join(lines)
 
 
-def render_page(template_name, template, values, margin=79):
+def render_help_page(usage, corpus, templates, margin=79, theme=None):
     """
-    Renders a master template: an ordinary format string, rendered
-    line by line.  A line containing at least one placeholder, ALL
-    of which rendered empty, is dropped; runs of three-plus
-    newlines collapse to two; the result is rstripped and given a
-    final newline.
+    The --help page: the template's sections, three phases (ruled
+    2026-08-01): leading template sections the user didn't write;
+    then the user's sections in the USER's order, wearing the
+    user's own headers; then the rest in template order.  Empty
+    sections are suppressed, usage always renders.  With a theme,
+    spans paint after layout.
     """
-    import string as _string
-    formatter = _string.Formatter()
-    lines = []
-    for line in template.split('\n'):
-        try:
-            fields = [f for _, f, _, _ in formatter.parse(line) if f is not None]
-            rendered = line.format_map(values)
-        except KeyError as e:
-            raise AppealConfigurationError(
-                f"template {template_name!r} names an unknown "
-                f"field: {e}")
-        except ValueError as e:
-            raise AppealConfigurationError(
-                f"template {template_name!r}: {e}")
-        if fields and all(not values.get(f) for f in fields):
+    def prose(lines):
+        if not lines:
+            return ''
+        return wrap_words(split_text_with_code('\n'.join(lines)),
+                          margin)
+
+    parsed = parse_help_template(templates)
+    by_name = {name: (header, indent) for name, header, indent
+               in parsed}
+    template_order = [name for name, _, _ in parsed]
+
+    pres = corpus.get('presentation') or {}
+    doc_lines = list(corpus['summary'])
+    if corpus['summary'] and corpus['documentation']:
+        doc_lines.append('')
+    doc_lines.extend(corpus['documentation'])
+    user_order = (['doc'] if doc_lines else [])
+    user_order += [s for s in pres.get('order', ())
+                   if s in by_name]
+
+    # the three phases
+    order = []
+    i = 0
+    for name in template_order:
+        if name in user_order:
+            break
+        order.append(name)
+    order.extend(user_order)
+    for name in template_order:
+        if name not in order:
+            order.append(name)
+
+    pieces = []
+    for name in order:
+        header, indent = by_name[name]
+        user_header = None
+        if name in pres.get('headers', {}):
+            user_header = pres['headers'][name]
+            indent = pres.get('indents', {}).get(name) or indent
+        if name == 'usage':
+            nl = header.rfind('\n')
+            lead, prefix = ((header[:nl + 1], header[nl + 1:])
+                            if nl >= 0 else ('', header))
+            body = wrap_words(usage_units(usage), margin,
+                              indent=(prefix, ' ' * len(prefix)))
+            if theme is not None:
+                body = paint_usage(theme, body)
+            pieces.append(lead + body)
             continue
-        lines.append(rendered)
-    text = '\n'.join(lines)
+        if name == 'doc':
+            body = prose(doc_lines)
+            if not body:
+                continue
+            if theme is not None and corpus['summary']:
+                lines = body.split('\n')
+                for k, line in enumerate(lines):
+                    if not line:
+                        break
+                    lines[k] = theme.paint('summary', line)
+                body = '\n'.join(lines)
+            if indent:
+                import textwrap as _textwrap
+                body = _textwrap.indent(body, indent)
+            emit_header = (header[:len(header) - len(indent)]
+                           if indent else header)
+            pieces.append(emit_header + body)
+            continue
+        body = _render_rows(name, corpus[name], indent, margin,
+                            theme)
+        if not body:
+            continue
+        if user_header is not None:
+            emit_header = user_header
+        else:
+            emit_header = (header[:len(header) - len(indent)]
+                           if indent else header)
+        if theme is not None:
+            emit_header = '\n'.join(
+                theme.paint('heading', line) if line.strip() else line
+                for line in emit_header.split('\n'))
+        pieces.append(emit_header + body)
+
+    text = ''.join(pieces)
     while '\n\n\n' in text:
         text = text.replace('\n\n\n', '\n\n')
     return text.lstrip('\n').rstrip() + '\n'
@@ -3464,41 +3495,6 @@ def help_margin(max_columns=79):
                max_columns)
 
 
-def render_help_page(usage, corpus, templates, margin=79, theme=None):
-    """
-    The --help page: assembles the master template's values from a
-    predigested corpus (see help.merge_docs) and renders it.  The
-    'help commands' master serves when the corpus has command
-    rows; 'help' otherwise.  With a theme, spans are painted after
-    layout--the width arithmetic only ever sees uncolored text.
-    """
-    def prose(lines):
-        if not lines:
-            return ''
-        return wrap_words(split_text_with_code('\n'.join(lines)), margin)
-
-    summary = prose(corpus['summary'])
-    usage_text = render_usage(usage, margin)
-    if theme is not None:
-        summary = '\n'.join(
-            theme.paint('summary', line) if line else line
-            for line in summary.split('\n'))
-        usage_text = paint_usage(theme, usage_text)
-    values = {
-        'summary': summary,
-        'usage': usage_text,
-        'documentation': prose(corpus['documentation']),
-        'arguments': render_section('arguments', templates['arguments'],
-                                    corpus['arguments'], margin, theme),
-        'options': render_section('options', templates['options'],
-                                  corpus['options'], margin, theme),
-        'commands': render_section('commands', templates['commands'],
-                                   corpus['commands'], margin, theme),
-    }
-    name = 'help commands' if corpus['commands'] else 'help'
-    return render_page(name, templates[name], values, margin)
-
-
 def render_command_listing(usage, corpus, templates, margin=79):
     """
     The compact command listing: the usage line plus the commands
@@ -3506,9 +3502,20 @@ def render_command_listing(usage, corpus, templates, margin=79):
     dispatch-level UsageErrors--helpful enough to name the valid
     commands, terse enough for an error.
     """
-    listing = render_section('commands', templates['commands'],
-                             corpus['commands'], margin)
-    return usage + '\n\n' + listing.rstrip('\n')
+    parsed = parse_help_template(templates)
+    header = indent = None
+    for name, h, ind in parsed:
+        if name == 'commands':
+            header, indent = h, ind
+    body = _render_rows('commands', corpus['commands'], indent,
+                        margin)
+    heading = header.strip('\n')
+    if indent:
+        heading = heading[:len(heading) - len(indent)] \
+            if heading.endswith(indent) else heading
+    return usage + '\n\n' + (heading + '\n' + body).rstrip('\n') \
+        if body else usage
+
 # --8<-- end appeal help --8<--
 
 

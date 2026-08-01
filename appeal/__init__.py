@@ -744,18 +744,17 @@ class Appeal:
                     f"{knob} must be a positive int, not {value!r}")
         self.margin = margin
         self.indent = indent
-        # the help templates: a plain dict, yours to overwrite
-        # entry by entry (see runtime.default_templates).
-        from .runtime import default_templates
-        self.templates = dict(default_templates)
+        # the help template: ONE string, five {sections}, yours
+        # to replace (see runtime.default_template; ruled
+        # 2026-08-01)
+        from .runtime import default_template
+        self.templates = default_template
         if indent != 4:
             import re as _re
             pad = ' ' * indent
-            for key in ('arguments', 'options', 'commands'):
-                template = self.templates.get(key)
-                if template:
-                    self.templates[key] = _re.sub(
-                        r'(?m)^[ \t]+(?=\{argument\})', pad, template)
+            self.templates = _re.sub(
+                r'(?m)^[ \t]+(?=\{(?:arguments|options|commands)\})',
+                pad, self.templates)
         # concurrency (ruled 2026-07-11): compilation runs LOCK-
         # FREE (it inspects user code, and we never hold a lock
         # over foreign code); this plain Lock guards only the
@@ -1293,7 +1292,7 @@ class Appeal:
         entries = [(w, summary(c)) for w, c in table.items()]
         corpus = command_set_corpus(
             self.global_plan, entries, False, auto_version=False,
-            doc=self._program_doc_override())
+            doc=self._program_doc_override(), listing=False)
         pages = [(word,
                   self.plan_for(word).usage(f'{prog} {word}'),
                   merge_docs(self.plan_for(word)))

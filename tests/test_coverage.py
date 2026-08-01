@@ -2060,32 +2060,34 @@ def test_theme_resolution_and_markup():
 
 
 def test_section_template_validation():
-    from appeal.runtime import parse_section_template, render_page
+    # the single-template model (ruled 2026-08-01): five
+    # sections, each exactly once, nothing else in braces
+    from appeal.runtime import parse_help_template
     cases = (
-        'no placeholders here',
-        'x {argument} without documentation',
-        'x {argument}  {documentation} lonely',
-        'x {argument}  {documentation}\n{argument} {documentation}',
-        'x {argument}  {documentation}\nx {argument}~~{documentation}',
-        ('x {argument}  {documentation}\nx {argument}  {documentation}'
-         '\nx {argument}  {documentation}'),
+        'no placeholders at all',
+        '{usage}\n{doc}\n{options}\n{arguments}',        # missing commands
+        '{usage}\n{doc}\n{options}\n{arguments}\n'
+        '{commands}\n{commands}',                          # duplicate
+        '{usage}\n{doc}\n{options}\n{arguments}\n'
+        '{commands}\n{zzz}',                               # unknown
         )
     for template in cases:
         try:
-            parse_section_template('t', template)
+            parse_help_template(template)
             assert False, 'expected refusal: %r' % (template,)
         except AppealConfigurationError:
             pass
-    try:
-        render_page('t', '{zzz}', {})
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError:
-        pass
-    try:
-        render_page('t', '{', {})
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError:
-        pass
+    # the parse: headers and indents fall out of the text
+    parsed = parse_help_template(
+        'usage: {usage}\n\n{doc}\n\nOpts:\n  {options}\n\n'
+        'Args:\n  {arguments}\n\nCmds:\n  {commands}')
+    names = [n for n, _, _ in parsed]
+    assert names == ['usage', 'doc', 'options', 'arguments', 'commands']
+    by = {n: (h, i) for n, h, i in parsed}
+    assert by['usage'][0] == 'usage: '
+    assert by['options'][0] == '\n\nOpts:\n  '
+    assert by['options'][1] == '  '
+
 
 
 def test_vocabulary_validation():
@@ -2683,18 +2685,20 @@ def test_run_mcp_ping():
 
 
 def test_section_template_more_fails():
-    from appeal.runtime import parse_section_template
-    for template in (
-            # the hanging form: {documentation} on its own line
-            'h {argument}\n   {documentation}\nh {argument}\n   {documentation}',
-            # the second pair must start on the very next line
-            'x {argument}  {documentation}\nY {argument}  {documentation}',
-            ):
-        try:
-            parse_section_template('t', template)
-            assert False, 'expected refusal: %r' % (template,)
-        except AppealConfigurationError:
-            pass
+    # a custom template reorders the page; suppression still
+    # holds (no commands -> no Cmds: section)
+    from appeal.runtime import render_help_page
+    template = ('usage: {usage}\n\nOpts:\n  {options}\n\n'
+                '{doc}\n\nArgs:\n  {arguments}\n\n'
+                'Cmds:\n  {commands}')
+    corpus = {'summary': ['Sum.'], 'documentation': ['Prose.'],
+              'arguments': [('a', ['doc a'])],
+              'options': [('-x', [])], 'commands': []}
+    page = render_help_page('t [-x] a', corpus, template)
+    assert page.index('Opts:') < page.index('Sum.') < \
+        page.index('Args:'), page
+    assert 'Cmds:' not in page
+    assert '  -x' in page and '  a  doc a' in page
 
 
 # ---------------------------------------------------------------------
@@ -3101,7 +3105,7 @@ def test_branch_text_formatter_edges():
     from appeal.runtime import (wrap_words, split_text_with_code,
                                 usage_units, format_definition_list,
                                 merge_columns, OverflowStrategy,
-                                render_help_page, default_templates, Theme)
+                                render_help_page, default_template, Theme)
 
     # code_indent=0 turns code detection off entirely
     split_text_with_code('para one\n\n    indented, not code\n',
@@ -3142,7 +3146,7 @@ def test_branch_text_formatter_edges():
         """
     plan = build(draw)
     page = render_help_page(plan.usage(), merge_docs(plan),
-                            default_templates, margin=50, theme=Theme())
+                            default_template, margin=50, theme=Theme())
     assert '\x1b[' in page
 
 

@@ -984,6 +984,47 @@ def test_program_doc_three_tiers():
         assert 'zork' in str(e)
 
 
+def test_docstring_presentation_wins():
+    # Ruled 2026-08-01 (D+E): the author's docstring presentation
+    # governs the sections they wrote--their spelling, decoration,
+    # blank-line rhythm, entry indent, and ORDER--while unwritten
+    # sections render where the template puts them (three-phase
+    # interleave).
+    import appeal as _appeal
+    import contextlib, io
+
+    app = _appeal.Appeal(name='p')
+    @app.global_command()
+    def g(thing, *, loud=False):
+        """
+        Summary here.
+
+         [Options!]
+           loud: Speak up.
+
+        arguments
+           thing: The thing.
+        """
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app.main(['--help'])
+        except SystemExit:
+            pass
+    text = out.getvalue()
+    # decoration preserved verbatim; order is the AUTHOR's
+    # (options before arguments, against the template's order)
+    assert ' [Options!]' in text, text
+    assert 'arguments' in text and 'Arguments:' not in text
+    assert text.index('[Options!]') < text.index('arguments'), text
+    # the author's 3-space entry indent rides along
+    assert '   -l|--loud  Speak up.' in text, text
+    assert '   thing  The thing.' in text, text
+    # usage still leads (phase one: template sections before the
+    # first user-defined one)
+    assert text.startswith('usage: g'), text
+
+
 def test_command_listings_are_definition_order():
     # Larry's ruling (2026-07-19): commands and subcommands are
     # DISPLAYED in definition order--the tree's dicts iterate in
@@ -1726,10 +1767,12 @@ def test_help_parameter_sections():
     assert result is None
     assert 'Note: this line is prose, not a parameter.' in text
     assert 'Arguments:' in text and 'Options:' in text
-    assert '    shape  the shape to draw.' in text
-    assert '    width  how wide.' in text
-    assert '    -v|--verbose      narrate the process.' in text
-    assert '    -t|--times times  how many times.' in text
+    # the docstring's own 2-space entry indent is PRESERVED
+    # (ruling D, 2026-08-01: the author's presentation wins)
+    assert '  shape  the shape to draw.' in text
+    assert '  width  how wide.' in text
+    assert '  -v|--verbose      narrate the process.' in text
+    assert '  -t|--times times  how many times.' in text
     body = text.split('Arguments:')[0]
     assert 'shape:' not in body                       # entries were extracted
     for line in text.splitlines():
@@ -1865,7 +1908,7 @@ def test_command_set_help():
     assert 'Adds an item to the pile.' in by_help
     assert 'usage: add_item' in by_help   # direct-built plans
     # carry no prog prefix; app-built ones do (ruled 2026-07-19)
-    assert '    name   what to call it.' in by_help   # 'count' row widens the column
+    assert '  name   what to call it.' in by_help  # docstring's 2-indent preserved
     _, interpreter_help = grab(lambda: interpreter_dispatch(plans, None, ['help', 'add_item'], prog='pile'))
     assert interpreter_help == by_help
 
@@ -2333,7 +2376,7 @@ def test_app_parameter_renames():
     assert usage == 'serve [-t|--times COUNT] host [PORT]', usage
     result, text = run_both_stdout(serve, ['--help'])
     assert '[-t|--times COUNT]' in text
-    assert '    PORT  where to listen.' in text        # tables renamed too
+    assert '  PORT  where to listen.' in text      # tables renamed too
     # a converter's own parameters rename by decorating the converter
     from appeal import add_parameter_usage
     def pair(x: float, y: float):
@@ -4302,10 +4345,23 @@ def test_usage_formatter_knobs():
     assert max(len(l) for l in narrow.splitlines()) <= 40
     assert 'Serves the thing' in narrow
 
+    # the docstring WROTE its sections, so its own 2-space entry
+    # indent wins over the indent= knob (ruling D, 2026-08-01:
+    # the knob shapes the TEMPLATE's sections; the author's
+    # presentation governs the sections they authored)
     indented = helptext(make_app(indent=8))
     row = next(l for l in indented.splitlines()
                if l.strip().startswith('host'))
-    assert row.startswith(' ' * 8) and row[8] != ' ', repr(row)
+    assert row.startswith('  host'), repr(row)
+    # a docstring with no sections takes the knob's indent
+    app8 = _appeal.Appeal(name='k8', indent=8)
+    @app8.global_command()
+    def plainer(host, *, verbose=False):
+        "No sections here."
+    text8 = helptext(app8)
+    row8 = next(l for l in text8.splitlines()
+                if l.strip().startswith('host'))
+    assert row8.startswith(' ' * 8) and row8[8] != ' ', repr(row8)
 
     # garbage refuses by name
     for knob in ('margin', 'indent'):
@@ -6166,7 +6222,7 @@ def test_standalone_help_sections():
         assert 'Marks a label on the canvas.' in r.stdout
         assert 'usage: mark' in r.stdout
         assert 'Arguments:' in r.stdout and 'Options:' in r.stdout
-        assert '    label  the text to place.' in r.stdout
+        assert '  label  the text to place.' in r.stdout
         assert '-a|--at x y' in r.stdout
         assert 'where to place it.' in r.stdout
 
@@ -6201,7 +6257,7 @@ def test_standalone_command_set_help():
         assert r.returncode == 0 and r.stdout == r2.stdout
         assert r.stdout.startswith('usage: '), r.stdout
         assert 'Marks a label on the canvas.' in r.stdout
-        assert '    label  the text to place.' in r.stdout
+        assert '  label  the text to place.' in r.stdout
 
 def test_standalone_help():
     # the north star: --help works in a generated script, formatted
@@ -6421,18 +6477,21 @@ def test_parse_docstring_errors():
             return
         assert False, f'expected AppealConfigurationError for {doc!r}'
 
-    # 'Sub-commands:' is detected and raised at the user
-    refuses("Sub-commands:\n  x: y", "Subcommands:", "Sub-commands:")
+    # liberal detection (ruled 2026-08-01): decoration and case
+    # are the author's business--'Sub-commands:' just works now
+    from appeal.help import parse_docstring as _pd
+    assert _pd("Sub-commands:\n  x: y", "f")['commands'] == {'x': ['y']}
+    assert _pd(" [Arguments:]\n  x: y", "f")['arguments'] == {'x': ['y']}
+    assert _pd("OPTIONS\n  x: y", "f")['options'] == {'x': ['y']}
+    # ...but a claim needs an indented body: v1's legacy
+    # [[arguments]] markup (unindented follower) stays prose
+    c = _pd("[[arguments]]\n{x} not an entry", "f")
+    assert not c['arguments']
     # one section per kind--including via the Commands:/Subcommands: alias
     refuses("Options:\n  a: b\n\nOptions:\n  c: d", "duplicate")
     refuses("Commands:\n  a: b\n\nSubcommands:\n  c: d",
             "duplicate", "same section")
-    # exact spellings: whitespace variants are refused, not demoted
-    refuses("Arguments: \n  x: y", "exact")
-    refuses("  Arguments:\n  x: y", "exact")
-    # entries are indented; only a blank line ends a section
-    refuses("Options:\nx: y", "isn't indented")
-    # the first line of a section must be an entry
+    # the first line of a claimed section must be an entry
     refuses("Options:\n  just some text", "expected a")
     # an entry documented twice
     refuses("Options:\n  a: b\n  a: c", "documented twice")
@@ -6662,12 +6721,12 @@ def test_colorized_help_paints_after_layout():
     import io, contextlib
     from appeal.build import build
     from appeal.help import merge_docs
-    from appeal.runtime import Theme, default_templates, render_help_page
+    from appeal.runtime import Theme, default_template, render_help_page
 
     plan = build(draw)
     corpus = merge_docs(plan)
-    plain = render_help_page(plan.usage(), corpus, default_templates)
-    painted = render_help_page(plan.usage(), corpus, default_templates,
+    plain = render_help_page(plan.usage(), corpus, default_template)
+    painted = render_help_page(plan.usage(), corpus, default_template,
                                theme=Theme())
     assert painted != plain
     assert '\x1b[' in painted
@@ -6681,7 +6740,7 @@ def test_colorized_help_paints_after_layout():
     from appeal.plan import DEFAULT_ARG_FORMAT
     plan.arg_format = '<{name}>'
     bracketed = render_help_page(plan.usage(), merge_docs(plan),
-                                 default_templates, theme=Theme())
+                                 default_template, theme=Theme())
     assert '\x1b[2m<times>\x1b[0m' in bracketed, bracketed
     plan.arg_format = DEFAULT_ARG_FORMAT
 

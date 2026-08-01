@@ -38,7 +38,7 @@ from .runtime import (
     parse_tokens, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
     sibling_scopes,
-    Theme, default_templates, render_command_listing, render_help_page,
+    Theme, default_template, render_command_listing, render_help_page,
     resolve_theme,
     did_you_mean, help_margin,
     run_command_set, run_main, runtime_source, window_options,
@@ -109,7 +109,7 @@ class _Emitter:
         # run_run and run_run2 instead of silently sharing one.
         self.plan = plan
         self.symbol = symbol or _ident(plan.name)
-        self.templates = default_templates if templates is None else templates
+        self.templates = default_template if templates is None else templates
         self.theme = theme
         self.max_columns = max_columns
         self.refs = Refs() if refs is None else refs
@@ -1185,7 +1185,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
     names no command); sub_defaults maps parent word -> that set's
     default Plan.
     """
-    templates = default_templates if templates is None else templates
+    templates = default_template if templates is None else templates
     refs = Refs()
     fill_names = {}
     chunks = []
@@ -1267,7 +1267,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
         sub_corpus = command_set_corpus(parent_plan, sub_entries, False)
         sub_usage = render_command_listing(
             command_set_usage(parent_word, parent_plan), sub_corpus,
-            templates or default_templates, margin=max_columns)
+            templates or default_template, margin=max_columns)
         sub_table = ', '.join(
             (f'{w!r}: _SET_{sym(p)}' if w in subs
              else f'{w!r}: (scan_{sym(p)}, run_{sym(p)})')

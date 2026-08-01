@@ -24,21 +24,6 @@ from .runtime import AppealConfigurationError
 ## blob, and the templates own the output's structure entirely.
 ##
 
-# heading line -> corpus section.  Exact spellings, whole line.
-# Commands: reads right on a global command, Subcommands: on a
-# command with subcommands; the doc machinery treats them
-# identically.
-_HEADINGS = {
-    'Arguments:': 'arguments',
-    'Options:': 'options',
-    'Commands:': 'commands',
-    'Subcommands:': 'commands',
-}
-
-_FORBIDDEN_HEADINGS = {
-    'Sub-commands:': 'Subcommands:',
-}
-
 # the first line of an entry: 'name:' or 'name: text'
 _ENTRY_START_RE = _re.compile(r'^([A-Za-z_][A-Za-z0-9_]*):(?:\s+(\S.*))?$')
 
@@ -91,26 +76,52 @@ def parse_docstring(doc, where):
     sections = {'arguments': {}, 'options': {}, 'commands': {}}
     seen = {}
     prose = []
+    order = []
+    headers = {}
+    indents = {}
 
-    lines = (doc or '').splitlines()
+    lines = [l.rstrip() for l in (doc or '').splitlines()]
     i = 0
     n = len(lines)
     while i < n:
         line = lines[i]
-        replacement = _FORBIDDEN_HEADINGS.get(line.strip())
-        if replacement:
-            raise AppealConfigurationError(
-                f"{where}: use {replacement!r}, not {line.strip()!r}")
-        kind = _HEADINGS.get(line)
+        # a section heading is detected LIBERALLY (ruled
+        # 2026-08-01): after a blank line (or at the very top), a
+        # line whose letters alone spell one of the section names
+        # --case and decoration ignored, and the user's spelling
+        # is PRESERVED as that section's rendered header
+        kind = None
+        if i == 0 or not lines[i - 1]:
+            word = ''.join(c for c in line if c.isalnum()).lower()
+            kind = {'options': 'options', 'arguments': 'arguments',
+                    'commands': 'commands',
+                    'subcommands': 'commands'}.get(word)
+        if kind is not None:
+            # ...and the claim needs a BODY: the next nonblank
+            # line must be indented (entries always are).  An
+            # unindented follower means this line was prose that
+            # happened to spell a section name--v1's legacy
+            # [[arguments]] markup, a word alone in a sentence
+            for j in range(i + 1, n):
+                if lines[j]:
+                    if not lines[j][0].isspace():
+                        kind = None
+                    break
+            else:
+                kind = None
         if kind is None:
-            stripped = line.strip()
-            if stripped in _HEADINGS:
-                raise AppealConfigurationError(
-                    f"{where}: section headings must be exact: "
-                    f"{stripped!r} on a line by itself, no extra whitespace")
             prose.append(line)
             i += 1
             continue
+
+        # the section's header: the blank lines before it belong
+        # to it (they become its leading newlines when rendered)
+        blanks = 0
+        while prose and not prose[-1]:
+            prose.pop()
+            blanks += 1
+        order.append(kind)
+        headers[kind] = '\n' * (blanks + 1) + line + '\n'
 
         # a section heading.
         if kind in seen:
@@ -153,6 +164,7 @@ def parse_docstring(doc, where):
                         f"{where}: in the {line!r} section: expected a "
                         f"'name: documentation' entry, got {body_line!r}")
                 entry_indent = indent
+                indents[kind] = ' ' * indent
             if indent > entry_indent:
                 continuation.append(body_line)
             elif (indent == entry_indent) and m:
@@ -198,6 +210,8 @@ def parse_docstring(doc, where):
         'arguments': sections['arguments'],
         'options': sections['options'],
         'commands': sections['commands'],
+        'presentation': {'order': order, 'headers': headers,
+                         'indents': indents},
     }
 
 
@@ -436,6 +450,7 @@ def merge_docs(plan, command_names=None):
     return {
         'summary': parsed['summary'],
         'documentation': parsed['documentation'],
+        'presentation': parsed.get('presentation'),
         'arguments': [(display, docs.get(name, []))
                       for name, display in argument_rows],
         'options': [(display, docs.get(name, []))
@@ -446,7 +461,7 @@ def merge_docs(plan, command_names=None):
 
 
 def command_set_corpus(global_plan, entries, auto_help=True,
-                       auto_version=False, doc=None):
+                       auto_version=False, doc=None, listing=True):
     """
     The corpus for a multi-command program's listing.  entries is
     a sequence of (word, summary) pairs in declaration order.  The
@@ -475,6 +490,7 @@ def command_set_corpus(global_plan, entries, auto_help=True,
                     f"{name!r} isn't a command word")
         corpus = {'summary': parsed['summary'],
                   'documentation': parsed['documentation'],
+                  'presentation': parsed.get('presentation'),
                   'arguments': [], 'options': [],
                   'commands': [(w, parsed['commands'].get(w, []))
                                for w in words]}
@@ -484,6 +500,13 @@ def command_set_corpus(global_plan, entries, auto_help=True,
         corpus = {'summary': [], 'documentation': [],
                   'arguments': [], 'options': [],
                   'commands': [(word, []) for word in words]}
+    if listing:
+        # the LISTING never shows the global command's own
+        # arguments/options tables (v1's shape; the single
+        # template would otherwise render them)--only usage,
+        # prose, commands
+        corpus['arguments'] = []
+        corpus['options'] = []
     fallback = dict(entries)
     if auto_version:
         fallback['version'] = "Print the program's version."

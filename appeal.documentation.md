@@ -142,23 +142,29 @@ The fine print:
 * Undocumented parameters still get their row, with an empty
   description.  Documentation is encouraged, never required.
 
-## 3: Reshaping the page: templates
+## 3: Reshaping the page: the template
 
-The page's structure is a handful of named templates--plain
-strings--living in a dict on your Appeal instance.  Overwrite
-entries to taste:
+The page's structure is ONE template--a plain string on your
+Appeal instance--naming five sections: `{usage}`, `{doc}`,
+`{options}`, `{arguments}`, `{commands}`.  All five must appear;
+replace the template to taste:
 
     import appeal
 
     app = appeal.Appeal(name='terse')
-    app.templates['help'] = (
-        '{usage}\n'
+    app.templates = (
+        'usage: {usage}\n'
         '\n'
-        '{summary}\n'
+        '{doc}\n'
         '\n'
-        '{options}\n'
+        'Options:\n'
+        '    {options}\n'
         '\n'
-        '{arguments}\n'
+        'Arguments:\n'
+        '    {arguments}\n'
+        '\n'
+        'Commands:\n'
+        '    {commands}\n'
     )
 
     @app.global_command()
@@ -175,28 +181,23 @@ entries to taste:
         import sys
         sys.exit(app.main())
 
-That page leads with usage, then the summary, then options before
-arguments.  The master templates are `help` (a command's page)
-and `help commands` (a dispatcher's command listing); their
-placeholders are `{summary}`, `{usage}`, `{documentation}` (the
-prose blob), `{arguments}`, `{options}`, and--for the listing--
-`{commands}`.  An absent section vanishes, its heading with it,
-and a template line whose placeholders all rendered empty is
-dropped.
+That page leads with usage, then the prose, then options before
+arguments.  The text between placeholders is each section's
+*header*, and the whitespace after the header's last newline is
+the section body's per-line indent (the definition lists are
+laid out by big's `format_definition_list`).  A section with no
+content vanishes, header and all; `usage` always renders, and
+must sit on a single template line.  One template serves both a
+command's help page and a dispatcher's listing--the unused
+sections simply vanish.
 
-The three *section* templates (`arguments`, `options`,
-`commands`) control the tables themselves.  A section template is
-its heading, then exactly two `{argument}`/`{documentation}`
-pairs showing the shape of a row and the separation between rows:
-
-    Options:
-        {argument}  {documentation}
-        {argument}  {documentation}
-
-The literal text before `{argument}` is the table's indent; the
-text between the placeholders is the spacer (yes, the definition
-lists are laid out by big's `format_definition_list`--spacers,
-hang rule, and all).
+Your docstrings talk back to the template, too.  A section
+header line in a docstring is recognized *liberally*--any line
+whose letters spell `options`, `arguments`, or `commands`
+(case and decoration ignored), after a blank line--and your
+spelling, decoration, and section ORDER are preserved in the
+rendered page.  Sections you didn't write render where the
+template puts them.
 
 ## 4: Color
 
