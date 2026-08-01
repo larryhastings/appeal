@@ -6483,10 +6483,16 @@ def test_parse_docstring_errors():
     assert _pd("Sub-commands:\n  x: y", "f")['commands'] == {'x': ['y']}
     assert _pd(" [Arguments:]\n  x: y", "f")['arguments'] == {'x': ['y']}
     assert _pd("OPTIONS\n  x: y", "f")['options'] == {'x': ['y']}
-    # ...but a claim needs an indented body: v1's legacy
-    # [[arguments]] markup (unindented follower) stays prose
+    # ...but a claim needs a body that's indented OR
+    # entry-shaped: v1's legacy [[arguments]] markup (unindented,
+    # un-entry-shaped follower) stays prose
     c = _pd("[[arguments]]\n{x} not an entry", "f")
     assert not c['arguments']
+    # left-margin entries are legal (ruled 2026-08-01): authors
+    # who want their tables at column 0 get them there
+    c = _pd("Options:\nloud: Speak up.", "f")
+    assert c['options'] == {'loud': ['Speak up.']}
+    assert c['presentation']['indents']['options'] == ''
     # one section per kind--including via the Commands:/Subcommands: alias
     refuses("Options:\n  a: b\n\nOptions:\n  c: d", "duplicate")
     refuses("Commands:\n  a: b\n\nSubcommands:\n  c: d",

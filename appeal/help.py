@@ -98,13 +98,16 @@ def parse_docstring(doc, where):
                     'subcommands': 'commands'}.get(word)
         if kind is not None:
             # ...and the claim needs a BODY: the next nonblank
-            # line must be indented (entries always are).  An
-            # unindented follower means this line was prose that
-            # happened to spell a section name--v1's legacy
-            # [[arguments]] markup, a word alone in a sentence
+            # line must be indented OR entry-shaped ('name: ...').
+            # Otherwise this line was prose that happened to spell
+            # a section name--v1's legacy [[arguments]] markup, a
+            # word alone in a sentence.  (Entry-shaped at the left
+            # margin is legal: authors who want their tables at
+            # column 0 get them there--ruled 2026-08-01.)
             for j in range(i + 1, n):
                 if lines[j]:
-                    if not lines[j][0].isspace():
+                    if (not lines[j][0].isspace()
+                            and not _ENTRY_START_RE.match(lines[j])):
                         kind = None
                     break
             else:
@@ -152,11 +155,10 @@ def parse_docstring(doc, where):
                 break
             stripped = body_line.lstrip()
             indent = len(body_line) - len(stripped)
-            if not indent:
-                raise AppealConfigurationError(
-                    f"{where}: in the {line!r} section: {body_line!r} "
-                    f"isn't indented.  Entries are indented under the "
-                    f"heading; only a blank line ends the section.")
+            if not indent and not _ENTRY_START_RE.match(stripped):
+                # unindented, un-entry-shaped: the section is over
+                # and prose has resumed
+                break
             m = _ENTRY_START_RE.match(stripped)
             if entry_indent is None:
                 if not m:
