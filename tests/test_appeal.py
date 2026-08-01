@@ -914,6 +914,76 @@ def test_main_exits_the_process():
     assert app.process(['fail']) == 3
 
 
+def test_program_doc_three_tiers():
+    # Ruled 2026-08-01: the program's documentation, highest
+    # first: (1) Appeal(doc=...); (2) the global command's
+    # docstring; (3) when every user command shares one module,
+    # that module's docstring--write a module docstring, get
+    # program docs for free.
+    import appeal as _appeal
+    import contextlib, io, sys, types
+
+    def helppage(app):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                app.main(['help'])
+            except SystemExit:
+                pass
+        return out.getvalue()
+
+    # tier 1 beats tier 2; its Commands: entries curate the listing
+    app = _appeal.Appeal('t1',
+                         doc='Doc wins.\n\nCommands:\n    work: curated.')
+    @app.global_command()
+    def g():
+        "Global docstring loses."
+    @app.command()
+    def work():
+        "Fallback summary."
+    out = helppage(app)
+    assert 'Doc wins.' in out and 'curated.' in out
+    assert 'loses' not in out
+
+    # tier 3: the module-docstring magic (stock help/version
+    # commands don't get a vote)
+    mod = types.ModuleType('_appeal_doc_fakemod')
+    mod.__doc__ = 'The module speaks.\n\nProse from the module.'
+    sys.modules['_appeal_doc_fakemod'] = mod
+    try:
+        app3 = _appeal.Appeal('t3', version='1.0')
+        def alpha(): "A."
+        def beta(): "B."
+        alpha.__module__ = beta.__module__ = '_appeal_doc_fakemod'
+        app3.command()(alpha)
+        app3.command()(beta)
+        out = helppage(app3)
+        assert 'The module speaks.' in out
+        assert 'Prose from the module.' in out
+        # ...but mixed modules mean no tier-3 doc
+        app4 = _appeal.Appeal('t4')
+        def gamma(): "G."
+        gamma.__module__ = 'somewhere_else'
+        def delta(): "D."
+        delta.__module__ = '_appeal_doc_fakemod'
+        app4.command()(gamma)
+        app4.command()(delta)
+        assert 'module speaks' not in helppage(app4)
+    finally:
+        del sys.modules['_appeal_doc_fakemod']
+
+    # unknown Commands: entries in doc= refuse by name
+    app5 = _appeal.Appeal('t5', doc='Hi.\n\nCommands:\n    zork: no.')
+    @app5.command()
+    def real():
+        pass
+    try:
+        helppage(app5)
+        assert False, 'expected ConfigurationError'
+    except _appeal.ConfigurationError as e:
+        assert 'zork' in str(e)
+
+
 def test_command_listings_are_definition_order():
     # Larry's ruling (2026-07-19): commands and subcommands are
     # DISPLAYED in definition order--the tree's dicts iterate in

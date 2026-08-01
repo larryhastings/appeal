@@ -618,7 +618,7 @@ class Appeal:
                  margin=79, indent=4,
                  positional_argument_usage_format='{name}',
                  default_options=default_options,
-                 default_mappings=default_mappings()):
+                 default_mappings=default_mappings(), doc=None):
         self.name = name
         # the command tree (v1's model, restored 2026-07-18 by
         # Larry's ruling): a tree of Appeal instances, one per
@@ -728,6 +728,10 @@ class Appeal:
         # runtime.Theme; the environment always wins (resolve_theme).
         self.theme = theme
         self.version = version
+        # the program's documentation, tier 1 of the doc chain
+        # (ruled 2026-08-01): doc= beats the global command's
+        # docstring beats the shared module's docstring
+        self.doc = doc
         # the help formatter's knobs (v1's, wired 2026-07-09):
         # margin caps the wrap width (narrow terminals re-wrap
         # below it; pipes get the cap itself), and indent is the
@@ -1234,8 +1238,9 @@ class Appeal:
             from .help import summary, command_set_corpus
             from .runtime import render_help_page
             entries = [(w, summary(c)) for w, c in table.items()]
-            corpus = command_set_corpus(self.global_plan, entries,
-                                        False, auto_version=False)
+            corpus = command_set_corpus(
+                self.global_plan, entries, False, auto_version=False,
+                doc=self._program_doc_override())
             from .runtime import help_margin, resolve_theme
             text = render_help_page(
                 command_set_usage(self._prog(), self._display_global()),
@@ -1243,10 +1248,17 @@ class Appeal:
                 margin=help_margin(self.margin),
                 theme=resolve_theme(self.theme, _sys.stdout)).rstrip('\n')
         else:
-            from .help import merge_docs
+            from .help import merge_docs, parse_docstring
             from .runtime import help_margin, render_help_page, resolve_theme
             plan = self.plan
             corpus = merge_docs(plan)
+            override = self.root.doc
+            if override is not None:
+                # tier 1 overrides a bare app's prose too; the
+                # signature-bound sections stay with the command
+                parsed = parse_docstring(override, '<program documentation>')
+                corpus['summary'] = parsed['summary']
+                corpus['documentation'] = parsed['documentation']
             text = render_help_page(
                 plan.usage(), corpus, self.templates,
                 margin=help_margin(self.margin),
@@ -1280,7 +1292,8 @@ class Appeal:
                             version=version)
         entries = [(w, summary(c)) for w, c in table.items()]
         corpus = command_set_corpus(
-            self.global_plan, entries, False, auto_version=False)
+            self.global_plan, entries, False, auto_version=False,
+            doc=self._program_doc_override())
         pages = [(word,
                   self.plan_for(word).usage(f'{prog} {word}'),
                   merge_docs(self.plan_for(word)))
@@ -1494,6 +1507,60 @@ class Appeal:
                 parse = self._parses.setdefault(id(node), parse)
         return parse
 
+    def _program_doc(self):
+        """
+        The program's documentation, three tiers (ruled
+        2026-08-01), highest first: the doc= constructor
+        argument; the global command's docstring; and--the
+        pleasant magic--the module docstring, when every user
+        command lives in one module.  Returns None when nobody
+        has anything to say.
+        """
+        root = self.root
+        if root.doc is not None:
+            return root.doc
+        if root._global is not None:
+            d = _inspect.getdoc(root._global)
+            if d and d.strip():
+                return d
+        modules = set()
+        for word, node in root._children.items():
+            fn = node._command_callable()
+            if fn is None:
+                continue
+            f = getattr(fn, '__func__', fn)
+            if f in (Appeal.help, Appeal.print_version):
+                continue    # the stock commands live in appeal;
+                            # they don't get a vote
+            m = getattr(fn, '__module__', None)
+            if m is None:
+                return None
+            modules.add(m)
+        if len(modules) == 1:
+            module = _sys.modules.get(modules.pop())
+            d = getattr(module, '__doc__', None)
+            if d and d.strip():
+                import textwrap as _textwrap
+                return _textwrap.dedent(d).strip('\n')
+        return None
+
+    def _program_doc_override(self):
+        """
+        Tiers 1 and 3 of the doc chain--the sources that
+        OVERRIDE what merge_docs would read from the global
+        command.  Tier 2 (the global docstring) returns None
+        here: the existing merge path already honors it, with
+        its fuller validation.
+        """
+        root = self.root
+        if root.doc is not None:
+            return root.doc
+        if root._global is not None:
+            d = _inspect.getdoc(root._global)
+            if d and d.strip():
+                return None         # tier 2: merge_docs' job
+        return self._program_doc() if root.doc is None else root.doc
+
     def _prog(self):
         return self.name or _os.path.basename(self.script) or 'program'
 
@@ -1605,7 +1672,8 @@ class Appeal:
         entries = [(word, summary(callable))
                    for word, callable in table.items()]
         corpus = command_set_corpus(
-            global_plan, entries, False, auto_version=False)
+            global_plan, entries, False, auto_version=False,
+            doc=self._program_doc_override())
         usage = render_command_listing(
             command_set_usage(self._prog(), self._display_global()),
             corpus, self.templates, margin=self.margin)
@@ -1989,6 +2057,7 @@ class Appeal:
                 sub_repeat=dict(self._sub_repeat) or None,
                 errors=self.errors, version=self.version,
                 max_columns=self.margin, help=self._help_enabled,
+                doc=self._program_doc_override(),
                 default=(self._build(self._default)
                          if self._default is not None else None),
                 sub_defaults={w: self._build(fn)

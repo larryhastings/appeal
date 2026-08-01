@@ -446,7 +446,7 @@ def merge_docs(plan, command_names=None):
 
 
 def command_set_corpus(global_plan, entries, auto_help=True,
-                       auto_version=False):
+                       auto_version=False, doc=None):
     """
     The corpus for a multi-command program's listing.  entries is
     a sequence of (word, summary) pairs in declaration order.  The
@@ -460,7 +460,25 @@ def command_set_corpus(global_plan, entries, auto_help=True,
         words.append('version')
     if auto_help:
         words.append('help')
-    if global_plan is not None:
+    if doc is not None:
+        # the resolved program documentation (the doc= argument
+        # or the shared module's docstring, ruled 2026-08-01)
+        # supplies the program half: summary, prose, Commands:
+        # overrides.  The global command's docstring still
+        # documents ITS parameters in its own contexts.
+        parsed = parse_docstring(doc, '<program documentation>')
+        known = set(words)
+        for name in parsed['commands']:
+            if name not in known:
+                raise AppealConfigurationError(
+                    f"program documentation: 'Commands:' entry "
+                    f"{name!r} isn't a command word")
+        corpus = {'summary': parsed['summary'],
+                  'documentation': parsed['documentation'],
+                  'arguments': [], 'options': [],
+                  'commands': [(w, parsed['commands'].get(w, []))
+                               for w in words]}
+    elif global_plan is not None:
         corpus = merge_docs(global_plan, command_names=words)
     else:
         corpus = {'summary': [], 'documentation': [],

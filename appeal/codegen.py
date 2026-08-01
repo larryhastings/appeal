@@ -1174,7 +1174,7 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
     return parse
 
 
-def emit_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None):
+def emit_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None):
     """
     Generate the source for a multi-command program: one parse
     function per command, an optional global-command parse function
@@ -1295,7 +1295,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
                                   'appeal_precommand', False)
                       else global_plan)
     usage_line = command_set_usage(prog or 'program', display_global)
-    corpus = command_set_corpus(global_plan, entries, auto_help,
+    corpus = command_set_corpus(global_plan, entries, auto_help, doc=doc,
                                 auto_version=auto_version)
     usage = render_command_listing(usage_line, corpus, templates,
                                    margin=max_columns)
@@ -1885,7 +1885,7 @@ def emit_standalone(plan, *, argv0=None, templates=None, theme=None,
         version=version)
 
 
-def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None):
+def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None):
     """
     Standalone mode for a multi-command program: every command\'s
     parser plus the dispatcher, in one dependency-free script.
@@ -1895,7 +1895,7 @@ def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templ
                                     theme, repeat, subs, sub_repeat,
                                     version=version, max_columns=max_columns,
                                     help=help, default=default,
-                                    sub_defaults=sub_defaults)
+                                    sub_defaults=sub_defaults, doc=doc)
     return _standalone_script(
         source, refs, prog,
         f'command-line parsing ({", ".join(commands)})',
