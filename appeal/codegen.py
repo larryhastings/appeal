@@ -861,9 +861,9 @@ class _Emitter:
             help_rule = next((o for o in pre.options
                               if o.name == 'help'), None)
             if help_rule is not None:
-                # the help topic is an optional oparg (the
-                # None-default rule): given holds '' for bare -h,
-                # or the topic string
+                # the help topic is optional[str]: a group whose
+                # given value is the consumed operands--bare -h
+                # is ()
                 helper = getattr(fn, 'appeal_help', None)
                 ref = self.refs.add('_default_help',
                                     helper if helper is not None
@@ -872,9 +872,9 @@ class _Emitter:
                 for s in help_rule.strings:
                     self.line(f'    if _topic is None and '
                               f'{s!r} in given:')
-                    self.line(f'        _topic = given.pop({s!r})')
+                    self.line(f'        _topic = list(given.pop({s!r}))')
                 self.line(f'    if _topic is not None:')
-                self.line(f'        {ref}(_topic)')
+                self.line(f"        {ref}(_topic[0] if _topic else '')")
                 self.line(f'        raise SystemExit(0)')
         if help_keys:
             self.line(f"    if given.get('--help'):")

@@ -75,19 +75,20 @@ transcript and still await confirmation.
   shared option was spoken; a first sibling with required
   arguments can't be summoned (loud refusal).  Both rungs, full
   parity.  Tests: test_sibling_option_groups.
-* **B3a. None-default str options take an OPTIONAL oparg.**
-  RULED (Larry, 2026-08-03): a value option whose parameter
-  defaults to None and converts as str accepts a bare spelling:
-  absent -> None, bare -> '', given -> the value.  Three
-  spellings agree (`log=None`, `log: str = None`, a one-optional-
-  parameter converter)--previously the first two required a value
-  while the third didn't, an incoherence optional_str's existence
-  exposed (that helper is deleted; the None default IS the
-  spelling).  0.6.4 errored on line-final bare `--option`
-  ("requires a value"); corpus pin test_str_i_f_4 converted--the
-  line still errors, now on operand count.  Mid-line behavior
-  unchanged (greedy oparg both ways); '--' still outranks an
-  OPTIONAL oparg.  Tests: test_none_default_means_optional_oparg.
+* **B3a. Optional opargs: opargs are REQUIRED by default;
+  `optional[T]` is the marked spelling.**  RULED 2026-08-03,
+  twice: a morning ruling made None-defaulted str options
+  optional-oparg; Larry walked it back the same day on the make
+  precedent (`-f file` is the common case, `-j [jobs]` the
+  marked one)--0.6.4's required-value behavior is RESTORED
+  byte-for-byte (corpus pin test_str_i_f_4 stands unmodified).
+  The marked spelling is the new `appeal.optional`, subscriptable:
+  `jobs: optional[int] = 1` -- absent -> 1, bare `-j` -> int()
+  == 0, `-j 3` -> 3.  Bare `optional` refuses by name
+  (converter-factory protocol); products carry recipes+snippets
+  so standalone scripts re-run `optional[int]` verbatim.  The
+  precommand's help topic is `optional[str]`.  optional_str
+  remains deleted.  Tests: test_optional_oparg_subscript.
 * **B4. 0.6.4 scope rejections accepted** (five_level_stack x8,
   options_stack x6, mixed_groups_2/5, test_test_3): options
   recognized anywhere, completable distribution.  Verified

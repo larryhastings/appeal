@@ -38,7 +38,8 @@ from .schema import schema, schema_set
 from .runtime import (
     AppealConfigurationError, AppealDataError, AppealError,
     MultiOption, Option, StrictOption, Theme,
-    UsageError, accumulator, counter, file, mapping, run_main, split,
+    UsageError, accumulator, counter, file, mapping, optional,
+    run_main, split,
     validate, validate_range,
     )
 
@@ -932,7 +933,8 @@ class Appeal:
                 command_set_usage(root._prog(), root._display_global()))
         root._parse_for(topic)(['--help'])
 
-    def precommand(self, *, help=None, version=False):
+    def precommand(self, *, help: optional[str] = None,
+                   version=False):
         """
         The stage ahead of the global command: program metadata.
         Its options live in the precommand+global era and unmap at
@@ -1730,18 +1732,18 @@ class Appeal:
         # 2026-07-25): treated as not mapped at all
         want_v = bool(mapped.get('version'))
         want_h = bool(mapped.get('help'))
-        # the closures mirror Appeal.precommand's signature; the
-        # grammar rides the defaults--help=None makes the topic an
-        # OPTIONAL oparg (the None-default rule, 2026-08-03), and
-        # version=False is a flag
+        # the closures mirror Appeal.precommand's signature:
+        # optional[str] marks the topic's oparg optional (bare -h
+        # gives ''), version=False is a flag
         if want_v and want_h:
-            def precommand(*, help=None, version=False):
+            def precommand(*, help: optional[str] = None,
+                           version=False):
                 app.precommand(help=help, version=version)
         elif want_v:
             def precommand(*, version=False):
                 app.precommand(version=version)
         else:
-            def precommand(*, help=None):
+            def precommand(*, help: optional[str] = None):
                 app.precommand(help=help)
         if want_v:
             add_option_override(precommand, 'version',

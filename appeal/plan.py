@@ -147,7 +147,7 @@ class OptionRule:
     """
     __slots__ = ('strings', 'name', 'kind', 'converters', 'default', 'explicit',
                  'usage_name', 'kwargs_delivered', 'child', 'fold_minimum',
-                 'annotation', 'auto_shorts', 'present', 'oparg_optional')
+                 'annotation', 'auto_shorts', 'present')
 
     def __init__(self, strings, name, kind, converters, default):
         self.strings = strings
@@ -170,9 +170,6 @@ class OptionRule:
                                  # policy) can see it at finalize time
         self.auto_shorts = ()    # short strings the policy proposes;
                                  # the finalize pass claims each if free
-        self.oparg_optional = False  # str value option, None default
-                                 # (ruled 2026-08-03): oparg may be
-                                 # omitted--absent None, bare ''
 
     def table_entry(self, windowed=False):
         """
@@ -196,8 +193,6 @@ class OptionRule:
             n = len(self.converters) - 1
             m = self.fold_minimum if self.fold_minimum is not None else n
             entry = (self.key, self.kind, m, n)
-        elif self.kind == 'value' and self.oparg_optional:
-            entry = (self.key, 'value?')
         elif self.kind == 'value' and len(self.converters) > 1:
             entry = (self.key, 'value', len(self.converters) - 1)
         elif self.kind == 'flag':
@@ -370,10 +365,7 @@ class Plan:
                     # for a multi-operand option), formatted through
                     # positional_argument_usage_format
                     for name in _oparg_names(o):
-                        text = format_arg(fmt, name)
-                        if getattr(o, 'oparg_optional', False):
-                            text = '[' + text + ']'
-                        bits.append(text)
+                        bits.append(format_arg(fmt, name))
             return '[' + ' '.join(bits) + ']'
 
         def slot_text(slot, rename=None):

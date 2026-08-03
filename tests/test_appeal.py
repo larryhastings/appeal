@@ -1025,45 +1025,47 @@ def test_docstring_presentation_wins():
     assert text.startswith('usage: g'), text
 
 
-def test_none_default_means_optional_oparg():
-    # Ruled 2026-08-03: a str value option whose parameter
-    # defaults to None takes an OPTIONAL oparg.  Three states:
-    # absent -> None, bare -> '', given -> the value.  And three
-    # spellings, one meaning: `log=None`, `log: str = None`, and
-    # a hand-written one-optional-parameter converter all agree.
-    # (optional_str is DELETED; the None default IS the spelling.)
+def test_optional_oparg_subscript():
+    # Ruled 2026-08-03 (the make precedent, superseding the brief
+    # None-default rule of earlier the same day): opargs are
+    # REQUIRED by default--`-f file` is the common case--and the
+    # optional oparg is the MARKED case, spelled optional[T]:
+    #     --debug[=FLAGS]     debug: optional[str] = None
+    #     -f file             file=None
+    #     -j [jobs]           jobs: optional[int] = 1
+    # Absent -> the parameter default; bare -> T() (str '', int
+    # 0); given -> T(value).
     import appeal as _appeal
+    from appeal import optional
     assert not hasattr(_appeal, 'optional_str')
 
-    def opt(topic=''):
-        return topic
-    def f1(*, log=None): return log
-    def f2(*, log: str = None): return log
-    def f3(*, log: opt = None): return log
-    for fn in (f1, f2, f3):
-        app = _appeal.Appeal('t', default_mappings=None)
-        app.global_command()(fn)
-        assert app.process([]) is None, fn.__name__
-        assert app.process(['--log']) == '', fn.__name__
-        assert app.process(['--log', 'x']) == 'x', fn.__name__
-        assert app.process(['--log=y']) == 'y', fn.__name__
-        assert app.process(['-l']) == '', fn.__name__
-    # int with a None default still REQUIRES its value ('' can't
-    # convert; the rule is str-only by design)
-    app4 = _appeal.Appeal('t4', default_mappings=None)
-    @app4.global_command()
-    def g(*, n: int = None): return n
+    app = _appeal.Appeal('make', default_mappings=None)
+    @app.global_command()
+    def make(*, debug: optional[str] = None, file=None,
+             jobs: optional[int] = 1):
+        return (debug, file, jobs)
+    assert app.process([]) == (None, None, 1)
+    assert app.process(['--debug']) == ('', None, 1)
+    assert app.process(['--debug=vj']) == ('vj', None, 1)
+    assert app.process(['--jobs']) == (None, None, 0)
+    assert app.process(['-j', '3']) == (None, None, 3)
+    # a plain (or None-defaulted) str option still REQUIRES its
+    # value, exactly as 0.6.4 did
     try:
-        app4.process(['--n'])
+        app.process(['--file'])
         assert False, 'expected UsageError'
-    except UsageError:
-        pass
-    # the optional oparg yields to '--' (POSIX: only a REQUIRED
-    # oparg may consume the terminator)
-    app5 = _appeal.Appeal('t5', default_mappings=None)
-    @app5.global_command()
-    def h(a='A', *, log=None): return (a, log)
-    assert app5.process(['--log', '--', 'x']) == ('x', '')
+    except UsageError as e:
+        assert 'requires a value' in str(e)
+    # the bare factory refuses by name
+    app2 = _appeal.Appeal('t2', default_mappings=None)
+    @app2.global_command()
+    def g(*, x: optional = None):
+        return x
+    try:
+        app2.process([])
+        assert False, 'expected ConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'optional[str]' in str(e)
 
 
 def test_command_listings_are_definition_order():

@@ -203,7 +203,7 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                 raise UsageError(
                     f"option {key} specified more than once", usage)
             given[key] = value
-        elif kind in ('flag', 'nullary', 'value', 'value?', 'group'):
+        elif kind in ('flag', 'nullary', 'value', 'group'):
             # last one wins (RULED by Larry 2026-07-18, review
             # item 6: repetition is for overriding defaults--a
             # shell alias baking in `--north` is harmlessly
@@ -261,11 +261,6 @@ def parse_tokens(argv, options, usage=None, command_split=None,
             if base in ('fold', 'fold1', 'group'):
                 minimum = entry[2]
                 maximum = entry[3] if len(entry) > 3 else entry[2]
-            elif base == 'value?':
-                # a str option with a None default (ruled
-                # 2026-08-03): the oparg is optional--absent gives
-                # the default, bare gives ''
-                minimum, maximum = 0, 1
             else:
                 minimum = maximum = entry[2] if len(entry) > 2 else 1
             if base in ('flag', 'nullary') or maximum == 0:
@@ -322,7 +317,7 @@ def parse_tokens(argv, options, usage=None, command_split=None,
             record(key, kind,
                    tuple(values)
                    if (base in ('fold', 'fold1', 'group') or maximum != 1)
-                   else (values[0] if values else ''))
+                   else values[0])
             continue
 
         # a negative number is an operand, unless the program
@@ -348,11 +343,6 @@ def parse_tokens(argv, options, usage=None, command_split=None,
             if base in ('fold', 'fold1', 'group'):
                 minimum = entry[2]
                 maximum = entry[3] if len(entry) > 3 else entry[2]
-            elif base == 'value?':
-                # a str option with a None default (ruled
-                # 2026-08-03): the oparg is optional--absent gives
-                # the default, bare gives ''
-                minimum, maximum = 0, 1
             else:
                 minimum = maximum = entry[2] if len(entry) > 2 else 1
             if base in ('flag', 'nullary') or maximum == 0:
@@ -406,7 +396,7 @@ def parse_tokens(argv, options, usage=None, command_split=None,
             record(key, kind,
                    tuple(values)
                    if (base in ('fold', 'fold1', 'group') or maximum != 1)
-                   else (values[0] if values else ''))
+                   else values[0])
 
     if command_split is not None:
         return operands, given, []
@@ -690,7 +680,7 @@ def window_options(occurrences, first, arity, count, name, usage=None,
                     raise UsageError(
                         f"option {key} specified more than once", usage)
                 given[key] = value
-            elif kind in ('flag', 'nullary', 'value', 'value?', 'group'):
+            elif kind in ('flag', 'nullary', 'value', 'group'):
                 if key in given:
                     del given[key]      # last one wins, per instance
                 given[key] = value
@@ -3795,6 +3785,46 @@ def file(mode='r', *, buffering=-1, encoding=None, errors=None,
     return file_converter
 file.__appeal_factory__ = "file()"
 # --8<-- end appeal file --8<--
+
+
+# --8<-- start appeal optional --8<--
+# --8<-- requires appeal exceptions --8<--
+class _OptionalMeta(type):
+    "optional[T] parameterizes via metaclass __getitem__ (3.6-safe)."
+    def __getitem__(cls, T):
+        return cls._parameterize(T)
+
+
+class optional(metaclass=_OptionalMeta):
+    """
+    Marks an option's oparg as OPTIONAL, make-style (`-j [jobs]`):
+    annotate the parameter with optional[T].  Absent: the
+    parameter's own default.  Bare: T() -- int gives 0, str gives
+    ''.  With a value: T(value).  Opargs are REQUIRED by default
+    (ruled 2026-08-03, the make precedent: `-f file` is the
+    common case, `-j [jobs]` is the marked one).
+    """
+    __appeal_factory__ = "optional[str]"
+
+    @classmethod
+    def _parameterize(cls, T):
+        if isinstance(T, tuple):
+            raise AppealConfigurationError(
+                "optional[...] takes exactly one converter")
+        if not callable(T):
+            raise AppealConfigurationError(
+                f"optional[...]: {T!r} isn't callable")
+        # None is the no-oparg sentinel: an operand that WAS
+        # given always arrives as a str, never the None object--
+        # and None renders into standalone scripts, which an
+        # anonymous sentinel can't
+        def option_value(value: str = None):
+            return T() if value is None else T(value)
+        option_value.__appeal_recipe__ = (
+            'subscript', 'optional', (T,), {})
+        option_value.__appeal_snippet__ = 'appeal optional'
+        return option_value
+# --8<-- end appeal optional --8<--
 
 
 # --8<-- start appeal folds --8<--
