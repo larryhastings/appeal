@@ -3820,6 +3820,9 @@ class optional(metaclass=_OptionalMeta):
         # anonymous sentinel can't
         def option_value(value: str = None):
             return T() if value is None else T(value)
+        # usage metavar: show the OPTION'S parameter name, not
+        # this closure's ('[-j|--jobs [jobs]]', not '[value]')
+        option_value.__appeal_oparg_borrows_name__ = True
         option_value.__appeal_recipe__ = (
             'subscript', 'optional', (T,), {})
         option_value.__appeal_snippet__ = 'appeal optional'

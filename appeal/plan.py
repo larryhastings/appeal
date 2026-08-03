@@ -353,7 +353,16 @@ class Plan:
         def option_text(o):
             bits = ['|'.join(o.strings)]
             if o.kind == 'group':
-                bits.append(body_text(o.child))
+                if getattr(o.child.callable,
+                           '__appeal_oparg_borrows_name__', False):
+                    # an optional[T]-style wrapper: its own
+                    # parameter name is plumbing; the metavar is
+                    # the OPTION's parameter (or its rename)
+                    name = (o.usage_name if o.usage_name is not None
+                            else format_arg(fmt, o.name))
+                    bits.append(f'[{name}]')
+                else:
+                    bits.append(body_text(o.child))
             elif o.kind not in ('flag', 'nullary'):
                 if o.usage_name is not None:
                     # @app.parameter renamed the metavar: explicit
