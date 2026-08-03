@@ -1618,12 +1618,17 @@ class SmokeTests(AppealTestsBase):
         self.assertEqual(str(e), "wrong number of arguments: got 2, expected 1 or 3")  # v2 message
 
     def test_str_i_f_4(self):
+        # converted from a v1 pin (ruled 2026-08-03): a str option
+        # defaulting to None takes an OPTIONAL oparg now, so bare
+        # `--option` is legal (option='') and the line fails for
+        # the honest reason instead--the operand count
         command(str_i_f)
         e = self.assert_process_raises(
             "str_i_f abc 1 --option",
             appeal.AppealUsageError,
             )
-        self.assertEqual(str(e), "option '--option' requires a value")  # v2 message
+        self.assertEqual(str(e),
+            "wrong number of arguments: got 2, expected 1 or 3")
 
 
     def test_app_class(self):

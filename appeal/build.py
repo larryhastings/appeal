@@ -767,8 +767,16 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
         converters = (annotation,) + operand_converters
     else:
         converters = (_leaf_callable(annotation, context),)
-    return finish(OptionRule(
-        strings, name, kind='value', converters=converters, default=default))
+    rule = OptionRule(
+        strings, name, kind='value', converters=converters, default=default)
+    if tuple(converters) == (str,) and grammar_default is None:
+        # ruled 2026-08-03: a str value option defaulting to None
+        # takes an OPTIONAL oparg--absent -> None, bare -> '',
+        # given -> the value.  Three spellings, one meaning:
+        # `log=None`, `log: str = None`, and a hand-written
+        # one-optional-parameter converter all agree.
+        rule.oparg_optional = True
+    return finish(rule)
 
 
 def _option_strings(name):

@@ -516,17 +516,6 @@ class _CompileOnDispatch:
         return parse   # pragma: no cover
 
 
-def optional_str(topic=''):
-    """
-    The "option with an optional value" converter: annotate a
-    keyword-only parameter with it and the option's oparg becomes
-    optional--bare gives '', a value gives the value (greedy, v1
-    opargs).  The precommand's help topic uses it; yours can too.
-    Same name, same meaning, in arglet.
-    """
-    return topic
-
-
 # the default_mappings menu, importable (spell your subset with
 # these: default_mappings(*default_mappings_help))
 default_mappings_help = ('-h', '--help', 'help')
@@ -943,8 +932,7 @@ class Appeal:
                 command_set_usage(root._prog(), root._display_global()))
         root._parse_for(topic)(['--help'])
 
-    def precommand(self, *, help: optional_str = None,
-                   version=False):
+    def precommand(self, *, help=None, version=False):
         """
         The stage ahead of the global command: program metadata.
         Its options live in the precommand+global era and unmap at
@@ -1743,18 +1731,17 @@ class Appeal:
         want_v = bool(mapped.get('version'))
         want_h = bool(mapped.get('help'))
         # the closures mirror Appeal.precommand's signature; the
-        # grammar (optional_str topic, version flag) rides the
-        # annotations/defaults--option() derives it (ruled
-        # 2026-07-25), no override smuggling
+        # grammar rides the defaults--help=None makes the topic an
+        # OPTIONAL oparg (the None-default rule, 2026-08-03), and
+        # version=False is a flag
         if want_v and want_h:
-            def precommand(*, help: optional_str = None,
-                           version=False):
+            def precommand(*, help=None, version=False):
                 app.precommand(help=help, version=version)
         elif want_v:
             def precommand(*, version=False):
                 app.precommand(version=version)
         else:
-            def precommand(*, help: optional_str = None):
+            def precommand(*, help=None):
                 app.precommand(help=help)
         if want_v:
             add_option_override(precommand, 'version',

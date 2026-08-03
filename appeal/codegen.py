@@ -861,8 +861,9 @@ class _Emitter:
             help_rule = next((o for o in pre.options
                               if o.name == 'help'), None)
             if help_rule is not None:
-                # the help group's greedy optional topic: given
-                # holds the consumed operands; bare -h is []
+                # the help topic is an optional oparg (the
+                # None-default rule): given holds '' for bare -h,
+                # or the topic string
                 helper = getattr(fn, 'appeal_help', None)
                 ref = self.refs.add('_default_help',
                                     helper if helper is not None
@@ -871,9 +872,9 @@ class _Emitter:
                 for s in help_rule.strings:
                     self.line(f'    if _topic is None and '
                               f'{s!r} in given:')
-                    self.line(f'        _topic = list(given.pop({s!r}))')
+                    self.line(f'        _topic = given.pop({s!r})')
                 self.line(f'    if _topic is not None:')
-                self.line(f"        {ref}(_topic[0] if _topic else '')")
+                self.line(f'        {ref}(_topic)')
                 self.line(f'        raise SystemExit(0)')
         if help_keys:
             self.line(f"    if given.get('--help'):")
@@ -1556,12 +1557,6 @@ def _render_ref(name, obj):
     naming the offender, for anything unrenderable.  This refusal
     is the north star\'s teeth.
     """
-    # the precommand help option's topic converter is appeal
-    # plumbing: bake it, never import it (standalone scripts are
-    # dependency-free)
-    if (getattr(obj, '__name__', '') in ('_help_topic', 'optional_str')
-            and getattr(obj, '__module__', '') == 'appeal'):
-        return f"def {name}(topic=''):\n    return topic"
     # the STOCK default_help rides into a standalone script as a
     # shim over its generated parse_help (an overridden
     # default_help refuses below, by name--the north star)

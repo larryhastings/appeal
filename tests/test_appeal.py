@@ -1025,6 +1025,47 @@ def test_docstring_presentation_wins():
     assert text.startswith('usage: g'), text
 
 
+def test_none_default_means_optional_oparg():
+    # Ruled 2026-08-03: a str value option whose parameter
+    # defaults to None takes an OPTIONAL oparg.  Three states:
+    # absent -> None, bare -> '', given -> the value.  And three
+    # spellings, one meaning: `log=None`, `log: str = None`, and
+    # a hand-written one-optional-parameter converter all agree.
+    # (optional_str is DELETED; the None default IS the spelling.)
+    import appeal as _appeal
+    assert not hasattr(_appeal, 'optional_str')
+
+    def opt(topic=''):
+        return topic
+    def f1(*, log=None): return log
+    def f2(*, log: str = None): return log
+    def f3(*, log: opt = None): return log
+    for fn in (f1, f2, f3):
+        app = _appeal.Appeal('t', default_mappings=None)
+        app.global_command()(fn)
+        assert app.process([]) is None, fn.__name__
+        assert app.process(['--log']) == '', fn.__name__
+        assert app.process(['--log', 'x']) == 'x', fn.__name__
+        assert app.process(['--log=y']) == 'y', fn.__name__
+        assert app.process(['-l']) == '', fn.__name__
+    # int with a None default still REQUIRES its value ('' can't
+    # convert; the rule is str-only by design)
+    app4 = _appeal.Appeal('t4', default_mappings=None)
+    @app4.global_command()
+    def g(*, n: int = None): return n
+    try:
+        app4.process(['--n'])
+        assert False, 'expected UsageError'
+    except UsageError:
+        pass
+    # the optional oparg yields to '--' (POSIX: only a REQUIRED
+    # oparg may consume the terminator)
+    app5 = _appeal.Appeal('t5', default_mappings=None)
+    @app5.global_command()
+    def h(a='A', *, log=None): return (a, log)
+    assert app5.process(['--log', '--', 'x']) == ('x', '')
+
+
 def test_command_listings_are_definition_order():
     # Larry's ruling (2026-07-19): commands and subcommands are
     # DISPLAYED in definition order--the tree's dicts iterate in

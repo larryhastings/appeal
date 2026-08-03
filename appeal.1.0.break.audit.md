@@ -75,6 +75,19 @@ transcript and still await confirmation.
   shared option was spoken; a first sibling with required
   arguments can't be summoned (loud refusal).  Both rungs, full
   parity.  Tests: test_sibling_option_groups.
+* **B3a. None-default str options take an OPTIONAL oparg.**
+  RULED (Larry, 2026-08-03): a value option whose parameter
+  defaults to None and converts as str accepts a bare spelling:
+  absent -> None, bare -> '', given -> the value.  Three
+  spellings agree (`log=None`, `log: str = None`, a one-optional-
+  parameter converter)--previously the first two required a value
+  while the third didn't, an incoherence optional_str's existence
+  exposed (that helper is deleted; the None default IS the
+  spelling).  0.6.4 errored on line-final bare `--option`
+  ("requires a value"); corpus pin test_str_i_f_4 converted--the
+  line still errors, now on operand count.  Mid-line behavior
+  unchanged (greedy oparg both ways); '--' still outranks an
+  OPTIONAL oparg.  Tests: test_none_default_means_optional_oparg.
 * **B4. 0.6.4 scope rejections accepted** (five_level_stack x8,
   options_stack x6, mixed_groups_2/5, test_test_3): options
   recognized anywhere, completable distribution.  Verified
