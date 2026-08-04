@@ -1019,7 +1019,7 @@ def test_docstring_presentation_wins():
     assert text.index('[Options!]') < text.index('arguments'), text
     # the author's 3-space entry indent rides along
     assert '   -l|--loud  Speak up.' in text, text
-    assert '   thing  The thing.' in text, text
+    assert '   <THING>  The thing.' in text, text
     # usage still leads (phase one: template sections before the
     # first user-defined one)
     assert text.startswith('usage: g'), text
@@ -1752,7 +1752,8 @@ def test_help_flag():
         # 2026-07-19); the summary follows
         assert text.splitlines()[0].startswith('usage: '), text
         assert 'Draws a shape.' in text
-        assert 'usage: draw [-v|--verbose] shape [[-b|--bold] width]' in text
+        assert ('usage: draw [-v|--verbose] <SHAPE> [[-b|--bold] <WIDTH>]'
+                in text)
         assert '--help' not in text                  # never advertised (v1)
         assert '    indented code paragraphs pass through intact' in text
         assert max(len(line) for line in text.splitlines()) <= 79
@@ -1773,9 +1774,9 @@ def test_usage_metavars_and_wrapping():
         pass
     plan = build(connect)
     usage = plan.usage()
-    assert '[-t|--times times]' in usage, usage
-    assert '[--timeout timeout]' in usage, usage
-    assert '[-c|--certificate certificate]' in usage, usage
+    assert '[-t|--times <TIMES>]' in usage, usage
+    assert '[--timeout <TIMEOUT>]' in usage, usage
+    assert '[-c|--certificate <CERTIFICATE>]' in usage, usage
     result, text = run_both_stdout(connect, ['--help'])
     lines = text.splitlines()
     usage_at = next(i for i, l in enumerate(lines) if l.startswith('usage: connect '))
@@ -1812,10 +1813,10 @@ def test_help_parameter_sections():
     assert 'Arguments:' in text and 'Options:' in text
     # the docstring's own 2-space entry indent is PRESERVED
     # (ruling D, 2026-08-01: the author's presentation wins)
-    assert '  shape  the shape to draw.' in text
-    assert '  width  how wide.' in text
-    assert '  -v|--verbose      narrate the process.' in text
-    assert '  -t|--times times  how many times.' in text
+    assert '  <SHAPE>  the shape to draw.' in text
+    assert '  <WIDTH>  how wide.' in text
+    assert '  -v|--verbose        narrate the process.' in text
+    assert '  -t|--times <TIMES>  how many times.' in text
     body = text.split('Arguments:')[0]
     assert 'shape:' not in body                       # entries were extracted
     for line in text.splitlines():
@@ -1861,7 +1862,7 @@ def test_help_composes_through_option_converters():
     # the deeply-indented row can push its description to a
     # continuation line; the regression was an EMPTY description,
     # so presence anywhere below the row is the guard
-    assert '--precision precision' in text, text
+    assert '--precision <PRECISION>' in text, text
     assert 'decimal places.' in text, text
 
     # nearest enclosing scope wins: the command overrides its
@@ -1951,7 +1952,7 @@ def test_command_set_help():
     assert 'Adds an item to the pile.' in by_help
     assert 'usage: add_item' in by_help   # direct-built plans
     # carry no prog prefix; app-built ones do (ruled 2026-07-19)
-    assert '  name   what to call it.' in by_help  # docstring's 2-indent preserved
+    assert '  <NAME>   what to call it.' in by_help  # docstring's 2-indent preserved
     _, interpreter_help = grab(lambda: interpreter_dispatch(plans, None, ['help', 'add_item'], prog='pile'))
     assert interpreter_help == by_help
 
@@ -2416,10 +2417,10 @@ def test_app_parameter_renames():
         """
         pass
     usage = app.plan.usage()
-    assert usage == 'serve [-t|--times COUNT] host [PORT]', usage
+    assert usage == 'serve [-t|--times COUNT] <HOST> [PORT]', usage
     result, text = run_both_stdout(serve, ['--help'])
     assert '[-t|--times COUNT]' in text
-    assert '  PORT  where to listen.' in text      # tables renamed too
+    assert '  PORT' in text and 'where to listen.' in text  # tables renamed too
     # a converter's own parameters rename by decorating the converter
     from appeal import add_parameter_usage
     def pair(x: float, y: float):
@@ -2475,7 +2476,7 @@ def test_positional_argument_usage_format():
     def plot(*, at: point = None):
         "Plot."
         return at
-    assert build(plot).usage('plot') == 'plot [-a|--at x y]'
+    assert build(plot).usage('plot') == 'plot [-a|--at <X> <Y>]'
 
     # an explicit @app.parameter usage= is literal and wins outright,
     # unadorned by the format
@@ -3344,11 +3345,11 @@ def test_scoped_help_presentation():
         return (a, b, c)
     corpus = merge_docs(build(mg))
     options = dict(corpus['options'])
-    assert '-g|--gronk gronk' in options              # unqualified
-    assert '-f|--flag (after a, before c)' in options
-    assert '-f|--flag (after b)' in options
+    assert '-g|--gronk <GRONK>' in options            # unqualified
+    assert '-f|--flag (after <A>, before <C>)' in options
+    assert '-f|--flag (after <B>)' in options
     # the shared converter's docs reach both rows
-    assert options['-f|--flag (after b)'] == ['Wave it.']
+    assert options['-f|--flag (after <B>)'] == ['Wave it.']
 
     # per-window docs: two DIFFERENT converters, same name and
     # grammar, each documenting its own window
@@ -4394,8 +4395,8 @@ def test_usage_formatter_knobs():
     # presentation governs the sections they authored)
     indented = helptext(make_app(indent=8))
     row = next(l for l in indented.splitlines()
-               if l.strip().startswith('host'))
-    assert row.startswith('  host'), repr(row)
+               if l.strip().startswith('<HOST>'))
+    assert row.startswith('  <HOST>'), repr(row)
     # a docstring with no sections takes the knob's indent
     app8 = _appeal.Appeal(name='k8', indent=8)
     @app8.global_command()
@@ -4403,7 +4404,7 @@ def test_usage_formatter_knobs():
         "No sections here."
     text8 = helptext(app8)
     row8 = next(l for l in text8.splitlines()
-                if l.strip().startswith('host'))
+                if l.strip().startswith('<HOST>'))
     assert row8.startswith(' ' * 8) and row8[8] != ' ', repr(row8)
 
     # garbage refuses by name
@@ -4921,7 +4922,7 @@ def test_documentation_man():
     assert text.startswith('.TH MYTOOL 1 "" "mytool 2.0" ""\n')
     assert '.SH NAME\nmytool \\- A demonstration tool.' in text
     assert '.B mytool [\\-t|\\-\\-trace] command' in text
-    assert '.B mytool greet [\\-s|\\-\\-shout] name' in text
+    assert '.B mytool greet [\\-s|\\-\\-shout] <NAME>' in text
     assert '.SH OPTIONS' in text and 'Print a trace' in text
     assert '.SS "mytool greet"' in text
     assert '.B \\-s|\\-\\-shout' in text and 'LOUDER.' in text
@@ -6265,8 +6266,8 @@ def test_standalone_help_sections():
         assert 'Marks a label on the canvas.' in r.stdout
         assert 'usage: mark' in r.stdout
         assert 'Arguments:' in r.stdout and 'Options:' in r.stdout
-        assert '  label  the text to place.' in r.stdout
-        assert '-a|--at x y' in r.stdout
+        assert '  <LABEL>  the text to place.' in r.stdout
+        assert '-a|--at <X> <Y>' in r.stdout
         assert 'where to place it.' in r.stdout
 
 def test_standalone_command_set_help():
@@ -6300,7 +6301,7 @@ def test_standalone_command_set_help():
         assert r.returncode == 0 and r.stdout == r2.stdout
         assert r.stdout.startswith('usage: '), r.stdout
         assert 'Marks a label on the canvas.' in r.stdout
-        assert '  label  the text to place.' in r.stdout
+        assert '  <LABEL>  the text to place.' in r.stdout
 
 def test_standalone_help():
     # the north star: --help works in a generated script, formatted
@@ -6587,10 +6588,10 @@ def test_merge_docs():
     # rows in plan order; entries merge up; nearest wins ('i');
     # undocumented surfaces get empty rows ('s')
     assert c['arguments'] == [
-        ('a', ['The first thing.']),
-        ('i', ['Overridden: how many knocks.']),
-        ('f', ['The float part.']),
-        ('s', []),
+        ('<A>', ['The first thing.']),
+        ('<I>', ['Overridden: how many knocks.']),
+        ('<F>', ['The float part.']),
+        ('<S>', []),
     ]
     assert c['options'] == [('-v|--verbose', ['Print more output.'])]
     assert c['commands'] == []
@@ -6603,7 +6604,8 @@ def test_merge_docs():
           required_kw: a trailing operand.
         """
     c = merge_docs(build(trailing_ok))
-    assert c['arguments'] == [('a', []), ('required_kw', ['a trailing operand.'])]
+    assert c['arguments'] == [('<A>', []),
+                              ('<REQUIRED_KW>', ['a trailing operand.'])]
 
     # commands merge only when the plan dispatches
     def dispatcher():
@@ -7097,11 +7099,11 @@ def test_single_terminal_transparency():
         """
 
     plan = build(scoop)
-    assert '[taste]' in plan.usage(), plan.usage()
+    assert '[<TASTE>]' in plan.usage(), plan.usage()
     corpus = merge_docs(plan)
     # the row wears the outer name; the outer entry documents it,
     # winning (nearest) over flavor's own 'name:' entry
-    assert ('taste', ['which flavor to serve.']) in corpus['arguments']
+    assert ('<TASTE>', ['which flavor to serve.']) in corpus['arguments']
 
     # the converter's own docstring keeps working in its own
     # vocabulary: without an outer override, 'name:' documents
@@ -7109,7 +7111,7 @@ def test_single_terminal_transparency():
     def scoop2(cone, taste: flavor = 'vanilla'):
         "Serves."
     corpus = merge_docs(build(scoop2))
-    assert ('taste', ["the flavor, in flavor's own vocabulary."]) \
+    assert ('<TASTE>', ["the flavor, in flavor's own vocabulary."]) \
         in corpus['arguments']
 
     # an explicit rename on the inner parameter wins the display
@@ -7129,7 +7131,8 @@ def test_single_terminal_transparency():
         return (x, y)
     def place(label, at: pair = None):
         "Places."
-    assert '[x y]' in build(place).usage() or 'x y' in build(place).usage()
+    u = build(place).usage()
+    assert '[<X> <Y>]' in u or '<X> <Y>' in u, u
 
 
 # ---------------------------------------------------------------------

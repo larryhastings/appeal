@@ -102,6 +102,22 @@ transcript and still await confirmation.
   real, that's a regression against v1 *and* against July-4 v2.
   VERIFY.
 
+## C. Presentation rulings
+
+* **C1. Metavars render `<NAME>` -- full clap.**  RULED (Larry,
+  2026-08-04, after a survey): the default
+  positional_argument_usage_format is now `'<{name.upper()}>'`.
+  Camps surveyed: bare CAPS (argparse, click, GNU), angle
+  brackets (docopt, git/hg man pages, Rust's clap == `<FILE>`),
+  plain lowercase (make's man page, v1 Appeal).  Ruled with the
+  git/docopt/Rust lineage.  Applies to usage lines AND the
+  Arguments/Options table row labels; explicit
+  @app.parameter(usage=) renames stay literal and unformatted,
+  as ever; optional opargs stay bracketed: `[-j|--jobs [<JOBS>]]`.
+  v1's plain default remains one knob away.  Corpus pin
+  test_two_or_more_files_usage converted (its renamed operands
+  stay literal "file"; the unrenamed one formats).
+
 ## D. Behaviors deliberately dropped (round 1.5: v1 worked, a
 ## session decided the new way was better, tests edited away)
 

@@ -25,7 +25,7 @@ def _validate_arg_format(fmt):
 
 
 # --8<-- start appeal plan classes --8<--
-DEFAULT_ARG_FORMAT = '{name}'
+DEFAULT_ARG_FORMAT = '<{name.upper()}>'   # full clap (ruled 2026-08-04)
 
 
 def format_arg(fmt, name):

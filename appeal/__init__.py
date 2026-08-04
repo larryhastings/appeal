@@ -606,7 +606,7 @@ class Appeal:
                  theme=None, version=None, repeat=False,
                  errors=None, script=_sys.argv[0],
                  margin=79, indent=4,
-                 positional_argument_usage_format='{name}',
+                 positional_argument_usage_format='<{name.upper()}>',
                  default_options=default_options,
                  default_mappings=default_mappings(), doc=None):
         self.name = name

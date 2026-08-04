@@ -1029,9 +1029,15 @@ class SmokeTests(AppealTestsBase):
         app.parameter("files", usage="file")(two_or_more_files)
 
     def test_two_or_more_files_usage(self):
+        # converted from a v1 pin (ruled 2026-08-04): metavars
+        # render <NAME.UPPER()> now--full clap, the git/docopt/
+        # Rust convention; see register entry F-metavar
         self.bind_two_or_more_files()
         text = capture_stdout('help two_or_more_files')
-        self.assertIn("file file [file]...", text)
+        # the un-renamed first parameter formats (<FILE>); the two
+        # explicitly renamed ones stay literal ("file"), renames
+        # being unformatted by rule
+        self.assertIn("<FILE> file [file]...", text)
 
     def test_two_or_more_files_1(self):
         self.bind_two_or_more_files()
