@@ -1085,6 +1085,143 @@ def test_help_knobs():
     assert out.getvalue() == full, (out.getvalue(), full)
 
 
+def test_markdown_scanner():
+    # The Markdown pivot's hand-written textual scanner (Larry's
+    # spec, 2026-08-05): summary paragraph, body, and the
+    # Options/Arguments/Commands sections by ANY heading kind
+    # (ATX or setext), any level, case-insensitive; each section
+    # must be exactly one definition list; terms unformatted.
+    from appeal.markdown import scan_docstring
+    r = scan_docstring(
+        "Update the item.\n"
+        "\n"
+        "Body prose here,\nsecond line.\n"
+        "\n"
+        "# Options\n"
+        "verbose\n"
+        ": Chatty.\n"
+        "\n"
+        "  Second paragraph of chatty.\n"
+        "\n"
+        "color\n"
+        ": Hue.\n"
+        "\n"
+        "Arguments\n"
+        "---------\n"
+        "name\n"
+        ": The item.\n"
+        "\n"
+        "## Notes\n"
+        "Unrelated section stays in the body.\n")
+    assert r['summary'] == 'Update the item.'
+    assert 'Body prose here' in r['body']
+    assert '## Notes' in r['body']
+    assert 'Unrelated section' in r['body']
+    assert 'verbose' not in r['body']
+    assert r['options'] == [
+        ('verbose', 'Chatty.\n\nSecond paragraph of chatty.'),
+        ('color', 'Hue.')]
+    assert r['arguments'] == [('name', 'The item.')]
+    assert r['commands'] is None
+    # any level, any kind, any case
+    r = scan_docstring("Sum.\n\n###### OPTIONS\nv\n: Doc.\n")
+    assert r['options'] == [('v', 'Doc.')]
+    r = scan_docstring("Sum.\n\nCommands\n========\ngo\n: Runs.\n")
+    assert r['commands'] == [('go', 'Runs.')]
+    # refusals name the offender
+    from appeal import AppealConfigurationError
+    for bad, fragment in (
+            ("# Options\nJust prose, no list.\n", 'definition'),
+            ("# Options\n**verbose**\n: Doc.\n", 'unformatted'),
+            ("# Options\nv\n: A.\n\n# Options\nw\n: B.\n", 'two'),
+            ("# Options\n: definition with no term\n", 'no term'),
+            ):
+        try:
+            scan_docstring("Sum.\n\n" + bad)
+            assert False, f'expected refusal: {bad!r}'
+        except AppealConfigurationError as e:
+            assert fragment in str(e), (bad, str(e))
+
+
+def test_markdown_transforms():
+    # to_github / to_commonmark are TEXTUAL (no Markdown parser:
+    # users aren't limited to big's subset).  GitHub: definition
+    # lists -> inline-HTML <dl> with blank lines so the Markdown
+    # inside still renders; strikethrough stripped; alerts kept.
+    # CommonMark: bold term + blockquote; alerts -> bold labels.
+    from appeal.markdown import to_commonmark, to_github
+    doc = ("Intro with ~~old~~ new text.\n"
+           "\n"
+           "> [!WARNING]\n"
+           "> Mind the gap.\n"
+           "\n"
+           "term\n"
+           ": A **rich** definition.\n"
+           "\n"
+           "  Second paragraph.\n")
+    gh = to_github(doc)
+    assert '~~' not in gh and 'old new text' in gh
+    assert '[!WARNING]' in gh                    # alerts pass through
+    assert '<dl>' in gh and '</dl>' in gh
+    assert '<dt>\n\nterm\n\n</dt>' in gh
+    assert 'A **rich** definition.' in gh        # markdown survives
+    cm = to_commonmark(doc)
+    assert '~~' not in cm
+    assert '[!WARNING]' not in cm and '> **Warning:**' in cm
+    assert '**term**' in cm
+    assert '> A **rich** definition.' in cm
+    assert '>\n> Second paragraph.' in cm
+    # non-list content passes through both untouched
+    plain = "Just prose.\n\n* a bullet\n* another\n"
+    assert to_github(plain) == plain
+    assert to_commonmark(plain) == plain
+
+
+def test_markdown_renderer():
+    # render_markdown_help runs big's whole pipeline: parse ->
+    # style -> split -> layout -> join -> StyleSheet.render.
+    from appeal.markdown import render_markdown_help
+    from big.template import plain_stylesheet
+    from big.markdown import markdown_defaults
+    text = render_markdown_help(
+        "# Options\n\nSome **bold** prose that is long enough to "
+        "need wrapping at a narrow width setting.\n",
+        width=40, stylesheet=plain_stylesheet | markdown_defaults)
+    assert 'Options' in text
+    assert 'bold' in text and '**' not in text   # parsed, not literal
+    assert all(len(line) <= 40 for line in text.split('\n')), text
+    assert '⦃' not in text                       # styles fully rendered
+    # default stylesheet: uncolored ANSI (bold shows, no color)
+    ansi = render_markdown_help("**b**\n", width=40)
+    assert '\x1b[1m' in ansi
+
+
+def test_documentation_markdown_formats():
+    # documentation('github'/'commonmark') is the API spelling--
+    # deliberately NO command-line switch (Larry, 2026-08-05).
+    import appeal as _appeal
+    app = _appeal.Appeal('t')
+    @app.command()
+    def serve(host):
+        """
+        Start the server.
+
+        # Arguments
+        host
+        : Interface to ~~listen~~ bind on.
+        """
+    gh = app.documentation('github')
+    assert '# t' in gh and '## t serve' in gh
+    assert '<dl>' in gh and 'bind on' in gh and '~~' not in gh
+    cm = app.documentation('commonmark')
+    assert '**host**' in cm and '> Interface' in cm
+    try:
+        app.documentation('docx')
+        assert False, 'expected refusal'
+    except _appeal.AppealConfigurationError as e:
+        assert 'docx' in str(e)
+
+
 def test_program_doc_three_tiers():
     # Ruled 2026-08-01: the program's documentation, highest
     # first: (1) Appeal(doc=...); (2) the global command's

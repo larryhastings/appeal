@@ -1335,14 +1335,42 @@ class Appeal:
         """
         The program's documentation rendered in the named format--
         the grammar describing itself in one more dialect, like
-        completion(shell).  Only 'man' (a troff man(1) page) for
-        now; unknown formats refuse by name.  Returns the text;
-        where it gets installed is packaging's business.
+        completion(shell).  Formats: 'man' (a troff man(1) page),
+        'github' (Markdown for GitHub/PyPI: definition lists as
+        inline-HTML <dl>, strikethrough stripped, alerts kept),
+        'commonmark' (pure CommonMark: definition lists as bold
+        term + blockquote, alerts as bold-labelled blockquotes).
+        Unknown formats refuse by name.  Returns the text; where
+        it goes is the caller's business--there is deliberately
+        NO command-line switch for this (Larry's ruling,
+        2026-08-05): wire it up yourself if you want one.
         """
+        if format in ('github', 'commonmark'):
+            from .markdown import to_commonmark, to_github
+            transform = (to_github if format == 'github'
+                         else to_commonmark)
+            prog = self._prog()
+            table = self._table()
+            doc = self._program_doc()
+            if not table:
+                return transform(doc or '')
+            parts = [f'# {prog}']
+            if doc:
+                parts.append(doc)
+            for word, fn in table.items():
+                f = getattr(fn, '__func__', fn)
+                if f in (Appeal.help, Appeal.print_version):
+                    continue        # stock commands document
+                                    # themselves in help, not READMEs
+                parts.append(f'## {prog} {word}')
+                d = _inspect.getdoc(fn)
+                if d and d.strip():
+                    parts.append(d)
+            return transform('\n\n'.join(parts))
         if format != 'man':
             raise AppealConfigurationError(
                 f"documentation format {format!r} isn't supported "
-                f"(only 'man', for now)")
+                f"(only 'man', 'github', and 'commonmark', for now)")
         from .help import command_set_corpus, man_page, merge_docs, summary
         from .plan import command_set_usage
         prog = self._prog()
