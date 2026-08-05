@@ -169,18 +169,71 @@ with each construct.*
   gone.**  README-documented (line 2090): raising it from a
   command is v1's way to fail with an error message/exit code.
   Any script that raises it dies with AttributeError.
+  RULED (Larry, 2026-08-05): **restore as `CommandError`** with
+  the `AppealCommandError` alias (the exceptions arrangement);
+  main() catches it, message to stderr, exits with the code;
+  process() lets it propagate.  Task #24.
 * **E2. `appeal.Preparer` is gone** -- the README section
   "Classes, Instances, And Preparers" (dependency injection);
   `bind_processor` and `CommandMethodPreparer` too.
+  RULED (Larry, 2026-08-05): **the low-level plumbing is
+  ruled-deleted** (`Preparer`, `CommandMethodPreparer`,
+  `Processor.preparer()`, the manual `command_method.bind(obj)`
+  idiom).  The use case--methods as commands, `self` handled--
+  survives through A3's restored `app_class()`/`command_method()`
+  compatibility layer, which Larry blessed 2026-07-18.  (Noted:
+  Preparer was the sneak-`self`-past-Appeal machinery, not
+  general dependency injection.)
 * **E3. `app.usage()` is gone** -- README-documented (line 2260).
+  v1's real signature was a knobbed help printer:
+  `usage(*, usage=False, summary=False, doc=False)`.
+  RULED (Larry, 2026-08-05): **stays dead; `help()` does it
+  all.**  Larry's design: `default_template` gains a `{summary}`
+  placeholder between usage and doc; `help()` grows keyword-only
+  `usage=True, summary=True, doc=True`; a False knob suppresses
+  its section and the template text before it (doc=False also
+  suppresses arguments, options, and commands); default_mappings'
+  help registration unmaps the three keywords via the zero-string
+  `app.option()` semantic.  `help(summary=False, doc=False)` IS
+  the usage line.  Task #25.
 * **E4. `appeal.Converter`, `SingleOption` (deprecated-but-kept
   alias of Option), `BaseOption`, `SimpleTypeConverter`,
   `Inferred*`, `SpecialSection`, `parse_bool`, `big` -- all gone.
+  RULED (Larry, 2026-08-05, walked name-by-name):
+  **ruled-delete the lot.**  Converter (v1's engine class; 1.0's
+  engine face is Plan); the SingleOption alias (the underlying
+  Option/MultiOption user-surface question stays PARKED,
+  unprejudiced); BaseOption; the SimpleTypeConverter family
+  (superseded by the blessed-types axiom); the Inferred* family
+  (the defaults-inference BEHAVIOR remains open as I1/I2);
+  SpecialSection (superseded by the template+corpus engine);
+  parse_bool (a signature-donor stub for a deleted class); the
+  accidental `appeal.big` re-export (import big yourself).**
 * **E5. Appeal methods gone: `version`, `usage`, `error`,
   `execute`, `analyze`, `convert`, `bind_appeal`,
   `bind_processor`, `command_method`/`app_class` (=A3),
   `compute_usage`, `render_docstring`, `option_signature`,
   `map_to_converter`, `format_positional_parameter`.**
+  RULED (Larry, 2026-08-05, walked name-by-name): `version` and
+  `usage` already settled (the attribute ruling; E3 above);
+  `command_method`/`app_class` restored under A3.  The rest are
+  **ruled-deleted**: `error()` (one-line UsageError wrapper that
+  would double-prefix "error: " in 1.0; raise
+  UsageError/CommandError directly); `analyze`/`convert`/
+  `execute` (v1's three engine phases--they don't exist in the
+  precompiled architecture, where the Plan IS the analysis and
+  conversion is interleaved into parse_tokens.  NOTE, ruled to
+  preserve as BEHAVIOR: the split bought v1
+  convert-everything-before-executing-anything--a typo late in a
+  repeat-chain fails the line before the first command runs;
+  1.0 must track this as an engine property, not API);
+  `bind_appeal`/`bind_processor` (Rebinder accessors, limbs of
+  E2's deleted plumbing); `compute_usage`, `render_docstring`,
+  `option_signature`, `map_to_converter`,
+  `format_positional_parameter` (engine internals, all with 1.0
+  successors: the template engine, OptionRule tables, the
+  `__appeal_factory__` protocol, `positional_argument_usage_
+  format` machinery).
 
 Probed clean (v1 and 1.0 agree): tuple defaults, `**kwargs`,
 `--`, `--name=joe`, bare `-`, multi-param option converters,
@@ -235,6 +288,14 @@ converters (v1 also refuses).
 A session decided *args converter groups must have a FIXED
 per-instance argument count ("awaits the streaming driver").
 v1 fills optional parameters greedily per instance.  Two faces:
+
+RULED (Larry, 2026-08-05): **restore v1's greedy fill.**  Corpus
+parity is law; optional parameters in a group behave like
+optional operands anywhere--take what's there.  G1's refusal and
+G2's silent misbind both die.  The fixed-arity rule was a
+session's own invention, justified by a driver that doesn't
+exist.  Implementation pending (both rungs, windowed and
+unwindowed); task #26.
 
 * **G1. Windowed case refuses the program.**  `def color(hue='k',
   *, bold=False)` + `def draw(shape, *colors: color)`: v1 builds
@@ -365,6 +426,10 @@ outcome, value, AND type.  22 raw divergences, clustering into:
   pipelines can notice.  Related: usage-error exit code -1 -> 2;
   empty command line v1 error+exit -1 -> 1.0 listing+exit 1
   ("ruled 2026-07-09", git-style--another session self-ruling).
+  RULED (Larry, 2026-08-04): **stderr by default, like everyone
+  else**--Larry considers this his own ruling, not a blessing of
+  the session's.  The `errors=` knob is REQUIRED surface: it must
+  keep supporting `'stdout'` and arbitrary writable file objects.
 * **J3. `complex` converter lost.**  v1: `n: complex` parses
   '1+2j' (SimpleTypeConverterComplex).  1.0: usage error (complex
   isn't special-cased; its (real, imag) signature reads as a
