@@ -145,15 +145,17 @@ The fine print:
 ## 3: Reshaping the page: the template
 
 The page's structure is ONE template--a plain string on your
-Appeal instance--naming five sections: `{usage}`, `{doc}`,
-`{options}`, `{arguments}`, `{commands}`.  All five must appear;
-replace the template to taste:
+Appeal instance--naming six sections: `{usage}`, `{summary}`,
+`{doc}`, `{options}`, `{arguments}`, `{commands}`.  All six must
+appear; replace the template to taste:
 
     import appeal
 
     app = appeal.Appeal(name='terse')
     app.templates = (
         'usage: {usage}\n'
+        '\n'
+        '{summary}\n'
         '\n'
         '{doc}\n'
         '\n'

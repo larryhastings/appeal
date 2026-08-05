@@ -2067,15 +2067,18 @@ def test_theme_resolution_and_markup():
 
 
 def test_section_template_validation():
-    # the single-template model (ruled 2026-08-01): five
-    # sections, each exactly once, nothing else in braces
+    # the single-template model (ruled 2026-08-01; {summary}
+    # split out 2026-08-05): six sections, each exactly once,
+    # nothing else in braces
     from appeal.runtime import parse_help_template
     cases = (
         'no placeholders at all',
-        '{usage}\n{doc}\n{options}\n{arguments}',        # missing commands
+        '{usage}\n{summary}\n{doc}\n{options}\n{arguments}',  # missing commands
         '{usage}\n{doc}\n{options}\n{arguments}\n'
+        '{commands}',                                      # missing summary
+        '{usage}\n{summary}\n{doc}\n{options}\n{arguments}\n'
         '{commands}\n{commands}',                          # duplicate
-        '{usage}\n{doc}\n{options}\n{arguments}\n'
+        '{usage}\n{summary}\n{doc}\n{options}\n{arguments}\n'
         '{commands}\n{zzz}',                               # unknown
         )
     for template in cases:
@@ -2086,10 +2089,11 @@ def test_section_template_validation():
             pass
     # the parse: headers and indents fall out of the text
     parsed = parse_help_template(
-        'usage: {usage}\n\n{doc}\n\nOpts:\n  {options}\n\n'
+        'usage: {usage}\n\n{summary}\n\n{doc}\n\nOpts:\n  {options}\n\n'
         'Args:\n  {arguments}\n\nCmds:\n  {commands}')
     names = [n for n, _, _ in parsed]
-    assert names == ['usage', 'doc', 'options', 'arguments', 'commands']
+    assert names == ['usage', 'summary', 'doc', 'options', 'arguments',
+                     'commands']
     by = {n: (h, i) for n, h, i in parsed}
     assert by['usage'][0] == 'usage: '
     assert by['options'][0] == '\n\nOpts:\n  '
@@ -2696,7 +2700,7 @@ def test_section_template_more_fails():
     # holds (no commands -> no Cmds: section)
     from appeal.runtime import render_help_page
     template = ('usage: {usage}\n\nOpts:\n  {options}\n\n'
-                '{doc}\n\nArgs:\n  {arguments}\n\n'
+                '{summary}\n\n{doc}\n\nArgs:\n  {arguments}\n\n'
                 'Cmds:\n  {commands}')
     corpus = {'summary': ['Sum.'], 'documentation': ['Prose.'],
               'arguments': [('a', ['doc a'])],

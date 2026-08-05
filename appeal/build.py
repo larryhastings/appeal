@@ -327,7 +327,8 @@ class _PolicyRegistrar:
 
 
 def build(callable, name=None, method_of=None,
-          default_options=default_options, app=None):
+          default_options=default_options, app=None,
+          extra_overrides=None):
     """
     Analyze a callable's signature and produce its Plan.
 
@@ -361,7 +362,8 @@ def build(callable, name=None, method_of=None,
                   skip_first=method_of is not None
                   and not isinstance(callable, type)
                   and not wrapped_class,
-                  default_options=default_options, app=app)
+                  default_options=default_options, app=app,
+                  extra_overrides=extra_overrides)
     if isinstance(callable, type) or wrapped_class:
         plan.constructs = callable.__qualname__
     if method_of is not None:
@@ -848,7 +850,7 @@ def add_option_override(callable, parameter_name, strings,
 
 def _build(callable, name, memo, stack, top, skip_first=False,
            allow_trailing=None, default_options=default_options,
-           app=None):
+           app=None, extra_overrides=None):
     if callable in stack:
         cycle = ' -> '.join(getattr(c, '__name__', repr(c)) for c in stack)
         raise AppealConfigurationError(
@@ -868,6 +870,14 @@ def _build(callable, name, memo, stack, top, skip_first=False,
     signature = inspect.signature(callable)
     stack = stack + (callable,)
     overrides = dict(getattr(callable, OPTION_OVERRIDES_ATTRIBUTE, None) or {})
+    if extra_overrides:
+        # per-app declarations for a bound Appeal-method command
+        # (help's knobs): bound methods mint fresh objects per
+        # attribute access, so these can't live on the callable
+        for param, decls in extra_overrides.items():
+            merged = list(overrides.get(param, ()))
+            merged.extend(d for d in decls if d not in merged)
+            overrides[param] = merged
     usage_names = dict(getattr(callable, PARAMETER_USAGE_ATTRIBUTE, None) or {})
 
     slots = []

@@ -3312,19 +3312,22 @@ def render_usage(usage, margin=79):
 
 ##
 ## Templates (Larry's single-template model, ruled 2026-08-01).
-## ONE template string defines the help page: five {sections}--
-## usage, doc, options, arguments, commands--all required.  The
-## text between placeholders is each section's "header"; the
-## whitespace after the header's last newline is the section
-## body's per-line indent.  usage is special: single-line, always
-## rendered.  Empty sections are suppressed, header and all.  The
-## user's own docstring section headers (detected liberally,
-## decoration preserved) override the template's, and the user's
-## section ORDER wins for the sections they wrote.
+## ONE template string defines the help page: six {sections}--
+## usage, summary, doc, options, arguments, commands--all
+## required.  The text between placeholders is each section's
+## "header"; the whitespace after the header's last newline is
+## the section body's per-line indent.  usage is special:
+## single-line, always rendered (unless suppressed).  Empty
+## sections are suppressed, header and all.  The user's own
+## docstring section headers (detected liberally, decoration
+## preserved) override the template's, and the user's section
+## ORDER wins for the sections they wrote.
 ##
 
 default_template = (
     'usage: {usage}\n'
+    '\n'
+    '{summary}\n'
     '\n'
     '{doc}\n'
     '\n'
@@ -3338,17 +3341,17 @@ default_template = (
     '    {commands}\n'
 )
 
-_TEMPLATE_SECTIONS = ('usage', 'doc', 'options', 'arguments',
-                      'commands')
+_TEMPLATE_SECTIONS = ('usage', 'summary', 'doc', 'options',
+                      'arguments', 'commands')
 
 
 def parse_help_template(template):
     """
-    Partition a help template at its five {section} placeholders.
+    Partition a help template at its six {section} placeholders.
     Returns [(name, header, indent), ...] in template order:
     header is the text since the previous placeholder (leading
     newlines included); indent is the header text after its last
-    newline--the body's per-line indent.  All five sections must
+    newline--the body's per-line indent.  All six sections must
     appear exactly once; anything else in braces refuses.
     """
     import re as _re
@@ -3415,14 +3418,17 @@ def _render_rows(name, rows, indent, margin=79, theme=None):
     return '\n'.join(lines)
 
 
-def render_help_page(usage, corpus, templates, margin=79, theme=None):
+def render_help_page(usage, corpus, templates, margin=79, theme=None,
+                     suppress=()):
     """
     The --help page: the template's sections, three phases (ruled
     2026-08-01): leading template sections the user didn't write;
     then the user's sections in the USER's order, wearing the
     user's own headers; then the rest in template order.  Empty
-    sections are suppressed, usage always renders.  With a theme,
-    spans paint after layout.
+    sections are suppressed; usage always renders unless
+    suppressed.  suppress names sections to omit entirely, header
+    included (help()'s usage=/summary=/doc= knobs, ruled
+    2026-08-05).  With a theme, spans paint after layout.
     """
     def prose(lines):
         if not lines:
@@ -3436,11 +3442,10 @@ def render_help_page(usage, corpus, templates, margin=79, theme=None):
     template_order = [name for name, _, _ in parsed]
 
     pres = corpus.get('presentation') or {}
-    doc_lines = list(corpus['summary'])
-    if corpus['summary'] and corpus['documentation']:
-        doc_lines.append('')
-    doc_lines.extend(corpus['documentation'])
-    user_order = (['doc'] if doc_lines else [])
+    summary_lines = list(corpus['summary'])
+    doc_lines = list(corpus['documentation'])
+    user_order = ([s for s, lines in (('summary', summary_lines),
+                                      ('doc', doc_lines)) if lines])
     user_order += [s for s in pres.get('order', ())
                    if s in by_name]
 
@@ -3458,6 +3463,8 @@ def render_help_page(usage, corpus, templates, margin=79, theme=None):
 
     pieces = []
     for name in order:
+        if name in suppress:
+            continue
         header, indent = by_name[name]
         user_header = None
         if name in pres.get('headers', {}):
@@ -3473,17 +3480,15 @@ def render_help_page(usage, corpus, templates, margin=79, theme=None):
                 body = paint_usage(theme, body)
             pieces.append(lead + body)
             continue
-        if name == 'doc':
-            body = prose(doc_lines)
+        if name in ('summary', 'doc'):
+            body = prose(summary_lines if name == 'summary'
+                         else doc_lines)
             if not body:
                 continue
-            if theme is not None and corpus['summary']:
-                lines = body.split('\n')
-                for k, line in enumerate(lines):
-                    if not line:
-                        break
-                    lines[k] = theme.paint('summary', line)
-                body = '\n'.join(lines)
+            if theme is not None and name == 'summary':
+                body = '\n'.join(theme.paint('summary', line)
+                                 if line else line
+                                 for line in body.split('\n'))
             if indent:
                 import textwrap as _textwrap
                 body = _textwrap.indent(body, indent)

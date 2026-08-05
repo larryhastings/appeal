@@ -576,6 +576,13 @@ def default_mappings(*options):
         if has_commands:
             if 'help' in requested and 'help' not in app.commands:
                 app.command('help')(app.help)
+                # help()'s usage=/summary=/doc= knobs are API,
+                # not command-line surface: the zero-string
+                # option() is the explicit unmap (ruled
+                # 2026-08-05)
+                app.option('usage')(app.help)
+                app.option('summary')(app.help)
+                app.option('doc')(app.help)
             free = [s for s in ('-h', '--help')
                     if s in requested and s not in app.options]
             if free:
@@ -636,6 +643,7 @@ class Appeal:
             self.version = None
             self._finalized = True      # the ROOT runs the pass
             self._precommand_options = {}
+            self._method_option_overrides = {}
             self._lock = _threading.Lock()
             self._method_owner = parent._method_owner
             self._init_caches()
@@ -682,6 +690,12 @@ class Appeal:
         self.default_mappings = default_mappings
         self._finalized = False
         self._precommand_options = {}   # param -> (strings...)
+        # option declarations for OTHER bound Appeal methods
+        # registered as commands (help's knobs): method __name__
+        # -> {param -> [declarations]}--the same shape
+        # add_option_override stamps on plain functions, kept
+        # per-app because bound methods can't hold attributes
+        self._method_option_overrides = {}
         # how an operand renders in usage lines and help tables:
         # a format string over the parameter NAME (v1's knob,
         # restored).  '{name}' (default) shows the bare name; the
@@ -913,7 +927,7 @@ class Appeal:
         "Print the program's version."
         print(self.root.version)
 
-    def _help_topic_page(self, topic):
+    def _help_topic_page(self, topic, suppress=frozenset()):
         "help(topic)'s command-page path, split for readability."
         root = self.root
         table = root._table()
@@ -932,7 +946,23 @@ class Appeal:
                 f"unknown command {topic!r}"
                 f"{did_you_mean(topic, table)}",
                 command_set_usage(root._prog(), root._display_global()))
-        root._parse_for(topic)(['--help'])
+        if not suppress:
+            # the compiled path: byte-identical to `prog topic
+            # --help`
+            root._parse_for(topic)(['--help'])
+            return
+        # a knob is off: render the page directly, same corpus
+        # and template the compiled path bakes
+        from .help import merge_docs
+        from .runtime import (help_margin, render_help_page,
+                              resolve_theme)
+        plan = root.plan_for(topic)
+        text = render_help_page(
+            plan.usage(), merge_docs(plan), root.templates,
+            margin=help_margin(root.margin),
+            theme=resolve_theme(root.theme, _sys.stdout),
+            suppress=suppress).rstrip('\n')
+        print(text)
 
     def precommand(self, *, help: optional[str] = None,
                    version=False):
@@ -1178,6 +1208,28 @@ class Appeal:
                     tuple(options)
                 callable.__self__.root._invalidate()
                 return callable
+            if (_inspect.ismethod(callable)
+                    and isinstance(callable.__self__, Appeal)):
+                # any other bound app method registered as a
+                # command (help's knobs, ruled 2026-08-05): same
+                # can't-stick problem as the precommand, so the
+                # declaration lives in the app's own table and
+                # _build merges it in
+                if name not in _inspect.signature(callable).parameters:
+                    raise AppealConfigurationError(
+                        f"option: {callable.__func__.__name__} has "
+                        f"no parameter {name!r}")
+                root = callable.__self__.root
+                table = root._method_option_overrides.setdefault(
+                    callable.__func__.__name__, {})
+                declaration = {'strings': tuple(options),
+                               'annotation': annotation,
+                               'default': default}
+                decls = table.setdefault(name, [])
+                if declaration not in decls:
+                    decls.append(declaration)
+                root._invalidate()
+                return callable
             add_option_override(callable, name, options,
                                 annotation=annotation, default=default)
             self._invalidate()
@@ -1210,7 +1262,7 @@ class Appeal:
                             repeat=self.repeat, sets=sets or None,
                             help=False)
 
-    def help(self, topic=''):
+    def help(self, topic='', *, usage=True, summary=True, doc=True):
         """
         Print usage documentation on a specific command.
         (That summary line doubles as the help command's listing
@@ -1219,9 +1271,27 @@ class Appeal:
         that command's help page.  This method IS the help
         command (and -h/--help, via the precommand); subclass and
         override to customize every spelling at once.
+
+        The knobs (Larry's design, 2026-08-05; v1's usage()
+        folded in): usage=False suppresses the usage line,
+        summary=False the summary line, doc=False the doc AND the
+        arguments/options/commands sections--each with the
+        template text before it.  help(summary=False, doc=False)
+        is just the usage line.  As the help command the knobs
+        stay API-only: default_mappings unmaps them (zero-string
+        app.option()).
         """
+        suppress = set()
+        if not usage:
+            suppress.add('usage')
+        if not summary:
+            suppress.add('summary')
+        if not doc:
+            suppress.update(('doc', 'arguments', 'options',
+                             'commands'))
+        suppress = frozenset(suppress)
         if topic:
-            return self._help_topic_page(topic)
+            return self._help_topic_page(topic, suppress)
         table = self._table()
         if table:
             from .plan import command_set_usage
@@ -1236,7 +1306,8 @@ class Appeal:
                 command_set_usage(self._prog(), self._display_global()),
                 corpus, self.templates,
                 margin=help_margin(self.margin),
-                theme=resolve_theme(self.theme, _sys.stdout)).rstrip('\n')
+                theme=resolve_theme(self.theme, _sys.stdout),
+                suppress=suppress).rstrip('\n')
         else:
             from .help import merge_docs, parse_docstring
             from .runtime import help_margin, render_help_page, resolve_theme
@@ -1252,7 +1323,8 @@ class Appeal:
             text = render_help_page(
                 plan.usage(), corpus, self.templates,
                 margin=help_margin(self.margin),
-                theme=resolve_theme(self.theme, _sys.stdout)).rstrip('\n')
+                theme=resolve_theme(self.theme, _sys.stdout),
+                suppress=suppress).rstrip('\n')
         print(text)
         # returns None: help is a COMMAND implementation now
         # (ruled 2026-07-25), and a command's return value is its
@@ -1399,9 +1471,14 @@ class Appeal:
         # the policy registers via the registrar-proxy's
         # app.option() (arglet style, Larry's design 2026-07-22);
         # build constructs the proxy around the real app
+        extra = None
+        if (_inspect.ismethod(callable)
+                and isinstance(callable.__self__, Appeal)):
+            extra = self.root._method_option_overrides.get(
+                callable.__func__.__name__)
         plan = build(callable,
                      default_options=self.root.default_options,
-                     app=self.root, **kwargs)
+                     app=self.root, extra_overrides=extra, **kwargs)
         plan.arg_format = self.positional_argument_usage_format
         plan.auto_help = self._help_enabled
         return plan

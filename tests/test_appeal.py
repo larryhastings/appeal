@@ -963,6 +963,70 @@ def test_command_error():
     assert raised
 
 
+def test_help_knobs():
+    # E3, RULED (Larry's design, 2026-08-05): usage() stays
+    # dead--help() does it all.  The template gains {summary};
+    # help() grows keyword-only usage=/summary=/doc= knobs, each
+    # False suppressing its section AND the template text before
+    # it; doc=False also suppresses arguments, options, and
+    # commands.  help(summary=False, doc=False) IS the usage
+    # line.  As the help COMMAND the knobs stay API-only:
+    # default_mappings unmaps them (zero-string app.option()).
+    import appeal as _appeal
+    import contextlib, io
+
+    def captured(fn, *a, **kw):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fn(*a, **kw)
+        return out.getvalue()
+
+    app = _appeal.Appeal(name='t')
+    @app.command()
+    def serve(host, *, verbose=False):
+        """
+        Start the server.
+
+        Long prose about serving.
+        """
+    full = captured(app.help, 'serve')
+    assert 'usage: t serve' in full
+    assert 'Start the server.' in full
+    assert 'Long prose about serving.' in full
+    assert 'Options:' in full
+    # usage line only
+    only_usage = captured(app.help, 'serve', summary=False,
+                          doc=False).strip()
+    assert only_usage == 'usage: t serve [-v|--verbose] <HOST>'
+    # no usage line
+    no_usage = captured(app.help, 'serve', usage=False)
+    assert 'usage:' not in no_usage
+    assert 'Start the server.' in no_usage
+    # doc=False kills doc AND arguments/options/commands
+    no_doc = captured(app.help, 'serve', doc=False)
+    assert 'Long prose' not in no_doc
+    assert 'Options:' not in no_doc
+    assert 'Arguments:' not in no_doc
+    assert 'Start the server.' in no_doc      # summary survives
+    # bare listing obeys the knobs too
+    bare = captured(app.help, doc=False)
+    assert 'usage: t command' in bare
+    assert 'Commands:' not in bare
+    # the help COMMAND has no --usage/--summary/--doc surface
+    knob_options = [s for s in app.commands['help'].options
+                    if s.lstrip('-').lstrip('=') in
+                    ('usage', 'summary', 'doc', 'u', 's', 'd')]
+    assert not knob_options, knob_options
+    # and `help serve` through main() is the full page, unchanged
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app.main(['help', 'serve'])
+        except SystemExit:
+            pass
+    assert out.getvalue() == full, (out.getvalue(), full)
+
+
 def test_program_doc_three_tiers():
     # Ruled 2026-08-01: the program's documentation, highest
     # first: (1) Appeal(doc=...); (2) the global command's
