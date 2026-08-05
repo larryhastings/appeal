@@ -1667,7 +1667,7 @@ def _normalize_indents(indent, name, margin, tab_width, left_column, indent_type
     return tuple(expanded), columns
 
 
-def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, tab_width=8, two_spaces=True):
+def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, tab_width=8, two_spaces=True, raw=None):
     """
     Combines 'words' into lines and returns the result as a string.
     Similar to textwrap.wrap.
@@ -1716,6 +1716,16 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
     sentence-ending punctuation ('.', '?', and '!') will be followed
     by two spaces, not one.
 
+    'raw' is an optional callback mapping a word to its PLAIN TEXT,
+    for callers whose words carry in-band styling markup (so the
+    word emitted is wider than the text the reader sees).  It
+    defaults to the identity.  Every place wrap_words INSPECTS a
+    word -- its width for the margin, its trailing punctuation for
+    two_spaces, and the whitespace/first-character tests that detect
+    line breaks and code lines -- runs on raw(word), while the
+    ORIGINAL word (markup and all) is what gets emitted.  wrap_words
+    never slices a word, so a plain-text view is all it needs.
+
     'indent' is a value used to prefix every line in the wrapped
     paragraphs.  It may be a single string, in which case every line
     gets prefixed with 'indent'.  It may also be a list or tuple of
@@ -1758,6 +1768,11 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
     """
     if (not isinstance(left_column, int)) or (left_column < 1):
         raise ValueError(f"left_column must be a positive int, not {left_column!r}")
+
+    # words may carry in-band styling markup; every INSPECTION below
+    # runs on raw(word) -- its plain text -- while the original word
+    # is what we emit.  Default: the word is its own plain text.
+    _raw = (lambda w: w) if raw is None else raw
 
     words = iter(words)
     col = 0
@@ -1821,8 +1836,10 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
                         code_indent, 'code_indent', margin, tab_width, left_column, indent_type)
                     last_code_indent = len(code_indents) - 1
 
-        if word.isspace():
-            if word == tab:
+        rawword = _raw(word)
+
+        if rawword.isspace():
+            if rawword == tab:
                 # a tab word: not a line break, not a paragraph
                 # break--column advancement, resolved when we
                 # place the next word.
@@ -1835,14 +1852,14 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
             new_line = True
             col = 0
 
-            new_paragraph = len(word) > 1
+            new_paragraph = len(rawword) > 1
             if not new_paragraph:
                 line_number += 1
             continue
 
         if new_paragraph:
             new_paragraph = False
-            code_paragraph = word[:1].isspace()
+            code_paragraph = rawword[:1].isspace()
             line_number = 0
             lastword = empty
 
@@ -1862,7 +1879,7 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
             continue
 
         # text paragraph
-        l = len(word)
+        l = len(rawword)
         if not l:
             continue
 
@@ -1885,7 +1902,7 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
                     append(space1 * (target - col))
                     col = target
             elif col:
-                if two_spaces and lastword.endswith(sentence_ending_punctuation):
+                if two_spaces and _raw(lastword).endswith(sentence_ending_punctuation):
                     space = space2
                     len_space = 2
                 else:
@@ -1920,7 +1937,7 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
                 col = target
 
         append(word)
-        col += len(word)
+        col += l                       # display width, not markup length
         lastword = word
 
     if first_word:
@@ -2091,6 +2108,7 @@ def merge_columns(*columns, column_separator=None,
     overflow_before=0,
     overflow_after=0,
     tab_width=8,
+    raw=None,
     ):
     """
     Merge n column tuples, with each column tuple being
@@ -2152,6 +2170,14 @@ def merge_columns(*columns, column_separator=None,
     of either, though merge_columns will only return str or bytes.
     All these objects (text and column_separator) must have the
     same baseclass, str or bytes.
+
+    'raw' is an optional callback mapping a line to its PLAIN TEXT,
+    for columns whose lines carry in-band styling markup.  It
+    defaults to the identity.  Line WIDTHS -- for overflow detection
+    and for padding a column to its max_width -- are measured on
+    raw(line), while the original line (markup and all) is emitted.
+    (Tab expansion still counts a line's literal characters, so
+    don't mix tabs and markup within a single column's line.)
     """
     # real raises, not asserts: these guard user input, and
     # asserts vanish under python -O.  (OverflowStrategy.INVALID
@@ -2178,6 +2204,11 @@ def merge_columns(*columns, column_separator=None,
 
     if column_separator is None:
         column_separator = space
+
+    # lines may carry in-band styling markup; widths (overflow and
+    # padding) are measured on raw(line), the plain text, while the
+    # original line is emitted.  Default: a line is its own plain text.
+    _raw = (lambda w: w) if raw is None else raw
 
     _columns = columns
     columns = []
@@ -2249,7 +2280,7 @@ def merge_columns(*columns, column_separator=None,
             assert not linebreak in line
             rstripped_lines.append(line)
 
-            length = len(line)
+            length = len(_raw(line))
             max_line_length = max(max_line_length, length)
 
             line_overflowed = length > max_width
@@ -2295,7 +2326,10 @@ def merge_columns(*columns, column_separator=None,
             if line_number >= overflow_start:
                 in_overflow = True
             if not in_overflow:
-                line = line.ljust(max_width)
+                # pad by DISPLAY width, so markup doesn't skew the column
+                pad = max_width - len(_raw(line))
+                if pad > 0:
+                    line = line + (space * pad)
             padded_lines.append((line, in_overflow))
 
         columns.append(padded_lines)
