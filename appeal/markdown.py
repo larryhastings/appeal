@@ -305,13 +305,13 @@ def _dl_blockquote(entries):
 
 def to_github(text):
     """
-    A docstring's Markdown re-spelled for GitHub / PyPI:
-    definition lists become inline-HTML <dl>, strikethrough is
-    stripped (Larry's ruling), alerts pass through (GitHub
-    renders them natively).
+    A docstring's Markdown re-spelled for GitHub flavor:
+    definition lists become inline-HTML <dl>; everything else
+    GitHub renders natively, so strikethrough and alerts pass
+    through untouched (Larry's ruling, 2026-08-05: target
+    GitHub flavor, let PyPI catch up in its own time).
     """
-    text = _transform_definition_lists(text, _dl_html)
-    return _strip_strikethrough(text)
+    return _transform_definition_lists(text, _dl_html)
 
 
 def to_commonmark(text):

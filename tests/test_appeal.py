@@ -1145,10 +1145,12 @@ def test_markdown_scanner():
 
 def test_markdown_transforms():
     # to_github / to_commonmark are TEXTUAL (no Markdown parser:
-    # users aren't limited to big's subset).  GitHub: definition
-    # lists -> inline-HTML <dl> with blank lines so the Markdown
-    # inside still renders; strikethrough stripped; alerts kept.
-    # CommonMark: bold term + blockquote; alerts -> bold labels.
+    # users aren't limited to big's subset).  GitHub flavor is
+    # the target (ruled 2026-08-05): ONLY definition lists need
+    # respelling (inline-HTML <dl> with blank lines so the
+    # Markdown inside still renders); strikethrough and alerts
+    # ride through.  CommonMark: bold term + blockquote,
+    # strikethrough stripped, alerts -> bold labels.
     from appeal.markdown import to_commonmark, to_github
     doc = ("Intro with ~~old~~ new text.\n"
            "\n"
@@ -1160,7 +1162,7 @@ def test_markdown_transforms():
            "\n"
            "  Second paragraph.\n")
     gh = to_github(doc)
-    assert '~~' not in gh and 'old new text' in gh
+    assert '~~old~~' in gh                       # GitHub renders it
     assert '[!WARNING]' in gh                    # alerts pass through
     assert '<dl>' in gh and '</dl>' in gh
     assert '<dt>\n\nterm\n\n</dt>' in gh
@@ -1212,7 +1214,7 @@ def test_documentation_markdown_formats():
         """
     gh = app.documentation('github')
     assert '# t' in gh and '## t serve' in gh
-    assert '<dl>' in gh and 'bind on' in gh and '~~' not in gh
+    assert '<dl>' in gh and '~~listen~~ bind on' in gh
     cm = app.documentation('commonmark')
     assert '**host**' in cm and '> Interface' in cm
     try:
