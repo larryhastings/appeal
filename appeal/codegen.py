@@ -41,7 +41,8 @@ from .runtime import (
     Theme, default_template, render_command_listing, render_help_page,
     resolve_theme,
     did_you_mean, help_margin,
-    run_command_set, run_main, runtime_source, window_options,
+    greedy_sizes, run_command_set, run_main, runtime_source,
+    window_options,
     )
 
 
@@ -83,7 +84,7 @@ _RESERVED = frozenset((
     'argv', 'given', 'operands', 'i', 'n', 'remaining', 'gate',
     'positions', 'rest', 'parse_tokens', 'convert', 'accumulate',
     'mapping', 'fold', 'call_converter', 'check_count', 'window_options',
-    'UsageError',
+    'greedy_sizes', 'UsageError',
     ))
 
 
@@ -231,36 +232,37 @@ class _Emitter:
                     self.line(f'{pad}i += _take')
                     self.line(f'{pad}remaining -= _take')
                     continue
-                # a converter group on *args: fixed-size instances,
+                # a converter group on *args: greedily-sized
+                # instances (v1's fill, ruled 2026-08-05),
                 # options bound to instances by window
                 child = slot.child
-                k = child.minimum
+                k_min, k_max = child.minimum, child.maximum
                 fill = self.fill_names[id(child)]
                 occ = ', '.join(f'{o.key!r}: given.get({o.key!r}, ())'
                                 for o in child.options)
+                each = (f'{k_min}' if k_min == k_max
+                        else f'{k_min} to {k_max}')
                 self.line(f'{pad}# {slot.name}: zero or more {child.name!r} '
-                          f'groups, {k} operand{"s" if k != 1 else ""} each')
+                          f'groups, {each} operand'
+                          f'{"s" if k_max != 1 else ""} each (greedy)')
                 self.line(f'{pad}_take = remaining - {m}')
-                self.line(f'{pad}if _take % {k}:')
-                self.line(f'{pad}    raise UsageError(f"wrong number of arguments '
-                          f'for {slot.name!r}: each takes {k}, '
-                          f'{{_take % {k}}} left over", {self.usage_const})')
-                self.line(f'{pad}_count = _take // {k}')
+                self.line(f'{pad}_sizes = greedy_sizes(_take, {k_min}, '
+                          f'{k_max}, {slot.name!r}, {self.usage_const})')
                 gate_arg = ', gate=gate' if self.gated else ''
                 extra = ', gate, positions' if self.gated else ''
                 if dry:
                     # the window binding is structural: it raises for
                     # too-early and no-instance occurrences
-                    self.line(f'{pad}window_options({{{occ}}}, i, {k}, '
-                              f'_count, {slot.name!r}, {self.usage_const}{gate_arg})')
+                    self.line(f'{pad}window_options({{{occ}}}, i, _sizes, '
+                              f'{slot.name!r}, {self.usage_const}{gate_arg})')
                     self.line(f'{pad}i += _take')
                     self.line(f'{pad}remaining -= _take')
                     continue
-                self.line(f'{pad}_givens = window_options({{{occ}}}, i, {k}, '
-                          f'_count, {slot.name!r}, {self.usage_const}{gate_arg})')
+                self.line(f'{pad}_givens = window_options({{{occ}}}, i, _sizes, '
+                          f'{slot.name!r}, {self.usage_const}{gate_arg})')
                 self.line(f'{pad}{_local(slot.name)} = []')
-                self.line(f'{pad}for _j in range(_count):')
-                self.line(f'{pad}    _item, i = {fill}(operands, i, {k}, _givens[_j]{extra})')
+                self.line(f'{pad}for _j, _size in enumerate(_sizes):')
+                self.line(f'{pad}    _item, i = {fill}(operands, i, _size, _givens[_j]{extra})')
                 self.line(f'{pad}    {_local(slot.name)}.append(_item)')
                 self.line(f'{pad}remaining -= _take')
                 continue
@@ -1148,6 +1150,7 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
         'fold': fold,
         'call_converter': call_converter,
         'window_options': window_options,
+        'greedy_sizes': greedy_sizes,
         'render_help_page': render_help_page,
         'help_margin': help_margin,
         'did_you_mean': did_you_mean,
@@ -1457,6 +1460,7 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, t
         'fold': fold,
         'call_converter': call_converter,
         'window_options': window_options,
+        'greedy_sizes': greedy_sizes,
         'render_help_page': render_help_page,
         'help_margin': help_margin,
         'did_you_mean': did_you_mean,
@@ -1665,6 +1669,7 @@ _SOURCE_SNIPPETS = (
     ('collect_mapping', 'appeal collect mapping'),
     ('fold', 'appeal option protocol'),
     ('window_options', 'appeal windows'),
+    ('greedy_sizes', 'appeal windows'),
     ('run_command_set', 'appeal command set'),
     )
 

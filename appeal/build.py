@@ -553,32 +553,38 @@ def _is_repeat_group(annotation):
     kinds = [p.kind for p in signature.parameters.values()]
     if inspect.Parameter.KEYWORD_ONLY in kinds:
         return True
-    return _positional_arity(annotation) > 1
+    # TOTAL positional count, optional included: pair(a, b='B')
+    # is a two-operand group whose second operand fills greedily
+    # (v1's semantics, ruled 2026-08-05)--counting only required
+    # parameters was G2's silent misbind
+    return sum(
+        1 for p in signature.parameters.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                      inspect.Parameter.POSITIONAL_OR_KEYWORD)) > 1
 
 
 def _repeat_group_plan(annotation, context, memo, stack):
     """
     A converter group on *args: each command-line instance consumes
-    the group's (fixed) operand count, and the group's options bind
-    to instances by position--the window rule.  Built with a fresh
-    memo: windowed-ness is a property of this use site, not of the
-    converter.  Staged: every parameter must be a required terminal.
+    up to the group's operand count--optional parameters fill
+    GREEDILY per instance, v1's semantics (RULED, Larry,
+    2026-08-05: the fixed-arity staging is dead)--and the group's
+    options bind to instances by position, the window rule.  Built
+    with a fresh memo: windowed-ness is a property of this use
+    site, not of the converter.  Every parameter must be a
+    terminal (a converter inside a *args group is still out of
+    the grammar).
     """
     plan = _build(annotation, None, {}, stack, top=False)
     for slot in plan.slots:
-        if not slot.required:
-            raise AppealConfigurationError(
-                f"{context}: optional parameter {slot.name!r} in a *args "
-                f"converter group awaits the streaming driver (each "
-                f"instance's argument count must be fixed)")
         if not isinstance(slot.child, Terminal):
             raise AppealConfigurationError(
                 f"{context}: converter {slot.child.name!r} on {slot.name!r} "
                 f"inside a *args group awaits the streaming driver")
-    if plan.minimum < 1:
+    if not plan.maximum:
         raise AppealConfigurationError(
-            f"{context}: a *args converter group must consume at least "
-            f"one argument per instance")
+            f"{context}: a *args converter group must be able to consume "
+            f"at least one argument per instance")
     plan.windowed = True
     return plan
 

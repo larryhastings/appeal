@@ -16,7 +16,8 @@ from .help import merge_docs
 from .plan import Terminal, NO_DEFAULT
 from .runtime import (
     UsageError, absorb_take, accumulate, call_converter,
-    collect_mapping, convert, fold, parse_tokens, check_count,
+    collect_mapping, convert, fold, greedy_sizes, parse_tokens,
+    check_count,
     default_template, did_you_mean, help_margin, render_command_listing,
     render_help_page,
     scoped_forces, scoped_next, scoped_resolve, scoped_rewind,
@@ -291,22 +292,19 @@ def _fill(plan, operands, i, remaining, given, usage,
                 i += take
                 remaining -= take
                 continue
-            # a converter group: `take` operands split into fixed-
-            # size instances; options bind to instances by window
+            # a converter group: `take` operands split into
+            # greedily-sized instances (v1's fill, ruled
+            # 2026-08-05); options bind to instances by window
             child = slot.child
-            k = child.minimum
-            if take % k:
-                raise UsageError(
-                    f"wrong number of arguments for {slot.name!r}: "
-                    f"each takes {k}, {take % k} left over", usage)
-            count = take // k
+            sizes = greedy_sizes(take, child.minimum, child.maximum,
+                                 slot.name, usage)
             occurrences = {o.key: given[o.key]
                            for o in child.options if o.key in given}
-            givens = window_options(occurrences, i, k, count,
+            givens = window_options(occurrences, i, sizes,
                                     slot.name, usage, gate=gate)
-            for j in range(count):
-                child_args, i, _ = _fill(child, operands, i, k, {}, usage,
-                                         dry=dry)
+            for j, size in enumerate(sizes):
+                child_args, i, _ = _fill(child, operands, i, size, {},
+                                         usage, dry=dry)
                 if not dry:
                     kwargs = _option_kwargs(child, givens[j], usage)
                     args.append(child.callable(*child_args, **kwargs))

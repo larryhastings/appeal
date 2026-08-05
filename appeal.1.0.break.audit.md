@@ -294,8 +294,20 @@ parity is law; optional parameters in a group behave like
 optional operands anywhere--take what's there.  G1's refusal and
 G2's silent misbind both die.  The fixed-arity rule was a
 session's own invention, justified by a driver that doesn't
-exist.  Implementation pending (both rungs, windowed and
-unwindowed); task #26.
+exist.  **FIXED**, semantics probed against real v1 (git
+master): simple greedy, NO lookahead--each instance takes up to
+its maximum; a leftover shortfall below the minimum errors (4
+operands into a 2-to-3 group is greedy 3 + orphan 1 -> error,
+even though 2+2 would fit; v1 agrees).  G2's mechanism was
+_is_repeat_group counting only REQUIRED positionals, so
+pair(a, b='B') never became a group at all--now the total count
+decides.  Options window to variable-size instances by span.
+Both rungs + standalone verified; tests:
+test_star_args_group_greedy_fill.  Liberal notes: a trailing
+group option binds to the last instance (1.0's never-rejects
+window rule; v1 opened a phantom instance and errored "requires
+1 argument"), and shortfall message phrasing differs (C1
+family).
 
 * **G1. Windowed case refuses the program.**  `def color(hue='k',
   *, bold=False)` + `def draw(shape, *colors: color)`: v1 builds

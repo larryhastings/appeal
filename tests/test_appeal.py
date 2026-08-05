@@ -596,15 +596,16 @@ def test_star_args_group_value_option():
     assert got == ('ok', ((1.0, 'up'), (2.0, ''))), got
 
 def test_star_args_group_refusals_are_named():
+    # G1, RULED (Larry, 2026-08-05): optional parameters in a
+    # *args converter group fill GREEDILY per instance (v1's
+    # semantics)--the fixed-arity refusal is dead, so `loose`
+    # BUILDS now.  A converter inside a *args group stays out of
+    # the grammar; an all-keyword group can't consume operands.
     def loose(width: float = 1.0, *, bold=False):
         return (width, bold)
     def draw(shape, *sizes: loose):
         pass
-    try:
-        build(draw)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'width' in str(e) and 'streaming driver' in str(e)
+    build(draw)                     # G1's refusal is gone
     def pair(x, y):
         return (x, y)
     def nested(where: pair, *, bold=False):
@@ -616,6 +617,63 @@ def test_star_args_group_refusals_are_named():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'streaming driver' in str(e)
+
+def test_star_args_group_greedy_fill():
+    # G1/G2, RULED (Larry, 2026-08-05): v1's greedy fill
+    # restored, probed against the real v1 (git master).  Each
+    # instance takes up to its maximum, greedily, no lookahead;
+    # a leftover shortfall below the minimum is an error, never
+    # redistributed backward.  Both rungs must agree.
+    def pair(a, b='B'):
+        return (a, b)
+    def draw(*pairs: pair):
+        return pairs
+    # G2's exact case: v1 gives (('1','2'), ('3','4')), not four
+    # clamped instances
+    assert run_both(draw, ['1', '2', '3', '4']) == \
+        ('ok', (('1', '2'), ('3', '4')))
+    assert run_both(draw, ['1', '2', '3']) == \
+        ('ok', (('1', '2'), ('3', 'B')))
+    assert run_both(draw, ['1']) == ('ok', (('1', 'B'),))
+    assert run_both(draw, []) == ('ok', ())
+
+    def trio(a, b='B', c='C'):
+        return (a, b, c)
+    def draw3(*ts: trio):
+        return ts
+    assert run_both(draw3, ['1', '2', '3', '4']) == \
+        ('ok', (('1', '2', '3'), ('4', 'B', 'C')))
+    assert run_both(draw3, ['1', '2', '3', '4', '5']) == \
+        ('ok', (('1', '2', '3'), ('4', '5', 'C')))
+
+    # no lookahead, v1-faithful: 4 operands into a 2-to-3 group
+    # is greedy 3 + orphan 1 -> error (2 + 2 would fit; v1
+    # doesn't look for it, so neither do we)
+    def duo(a, b, c='C'):
+        return (a, b, c)
+    def draw2(shape, *ds: duo):
+        return (shape, ds)
+    kind, msg = run_both(draw2, ['s', '1', '2', '3', '4'])
+    assert kind == 'usage' and 'left over' in msg, (kind, msg)
+    assert run_both(draw2, ['s', '1', '2', '3', '4', '5']) == \
+        ('ok', ('s', (('1', '2', '3'), ('4', '5', 'C'))))
+
+    # G1's exact case: optional positional + windowed option
+    def color(hue='k', *, bold=False):
+        return (hue, bold)
+    def drawc(shape, *colors: color):
+        return (shape, colors)
+    assert run_both(drawc, ['dot', 'red', '--bold', 'blue']) == \
+        ('ok', ('dot', (('red', False), ('blue', True))))
+    assert run_both(drawc, ['dot', '--bold', 'red', 'blue']) == \
+        ('ok', ('dot', (('red', True), ('blue', False))))
+    assert run_both(drawc, ['dot']) == ('ok', ('dot', ()))
+    # 1.0-liberal, noted in the register: a trailing option binds
+    # to the last instance (the never-rejects window rule); v1
+    # opened a phantom instance and errored
+    assert run_both(drawc, ['dot', 'red', 'blue', '--bold']) == \
+        ('ok', ('dot', (('red', False), ('blue', True))))
+
 
 def test_multiparam_option_converters():
     # v1, probed: a plain converter with several parameters

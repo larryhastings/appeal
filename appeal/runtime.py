@@ -667,18 +667,48 @@ def fold(cls, converters, occurrences, default, name, usage=None):
 
 # --8<-- start appeal windows --8<--
 # --8<-- requires appeal exceptions --8<--
-def window_options(occurrences, first, arity, count, name, usage=None,
+def greedy_sizes(take, minimum, maximum, name, usage=None):
+    """
+    Split `take` operands into per-instance sizes for a *args
+    converter group, v1's way (RULED, Larry, 2026-08-05): each
+    instance takes up to `maximum`, greedily, no lookahead--a
+    leftover shortfall below `minimum` is an error, never
+    redistributed backward.
+    """
+    sizes = []
+    remaining = take
+    while remaining:
+        size = maximum if remaining > maximum else remaining
+        if size < minimum:
+            each = (f"{minimum}" if minimum == maximum
+                    else f"{minimum} to {maximum}")
+            raise UsageError(
+                f"wrong number of arguments for {name!r}: "
+                f"each takes {each}, {size} left over", usage)
+        sizes.append(size)
+        remaining -= size
+    return sizes
+
+
+def window_options(occurrences, first, sizes, name, usage=None,
                    gate=0):
     """
-    Bind a *args group's option occurrences to instances.  An
-    occurrence at operand position p configures the instance being
-    built or about to be built--instance (p - first) // arity--and
-    past the ends of the line it binds to the nearest instance
-    (with sizes A B C, the positions 1 A 2 B 3 C 4 map to
-    A, B, C, C).  Position selects; it never rejects.  The only
-    error left is an option with no instances at all.
+    Bind a *args group's option occurrences to instances.  sizes
+    is the per-instance operand count list (variable--greedy
+    fill).  An occurrence at operand position p configures the
+    instance being built or about to be built, and past the ends
+    of the line it binds to the nearest instance (with sizes
+    A B C, the positions 1 A 2 B 3 C 4 map to A, B, C, C).
+    Position selects; it never rejects.  The only error left is
+    an option with no instances at all.
     Returns one given-style dict per instance.
     """
+    count = len(sizes)
+    ends = []
+    acc = first
+    for s in sizes:
+        acc += s
+        ends.append(acc)
     givens = [{} for _ in range(count)]
     for key, entries in occurrences.items():
         for position, kind, value in entries:
@@ -690,11 +720,11 @@ def window_options(occurrences, first, arity, count, name, usage=None,
                 raise UsageError(
                     f"option {key} needs at least one {name!r} "
                     f"on the command line", usage)
-            j = (position - first) // arity
-            if j < 0:
-                j = 0
-            if j >= count:
-                j = count - 1
+            # the first instance whose end lies past the
+            # occurrence--"being built or about to be built"
+            j = 0
+            while j < count - 1 and ends[j] <= position:
+                j += 1
             given = givens[j]
             if kind == 'fold1':
                 if key in given:

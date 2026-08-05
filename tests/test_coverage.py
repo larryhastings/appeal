@@ -1678,9 +1678,12 @@ def test_build_completions_and_probe_fallback():
 
 
 def test_build_repeat_group_refusals():
-    # *args occurrences must consume at least one operand
-    def hollow(a=1, *, deep=False):
-        return (a, deep)
+    # *args occurrences must be ABLE to consume an operand: an
+    # all-keyword group has no positional to make progress with.
+    # (An all-OPTIONAL positional builds now--greedy fill, ruled
+    # 2026-08-05.)
+    def hollow(*, deep=False):
+        return deep
     def f(*occ: hollow):
         return occ
     try:
@@ -1688,6 +1691,11 @@ def test_build_repeat_group_refusals():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
+    def lenient(a=1, *, deep=False):
+        return (a, deep)
+    def f2(*occ: lenient):
+        return occ
+    build(f2)                       # G1's refusal is gone
     # a windowed group's option string clashing with the top
     # level's: position can't tell them apart--refused
     def rep(x, *, v=False):
