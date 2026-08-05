@@ -248,7 +248,7 @@ class Plan:
                  'minimum', 'maximum', 'valid_counts', 'windowed', 'gated',
                  'certain', 'var_keyword', 'constructs', 'binds',
                  'tree_trailing', 'scoped_keys', 'arg_format', 'auto_help',
-                 'sibling_parents', 'sibling_keys', 'pre_plan', 'prog')
+                 'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
@@ -299,10 +299,12 @@ class Plan:
         # and pops them FIRST, then proceeds (Larry's design,
         # 2026-07-19).
         self.pre_plan = None
-        # the program name, stamped on COMMAND plans at build so
-        # the usage line reads `usage: prog go ...` (0.6.4's
-        # shape, ruled 2026-07-19)--pasteable into a shell
-        self.prog = None
+        # the string the program was invoked as, stamped on
+        # COMMAND plans at build so the usage line reads
+        # `usage: prog go ...` (0.6.4's shape, ruled 2026-07-19)
+        # --pasteable into a shell.  Named argv0 (ruled
+        # 2026-08-04), matching standalone(argv0=).
+        self.argv0 = None
         self.callable = callable
         self.name = name
         self.slots = slots
@@ -316,7 +318,7 @@ class Plan:
                 f'options={len(self.options)} '
                 f'arity=({self.minimum}, {self.maximum})>')
 
-    def usage(self, prog=None):
+    def usage(self, argv0=None):
         """
         A one-line usage string, read straight off the tree.
         v1's shape, kept: options first (all strings, pipe-joined,
@@ -407,9 +409,9 @@ class Plan:
             bits.extend(slot_text(s, rename) for s in plan.slots)
             return ' '.join(bits)
 
-        head = prog
+        head = argv0
         if head is None:
-            head = (f'{self.prog} {self.name}' if self.prog
+            head = (f'{self.argv0} {self.name}' if self.argv0
                     else self.name)
         return f'{head} {body_text(self)}'.rstrip()
 

@@ -827,7 +827,7 @@ class Appeal:
         Read-only mapping: command word -> the child Appeal node,
         in definition order.  The node IS the configuration
         object: .callable is its function, .commands its
-        subcommands, .options its option table, .default_handler
+        subcommands, .options its option table, .default_callable
         its default command.
         """
         import types as _types
@@ -844,8 +844,8 @@ class Appeal:
         return self._impl
 
     @property
-    def default_handler(self):
-        "The default command's function (None if unset)."
+    def default_callable(self):
+        "The default command's function (None if unset; ruled 2026-08-04)."
         return self._node_default
 
     @property
@@ -863,7 +863,7 @@ class Appeal:
         plan = None
         if self._impl is not None:
             plan = (self.global_plan if self.parent is None
-                    else self.plan_for_self())
+                    else self._plan())
         if plan is not None:
             for owner, o in all_options(plan):
                 for s in o.strings:
@@ -873,8 +873,8 @@ class Appeal:
                 table.setdefault(s, None)
         return _types.MappingProxyType(table)
 
-    def plan_for_self(self):
-        "This node's own Plan (the root: the global plan)."
+    def _plan(self):
+        "This node's own Plan (the root: the global plan; ruled private 2026-08-04)."
         if self.parent is None:
             return self.global_plan
         return self.root.plan_for(self.name)
@@ -1446,7 +1446,7 @@ class Appeal:
             if owner is None:
                 _refuse_orphan_method(callable)
             plan = self._build(callable, name=word, method_of=owner)
-            plan.prog = self.root._prog()
+            plan.argv0 = self.root._prog()
             with self._lock:
                 if self._plans is None:
                     self._plans = {}
