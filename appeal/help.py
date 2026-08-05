@@ -54,166 +54,51 @@ def parse_docstring(doc, where):
 
         summary        the first paragraph of the prose, as lines
         documentation  the rest of the prose, as lines--the
-                       coalesced blob, in source order, with the
-                       sections slurped out
+                       coalesced Markdown, in source order, with
+                       the special sections slurped out
         arguments      dict of name -> documentation lines
         options        dict of name -> documentation lines
         commands       dict of name -> documentation lines
 
-    The grammar: a section heading is a line that is exactly
-    'Arguments:', 'Options:', 'Commands:', or 'Subcommands:'.
-    A section runs from its heading to the first blank line.
-    Entries are 'name: text' lines indented under the heading, all
-    at the same indent; deeper-indented lines continue an entry.
-    Entry text is kept as dedented lines, never flattened.  One
-    section per kind.  Everything else is prose.
+    THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05;
+    Markdown ONLY--the 'Arguments:' + 'name: desc' grammar died
+    unshipped).  The first paragraph is the summary; ANY heading
+    (ATX or setext, any level, case-insensitive) named Options,
+    Arguments, or Commands opens a special section, which must
+    contain exactly one definition list with unformatted terms;
+    everything else is the doc, other headings included.  The
+    user's heading decoration is input spelling only--the help
+    template dresses the page.
 
     'where' names the docstring's owner, for error messages.
     Grammar violations raise AppealConfigurationError; validation
     against the plan (unknown names, kinds, visibility) happens
     later, in the merge.
     """
-    sections = {'arguments': {}, 'options': {}, 'commands': {}}
-    seen = {}
-    prose = []
-    order = []
-    headers = {}
-    indents = {}
+    from .markdown import scan_docstring
+    scanned = scan_docstring(doc or '', where)
 
-    lines = [l.rstrip() for l in (doc or '').splitlines()]
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i]
-        # a section heading is detected LIBERALLY (ruled
-        # 2026-08-01): after a blank line (or at the very top), a
-        # line whose letters alone spell one of the section names
-        # --case and decoration ignored, and the user's spelling
-        # is PRESERVED as that section's rendered header
-        kind = None
-        if i == 0 or not lines[i - 1]:
-            word = ''.join(c for c in line if c.isalnum()).lower()
-            kind = {'options': 'options', 'arguments': 'arguments',
-                    'commands': 'commands',
-                    'subcommands': 'commands'}.get(word)
-        if kind is not None:
-            # ...and the claim needs a BODY: the next nonblank
-            # line must be indented OR entry-shaped ('name: ...').
-            # Otherwise this line was prose that happened to spell
-            # a section name--v1's legacy [[arguments]] markup, a
-            # word alone in a sentence.  (Entry-shaped at the left
-            # margin is legal: authors who want their tables at
-            # column 0 get them there--ruled 2026-08-01.)
-            for j in range(i + 1, n):
-                if lines[j]:
-                    if (not lines[j][0].isspace()
-                            and not _ENTRY_START_RE.match(lines[j])):
-                        kind = None
-                    break
-            else:
-                kind = None
-        if kind is None:
-            prose.append(line)
-            i += 1
-            continue
-
-        # the section's header: the blank lines before it belong
-        # to it (they become its leading newlines when rendered)
-        blanks = 0
-        while prose and not prose[-1]:
-            prose.pop()
-            blanks += 1
-        order.append(kind)
-        headers[kind] = '\n' * (blanks + 1) + line + '\n'
-
-        # a section heading.
-        if kind in seen:
-            raise AppealConfigurationError(
-                f"{where}: duplicate {line!r} section"
-                + (f" ({seen[kind]!r} is the same section)"
-                   if seen[kind] != line else ""))
-        seen[kind] = line
-        entries = sections[kind]
-        i += 1
-
-        # the section runs to the first blank line.
-        entry_indent = None
-        name = None
-        first_text = None
-        continuation = None
-
-        def close_entry():
-            if name is None:
-                return
-            text = [first_text] if first_text else []
-            text.extend(_dedent_lines(continuation))
-            entries[name] = text
-
-        while i < n:
-            body_line = lines[i]
-            if not body_line.strip():
-                break
-            stripped = body_line.lstrip()
-            indent = len(body_line) - len(stripped)
-            if not indent and not _ENTRY_START_RE.match(stripped):
-                # unindented, un-entry-shaped: the section is over
-                # and prose has resumed
-                break
-            m = _ENTRY_START_RE.match(stripped)
-            if entry_indent is None:
-                if not m:
-                    raise AppealConfigurationError(
-                        f"{where}: in the {line!r} section: expected a "
-                        f"'name: documentation' entry, got {body_line!r}")
-                entry_indent = indent
-                indents[kind] = ' ' * indent
-            if indent > entry_indent:
-                continuation.append(body_line)
-            elif (indent == entry_indent) and m:
-                close_entry()
-                name = m.group(1)
-                if name in entries:
-                    raise AppealConfigurationError(
-                        f"{where}: in the {line!r} section: "
-                        f"{name!r} is documented twice")
-                first_text = m.group(2)
-                continuation = []
-            else:
+    def entry_dict(pairs, section):
+        entries = {}
+        for name, text in (pairs or ()):
+            if name in entries:
                 raise AppealConfigurationError(
-                    f"{where}: in the {line!r} section: expected a "
-                    f"'name: documentation' entry or a deeper-indented "
-                    f"continuation, got {body_line!r}")
-            i += 1
-        close_entry()
-
-    # the prose coalesces into one blob: collapse the runs of
-    # blank lines the slurped-out sections left behind, and strip
-    # the ends.
-    blob = []
-    for line in prose:
-        if line.strip():
-            blob.append(line)
-        elif blob and blob[-1].strip():
-            blob.append('')
-    while blob and not blob[-1].strip():
-        blob.pop()
-
-    # the summary is the first paragraph; the documentation is
-    # the rest.
-    try:
-        split = blob.index('')
-        summary, documentation = blob[:split], blob[split + 1:]
-    except ValueError:
-        summary, documentation = blob, []
+                    f"{where}: in the {section} section: "
+                    f"{name!r} is documented twice")
+            entries[name] = text.split('\n') if text else []
+        return entries
 
     return {
-        'summary': summary,
-        'documentation': documentation,
-        'arguments': sections['arguments'],
-        'options': sections['options'],
-        'commands': sections['commands'],
-        'presentation': {'order': order, 'headers': headers,
-                         'indents': indents},
+        'summary': (scanned['summary'].split('\n')
+                    if scanned['summary'] else []),
+        'documentation': (scanned['body'].split('\n')
+                          if scanned['body'] else []),
+        'arguments': entry_dict(scanned['arguments'], 'Arguments'),
+        'options': entry_dict(scanned['options'], 'Options'),
+        'commands': entry_dict(scanned['commands'], 'Commands'),
+        # the template establishes the page's order and dresses
+        # the headings (ruled 2026-08-05): nothing to present
+        'presentation': {'order': (), 'headers': {}, 'indents': {}},
     }
 
 

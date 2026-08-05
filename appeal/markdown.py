@@ -40,7 +40,10 @@ SPECIAL_SECTIONS = ('options', 'arguments', 'commands')
 
 _ATX_RE = re.compile(r'^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$')
 _SETEXT_RE = re.compile(r'^ {0,3}(=+|-+)\s*$')
-_TERM_FORMATTING = set('*_`~[]<>')
+# characters that read as Markdown formatting in a term.  '_' is
+# deliberately absent: parameter names carry underscores, and
+# mid-word underscores aren't emphasis anyway.
+_TERM_FORMATTING = set('*`~[]<>')
 
 
 def _heading_at(lines, i):
@@ -137,7 +140,7 @@ def _parse_definition_list(lines, where):
     return entries
 
 
-def scan_docstring(text):
+def scan_docstring(text, where=None):
     """
     Appeal's textual docstring scanner (no Markdown parser
     involved).  Returns a dict:
@@ -150,7 +153,9 @@ def scan_docstring(text):
     ANY heading whose text is Options/Arguments/Commands
     (case-insensitive), of ANY kind and level, opens the special
     section; it runs to the next heading of any kind or EOF.
+    `where` names the docstring's owner in error messages.
     """
+    prefix = f"{where}: docstring " if where else "docstring "
     lines = (text or '').split('\n')
     sections = {name: None for name in SPECIAL_SECTIONS}
     body_lines = []
@@ -162,14 +167,15 @@ def scan_docstring(text):
             if name in SPECIAL_SECTIONS:
                 if sections[name] is not None:
                     raise ConfigurationError(
-                        f"docstring has two {h[0]!r} sections")
+                        f"{prefix}has two {h[0]!r} sections")
                 i += h[2]
                 content = []
                 while i < n and _heading_at(lines, i) is None:
                     content.append(lines[i])
                     i += 1
                 sections[name] = _parse_definition_list(
-                    content, h[0] + ':')
+                    content, (f"{where}: {h[0]}" if where
+                              else h[0]) + ':')
                 continue
         body_lines.append(lines[i])
         i += 1
@@ -344,7 +350,7 @@ def render_markdown_help(text, width=None, stylesheet=None):
     from big.markdown import (markdown_defaults, parse,
                               render_terminal, split_styles_document,
                               style_document)
-    from big.template import StyleSheet, ansi_uncolored, join_styles
+    from big.stylesheet import ansi_uncolored, join_styles
     document = split_styles_document(style_document(parse(text)))
     rendered = render_terminal(document, width=width)
     joined = join_styles(rendered)

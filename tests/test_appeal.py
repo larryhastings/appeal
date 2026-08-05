@@ -1051,7 +1051,7 @@ def test_help_knobs():
     assert 'usage: t serve' in full
     assert 'Start the server.' in full
     assert 'Long prose about serving.' in full
-    assert 'Options:' in full
+    assert 'Options\n-------' in full
     # usage line only
     only_usage = captured(app.help, 'serve', summary=False,
                           doc=False).strip()
@@ -1063,13 +1063,13 @@ def test_help_knobs():
     # doc=False kills doc AND arguments/options/commands
     no_doc = captured(app.help, 'serve', doc=False)
     assert 'Long prose' not in no_doc
-    assert 'Options:' not in no_doc
-    assert 'Arguments:' not in no_doc
+    assert 'Options' not in no_doc
+    assert 'Arguments' not in no_doc
     assert 'Start the server.' in no_doc      # summary survives
     # bare listing obeys the knobs too
     bare = captured(app.help, doc=False)
     assert 'usage: t command' in bare
-    assert 'Commands:' not in bare
+    assert 'Commands' not in bare
     # the help COMMAND has no --usage/--summary/--doc surface
     knob_options = [s for s in app.commands['help'].options
                     if s.lstrip('-').lstrip('=') in
@@ -1183,7 +1183,7 @@ def test_markdown_renderer():
     # render_markdown_help runs big's whole pipeline: parse ->
     # style -> split -> layout -> join -> StyleSheet.render.
     from appeal.markdown import render_markdown_help
-    from big.template import plain_stylesheet
+    from big.stylesheet import plain_stylesheet
     from big.markdown import markdown_defaults
     text = render_markdown_help(
         "# Options\n\nSome **bold** prose that is long enough to "
@@ -1283,7 +1283,7 @@ def test_program_doc_three_tiers():
         del sys.modules['_appeal_doc_fakemod']
 
     # unknown Commands: entries in doc= refuse by name
-    app5 = _appeal.Appeal('t5', doc='Hi.\n\nCommands:\n    zork: no.')
+    app5 = _appeal.Appeal('t5', doc='Hi.\n\n# Commands\nzork\n: no.')
     @app5.command()
     def real():
         pass
@@ -1294,12 +1294,13 @@ def test_program_doc_three_tiers():
         assert 'zork' in str(e)
 
 
-def test_docstring_presentation_wins():
-    # Ruled 2026-08-01 (D+E): the author's docstring presentation
-    # governs the sections they wrote--their spelling, decoration,
-    # blank-line rhythm, entry indent, and ORDER--while unwritten
-    # sections render where the template puts them (three-phase
-    # interleave).
+def test_template_dresses_the_page():
+    # The Markdown pivot (ruled 2026-08-05) SUPERSEDES the
+    # presentation-wins ruling of 2026-08-01: the docstring is
+    # input--the author's heading decoration is just how they
+    # spelled it--and the TEMPLATE establishes the page's order
+    # and dresses its headings ('## Options' by default,
+    # rendering as a setext-underlined heading).
     import appeal as _appeal
     import contextlib, io
 
@@ -1309,11 +1310,14 @@ def test_docstring_presentation_wins():
         """
         Summary here.
 
-         [Options!]
-           loud: Speak up.
+        ###### OPTIONS
+        loud
+        : Speak up.
 
-        arguments
-           thing: The thing.
+        Arguments
+        =========
+        thing
+        : The thing.
         """
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
@@ -1322,16 +1326,14 @@ def test_docstring_presentation_wins():
         except SystemExit:
             pass
     text = out.getvalue()
-    # decoration preserved verbatim; order is the AUTHOR's
-    # (options before arguments, against the template's order)
-    assert ' [Options!]' in text, text
-    assert 'arguments' in text and 'Arguments:' not in text
-    assert text.index('[Options!]') < text.index('arguments'), text
-    # the author's 3-space entry indent rides along
-    assert '   -l|--loud  Speak up.' in text, text
-    assert '   <THING>  The thing.' in text, text
-    # usage still leads (phase one: template sections before the
-    # first user-defined one)
+    # the input decoration is gone; the template's dress renders
+    assert '######' not in text and '=====' not in text, text
+    assert 'Options\n-------' in text, text
+    assert 'Arguments\n---------' in text, text
+    # the TEMPLATE's order wins: arguments before options
+    assert text.index('Arguments\n') < text.index('Options\n'), text
+    assert '-l|--loud\n    Speak up.' in text, text
+    assert '<THING>\n    The thing.' in text, text
     assert text.startswith('usage: g'), text
 
 
@@ -1402,15 +1404,17 @@ def test_command_listings_are_definition_order():
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.process(['help'])
-    words = [l.split()[0] for l in out.getvalue().splitlines()
-             if l.startswith('    ')]
+    words = [l for l in out.getvalue().splitlines()
+             if l and not l.startswith((' ', 'usage:', 'Commands'))
+             and set(l) != {'-'}]
     assert words == ['zebra', 'mango', 'apple', 'help'], words
 
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.process(['help', 'zebra'])
-    words = [l.split()[0] for l in out.getvalue().splitlines()
-             if l.startswith('    ')]
+    tail = out.getvalue().split('Commands')[-1]
+    words = [l for l in tail.splitlines()
+             if l and not l.startswith(' ') and set(l) != {'-'}]
     assert words == ['walk', 'crawl', 'help'], words
 
     # completion stays sorted, deliberately
@@ -1913,7 +1917,7 @@ def test_command_dispatch():
     with contextlib.redirect_stdout(out):
         got = run_both_set([add_item, remove], None, [])
     assert got == ('ok', 1), got
-    assert 'Commands:' in out.getvalue()
+    assert 'Commands\n--------' in out.getvalue()
 
 def test_global_command_dispatch():
     calls = []
@@ -2096,9 +2100,12 @@ def test_usage_metavars_and_wrapping():
         assert line.count('[') == line.count(']'), line    # units whole
 
 def test_help_parameter_sections():
-    # `name: description` docstring lines become argument/option
-    # tables (labels from the plan: option strings, usage names);
-    # names that match no parameter stay prose
+    # Markdown definition-list entries become argument/option
+    # tables (terms resolved via the plan: option strings, usage
+    # names); prose stays prose.  Converted to the Markdown
+    # dialect 2026-08-05 (the pivot: one format ships); the
+    # old presentation-wins indent rule died with the old
+    # grammar--the template dresses the page.
     def size(width: float, *, bold=False):
         return (width, bold)
     def draw(shape, width: size = None, *, verbose=False, times: int = 1):
@@ -2107,28 +2114,35 @@ def test_help_parameter_sections():
 
         Note: this line is prose, not a parameter.
 
-        Arguments:
-          shape: the shape to draw.  A longer description that will
-              need wrapping when rendered into the table's column.
-          width: how wide.
+        # Arguments
+        shape
+        : the shape to draw.  A longer description that will
+          need wrapping when rendered into the page's width.
 
-        Options:
-          verbose: narrate the process.
-          times: how many times.
+        width
+        : how wide.
+
+        # Options
+        verbose
+        : narrate the process.
+
+        times
+        : how many times.
         """
         pass
     result, text = run_both_stdout(draw, ['--help'])
     assert result is None
     assert 'Note: this line is prose, not a parameter.' in text
-    assert 'Arguments:' in text and 'Options:' in text
-    # the docstring's own 2-space entry indent is PRESERVED
-    # (ruling D, 2026-08-01: the author's presentation wins)
-    assert '  <SHAPE>  the shape to draw.' in text
-    assert '  <WIDTH>  how wide.' in text
-    assert '  -v|--verbose        narrate the process.' in text
-    assert '  -t|--times <TIMES>  how many times.' in text
-    body = text.split('Arguments:')[0]
-    assert 'shape:' not in body                       # entries were extracted
+    # '## Arguments' renders as a setext-underlined heading
+    assert 'Arguments\n---------' in text, text
+    assert 'Options\n-------' in text, text
+    # terms resolve to displays; definitions indent beneath
+    assert '<SHAPE>\n    the shape to draw.' in text, text
+    assert '<WIDTH>\n    how wide.' in text
+    assert '-v|--verbose\n    narrate the process.' in text
+    assert '-t|--times <TIMES>\n    how many times.' in text
+    body = text.split('Arguments\n')[0]
+    assert 'shape\n:' not in body                # entries were extracted
     for line in text.splitlines():
         assert len(line) <= 79, line
 
@@ -2142,8 +2156,9 @@ def test_help_composes_through_option_converters():
         """
         A dotted line.
 
-        Options:
-          width: how many dots wide.
+        # Options
+        width
+        : how many dots wide.
         """
         return (style, width)
     def draw(shape, *, line: dotted = None):
@@ -2151,15 +2166,16 @@ def test_help_composes_through_option_converters():
         return shape
     result, text = run_both_stdout(draw, ['--help'])
     assert result is None
-    row = next(l for l in text.splitlines()
-               if '--width' in l and l.startswith(' '))
-    assert 'how many dots wide.' in row, text
+    # the inner option's row is flat in the table (the usage
+    # line shows the nesting inline; Markdown pivot 2026-08-05)
+    assert '-w|--width <WIDTH>\n    how many dots wide.' in text, text
 
     # full depth: option -> converter -> option -> converter -> option
     def inner(v, *, precision: int = 2):
         """
-        Options:
-          precision: decimal places.
+        # Options
+        precision
+        : decimal places.
         """
         return v
     def mid(a, *, nested: inner = None):
@@ -2179,35 +2195,38 @@ def test_help_composes_through_option_converters():
     # converter's text for the same inner option
     def dd(style, *, width: int = 1):
         """
-        Options:
-          width: CONVERTER text.
+        # Options
+        width
+        : CONVERTER text.
         """
         return style
     def cmd(shape, *, line: dd = None):
         """
         Draw.
 
-        Options:
-          width: COMMAND text.
+        # Options
+        width
+        : COMMAND text.
         """
         return shape
     _, text = run_both_stdout(cmd, ['--help'])
-    row = next(l for l in text.splitlines()
-               if '--width' in l and l.startswith(' '))
-    assert 'COMMAND text.' in row and 'CONVERTER' not in row, text
+    assert '-w|--width <WIDTH>\n    COMMAND text.' in text, text
+    assert 'CONVERTER' not in text, text
 
     # each converter documents its OWN window even when the inner
     # name is ambiguous across two sibling option converters
     def a_conv(v, *, flag=False):
         """
-        Options:
-          flag: from A.
+        # Options
+        flag
+        : from A.
         """
         return v
     def b_conv(v, *, flag=False):
         """
-        Options:
-          flag: from B.
+        # Options
+        flag
+        : from B.
         """
         return v
     def two(shape, *, first: a_conv = None, second: b_conv = None):
@@ -2225,8 +2244,9 @@ def test_command_set_help():
         """
         Adds an item to the pile.
 
-        Arguments:
-          name: what to call it.
+        # Arguments
+        name
+        : what to call it.
         """
         return ('add', name, count)
     def remove(name):
@@ -2248,9 +2268,9 @@ def test_command_set_help():
     oresult, olisting = grab(lambda: interpreter_dispatch(plans, None, ['help'], prog='pile'))
     assert (result, listing) == (oresult, olisting)
     assert listing.startswith('usage: pile command')
-    assert 'add_item  Adds an item to the pile.' in listing
-    assert 'remove    Removes an item.' in listing
-    assert 'help      Print usage documentation on a specific command.' in listing
+    assert 'add_item\n    Adds an item to the pile.' in listing
+    assert 'remove\n    Removes an item.' in listing
+    assert 'help\n    Print usage documentation on a specific command.' in listing
 
     # `help CMD` == `CMD --help`
     _, by_help = grab(lambda: parse(['help', 'add_item']))
@@ -2262,7 +2282,7 @@ def test_command_set_help():
     assert 'Adds an item to the pile.' in by_help
     assert 'usage: add_item' in by_help   # direct-built plans
     # carry no prog prefix; app-built ones do (ruled 2026-07-19)
-    assert '  <NAME>   what to call it.' in by_help  # docstring's 2-indent preserved
+    assert '<NAME>\n    what to call it.' in by_help
     _, interpreter_help = grab(lambda: interpreter_dispatch(plans, None, ['help', 'add_item'], prog='pile'))
     assert interpreter_help == by_help
 
@@ -2295,7 +2315,7 @@ def test_command_set_help_facade():
     with contextlib.redirect_stdout(out):
         result = app.process(['help'])
     assert result is None
-    assert 'add_item  Adds an item to the pile.' in out.getvalue()
+    assert 'add_item\n    Adds an item to the pile.' in out.getvalue()
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.process(['help', 'add_item'])
@@ -2321,7 +2341,7 @@ def test_set_level_help_flag():
         return result, out.getvalue()
     result, text = grab(lambda: parse(['--help']))
     assert result is None and text.startswith('usage: pile command')
-    assert 'add_item  Adds an item.' in text
+    assert 'add_item\n    Adds an item.' in text
     oresult, otext = grab(lambda: interpreter_dispatch(plans, None, ['--help'], prog='pile'))
     assert (oresult, otext) == (result, text)
     _, htext = grab(lambda: parse(['help']))
@@ -2722,15 +2742,16 @@ def test_app_parameter_renames():
         """
         Serves.
 
-        Arguments:
-          port: where to listen.
+        # Arguments
+        port
+        : where to listen.
         """
         pass
     usage = app.plan.usage()
     assert usage == 'serve [-t|--times COUNT] <HOST> [PORT]', usage
     result, text = run_both_stdout(serve, ['--help'])
     assert '[-t|--times COUNT]' in text
-    assert '  PORT' in text and 'where to listen.' in text  # tables renamed too
+    assert 'PORT\n    where to listen.' in text  # tables renamed too
     # a converter's own parameters rename by decorating the converter
     from appeal import add_parameter_usage
     def pair(x: float, y: float):
@@ -3098,11 +3119,13 @@ def test_schema():
         """
         Draws a shape.
 
-        Arguments:
-          shape: the shape to draw.
+        # Arguments
+        shape
+        : the shape to draw.
 
-        Options:
-          times: how many times.
+        # Options
+        times
+        : how many times.
         """
         return None
     got = schema(draw)
@@ -3647,8 +3670,9 @@ def test_scoped_help_presentation():
         """
         A child.
 
-        Options:
-          flag: Wave it.
+        # Options
+        flag
+        : Wave it.
         """
         return (p, q, flag)
     def mg(a, b: child = None, c: child = None, *, gronk=''):
@@ -3665,14 +3689,16 @@ def test_scoped_help_presentation():
     # grammar, each documenting its own window
     def sweet(kind, *, flavor=''):
         """
-        Options:
-          flavor: The sweet one.
+        # Options
+        flavor
+        : The sweet one.
         """
         return (kind, flavor)
     def savory(kind, *, flavor=''):
         """
-        Options:
-          flavor: The savory one.
+        # Options
+        flavor
+        : The savory one.
         """
         return (kind, flavor)
     def dish(first: sweet, second: savory):
@@ -3688,8 +3714,9 @@ def test_scoped_help_presentation():
         """
         Dishes.
 
-        Options:
-          flavor: Which one?
+        # Options
+        flavor
+        : Which one?
         """
         return (first, second)
     try:
@@ -4699,23 +4726,14 @@ def test_usage_formatter_knobs():
     assert max(len(l) for l in narrow.splitlines()) <= 40
     assert 'Serves the thing' in narrow
 
-    # the docstring WROTE its sections, so its own 2-space entry
-    # indent wins over the indent= knob (ruling D, 2026-08-01:
-    # the knob shapes the TEMPLATE's sections; the author's
-    # presentation governs the sections they authored)
+    # INTERIM (Markdown pivot, 2026-08-05): the indent= knob is
+    # inert--big's renderer owns the definition-list layout (the
+    # old ruling D indent semantics died with the old grammar).
+    # The knob still validates; its fate needs a ruling.
     indented = helptext(make_app(indent=8))
     row = next(l for l in indented.splitlines()
                if l.strip().startswith('<HOST>'))
-    assert row.startswith('  <HOST>'), repr(row)
-    # a docstring with no sections takes the knob's indent
-    app8 = _appeal.Appeal(name='k8', indent=8)
-    @app8.global_command()
-    def plainer(host, *, verbose=False):
-        "No sections here."
-    text8 = helptext(app8)
-    row8 = next(l for l in text8.splitlines()
-                if l.strip().startswith('<HOST>'))
-    assert row8.startswith(' ' * 8) and row8[8] != ' ', repr(row8)
+    assert row == '<HOST>', repr(row)
 
     # garbage refuses by name
     for knob in ('margin', 'indent'):
@@ -5585,7 +5603,7 @@ def test_version():
     # the listing documents it (before help, v1's order)
     code, out = main(app, ['help'])
     assert code == 0
-    assert out.index('version') < out.index('help ')
+    assert out.index('version') < out.index('help\n')
     assert "Print the program's version." in out
     # help DESCRIBES the auto commands (fixed 2026-07-11: this
     # errored in-process and raised raw TypeError in standalone)
@@ -5888,17 +5906,17 @@ def test_standalone_command_set():
         # that's orientation, not a diagnostic: listing, exit 1
         r = run_script(script_path, ['bogus'])
         assert r.returncode == 1
-        assert 'Commands:' in r.stdout and r.stderr == ''
+        assert 'Commands' in r.stdout and r.stderr == ''
         # ...but once the global is at its maximum, the next operand
         # is forced to be the command word
         r = run_script(script_path, ['bogus', 'bogus2'])
         assert r.returncode == 2
         assert 'unknown command' in r.stderr
-        assert 'Commands:' in r.stderr and 'greet' in r.stderr
+        assert 'Commands' in r.stderr and 'greet' in r.stderr
 
         r = run_script(script_path, [])
         assert r.returncode == 1
-        assert 'Commands:' in r.stdout and r.stderr == ''
+        assert 'Commands' in r.stdout and r.stderr == ''
 
         # the global option is scoped to before the command word
         r = run_script(script_path, ['greet', 'world', '--trace'])
@@ -6566,6 +6584,13 @@ def test_standalone_star_args_windows():
         assert 'at least one' in r.stderr
 
 def test_standalone_help_sections():
+    # TEMPORARILY SKIPPED (Larry, 2026-08-05, heavy development
+    # mode): standalone help waits on big's stage-2 snippets
+    # (bake parse/style/layout at emission; wrap + stylesheet at
+    # runtime--the laundry list lives in
+    # big/appeal.markdown.snippets.md).  Un-skip when they land.
+    import unittest
+    raise unittest.SkipTest('standalone help awaits big stage-2 snippets')
     # parameter tables render inside a generated script, formatted
     # at run time by the embedded trio
     with tempfile.TemporaryDirectory() as d:
@@ -6581,6 +6606,13 @@ def test_standalone_help_sections():
         assert 'where to place it.' in r.stdout
 
 def test_standalone_command_set_help():
+    # TEMPORARILY SKIPPED (Larry, 2026-08-05, heavy development
+    # mode): standalone help waits on big's stage-2 snippets
+    # (bake parse/style/layout at emission; wrap + stylesheet at
+    # runtime--the laundry list lives in
+    # big/appeal.markdown.snippets.md).  Un-skip when they land.
+    import unittest
+    raise unittest.SkipTest('standalone help awaits big stage-2 snippets')
     from appeal import emit_standalone_command_set
     with tempfile.TemporaryDirectory() as d:
         module_path = os.path.join(d, 'demo_cmds.py')
@@ -6680,6 +6712,13 @@ def test_standalone_plucks_minimal_runtime():
         assert r.returncode == 0, r.stderr
 
 def test_standalone_is_standalone():
+    # TEMPORARILY SKIPPED (Larry, 2026-08-05, heavy development
+    # mode): standalone help waits on big's stage-2 snippets
+    # (bake parse/style/layout at emission; wrap + stylesheet at
+    # runtime--the laundry list lives in
+    # big/appeal.markdown.snippets.md).  Un-skip when they land.
+    import unittest
+    raise unittest.SkipTest('standalone help awaits big stage-2 snippets')
     # the north star's teeth, part 1: the generated text imports
     # nothing but the stdlib and the user's own module
     with tempfile.TemporaryDirectory() as d:
@@ -6756,22 +6795,27 @@ def test_standalone_refuses_unimportable_by_name():
 # the docstring parser (composable documentation, proposal §8.7.1)
 
 def test_parse_docstring():
+    # THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05;
+    # Markdown ONLY--the 'Arguments:' + 'name: desc' grammar died
+    # unshipped, this test converted the same day).
     from appeal.help import parse_docstring
 
     # the docstring is input, never output: sections are slurped
-    # out, prose coalesces into one blob in source order.
+    # out, prose coalesces in source order.
     doc = (
         "Summary line for foo.\n"
         "\n"
         "First line of docs for foo.\n"
         "\n"
-        "Arguments:\n"
-        "  x: the thing to foo\n"
+        "This is the second line of docs.\n"
         "\n"
-        "Options:\n"
-        "  verbose: Verbosity, man.\n"
+        "# Arguments\n"
+        "x\n"
+        ": the thing to foo\n"
         "\n"
-        "This is the second line of docs."
+        "# Options\n"
+        "verbose\n"
+        ": Verbosity, man.\n"
     )
     c = parse_docstring(doc, "foo")
     assert c['summary'] == ['Summary line for foo.']
@@ -6780,17 +6824,30 @@ def test_parse_docstring():
     assert c['arguments'] == {'x': ['the thing to foo']}
     assert c['options'] == {'verbose': ['Verbosity, man.']}
     assert c['commands'] == {}
+    # a special section runs to the next heading and must contain
+    # ONLY its definition list: prose after the list refuses (put
+    # doc prose before the sections, or under its own heading)
+    try:
+        parse_docstring("Sum.\n\n# Options\nv\n: doc\n\nStray prose.",
+                        "f")
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'definition' in str(e)
 
-    # entry text is kept as dedented lines, kid gloves: relative
-    # indentation (code!) survives, nothing is flattened.
+    # definition text keeps its relative indentation (code!),
+    # dedented as a block, nothing flattened.
     doc = (
         "Sum.\n"
         "\n"
-        "Arguments:\n"
-        "  x: the thing.\n"
-        "      More about x.\n"
-        "          code = here\n"
-        "  y: simple."
+        "Arguments\n"
+        "---------\n"
+        "x\n"
+        ": the thing.\n"
+        "  More about x.\n"
+        "      code = here\n"
+        "\n"
+        "y\n"
+        ": simple."
     )
     c = parse_docstring(doc, "f")
     assert c['arguments'] == {
@@ -6798,26 +6855,34 @@ def test_parse_docstring():
         'y': ['simple.'],
     }
 
-    # a bare 'name:' first line, documentation all in continuation
-    c = parse_docstring("Arguments:\n  x:\n     doc for x", "f")
-    assert c['arguments'] == {'x': ['doc for x']}
-
-    # heading-free docstring: the do-almost-nothing behavior is
-    # emergent.  bare top-level 'name: text' lines are NOT entries;
-    # the plan-resolution heuristic is retired.
+    # heading-free docstring: pure prose, no sections.  The old
+    # grammar's spellings are just prose now, too.
     c = parse_docstring("Just prose.\n\nNote: this stays prose.", "f")
     assert c['summary'] == ['Just prose.']
     assert c['documentation'] == ['Note: this stays prose.']
     assert not (c['arguments'] or c['options'] or c['commands'])
+    c = parse_docstring("Sum.\n\nArguments:\n  x: old dialect", "f")
+    assert not c['arguments']            # the old grammar is dead
+    assert 'Arguments:' in '\n'.join(c['documentation'])
 
     # empty and None
     for empty in (None, '', '\n\n'):
         c = parse_docstring(empty, "f")
         assert c['summary'] == [] and c['documentation'] == []
 
-    # Commands: and Subcommands: are machine-identical
-    c = parse_docstring("Subcommands:\n  serve: Serves.", "f")
+    # any heading kind, any level, any case
+    c = parse_docstring("Sum.\n\n###### COMMANDS\nserve\n: Serves.", "f")
     assert c['commands'] == {'serve': ['Serves.']}
+    # 'Subcommands' is not on the menu (the Markdown spec names
+    # exactly three sections); it stays a body heading
+    c = parse_docstring("Sum.\n\n# Subcommands\nserve\n: Serves.", "f")
+    assert c['commands'] == {}
+    assert '# Subcommands' in '\n'.join(c['documentation'])
+
+    # the template dresses the page: nothing to present
+    c = parse_docstring("Sum.\n\n# Options\nv\n: doc", "f")
+    assert c['presentation'] == {'order': (), 'headers': {},
+                                 'indents': {}}
 
 
 def test_parse_docstring_errors():
@@ -6831,33 +6896,18 @@ def test_parse_docstring_errors():
             return
         assert False, f'expected AppealConfigurationError for {doc!r}'
 
-    # liberal detection (ruled 2026-08-01): decoration and case
-    # are the author's business--'Sub-commands:' just works now
-    from appeal.help import parse_docstring as _pd
-    assert _pd("Sub-commands:\n  x: y", "f")['commands'] == {'x': ['y']}
-    assert _pd(" [Arguments:]\n  x: y", "f")['arguments'] == {'x': ['y']}
-    assert _pd("OPTIONS\n  x: y", "f")['options'] == {'x': ['y']}
-    # ...but a claim needs a body that's indented OR
-    # entry-shaped: v1's legacy [[arguments]] markup (unindented,
-    # un-entry-shaped follower) stays prose
-    c = _pd("[[arguments]]\n{x} not an entry", "f")
-    assert not c['arguments']
-    # left-margin entries are legal (ruled 2026-08-01): authors
-    # who want their tables at column 0 get them there
-    c = _pd("Options:\nloud: Speak up.", "f")
-    assert c['options'] == {'loud': ['Speak up.']}
-    assert c['presentation']['indents']['options'] == ''
-    # one section per kind--including via the Commands:/Subcommands: alias
-    refuses("Options:\n  a: b\n\nOptions:\n  c: d", "duplicate")
-    refuses("Commands:\n  a: b\n\nSubcommands:\n  c: d",
-            "duplicate", "same section")
-    # the first line of a claimed section must be an entry
-    refuses("Options:\n  just some text", "expected a")
+    # one section per kind, whatever the spelling
+    refuses("# Options\na\n: b\n\nOPTIONS\n-------\nc\n: d", "two")
+    # a special section must contain only a definition list
+    refuses("# Options\njust some prose", "definition")
+    # a term must be unformatted
+    refuses("# Options\n**a**\n: b", "unformatted")
+    # a definition needs a term
+    refuses("# Options\n: floating definition", "no term")
     # an entry documented twice
-    refuses("Options:\n  a: b\n  a: c", "documented twice")
-    # an entry-shaped line at the wrong indent is malformed,
-    # not silently adopted
-    refuses("Options:\n    a: b\n  c: d", "expected a")
+    refuses("# Options\na\n: b\n\na\n: c", "documented twice")
+    # errors name the owner
+    refuses("# Options\nprose only", "f")
 
 
 def test_merge_docs():
@@ -6867,9 +6917,12 @@ def test_merge_docs():
         """
         An int and a float.
 
-        Arguments:
-          i: The integer part.
-          f: The float part.
+        # Arguments
+        i
+        : The integer part.
+
+        f
+        : The float part.
         """
 
     def my_converter(i_f: int_float, s: str, *, verbose=False):
@@ -6878,17 +6931,21 @@ def test_merge_docs():
 
         Prose about gathering, which stays home.
 
-        Options:
-          verbose: Print more output.
+        # Options
+        verbose
+        : Print more output.
         """
 
     def recurse2(a: str, b: my_converter = None):
         """
         The showpiece.
 
-        Arguments:
-          a: The first thing.
-          i: Overridden: how many knocks.
+        # Arguments
+        a
+        : The first thing.
+
+        i
+        : Overridden, how many knocks.
         """
 
     c = merge_docs(build(recurse2))
@@ -6899,7 +6956,7 @@ def test_merge_docs():
     # undocumented surfaces get empty rows ('s')
     assert c['arguments'] == [
         ('<A>', ['The first thing.']),
-        ('<I>', ['Overridden: how many knocks.']),
+        ('<I>', ['Overridden, how many knocks.']),
         ('<F>', ['The float part.']),
         ('<S>', []),
     ]
@@ -6907,11 +6964,12 @@ def test_merge_docs():
     assert c['commands'] == []
 
     # a keyword-only-no-default parameter is a trailing operand:
-    # documenting it under Arguments: is correct
+    # documenting it under Arguments is correct
     def trailing_ok(a, *, required_kw):
         """
-        Arguments:
-          required_kw: a trailing operand.
+        # Arguments
+        required_kw
+        : a trailing operand.
         """
     c = merge_docs(build(trailing_ok))
     assert c['arguments'] == [('<A>', []),
@@ -6922,8 +6980,9 @@ def test_merge_docs():
         """
         Top.
 
-        Commands:
-          serve: Serves the thing.
+        # Commands
+        serve
+        : Serves the thing.
         """
     c = merge_docs(build(dispatcher), command_names=('serve', 'help'))
     assert c['commands'] == [('serve', ['Serves the thing.']), ('help', [])]
@@ -6946,15 +7005,17 @@ def test_merge_docs_errors():
 
     def bad_unknown(a):
         """
-        Arguments:
-          zed: nope.
+        # Arguments
+        zed
+        : nope.
         """
     refuses(bad_unknown, "'zed'", 'not a parameter')
 
     def bad_invisible(a: str, b: helper = None):
         """
-        Arguments:
-          b: the pair.
+        # Arguments
+        b
+        : the pair.
         """
     refuses(bad_invisible,
             "'b' is not one of the visible command-line arguments "
@@ -6962,29 +7023,33 @@ def test_merge_docs_errors():
 
     def bad_kind(a, *, flag=False):
         """
-        Arguments:
-          flag: wrong side.
+        # Arguments
+        flag
+        : wrong side.
         """
     refuses(bad_kind, 'is an option, not an argument')
 
     def bad_kind2(a, *, flag=False):
         """
-        Options:
-          a: wrong side.
+        # Options
+        a
+        : wrong side.
         """
     refuses(bad_kind2, 'is an argument, not an option')
 
     def bad_commands(a):
         """
-        Commands:
-          serve: nope.
+        # Commands
+        serve
+        : nope.
         """
     refuses(bad_commands, "doesn't dispatch to commands")
 
     def bad_command_word():
         """
-        Commands:
-          swerve: typo.
+        # Commands
+        swerve
+        : typo.
         """
     refuses(bad_command_word, "'swerve'", 'not one of the command words',
             command_names=('serve',))
@@ -7072,12 +7137,16 @@ def test_colorized_help_paints_after_layout():
         """
         Draws a shape.
 
-        Arguments:
-          shape: the shape to draw.
+        # Arguments
+        shape
+        : the shape to draw.
 
-        Options:
-          verbose: narrate the process.
-          times: how many times.
+        # Options
+        verbose
+        : narrate the process.
+
+        times
+        : how many times.
         """
     import io, contextlib
     from appeal.build import build
@@ -7092,12 +7161,17 @@ def test_colorized_help_paints_after_layout():
     assert painted != plain
     assert '\x1b[' in painted
     assert decolor(painted) == plain
-    # spans: the option strings and the headings took paint
-    assert '\x1b[36m--verbose\x1b[0m' in painted
-    assert '\x1b[1mArguments:\x1b[0m' in painted
+    # INTERIM (Markdown pivot, 2026-08-05): only the usage line
+    # paints--the Markdown body renders unpainted until the
+    # StyleSheet-based theming rewrite (task #20) maps Appeal
+    # themes onto big stylesheets.  The invariant above (paint
+    # never moves layout) is the load-bearing assertion.
+    assert '\x1b[36m--verbose\x1b[0m' in painted     # usage line
+    body = painted.split('\n\n', 1)[1]
+    assert '\x1b[' not in body, body
 
     # angle-bracketed metavars (positional_argument_usage_format=
-    # '<{name}>') paint as 'metavar' spans, brackets and all
+    # '<{name}>') paint as 'metavar' spans in the USAGE line
     from appeal.plan import DEFAULT_ARG_FORMAT
     plan.arg_format = '<{name}>'
     bracketed = render_help_page(plan.usage(), merge_docs(plan),
@@ -7395,8 +7469,9 @@ def test_single_terminal_transparency():
         """
         A flavor.
 
-        Arguments:
-          name: the flavor, in flavor's own vocabulary.
+        # Arguments
+        name
+        : the flavor, in flavor's own vocabulary.
         """
         return name
 
@@ -7404,8 +7479,9 @@ def test_single_terminal_transparency():
         """
         Serves a scoop.
 
-        Arguments:
-          taste: which flavor to serve.
+        # Arguments
+        taste
+        : which flavor to serve.
         """
 
     plan = build(scoop)

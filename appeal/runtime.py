@@ -3378,14 +3378,14 @@ def render_usage(usage, margin=79):
 ## Templates (Larry's single-template model, ruled 2026-08-01).
 ## ONE template string defines the help page: six {sections}--
 ## usage, summary, doc, options, arguments, commands--all
-## required.  The text between placeholders is each section's
-## "header"; the whitespace after the header's last newline is
-## the section body's per-line indent.  usage is special:
-## single-line, always rendered (unless suppressed).  Empty
-## sections are suppressed, header and all.  The user's own
-## docstring section headers (detected liberally, decoration
-## preserved) override the template's, and the user's section
-## ORDER wins for the sections they wrote.
+## required.  The template establishes the ORDER of the page
+## (the Markdown pivot, ruled 2026-08-05); the text between
+## placeholders is each section's header, written in MARKDOWN
+## ('## Options' by default)--the docstring's own heading
+## decoration is input spelling, stripped by the scanner; the
+## template dresses the page.  usage is special: not Markdown,
+## rendered and wrapped separately.  Empty sections are
+## suppressed, header and all.
 ##
 
 default_template = (
@@ -3395,14 +3395,14 @@ default_template = (
     '\n'
     '{doc}\n'
     '\n'
-    'Arguments:\n'
-    '    {arguments}\n'
+    '## Arguments\n'
+    '{arguments}\n'
     '\n'
-    'Options:\n'
-    '    {options}\n'
+    '## Options\n'
+    '{options}\n'
     '\n'
-    'Commands:\n'
-    '    {commands}\n'
+    '## Commands\n'
+    '{commands}\n'
 )
 
 _TEMPLATE_SECTIONS = ('usage', 'summary', 'doc', 'options',
@@ -3482,59 +3482,81 @@ def _render_rows(name, rows, indent, margin=79, theme=None):
     return '\n'.join(lines)
 
 
+def rows_markdown(rows):
+    """
+    Corpus rows [(display, doc-lines), ...] as one Markdown
+    definition list, definition order preserved (ruled
+    2026-08-05).  An undocumented row is a term with an empty
+    definition.  Entry lines are already Markdown; continuation
+    lines re-indent under the ':'.
+    """
+    parts = []
+    for display, lines in rows:
+        body = [l for l in lines] or ['']
+        # ': ' with nothing after it is the empty definition
+        # (bare ':' wouldn't parse as a definition list).  A
+        # nested option's depth prefix would read as Markdown
+        # continuation: the table is flat--the usage line shows
+        # the nesting inline.
+        display = display.lstrip()
+        first = f": {body[0]}" if body[0] else ": "
+        rest = [("  " + l) if l.strip() else '' for l in body[1:]]
+        parts.append('\n'.join([display, first] + rest))
+    return '\n\n'.join(parts)
+
+
+def render_markdown(text, margin=79, theme=None):
+    """
+    Markdown -> terminal text via big's whole pipeline: parse ->
+    style_document -> split_styles_document -> render_terminal ->
+    join_styles -> StyleSheet.render.  theme=None renders plain
+    (styles resolve to nothing); themed rendering arrives with
+    the StyleSheet-based theming rewrite.  Requires big:
+    standalone scripts wait on the stage-2 snippets (accepted,
+    2026-08-05, heavy development mode).
+    """
+    from big.markdown import (markdown_defaults, parse,
+                              render_terminal,
+                              split_styles_document, style_document)
+    from big.stylesheet import join_styles, plain_stylesheet
+    document = split_styles_document(style_document(parse(text)))
+    rendered = render_terminal(document, width=margin)
+    sheet = plain_stylesheet | markdown_defaults
+    return sheet.render(join_styles(rendered))
+
+
 def render_help_page(usage, corpus, templates, margin=79, theme=None,
                      suppress=()):
     """
-    The --help page: the template's sections, three phases (ruled
-    2026-08-01): leading template sections the user didn't write;
-    then the user's sections in the USER's order, wearing the
-    user's own headers; then the rest in template order.  Empty
-    sections are suppressed; usage always renders unless
-    suppressed.  suppress names sections to omit entirely, header
-    included (help()'s usage=/summary=/doc= knobs, ruled
-    2026-08-05).  With a theme, spans paint after layout.
+    The --help page, the Markdown pivot's engine (ruled
+    2026-08-05): the template establishes the page's ORDER and
+    dresses its headings (Markdown, '## Options' by default);
+    the corpus fills the slots--summary and doc are Markdown
+    prose, the three tables become definition lists whose terms
+    are the resolved displays, rows synthesized in definition
+    order.  The assembled document renders through big's
+    pipeline in one pass.  usage is not Markdown: rendered and
+    wrapped separately, at whole units, painted when themed.
+    Empty sections are suppressed, header and all; suppress
+    names slots to omit entirely (help()'s usage=/summary=/doc=
+    knobs).
     """
-    def prose(lines):
-        if not lines:
-            return ''
-        return wrap_words(split_text_with_code('\n'.join(lines)),
-                          margin)
-
     parsed = parse_help_template(templates)
-    by_name = {name: (header, indent) for name, header, indent
-               in parsed}
-    template_order = [name for name, _, _ in parsed]
+    pieces = []        # rendered text pieces, template order
+    md = []            # pending markdown, flushed around usage
 
-    pres = corpus.get('presentation') or {}
-    summary_lines = list(corpus['summary'])
-    doc_lines = list(corpus['documentation'])
-    user_order = ([s for s, lines in (('summary', summary_lines),
-                                      ('doc', doc_lines)) if lines])
-    user_order += [s for s in pres.get('order', ())
-                   if s in by_name]
+    def flush():
+        text = ''.join(md)
+        md.clear()
+        if text.strip():
+            pieces.append(render_markdown(text, margin, theme)
+                          .rstrip('\n'))
 
-    # the three phases
-    order = []
-    i = 0
-    for name in template_order:
-        if name in user_order:
-            break
-        order.append(name)
-    order.extend(user_order)
-    for name in template_order:
-        if name not in order:
-            order.append(name)
-
-    pieces = []
-    for name in order:
+    for name, header, indent in parsed:
         if name in suppress:
             continue
-        header, indent = by_name[name]
-        user_header = None
-        if name in pres.get('headers', {}):
-            user_header = pres['headers'][name]
-            indent = pres.get('indents', {}).get(name) or indent
         if name == 'usage':
+            flush()
             nl = header.rfind('\n')
             lead, prefix = ((header[:nl + 1], header[nl + 1:])
                             if nl >= 0 else ('', header))
@@ -3542,40 +3564,20 @@ def render_help_page(usage, corpus, templates, margin=79, theme=None,
                               indent=(prefix, ' ' * len(prefix)))
             if theme is not None:
                 body = paint_usage(theme, body)
-            pieces.append(lead + body)
+            pieces.append(body)
             continue
-        if name in ('summary', 'doc'):
-            body = prose(summary_lines if name == 'summary'
-                         else doc_lines)
-            if not body:
-                continue
-            if theme is not None and name == 'summary':
-                body = '\n'.join(theme.paint('summary', line)
-                                 if line else line
-                                 for line in body.split('\n'))
-            if indent:
-                import textwrap as _textwrap
-                body = _textwrap.indent(body, indent)
-            emit_header = (header[:len(header) - len(indent)]
-                           if indent else header)
-            pieces.append(emit_header + body)
-            continue
-        body = _render_rows(name, corpus[name], indent, margin,
-                            theme)
-        if not body:
-            continue
-        if user_header is not None:
-            emit_header = user_header
+        if name == 'summary':
+            content = '\n'.join(corpus['summary'])
+        elif name == 'doc':
+            content = '\n'.join(corpus['documentation'])
         else:
-            emit_header = (header[:len(header) - len(indent)]
-                           if indent else header)
-        if theme is not None:
-            emit_header = '\n'.join(
-                theme.paint('heading', line) if line.strip() else line
-                for line in emit_header.split('\n'))
-        pieces.append(emit_header + body)
+            content = rows_markdown(corpus[name])
+        if not content.strip():
+            continue
+        md.append(header + content)
+    flush()
 
-    text = ''.join(pieces)
+    text = '\n\n'.join(pieces)
     while '\n\n\n' in text:
         text = text.replace('\n\n\n', '\n\n')
     return text.lstrip('\n').rstrip() + '\n'
@@ -3608,10 +3610,12 @@ def render_command_listing(usage, corpus, templates, margin=79):
             header, indent = h, ind
     body = _render_rows('commands', corpus['commands'], indent,
                         margin)
-    heading = header.strip('\n')
-    if indent:
-        heading = heading[:len(heading) - len(indent)] \
-            if heading.endswith(indent) else heading
+    # the template's headers are Markdown ('## Commands'); the
+    # terse listing wants plain text--strip ATX marks and setext
+    # underlines, spell it heading-colon
+    words = [l.lstrip('#').strip() for l in header.split('\n')
+             if l.strip() and set(l.strip()) - set('=-')]
+    heading = (words[0] + ':') if words else 'Commands:'
     return usage + '\n\n' + (heading + '\n' + body).rstrip('\n') \
         if body else usage
 

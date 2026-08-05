@@ -457,11 +457,13 @@ def test_schema_branches():
         """
         Does things.
 
-        Arguments:
-          plain: An untyped operand.
+        # Arguments
+        plain
+        : An untyped operand.
 
-        Options:
-          flag: A boolean.
+        # Options
+        flag
+        : A boolean.
         """
         return plain
     schema = mcp_input_schema(build(cmd))
@@ -2717,7 +2719,7 @@ def test_section_template_more_fails():
     assert page.index('Opts:') < page.index('Sum.') < \
         page.index('Args:'), page
     assert 'Cmds:' not in page
-    assert '  -x' in page and '  a  doc a' in page
+    assert '-x' in page and 'a\n    doc a' in page
 
 
 # ---------------------------------------------------------------------
