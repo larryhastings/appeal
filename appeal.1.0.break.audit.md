@@ -480,6 +480,22 @@ outcome, value, AND type.  22 raw divergences, clustering into:
 * **F1 (docstring format): NOT a break.**  Larry: the new
   `Arguments:` grammar is desirable, keep it, do not restore
   `[[arguments]]`.  Remains listed as a documented 1.0 change.
+  SUPERSEDED (Larry, 2026-08-05, the Markdown pivot): **the
+  docstring format is Markdown, and Markdown ONLY**--summary =
+  first paragraph, doc = the rest, sections = any heading named
+  Options/Arguments/Commands containing one definition list;
+  the `Arguments:` + `name: desc` grammar dies unshipped with
+  the corpus converted (one format ships).  The template
+  survives as the page's ORDER (its headings become Markdown,
+  default `## Options` etc.; user heading decoration is input
+  spelling, stripped--the template dresses the page); rows
+  synthesize for undocumented parameters, definition order
+  everywhere.  Standalone: two-stage renderer (bake
+  parse/style/layout at emission; wrap + stylesheet at runtime
+  via new big snippets--the laundry list lives in
+  big/appeal.markdown.snippets.md); standalone help may break
+  temporarily during the transition (accepted, heavy
+  development mode).
 
 ## C. Message/format divergences (same outcome, different text)
 
