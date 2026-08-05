@@ -1199,7 +1199,7 @@ def test_markdown_renderer():
 
 
 def test_documentation_markdown_formats():
-    # documentation('github'/'commonmark') is the API spelling--
+    # documentation('gfm'/'commonmark') is the API spelling--
     # deliberately NO command-line switch (Larry, 2026-08-05).
     import appeal as _appeal
     app = _appeal.Appeal('t')
@@ -1212,7 +1212,7 @@ def test_documentation_markdown_formats():
         host
         : Interface to ~~listen~~ bind on.
         """
-    gh = app.documentation('github')
+    gh = app.documentation('gfm')
     assert '# t' in gh and '## t serve' in gh
     assert '<dl>' in gh and '~~listen~~ bind on' in gh
     cm = app.documentation('commonmark')
@@ -5200,7 +5200,7 @@ def test_subcommands_interacting_with_repeat():
 
 
 def test_documentation_man():
-    # app.documentation('man'): the help corpus in troff clothing
+    # app.documentation('troff'): the help corpus in troff clothing
     # (the completion(shell) shape: a format name in, text out).
     # Installing the page somewhere is packaging's business.
     import appeal as _appeal
@@ -5228,7 +5228,7 @@ def test_documentation_man():
         Options:
           shout: LOUDER.
         """
-    text = app.documentation('man')
+    text = app.documentation('troff')
     assert text.startswith('.TH MYTOOL 1 "" "mytool 2.0" ""\n')
     assert '.SH NAME\nmytool \\- A demonstration tool.' in text
     assert '.B mytool [\\-t|\\-\\-trace] command' in text
@@ -5243,7 +5243,7 @@ def test_documentation_man():
     @solo.global_command()
     def run(thing):
         "Runs the thing."
-    stext = solo.documentation('man')
+    stext = solo.documentation('troff')
     assert '.SH NAME\nsolo \\- Runs the thing.' in stext
     assert '.SH COMMANDS' not in stext
     # unknown formats refuse by name

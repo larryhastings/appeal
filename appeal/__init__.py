@@ -1335,19 +1335,20 @@ class Appeal:
         """
         The program's documentation rendered in the named format--
         the grammar describing itself in one more dialect, like
-        completion(shell).  Formats: 'man' (a troff man(1) page),
-        'github' (Markdown for GitHub/PyPI: definition lists as
-        inline-HTML <dl>, strikethrough stripped, alerts kept),
-        'commonmark' (pure CommonMark: definition lists as bold
-        term + blockquote, alerts as bold-labelled blockquotes).
-        Unknown formats refuse by name.  Returns the text; where
-        it goes is the caller's business--there is deliberately
-        NO command-line switch for this (Larry's ruling,
-        2026-08-05): wire it up yourself if you want one.
+        completion(shell).  Formats (ruled 2026-08-05): 'gfm'
+        (GitHub-flavored Markdown: definition lists as
+        inline-HTML <dl>, everything else GitHub renders
+        natively), 'commonmark' (pure CommonMark: definition
+        lists as bold term + blockquote, strikethrough stripped,
+        alerts as bold-labelled blockquotes), 'troff' (a man(1)
+        page).  Unknown formats refuse by name.  Returns the
+        text; where it goes is the caller's business--there is
+        deliberately NO command-line switch for this: wire it up
+        yourself if you want one.
         """
-        if format in ('github', 'commonmark'):
+        if format in ('gfm', 'commonmark'):
             from .markdown import to_commonmark, to_github
-            transform = (to_github if format == 'github'
+            transform = (to_github if format == 'gfm'
                          else to_commonmark)
             prog = self._prog()
             table = self._table()
@@ -1367,10 +1368,10 @@ class Appeal:
                 if d and d.strip():
                     parts.append(d)
             return transform('\n\n'.join(parts))
-        if format != 'man':
+        if format != 'troff':
             raise AppealConfigurationError(
                 f"documentation format {format!r} isn't supported "
-                f"(only 'man', 'github', and 'commonmark', for now)")
+                f"(only 'gfm', 'commonmark', and 'troff', for now)")
         from .help import command_set_corpus, man_page, merge_docs, summary
         from .plan import command_set_usage
         prog = self._prog()

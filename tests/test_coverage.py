@@ -518,7 +518,7 @@ def test_man_page_edges():
     @app.command()
     def bare():
         pass
-    text = app.documentation('man')
+    text = app.documentation('troff')
     assert '\\&.starts' in text            # leading-dot escape
     assert text.count('.PP') >= 2           # paragraph breaks
     assert 'Sub prose paragraph.' in text   # sub DESCRIPTION prose
@@ -1003,7 +1003,7 @@ def test_man_page_double_blank():
 
         Second paragraph after a double blank.
         """
-    text = app.documentation('man')
+    text = app.documentation('troff')
     assert 'Second paragraph after a double blank.' in text
 
 
