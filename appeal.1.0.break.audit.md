@@ -495,7 +495,23 @@ outcome, value, AND type.  22 raw divergences, clustering into:
   via new big snippets--the laundry list lives in
   big/appeal.markdown.snippets.md); standalone help may break
   temporarily during the transition (accepted, heavy
-  development mode).
+  development mode).  FLENSE LANDED (2026-08-05, same session,
+  commit f2adf77): parse_docstring rewritten to the Markdown
+  grammar (same return contract--the merge machinery survived
+  untouched); render_help_page assembles template-ordered
+  Markdown and renders through big's pipeline (body plain until
+  the theming rewrite; usage still paints);
+  render_command_listing stays compact and big-free (error
+  paths carry no big dependency; its heading derives from the
+  template's Markdown).  Sweep: ~30 suite tests converted;
+  presentation-wins (2026-08-01 D+E) and the indent= knob's
+  semantics died with the old grammar
+  (test_template_dresses_the_page pins the successor; indent=
+  is INERT, fate needs a ruling); nested option rows render
+  flat (a depth prefix reads as Markdown continuation; usage
+  shows the nesting inline); one corpus pin converted (the
+  listing's Commands heading); three standalone-help tests
+  SKIPPED until the snippets land.
 
 ## C. Message/format divergences (same outcome, different text)
 
