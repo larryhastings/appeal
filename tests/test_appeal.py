@@ -914,6 +914,55 @@ def test_main_exits_the_process():
     assert app.process(['fail']) == 3
 
 
+def test_command_error():
+    # E1, RULED (Larry, 2026-08-05): CommandError restored--a
+    # command raises it AFTER parsing succeeded to fail with a
+    # message and a chosen exit code.  main() prints
+    # `error: message` to stderr (NO usage--the command line was
+    # fine) and exits with the code; process() lets it propagate.
+    # v1 documented this contract for AppealCommandError but
+    # never wired the catch; 1.0 wires it.
+    import appeal as _appeal
+    import contextlib, io
+    assert _appeal.AppealCommandError is _appeal.CommandError
+    app = _appeal.Appeal(name='t')
+    @app.command()
+    def deploy(target):
+        raise _appeal.CommandError(f"no such target: {target}",
+                                   exit_code=3)
+    @app.command()
+    def grumble():
+        raise _appeal.CommandError("unhappy")     # default code 1
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), \
+             contextlib.redirect_stderr(err):
+            app.main(['deploy', 'prod'])
+        code = 'returned'
+    except SystemExit as e:
+        code = e.code
+    assert code == 3
+    assert out.getvalue() == ''
+    assert 'error: no such target: prod' in err.getvalue()
+    assert 'usage' not in err.getvalue()
+    try:
+        with contextlib.redirect_stdout(out), \
+             contextlib.redirect_stderr(err):
+            app.main(['grumble'])
+        code = 'returned'
+    except SystemExit as e:
+        code = e.code
+    assert code == 1
+    # process() is the raw API: the exception propagates
+    try:
+        app.process(['grumble'])
+        raised = False
+    except _appeal.CommandError as e:
+        raised = True
+        assert e.exit_code == 1
+    assert raised
+
+
 def test_program_doc_three_tiers():
     # Ruled 2026-08-01: the program's documentation, highest
     # first: (1) Appeal(doc=...); (2) the global command's

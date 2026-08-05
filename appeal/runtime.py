@@ -82,12 +82,28 @@ class UsageError(DataError):
     """
 
 
+class CommandError(AppealError):
+    """
+    Raise FROM YOUR COMMAND to fail with a message and a chosen
+    exit code--parsing succeeded, the work itself went wrong.
+    main() prints `error: message` (no usage: the command line
+    was fine) and exits with .exit_code; process() lets it
+    propagate.  (v1 documented exactly this contract for
+    AppealCommandError but never wired the catch; restored and
+    wired, ruled 2026-08-05.)
+    """
+    def __init__(self, message, exit_code=1):
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
 # the old prefixed names (0.6.4 called them exactly that--"old
 # names"--and kept them as aliases; ruled again 2026-07-25:
 # the unprefixed spellings are canonical, appeal.UsageError)
 AppealUsageError = UsageError
 AppealDataError = DataError
 AppealConfigurationError = ConfigurationError
+AppealCommandError = CommandError
 AppealBaseException = AppealError
 
 
@@ -98,16 +114,21 @@ def foreign_appeal_error(e):
     are the INSTALLED appeal's classes--not this script's
     streamed copies, and `except` can't match them by identity
     (the two-copies problem, exceptions edition; see is_option).
-    Recognizes one by name and home; returns 'configuration',
-    'data', 'error', or None.
+    Recognizes one by name and home (canonical or old-prefixed
+    spelling--the raiser controls which is its class's real
+    __name__); returns 'configuration', 'data', 'command',
+    'error', or None.
     """
     for c in type(e).__mro__:
         if not c.__module__.endswith('appeal.runtime'):
             continue
-        if c.__name__ == 'AppealConfigurationError':
+        if c.__name__ in ('ConfigurationError',
+                          'AppealConfigurationError'):
             return 'configuration'
-        if c.__name__ == 'AppealDataError':
+        if c.__name__ in ('DataError', 'AppealDataError'):
             return 'data'
+        if c.__name__ in ('CommandError', 'AppealCommandError'):
+            return 'command'
         if c.__name__ == 'AppealError':
             return 'error'
     return None
@@ -1148,6 +1169,11 @@ def run_main(parse, args=None, theme=None, completion=None,
         return 2
     except AppealConfigurationError:
         raise               # a bug in the program: traceback
+    except CommandError as e:
+        # the command failed on purpose: message, its chosen
+        # code, no usage (the command line was fine)
+        print(f"{error_prefix()} {e}", file=error_stream())
+        return e.exit_code
     except AppealError as e:
         print(f"{error_prefix()} {e}", file=error_stream())
         return 1
@@ -1161,6 +1187,10 @@ def run_main(parse, args=None, theme=None, completion=None,
             if usage:
                 print(f"usage: {usage}", file=error_stream())
             return 2
+        if kind == 'command':
+            print(f"{error_prefix()} {e}", file=error_stream())
+            code = getattr(e, 'exit_code', 1)
+            return code if isinstance(code, int) else 1
         if kind == 'error':
             print(f"{error_prefix()} {e}", file=error_stream())
             return 1

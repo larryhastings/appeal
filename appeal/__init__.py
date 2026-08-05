@@ -37,7 +37,7 @@ from .read import read_csv, read_iterable, read_mapping
 from .schema import schema, schema_set
 from .runtime import (
     AppealConfigurationError, AppealDataError, AppealError,
-    MultiOption, Option, StrictOption, Theme,
+    CommandError, MultiOption, Option, StrictOption, Theme,
     UsageError, accumulator, counter, file, mapping, optional,
     run_main, split,
     validate, validate_range,
@@ -46,7 +46,8 @@ from .runtime import (
 # every exception, both spellings (the prefixed forms are the
 # real names--they're what tracebacks show, v1's rendering kept)
 from .runtime import (
-    AppealBaseException, AppealUsageError, ConfigurationError, DataError,
+    AppealBaseException, AppealCommandError, AppealUsageError,
+    ConfigurationError, DataError,
     )
 
 

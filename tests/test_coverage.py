@@ -1833,8 +1833,15 @@ def test_foreign_appeal_error_names():
     # exceptions from ANOTHER copy of appeal.runtime (a standalone
     # script) are recognized by name and home
     from appeal.runtime import foreign_appeal_error
+    # both spellings: the raiser's class __name__ is the
+    # canonical unprefixed form when it imported installed
+    # appeal, the prefixed form is the old-names alias family
     for name, kind in (('AppealConfigurationError', 'configuration'),
+                       ('ConfigurationError', 'configuration'),
                        ('AppealDataError', 'data'),
+                       ('DataError', 'data'),
+                       ('AppealCommandError', 'command'),
+                       ('CommandError', 'command'),
                        ('AppealError', 'error')):
         cls = type(name, (Exception,),
                    {'__module__': 'script.appeal.runtime'})
