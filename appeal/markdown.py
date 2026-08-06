@@ -350,8 +350,8 @@ def render_markdown_help(text, width=None, stylesheet=None):
     from big.markdown import (layout_document, markdown_defaults,
                               parse, split_styles_document,
                               style_document)
-    from big.stylesheet import (ansi_uncolored, join_styles,
-                                strip_styles)
+    from big.stylesheet import (join_styles, strip_styles,
+                                uncolored_palette)
     from big.text import wrap_words
     document = split_styles_document(style_document(parse(text)))
     layout = layout_document(document)
@@ -361,5 +361,5 @@ def render_markdown_help(text, width=None, stylesheet=None):
     rendered = wrap_words(layout, margin=width, raw=strip_styles)
     joined = join_styles(rendered)
     if stylesheet is None:
-        stylesheet = ansi_uncolored | markdown_defaults
+        stylesheet = uncolored_palette | markdown_defaults
     return stylesheet.render(joined)
