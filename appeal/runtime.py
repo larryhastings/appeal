@@ -1431,6 +1431,9 @@ def toy_multisplit(s, separators):
 ##
 
 # --8<-- start appeal stylesheet preamble --8<--
+import os
+import sys
+
 style_delimiters = '⦃⦙⦄'
 
 def export(*args, **kwargs):
@@ -1446,6 +1449,80 @@ def _multisplit(*args, **kwargs):
     # work--a runtime call is a bug, not a fallback
     raise RuntimeError("split_styles is bake-time only")
 # --8<-- end appeal stylesheet preamble --8<--
+
+# --8<-- start big terminal color --8<--
+# (can_colorize + ansi_color_depth; a snippet consumer supplies `sys`,
+#  `os`, and an export() shim.)
+if sys.version_info >= (3, 13):
+    # 3.13+ ships this logic as _colorize.can_colorize; alias it, so we
+    # track CPython exactly (including any later refinements).
+    from _colorize import can_colorize
+    export('can_colorize')
+else:
+    import io as _io
+
+    @export
+    def can_colorize(*, file=None):
+        """
+        Return True if `file` (default sys.stdout) should get colorized
+        output, honoring the usual environment overrides.
+
+        The same logic as CPython 3.13+'s _colorize.can_colorize (which
+        this aliases on 3.13+): PYTHON_COLORS forces the answer (unless
+        running with -E/-I); otherwise NO_COLOR disables color,
+        FORCE_COLOR enables it, TERM=dumb disables it; on Windows the
+        console must support virtual-terminal sequences; and failing all
+        of those the file must be a tty.
+        """
+        if file is None:
+            file = sys.stdout
+
+        if not sys.flags.ignore_environment:
+            if os.environ.get("PYTHON_COLORS") == "0":
+                return False
+            if os.environ.get("PYTHON_COLORS") == "1":
+                return True
+        if os.environ.get("NO_COLOR"):
+            return False
+        if os.environ.get("FORCE_COLOR"):
+            return True
+        if os.environ.get("TERM") == "dumb":
+            return False
+
+        if not hasattr(file, "fileno"):
+            return False
+
+        if sys.platform == "win32":
+            try:
+                import nt
+                if not nt._supports_virtual_terminal():
+                    return False
+            except (ImportError, AttributeError):
+                return False
+
+        try:
+            return os.isatty(file.fileno())
+        except _io.UnsupportedOperation:
+            return file.isatty()
+
+
+@export
+def ansi_color_depth():
+    """
+    Guess the terminal's ANSI color depth from the COLORTERM and TERM
+    environment variables: 'truecolor', '256color', or '16color'.
+    Defaults to 'truecolor' when nothing says otherwise.
+    """
+    colorterm = os.environ.get('COLORTERM', '')
+    term = os.environ.get('TERM', '')
+    if 'truecolor' in colorterm or '24bit' in colorterm:
+        return 'truecolor'
+    if '256color' in term:
+        return '256color'
+    if term in ('linux', 'ansi', 'vt100', 'vt220'):
+        return '16color'
+    return 'truecolor'
+# --8<-- end big terminal color --8<--
 
 # --8<-- start big stylesheet render core --8<--
 # (The render half of the module: the span parser, the codec's
@@ -2215,6 +2292,20 @@ ansi_uncolored = StyleSheet({
     'black': ('T', 'T'),
 })
 export('ansi_uncolored')
+
+
+# best_palette: the stock palette for THIS terminal, chosen once, at
+# import.  If we can't colorize, it's the uncolored map; otherwise it's
+# the deepest map the terminal advertises (see ansi_color_depth).
+if not can_colorize():
+    best_palette = ansi_uncolored
+else:
+    best_palette = {
+        'truecolor': ansi_truecolor,
+        '256color':  ansi_256,
+        '16color':   ansi_16,
+    }.get(ansi_color_depth(), ansi_truecolor)
+export('best_palette')
 # --8<-- end big ansi stylesheets --8<--
 
 # --8<-- start appeal stylesheet alias --8<--
@@ -4227,6 +4318,8 @@ def run_mcp(tools, name, version='0'):
 
 # --8<-- start appeal theme --8<--
 # --8<-- requires appeal exceptions --8<--
+# --8<-- requires appeal stylesheet preamble --8<--
+# --8<-- requires big terminal color --8<--
 
 ##
 ## Colorization (proposal §8.8, plus the completion/colorization
@@ -4320,42 +4413,6 @@ class Theme:
         return f'{on}{s}{_SGR_RESET}'
 
 
-def can_colorize(file):
-    """
-    The established convention, copied from CPython's _colorize
-    precedence so appeal programs and stock argparse programs
-    respond identically to the same shell: PYTHON_COLORS beats
-    NO_COLOR beats FORCE_COLOR, then TERM=dumb, then isatty--
-    and on Windows, whether the console actually processes VT
-    escapes at all (without this, an old conhost prints literal
-    escape garbage; CPython checks it too).
-    """
-    import os
-    python_colors = os.environ.get('PYTHON_COLORS')
-    if python_colors == '0':
-        return False
-    if python_colors == '1':
-        return True
-    if os.environ.get('NO_COLOR'):
-        return False
-    if os.environ.get('FORCE_COLOR'):
-        return True
-    if os.environ.get('TERM') == 'dumb':
-        return False
-    import sys
-    if sys.platform == 'win32':
-        try:
-            import nt
-            if not nt._supports_virtual_terminal():
-                return False
-        except (ImportError, AttributeError):
-            return False
-    try:
-        return file.isatty()
-    except (AttributeError, ValueError):
-        return False
-
-
 def resolve_theme(spec, file):
     """
     The runtime half of the theme decision.  spec is what the
@@ -4367,7 +4424,7 @@ def resolve_theme(spec, file):
     """
     if spec is False:
         return None
-    if not can_colorize(file):
+    if not can_colorize(file=file):
         return None
     if spec is None:
         return Theme()
@@ -4448,6 +4505,7 @@ def paint_usage(theme, text):
 # --8<-- requires big word wrap trio --8<--
 # --8<-- requires big format_definition_list --8<--
 # --8<-- requires appeal stylesheet preamble --8<--
+# --8<-- requires big terminal color --8<--
 # --8<-- requires big stylesheet render core --8<--
 # --8<-- requires appeal stylesheet alias --8<--
 # --8<-- requires big ansi stylesheets --8<--
@@ -4535,37 +4593,17 @@ def help_margin(max_columns=79):
                max_columns)
 
 
-def ansi_color_depth():
-    """
-    How much color this terminal can show (Larry's design,
-    2026-08-06; big.builtin will grow the same function--one
-    name in the world).  COLORTERM is trusted positive evidence
-    for truecolor; TERM only ever DOWNGRADES on positive
-    evidence of less; no evidence at all means truecolor--every
-    terminal run on purpose today supports it.  Whether color
-    appears AT ALL is can_colorize's question, not this one's.
-    """
-    import os
-    colorterm = os.environ.get('COLORTERM', '')
-    term = os.environ.get('TERM', '')
-    if 'truecolor' in colorterm or '24bit' in colorterm:
-        return 'truecolor'
-    if '256color' in term:
-        return '256color'
-    if term in ('linux', 'ansi', 'vt100', 'vt220'):
-        return '16color'
-    return 'truecolor'
-
-
 def help_stylesheet(file=None):
     """
     The StyleSheet a help page paints with, for this stream at
     this moment: markdown_defaults over the palette the terminal
     deserves--or over plain_stylesheet (every span strips) when
-    color is off (can_colorize: the CPython ladder plus the
-    Windows VT check).
+    color is off.  can_colorize and ansi_color_depth are big's
+    (synced); big's best_palette is this function's import-time
+    twin--we re-ask per STREAM because appeal imports once while
+    help renders to ttys and captures alike.
     """
-    if not can_colorize(file):
+    if not can_colorize(file=file):
         return markdown_defaults | plain_stylesheet
     palette = {'truecolor': ansi_truecolor,
                '256color': ansi_256,

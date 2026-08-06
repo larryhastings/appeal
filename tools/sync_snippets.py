@@ -14,6 +14,7 @@ import sys
 
 try:
     from big.snip import sync_snippets
+    import big.builtin
     import big.markdown
     import big.stylesheet
     import big.text
@@ -28,13 +29,14 @@ destination = original = appeal_runtime_py.read_text(encoding='utf-8')
 
 # the warehouse folds together snippets borrowed from big and
 # Appeal's own; whitelist just big's (the 'big ' name prefix).
-# Three source modules: the word-wrap trio (text), the
+# Four source modules: the word-wrap trio (text),
+# can_colorize + ansi_color_depth (builtin), the
 # StyleSheet render core + ANSI stylesheets (stylesheet), and
 # markdown_defaults (markdown).  Each syncs only the regions it
 # defines.
 import re
 updated = destination
-for module in (big.text, big.stylesheet, big.markdown):
+for module in (big.text, big.builtin, big.stylesheet, big.markdown):
     source = pathlib.Path(module.__file__).read_text(encoding='utf-8')
     defined = set(re.findall(r'--8<-- start (big [^-]+?) --8<--',
                              source))

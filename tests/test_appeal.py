@@ -7098,7 +7098,7 @@ def test_can_colorize_precedence():
                  for k in ('PYTHON_COLORS', 'NO_COLOR', 'FORCE_COLOR', 'TERM')}
         try:
             os.environ.update(env)
-            return can_colorize(file)
+            return can_colorize(file=file)
         finally:
             for k, v in saved.items():
                 os.environ.pop(k, None)

@@ -2053,7 +2053,7 @@ def test_theme_resolution_and_markup():
     from appeal.runtime import (
         Theme, can_colorize, resolve_theme, _paint_atoms,
         )
-    assert can_colorize(object()) is False
+    assert can_colorize(file=object()) is False
     class FakeTTY(io.StringIO):
         def isatty(self):
             return True
@@ -2063,7 +2063,7 @@ def test_theme_resolution_and_markup():
     os.environ.pop('FORCE_COLOR', None)
     os.environ['TERM'] = 'xterm-256color'
     try:
-        if can_colorize(tty):
+        if can_colorize(file=tty):
             assert resolve_theme(False, tty) is None
             assert isinstance(resolve_theme(None, tty), Theme)
             t = Theme()
