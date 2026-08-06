@@ -2294,18 +2294,21 @@ ansi_uncolored = StyleSheet({
 export('ansi_uncolored')
 
 
-# best_palette: the stock palette for THIS terminal, chosen once, at
-# import.  If we can't colorize, it's the uncolored map; otherwise it's
-# the deepest map the terminal advertises (see ansi_color_depth).
-if not can_colorize():
-    best_palette = ansi_uncolored
-else:
-    best_palette = {
+@export
+def best_palette(*, file=None):
+    """
+    The stock low-level palette best suited to `file` (default
+    sys.stdout).  If we can't colorize `file`, it's the uncolored map;
+    otherwise it's the deepest map the terminal advertises (see
+    can_colorize and ansi_color_depth).
+    """
+    if not can_colorize(file=file):
+        return ansi_uncolored
+    return {
         'truecolor': ansi_truecolor,
         '256color':  ansi_256,
         '16color':   ansi_16,
     }.get(ansi_color_depth(), ansi_truecolor)
-export('best_palette')
 # --8<-- end big ansi stylesheets --8<--
 
 # --8<-- start appeal stylesheet alias --8<--
@@ -4596,19 +4599,17 @@ def help_margin(max_columns=79):
 def help_stylesheet(file=None):
     """
     The StyleSheet a help page paints with, for this stream at
-    this moment: markdown_defaults over the palette the terminal
-    deserves--or over plain_stylesheet (every span strips) when
-    color is off.  can_colorize and ansi_color_depth are big's
-    (synced); big's best_palette is this function's import-time
-    twin--we re-ask per STREAM because appeal imports once while
-    help renders to ttys and captures alike.
+    this moment: markdown_defaults over big's best_palette when
+    color is on, over plain_stylesheet (every span strips) when
+    it isn't.  The explicit can_colorize check exists because
+    best_palette's own no-color answer is ansi_uncolored, which
+    still emits attribute escapes (bold/italic)--right for a
+    colorless TERMINAL, wrong for a pipe or a capture, where no
+    escape of any kind belongs.
     """
     if not can_colorize(file=file):
         return markdown_defaults | plain_stylesheet
-    palette = {'truecolor': ansi_truecolor,
-               '256color': ansi_256,
-               '16color': ansi_16}[ansi_color_depth()]
-    return markdown_defaults | palette
+    return markdown_defaults | best_palette(file=file)
 
 
 def render_baked_help(pieces, margin=79, theme=None, file=None):
