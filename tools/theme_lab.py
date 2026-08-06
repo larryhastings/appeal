@@ -210,9 +210,20 @@ usage: ⦃program⦙serve⦄ [⦃option⦙-v⦄|⦃option⦙--verbose⦄] [⦃op
 Longer prose with ⦃bold⦙bold⦄, ⦃italic⦙italic⦄, and ⦃code⦙inline_code()⦄,
 plus a ⦃link⦙hyperlink⦄ and ⦃strikethrough⦙the old way⦄.
 
-⦃heading1⦙==================⦄
-⦃heading1⦙Serving, Generally⦄
-⦃heading1⦙==================⦄
+⦃heading1⦙===========⦄
+⦃heading1⦙Heading One⦄
+⦃heading1⦙===========⦄
+
+⦃heading2⦙Heading Two⦄
+⦃heading2⦙-----------⦄
+
+⦃heading3⦙Heading Three⦄
+
+⦃heading4⦙Heading Four⦄
+
+⦃heading5⦙Heading Five⦄
+
+⦃heading6⦙Heading Six⦄
 
   ⦃marker⦙•⦄ the first bullet
   ⦃marker⦙•⦄ the second bullet
@@ -221,7 +232,19 @@ plus a ⦃link⦙hyperlink⦄ and ⦃strikethrough⦙the old way⦄.
 serving example.com:8080⦄
 
 ⦃heading_note⦙▐ Note⦄
-⦃note⦙▐⦄ Alerts wear their kind's color.
+⦃note⦙▐⦄ Notes are blue.
+
+⦃heading_tip⦙▐ Tip⦄
+⦃tip⦙▐⦄ Tips are green.
+
+⦃heading_important⦙▐ Important⦄
+⦃important⦙▐⦄ Important is purple.
+
+⦃heading_warning⦙▐ Warning⦄
+⦃warning⦙▐⦄ Warnings are orange.
+
+⦃heading_caution⦙▐ Caution⦄
+⦃caution⦙▐⦄ Caution is red.
 
 ⦃heading2⦙Arguments⦄
 ⦃heading2⦙---------⦄
