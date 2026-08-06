@@ -1683,12 +1683,32 @@ _SOURCE_SNIPPETS = (
     )
 
 
+def snippet_source():
+    """
+    The concatenated snippet warehouse: appeal's own regions
+    (appeal/runtime.py) plus big's, read LIVE from the installed
+    big's source files at COMPILE time (ruled 2026-08-06)--no
+    pre-synced copies, so upgrading big reaches every
+    subsequently compiled parser.  Cross-file requires resolve
+    against the concatenation.
+    """
+    import big.builtin
+    import big.markdown
+    import big.stylesheet
+    import big.text
+    parts = [runtime_source()]
+    for module in (big.text, big.builtin, big.stylesheet,
+                   big.markdown):
+        with open(module.__file__, 'rt', encoding='utf-8') as f:
+            parts.append(f.read())
+    return '\n'.join(parts)
+
+
 def _extract_snippets():
-    # standalone emission plucks snippets out of the runtime
-    # warehouse with big's own machinery.  the import lives here,
-    # not at module top: parsing in-process needs no big at all;
-    # only emitting a standalone script does.  (the emitted script
-    # itself still imports nothing but the stdlib and your module.)
+    # standalone emission plucks snippets out of the combined
+    # warehouse (snippet_source) with big's own machinery.  (the
+    # emitted script itself still imports nothing but the stdlib
+    # and your module.)
     try:
         from big.snip import extract_snippets
     except ImportError:
@@ -1738,7 +1758,7 @@ def _standalone_script(source, refs, prog, description, entry, theme=None, compl
     parts = [header]
     parts.append('\n# ---- the appeal runtime, plucked out of appeal/runtime.py (one copy in the world) ----\n')
     parts.append('import enum\nimport operator\nimport sys\n\n')
-    parts.append(_extract_snippets()(runtime_source(), *_needed_snippets(source, refs)))
+    parts.append(_extract_snippets()(snippet_source(), *_needed_snippets(source, refs)))
     parts.append('\n# ---- your program ----\n')
     if imports:
         parts.append('\n'.join(imports) + '\n')
@@ -1854,7 +1874,7 @@ def emit_standalone_mcp(commands, *, argv0=None, version='0',
                  '(one copy in the world) ----\n')
     parts.append('import inspect\nimport sys\n'
                  'from collections.abc import Mapping, Sequence\n')
-    parts.append(extract(runtime_source(),
+    parts.append(extract(snippet_source(),
                          'appeal exceptions', 'appeal option protocol',
                          'appeal mcp'))
     parts.append(extract(module_text(plan_module),

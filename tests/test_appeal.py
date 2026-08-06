@@ -3283,60 +3283,64 @@ def test_read_mapping_facade():
     assert app.read_mapping(f, {'x': '5'}) == 5
     assert app.read_iterable(f, [['5']]) == [5]
 
-def test_text_trio_synced_from_big():
-    # appeal/runtime.py carries the word-wrap trio excerpted from
-    # big between scissors markers (tools/sync_snippets.py re-syncs).
-    # This test fails if big's snippets have drifted: re-run the tool.
-    import os.path
-    big_dir = os.path.normpath(os.path.join(repo_dir, '..', 'big', 'big'))
-    if not os.path.isdir(big_dir):
-        print('  (big sibling checkout not found; sync check skipped)')
-        return
-
-    def snippet(path, id):
-        with open(path, 'rt', encoding='utf-8') as f:
-            text = f.read()
-        start_marker = f'# --8<-- start {id} --8<--\n'
-        end_marker = f'# --8<-- end {id} --8<--\n'
-        start = text.index(start_marker)
-        end = text.index(end_marker) + len(end_marker)
-        return text[start:end]
-
-    runtime = os.path.join(repo_dir, 'appeal', 'runtime.py')
-    for source, ours, id in ((os.path.join(big_dir, 'text.py'), runtime, 'big _iterate_over_bytes'),
-                             (os.path.join(big_dir, 'text.py'), runtime, 'big word wrap trio')):
-        assert snippet(source, id) == snippet(ours, id), (
-            f'{id!r} drifted: run tools/sync_snippets.py')
-
-def test_runtime_source_is_self_contained():
-    # the whole streamed runtime runs in a BARE namespace (the
-    # north star: a standalone script's library imports nothing)
-    # and its borrowed trio agrees with live big where available
+def test_snippets_grab_big_live():
+    # The compile-time grab (ruled 2026-08-06): appeal ships NO
+    # pre-synced copies of big's snippet regions--emission reads
+    # them from the INSTALLED big's source at compile time, so
+    # upgrading big reaches every subsequently compiled parser.
+    import re
+    from appeal.codegen import snippet_source
     from appeal.runtime import runtime_source
+
+    # appeal's warehouse carries only appeal's own regions now
+    assert not re.search(r'--8<-- start big ', runtime_source())
+
+    # the combined warehouse carries each big region exactly once,
+    # read from the installed big's own files
+    combined = snippet_source()
+    for region in ('big word wrap trio', 'big terminal color',
+                   'big stylesheet render core',
+                   'big ansi stylesheets', 'big markdown defaults',
+                   'big glyphs from stylesheet'):
+        assert combined.count(f'--8<-- start {region} --8<--') == 1, region
+    # ...and the grab is LIVE: a distinctive line from installed
+    # big's trio appears verbatim
+    import big.text
+    big_text = open(big.text.__file__, 'rt', encoding='utf-8').read()
+    i = big_text.index('--8<-- start big word wrap trio --8<--')
+    j = big_text.index('--8<-- end big word wrap trio --8<--')
+    for line in big_text[i:j].split('\n'):
+        if line.strip().startswith('def '):
+            assert line in combined, line
+
+
+def test_streamed_snippets_run_bare():
+    # the extracted snippet set--what a generated script actually
+    # contains--execs in a BARE namespace (the north star: a
+    # standalone script imports nothing but the stdlib)
+    from big.snip import extract_snippets
+    from appeal.codegen import snippet_source
+    text = extract_snippets(
+        snippet_source(),
+        'appeal exceptions', 'appeal parse tokens', 'appeal run main',
+        'appeal help', 'appeal split', 'appeal folds',
+        'appeal check count', 'appeal command set')
     ns = {}
-    exec(runtime_source(), ns)
-    for name in ('parse_tokens', 'run_main', 'render_help_page', 'split',
-                 'accumulator', 'wrap_words', 'merge_columns'):
-        assert name in ns, f'streamed runtime is missing {name}'
+    exec('import enum\nimport operator\nimport sys\n' + text, ns)
+    for name in ('parse_tokens', 'run_main', 'render_baked_help',
+                 'split', 'accumulator', 'wrap_words', 'StyleSheet',
+                 'markdown_defaults', 'best_palette', 'can_colorize',
+                 'glyphs_from_stylesheet'):
+        assert name in ns, f'streamed snippets are missing {name}'
     words = ('the streamed runtime wraps words with no imports '
              'from anywhere at all.  Even two-space sentences.').split()
     wrapped = ns['wrap_words'](words, 30)
     assert max(len(line) for line in wrapped.split('\n')) <= 30
     assert 'all.  Even' in wrapped.replace('\n', ' ')
-    merged = ns['merge_columns']((['one', 'two'], 5, 5),
-                                 (['three', 'four'], 5, 5))
-    assert merged == 'one   three\ntwo   four'
-    split = ns['split_text_with_code'](
-        'Hello there.\n\n    code stays intact\n\nBye.')
-    assert '    code stays intact' in split
-    try:
-        import big.text
-    except ImportError:
-        print('  (big not importable; live-parity check skipped)')
-        return
+    # and it IS live big code: identical output to the import
+    import big.text
     assert wrapped == big.text.wrap_words(list(words), 30)
-    assert merged == big.text.merge_columns((['one', 'two'], 5, 5),
-                                            (['three', 'four'], 5, 5))
+
 
 def test_fuzz_parity():
     # the two rungs, adversarially: random signatures, random
