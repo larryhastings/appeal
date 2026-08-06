@@ -3492,7 +3492,10 @@ def can_colorize(file):
     The established convention, copied from CPython's _colorize
     precedence so appeal programs and stock argparse programs
     respond identically to the same shell: PYTHON_COLORS beats
-    NO_COLOR beats FORCE_COLOR, then TERM=dumb, then isatty.
+    NO_COLOR beats FORCE_COLOR, then TERM=dumb, then isatty--
+    and on Windows, whether the console actually processes VT
+    escapes at all (without this, an old conhost prints literal
+    escape garbage; CPython checks it too).
     """
     import os
     python_colors = os.environ.get('PYTHON_COLORS')
@@ -3506,6 +3509,14 @@ def can_colorize(file):
         return True
     if os.environ.get('TERM') == 'dumb':
         return False
+    import sys
+    if sys.platform == 'win32':
+        try:
+            import nt
+            if not nt._supports_virtual_terminal():
+                return False
+        except (ImportError, AttributeError):
+            return False
     try:
         return file.isatty()
     except (AttributeError, ValueError):
