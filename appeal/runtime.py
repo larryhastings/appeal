@@ -2366,7 +2366,9 @@ def best_palette(*, file=None):
 # --8<-- end big ansi stylesheets --8<--
 
 # --8<-- start appeal stylesheet alias --8<--
-_StyleSheet = StyleSheet        # markdown_defaults' home-module alias
+# the home-module spellings big/markdown.py's regions expect
+_StyleSheet = StyleSheet
+_style_span = style
 # --8<-- end appeal stylesheet alias --8<--
 
 # --8<-- start big markdown defaults --8<--
@@ -2428,6 +2430,32 @@ markdown_ascii_glyphs = _StyleSheet({
     'caution_emoji':   ('(x)',),
 })
 # --8<-- end big markdown defaults --8<--
+
+# --8<-- start big glyphs from stylesheet --8<--
+# (a snippet consumer supplies _style_span -- big.stylesheet.style.)
+_glyph_roles = ('bullet', 'quote_bar', 'thematic_break',
+                'heading1_rule', 'heading2_rule',
+                'note_emoji', 'tip_emoji', 'important_emoji',
+                'warning_emoji', 'caution_emoji')
+
+
+def glyphs_from_stylesheet(stylesheet):
+    """
+    Return a function that replaces big.markdown's glyph markup with
+    whatever `stylesheet` renders each glyph role to.
+
+    Use it to measure glyph widths (as wrap_words' raw=) against the very
+    sheet you'll render with, or to bake a custom glyph set.  The sheet
+    must define the glyph roles (markdown_defaults does).
+    """
+    swaps = {_style_span(role): stylesheet.render(_style_span(role))
+             for role in _glyph_roles}
+    def swap(s):
+        for markup, glyph in swaps.items():
+            s = s.replace(markup, glyph)
+        return s
+    return swap
+# --8<-- end big glyphs from stylesheet --8<--
 
 
 # --8<-- start big linebreaks --8<--
@@ -4595,6 +4623,7 @@ def paint_usage(theme, text):
 # --8<-- requires appeal stylesheet alias --8<--
 # --8<-- requires big ansi stylesheets --8<--
 # --8<-- requires big markdown defaults --8<--
+# --8<-- requires big glyphs from stylesheet --8<--
 def usage_units(usage):
     """
     Split a usage line into its unbreakable top-level units: the
@@ -4689,30 +4718,6 @@ def help_stylesheet(file=None):
     return markdown_defaults | best_palette(file=file)
 
 
-def resolve_glyphs(stylesheet):
-    """
-    Return a function that replaces big.markdown's glyph markup
-    (zero-arg spans: ⦃bullet⦄, ⦃note_emoji⦄, ...) with whatever
-    `stylesheet` renders them to.  The width math needs this:
-    a layout's glyphs occupy columns, and only the sheet knows
-    which characters they become.  (Mirror of big's
-    glyphs_from_stylesheet, discovering roles from the text
-    instead of a role list--one big-side export away from
-    deduplication.)
-    """
-    import re
-    pattern = re.compile('⦃([A-Za-z0-9_]+)⦄')
-    cache = {}
-    def resolve(s):
-        def sub(m):
-            markup = m.group(0)
-            if markup not in cache:
-                cache[markup] = stylesheet.render(markup)
-            return cache[markup]
-        return pattern.sub(sub, s)
-    return resolve
-
-
 def render_baked_help(pieces, margin=79, theme=None, file=None):
     """
     The runtime half of a help page.  pieces is the baked,
@@ -4725,7 +4730,7 @@ def render_baked_help(pieces, margin=79, theme=None, file=None):
     adjacent spans, and the terminal's stylesheet paints.
     """
     sheet = help_stylesheet(file)
-    glyphs = resolve_glyphs(sheet)
+    glyphs = glyphs_from_stylesheet(sheet)
     measure = lambda w: strip_styles(glyphs(w))
     out = []
     for piece in pieces:
