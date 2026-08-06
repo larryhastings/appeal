@@ -2,24 +2,28 @@
 
 *The user guide for Appeal 1.0's help system: how docstrings become
 `--help` pages, how documentation composes across converters, how
-to reshape the output with templates, and how to color it with a
-theme.  The design and its rulings live in the proposal (§8.7,
-§8.7.1, §8.8) and in appeal.completion.md; this document is the
-walkthrough.  Every example here is executed by the test suite.*
+to reshape the page with the template, and how to color it with a
+theme.  The docstring format is Markdown (the pivot, ruled
+2026-08-05); big's Markdown parser renders it.  Every example here
+is executed by the test suite.*
 
 
 ## 1: The docstring is input, never output
 
-Appeal never shows your docstring to anyone.  It *reads* it: named
-sections are slurped out as data, all remaining prose coalesces
-into one blob, and the help page is generated fresh from that
-data--so the page's structure belongs to Appeal's templates, not
-to how you happened to arrange your docstring.
+Appeal never shows your docstring to anyone.  It *reads* it: the
+special sections are slurped out as data, the rest is your
+program's prose, and the help page is generated fresh--so the
+page's structure belongs to Appeal's template, not to how you
+happened to arrange your docstring.
 
-A docstring is prose, except where a **section heading** appears:
-a line that is exactly `Arguments:`, `Options:`, `Commands:`, or
-`Subcommands:`--capitalized, on a line by itself, nothing else on
-the line.  A heading opens a section of **entries**:
+**Your docstring is Markdown.**  The first paragraph is the
+summary.  Everything after it is the documentation.  And a
+heading named `Options`, `Arguments`, or `Commands`--ANY heading,
+`# Options` or `###### OPTIONS` or setext `Options` over
+`-------`, any level, any case--opens a special section, which
+must contain exactly one **definition list**: the term is a
+parameter name (or command word), bare and unformatted; the
+details after the `:` are Markdown.
 
     import appeal
 
@@ -30,15 +34,19 @@ the line.  A heading opens a section of **entries**:
         """
         Serves the thing.
 
-        Longer prose about serving.  This paragraph, and any other
-        prose, coalesces into the page's documentation block.
+        Longer prose about serving.  This paragraph, and any
+        other prose, is the page's documentation block.
 
-        Arguments:
-          host: The host to serve on.
-          port: The port.  Defaults to 8080.
+        # Arguments
+        host
+        : The host to serve on.
 
-        Options:
-          verbose: Print more output.
+        port
+        : The port.  Defaults to 8080.
+
+        # Options
+        verbose
+        : Print more output.
         """
         print('serving', host, port, verbose)
 
@@ -48,42 +56,52 @@ the line.  A heading opens a section of **entries**:
 
 `serve --help` renders:
 
+    usage: serve [-v|--verbose] <HOST> [<PORT>]
+
     Serves the thing.
 
-    usage: serve [-v|--verbose] host [port]
+    Longer prose about serving.  This paragraph, and any
+    other prose, is the page's documentation block.
 
-    Longer prose about serving.  This paragraph, and any other
-    prose, coalesces into the page's documentation block.
+    Arguments
+    ---------
 
-    Arguments:
-        host  The host to serve on.
-        port  The port.  Defaults to 8080.
+    <HOST>
+        The host to serve on.
 
-    Options:
-        -v|--verbose  Print more output.
+    <PORT>
+        The port.  Defaults to 8080.
+
+    Options
+    -------
+
+    -v|--verbose
+        Print more output.
 
 The rules, all of them:
 
-* An entry is a `name: text` line indented under the heading.
-  Deeper-indented lines continue the entry.  Entry text is kept
-  with kid gloves--paragraphs and indented code examples inside an
-  entry survive into the rendered table.
-* A section runs from its heading to the first blank line.  One
-  section per heading kind.  `Commands:` and `Subcommands:` are
-  the same section wearing context-appropriate clothes (use
-  `Commands:` on a global command, `Subcommands:` on a command
-  that has them).  `Sub-commands:` is an error, so you don't have
-  to remember which spelling we picked.
-* A bare `name: text` line *without* a heading above it is just
-  prose.  `Note: remember this` stays a note.
+* The **term must be unformatted**--it's a name, not prose.  The
+  details take whatever Markdown you like: emphasis, code spans,
+  nested lists, multiple paragraphs (indent the continuations).
+* A special section runs from its heading to the **next heading
+  of any kind** (or the end), and must contain ONLY its
+  definition list--trailing prose there is an error; put it
+  before the section, or under its own heading.
+* Your OTHER headings are yours: anything not named
+  Options/Arguments/Commands stays in the documentation and
+  renders as part of it.
 * Entries are validated against your program's grammar, at build
   time, loudly: naming something that isn't a parameter is an
-  error; documenting an option under `Arguments:` (or vice versa)
+  error; documenting an option under `Arguments` (or vice versa)
   is an error.  A keyword-only parameter *without* a default is a
-  required trailing operand, so it belongs under `Arguments:`.
+  required trailing operand, so it belongs under `Arguments`.
+* Terms render as their command-line **displays**: `host` becomes
+  `<HOST>`, `verbose` becomes `-v|--verbose`.
 * The docstring's section order doesn't matter; the page's order
-  comes from the templates (arguments before options, by
-  default).  Your summary is the first prose paragraph.
+  comes from the template (arguments before options, by
+  default), and the template dresses the headings--your
+  decoration is just how you spelled the input.  Your summary is
+  the first paragraph.
 
 ## 2: Composable documentation
 
@@ -99,9 +117,12 @@ every command using it inherits that documentation:
         """
         A 2D point.
 
-        Arguments:
-          x: The horizontal coordinate.
-          y: The vertical coordinate.
+        # Arguments
+        x
+        : The horizontal coordinate.
+
+        y
+        : The vertical coordinate.
         """
         return (x, y)
 
@@ -110,13 +131,17 @@ every command using it inherits that documentation:
         """
         Plots a labeled point.
 
-        Arguments:
-          label: What to call it.
-          y: The vertical coordinate.  (Overrides point's own
-              documentation--the nearest enclosing scope wins.)
+        # Arguments
+        label
+        : What to call it.
 
-        Options:
-          verbose: Narrate the plotting.
+        y
+        : The vertical coordinate.  (Overrides point's own
+          documentation--the nearest enclosing scope wins.)
+
+        # Options
+        verbose
+        : Narrate the plotting.
         """
         print(label, p, verbose)
 
@@ -136,18 +161,24 @@ The fine print:
   feature, not a conflict.
 * **Only visible things have rows.**  The flat command line shows
   operands and options; an intermediate converter like `p` above
-  is grammar structure, not a visible argument, so `p: ...` in a
-  docstring is an error that tells you to document its operands
+  is grammar structure, not a visible argument, so documenting
+  `p` is an error that tells you to document its operands
   instead.
 * Undocumented parameters still get their row, with an empty
   description.  Documentation is encouraged, never required.
+* An option's converter can declare options of its own; their
+  rows nest beneath the declaring option's row in the table, as
+  a nested definition list.
 
 ## 3: Reshaping the page: the template
 
 The page's structure is ONE template--a plain string on your
 Appeal instance--naming six sections: `{usage}`, `{summary}`,
 `{doc}`, `{options}`, `{arguments}`, `{commands}`.  All six must
-appear; replace the template to taste:
+appear.  The template establishes the page's ORDER, and its text
+between placeholders is **Markdown**--the section headings, in
+particular, are the template's to dress (`## Options` by
+default).  Replace it to taste:
 
     import appeal
 
@@ -159,14 +190,14 @@ appear; replace the template to taste:
         '\n'
         '{doc}\n'
         '\n'
-        'Options:\n'
-        '    {options}\n'
+        '## Options\n'
+        '{options}\n'
         '\n'
-        'Arguments:\n'
-        '    {arguments}\n'
+        '## Arguments\n'
+        '{arguments}\n'
         '\n'
-        'Commands:\n'
-        '    {commands}\n'
+        '## Commands\n'
+        '{commands}\n'
     )
 
     @app.global_command()
@@ -174,8 +205,9 @@ appear; replace the template to taste:
         """
         Does the thing, tersely.
 
-        Arguments:
-          thing: The thing.
+        # Arguments
+        thing
+        : The thing.
         """
         print(thing, loud)
 
@@ -184,22 +216,13 @@ appear; replace the template to taste:
         sys.exit(app.main())
 
 That page leads with usage, then the prose, then options before
-arguments.  The text between placeholders is each section's
-*header*, and the whitespace after the header's last newline is
-the section body's per-line indent (the definition lists are
-laid out by big's `format_definition_list`).  A section with no
-content vanishes, header and all; `usage` always renders, and
-must sit on a single template line.  One template serves both a
-command's help page and a dispatcher's listing--the unused
-sections simply vanish.
-
-Your docstrings talk back to the template, too.  A section
-header line in a docstring is recognized *liberally*--any line
-whose letters spell `options`, `arguments`, or `commands`
-(case and decoration ignored), after a blank line--and your
-spelling, decoration, and section ORDER are preserved in the
-rendered page.  Sections you didn't write render where the
-template puts them.
+arguments.  A section with no content vanishes, header and all;
+`usage` is not Markdown--it renders and wraps separately, at
+whole units, and must sit on a single template line.  One
+template serves both a command's help page and a dispatcher's
+listing--the unused sections simply vanish.  Layout inside the
+sections (the definition lists, wrapping, indentation) belongs
+to big's renderer.
 
 ## 4: Color
 
@@ -222,8 +245,9 @@ output, each slot a little symbolic string:
         """
         Renders vividly.
 
-        Arguments:
-          image: The image file.
+        # Arguments
+        image
+        : The image file.
         """
         print(image, contrast)
 
@@ -249,6 +273,11 @@ like; the user's environment decides whether it happens.
 `theme=None` (the default) means the stock theme under those same
 rules; `theme=False` means never.
 
+(Interim, accepted 2026-08-06: while the theming system moves
+onto big's StyleSheets, a theme paints the usage line; the
+Markdown body renders unpainted.  The rewrite brings the body's
+color back, richer--six pre-built themes are already specced.)
+
 Two guarantees worth knowing:
 
 * **Color never moves text.**  Layout is computed uncolored and
@@ -260,51 +289,67 @@ Two guarantees worth knowing:
   was emitted with and re-decides at *its* runtime--emitting on a
   terminal doesn't color output that lands in a pipe.
 
-## 5: Where completion fits
+## 5: Your docs, elsewhere
 
-Tab completion is the third face of the same design--the grammar
-answering questions about itself.  Its walkthrough (zsh and bash)
-lives in appeal.completion.md, Part 3.
+The same documentation renders in other dialects, by API
+(deliberately no command-line switch--wire one up if you want
+it):
+
+* `app.documentation('gfm')`--GitHub-flavored Markdown for a
+  README: definition lists become inline-HTML `<dl>` (with the
+  blank lines that make GitHub render the Markdown inside);
+  everything else GitHub renders natively.
+* `app.documentation('commonmark')`--pure CommonMark: definition
+  lists become a bold term over a blockquote, alerts become
+  bold-labelled blockquotes, strikethrough is stripped.
+* `app.documentation('troff')`--a man(1) page.
+
+Tab completion is another face of the same design--the grammar
+answering questions about itself; its walkthrough lives in
+appeal.completion.md, Part 3.
 
 ## 6: The famous `make -j`
 
 The `--jobs`/`-j` option of unix `make` has two defaults: run
 `make` and it uses one job; `make -j 5` uses five; a bare
-`make -j` uses as many as it likes.  In Appeal that's a converter
-whose one parameter has a default--two defaults, two homes:
+`make -j` uses as many as it likes.  In Appeal that's the marked
+spelling for an optional option-argument, `optional[T]` (ruled
+2026-08-03, the make precedent):
 
     import appeal
-    import math
+    from appeal import optional
 
     app = appeal.Appeal(name='make')
 
-    def jobs(jobs: int = math.inf):
-        return jobs
-
     @app.global_command()
-    def make(*targets, jobs: jobs = 1):
+    def make(*targets, jobs: optional[int] = 1):
         """
         Builds the targets.
 
-        Arguments:
-          targets: What to build.
+        # Arguments
+        targets
+        : What to build.
 
-        Options:
-          jobs: How many jobs to run in parallel.
+        # Options
+        jobs
+        : How many jobs to run in parallel.  Bare `-j` means as
+          many as it likes.
         """
-        print(f"building {targets} with {jobs} jobs")
+        count = 'unlimited' if jobs == 0 else jobs
+        print(f"building {targets} with {count} jobs")
 
     app.main()
 
-The parameter's own default (`1`) fills when `-j` never appears;
-the converter's default (`math.inf`) fills when `-j` appears bare.
+Absent, the parameter's own default fills (`1`).  Bare `-j`
+gives `int()`--zero--your sentinel for "no limit".  With a
+value, `make -j 5` is five jobs, `make -j5` and `make -j=5`
+too.  An option whose parameter is NOT wrapped in `optional[]`
+requires its value, full stop--`optional[T]` is the marked case,
+exactly like make's man page marks `-j [jobs]`.
 
 An optional operand is *greedy*: when `-j` has a next token, it
-takes it--whatever it looks like.  So `make -j 5` is five jobs,
-`make -j5` and `make -j=5` too, and `-j -5` would be negative five
-(useless to make, but negative numbers cost nothing).  The flip
-side of greed is that `make all -j install` hands `install` to
-`-j` and fails loudly--`invalid value for 'jobs'`--rather than
-quietly guessing you meant it as a target.  If `-j` should not
-eat the word after it, give `-j` its value explicitly or put it
-last.
+takes it--whatever it looks like.  So `make all -j install`
+hands `install` to `-j` and fails loudly--`invalid value
+'install' (not a valid int)`--rather than quietly guessing you
+meant it as a target.  If `-j` should not eat the word after
+it, give `-j` its value explicitly or put it last.

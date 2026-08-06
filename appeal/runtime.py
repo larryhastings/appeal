@@ -1602,7 +1602,7 @@ def expand_tabs(s, *, column=1, first_column=1, tab_width=8):
     return s[:0].join(result)
 
 
-def _normalize_indents(indent, name, margin, tab_width, left_column, indent_type):
+def _normalize_indents(indent, name, margin, tab_width, left_column, indent_type, measure=len):
     """
     Validates, normalizes, and measures an "indent" argument for wrap_words.
 
@@ -1659,12 +1659,43 @@ def _normalize_indents(indent, name, margin, tab_width, left_column, indent_type
 
         i = _expand_tabs(i, left_column, tab_width, tab, space)
         expanded.append(i)
-        column = len(i)
+        column = measure(i)
         if column >= margin:
             raise ValueError(f"{name} {i!r} leaves no room for words inside margin {margin}")
         append(column)
 
     return tuple(expanded), columns
+
+
+# the gap between a definition-list term and its details, the details
+# indent when a list goes tall, and the narrowest details ribbon worth
+# wrapping into.  See deflist.layout.proposal.md.
+_DEFLIST_GAP = 2
+_DEFLIST_TALL_INDENT = 4
+_DEFLIST_MIN_RIBBON = 20
+
+
+def _deflist_column(term_widths, margin):
+    """
+    Pick the detail column D for a definition list, and whether to
+    render it tall.  term_widths are the terms' visible widths; margin
+    is the width available to the list.  Returns (D, tall).
+
+    Fit-everyone if every term clears a third of the width; else put D
+    at the 80th-percentile term (the wider outliers take the per-entry
+    fallback); give up to tall if D would eat past half the width or
+    leave too thin a ribbon for the details.
+    """
+    longest = max(term_widths)
+    if longest + _DEFLIST_GAP <= margin // 3:
+        column = longest + _DEFLIST_GAP
+    else:
+        ordered = sorted(term_widths)
+        rank = (4 * len(ordered) + 4) // 5          # ceil(0.8 * n), nearest-rank
+        p80 = ordered[min(rank, len(ordered)) - 1]
+        column = p80 + _DEFLIST_GAP
+    tall = (column > margin // 2) or ((margin - column) < _DEFLIST_MIN_RIBBON)
+    return column, tall
 
 
 def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, tab_width=8, two_spaces=True, raw=None):
@@ -1693,6 +1724,27 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
     Any other whitespace-only strings are unsupported, and if
     you pass in a "words" array to wrap_words containing one,
     its behavior is undefined.
+
+    An element of 'words' may also be a tuple, which is an
+    instruction rather than a word.  Its first item names the
+    instruction:
+        ('indent', first, ..., last)
+            Switch the active indent context, using the same rules
+            as the 'indent' parameter (see below): 'first' prefixes
+            the next line, 'last' prefixes every line after the ones
+            named.  It resets the line counter, so the next line is
+            always a "first line".  (Passing indent=X behaves as if
+            ('indent', ...) built from X were prepended to 'words'.)
+        ('fill margin',   initial, fill, trailing)
+        ('fill previous', initial, fill, trailing)
+        ('fill next',     initial, fill, trailing)
+            Draw a whole line by filling to a width: the margin, the
+            previous line's width, or the next line's width.  The
+            line is 'initial', then 'fill' repeated and clipped to
+            the remaining width, then 'trailing', all inside the
+            active indent.  'initial' and 'trailing' are never
+            clipped.  This draws rules and boxes; e.g. a heading
+            underlined to its own width is a 'fill previous'.
 
     Implicitly supports "code lines" as defined by split_text_with_code.
     (A "code line" just shows up in words as one unbroken word surrounded
@@ -1774,6 +1826,10 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
     # is what we emit.  Default: the word is its own plain text.
     _raw = (lambda w: w) if raw is None else raw
 
+    # words (and indent prefixes) may carry in-band markup; _measure
+    # is a word's VISIBLE width, past the markup.
+    _measure = lambda s: len(_raw(s))
+
     words = iter(words)
     col = 0
     empty = None
@@ -1791,6 +1847,13 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
     new_line = True
     code_paragraph = False
 
+    # the visible width of the last completed output line (what a
+    # 'fill previous' matches), and a 'fill next' still waiting for the
+    # following line to be laid out so it can match ITS width.
+    last_line_len = 0
+    pending_next = None
+    pending_next_armed = False
+
     def next_tab_stops(col, tabs):
         # the 0-based line offset of the next word, after
         # advancing 'tabs' tab stops from the offset 'col'.
@@ -1801,16 +1864,134 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
             absolute += tab_width - ((absolute - 1) % tab_width)
         return absolute - left_column
 
+    class _FillNext:
+        # placeholder for a 'fill next' line: its width isn't known
+        # until the following line is laid out, so we emit this and
+        # back-patch its .value at join time.
+        __slots__ = ('value',)
+        def __init__(self):
+            self.value = empty
+
+    def fill_body(initial, fillchar, trailing, target, prefix_w):
+        # a fill line's content, after its indent prefix: initial, then
+        # fillchar repeated to the leftover VISIBLE width and clipped,
+        # then trailing.  initial and trailing are never clipped.
+        body = target - prefix_w - _measure(initial) - _measure(trailing)
+        fill_width = _measure(fillchar) if fillchar else 0
+        if (body > 0) and fill_width:
+            filled = fillchar * (body // fill_width)
+            remainder = body - (body // fill_width) * fill_width
+            if remainder and (len(fillchar) == fill_width):
+                # a plain fillchar can be sliced to finish the last
+                # partial repeat; a styled one just under-fills.
+                filled = filled + fillchar[:remainder]
+        else:
+            filled = empty
+        return initial + filled + trailing
+
+    def complete_line(line_len):
+        # the current output line just ended, this wide: record it (for
+        # 'fill previous'), and arm then resolve a deferred 'fill next'.
+        nonlocal last_line_len, pending_next, pending_next_armed
+        last_line_len = line_len
+        if pending_next is not None:
+            if not pending_next_armed:
+                pending_next_armed = True    # that was the fill line's own line
+            else:
+                placeholder, prefix_w, initial, fillchar, trailing = pending_next
+                placeholder.value = fill_body(initial, fillchar, trailing, line_len, prefix_w)
+                pending_next = None
+                pending_next_armed = False
+
+    def render_stream(stream, width):
+        # lay a sub-stream out to `width`, returning its lines; an empty
+        # or content-free stream gives [].
+        try:
+            return wrap_words(stream, margin=max(1, width), raw=raw,
+                              two_spaces=two_spaces, tab_width=tab_width).split(linebreak)
+        except ValueError:
+            return []
+
+    def render_deflist(items, base_first, base_rest, base_w):
+        # Split the collected list into entries, measure the terms, pick
+        # the detail column, and lay each entry out -- compact (term and
+        # its details share a line when the term fits) or tall (term on
+        # its own line, details indented, a blank line between entries).
+        # Details are laid out recursively, so nested lists / code / even
+        # nested definition lists compose, indented to the detail column.
+        # Returns lines already carrying the outer indent.
+        entries = []
+        term_words = None
+        details = []
+        for item in items:
+            if (type(item) is tuple) and (item[0] == def_markers[2]):    # 'term'
+                if term_words is not None:
+                    entries.append((term_words, details))
+                term_words = list(item[1:])
+                details = []
+            elif term_words is not None:
+                details.append(item)
+        if term_words is not None:
+            entries.append((term_words, details))
+        if not entries:
+            return []
+
+        inner_width = max(1, margin - base_w)
+
+        terms = []
+        measures = []
+        for term_words, _ in entries:
+            lines = render_stream(term_words, 10 ** 9) if term_words else []
+            term_text = lines[0] if lines else empty
+            terms.append(term_text)
+            measures.append(_measure(term_text))
+
+        column, tall = _deflist_column(measures, inner_width)
+        details_width = inner_width - (_DEFLIST_TALL_INDENT if tall else column)
+        full_pad = space1 * column
+        tall_pad = space1 * _DEFLIST_TALL_INDENT
+
+        inner_lines = []
+        for index, (term_words, details) in enumerate(entries):
+            term_text = terms[index]
+            details_lines = render_stream(details, details_width)
+            if tall:
+                if index:
+                    inner_lines.append(empty)              # blank between entries
+                inner_lines.append(term_text)
+                inner_lines.extend(tall_pad + line for line in details_lines)
+            elif not details_lines:
+                inner_lines.append(term_text)              # empty details: bare term
+            elif (measures[index] + 1) <= column:          # term fits: share the line
+                gap = space1 * (column - measures[index])
+                inner_lines.append(term_text + gap + details_lines[0])
+                inner_lines.extend(full_pad + line for line in details_lines[1:])
+            else:                                          # term too wide: own line
+                inner_lines.append(term_text)
+                inner_lines.extend(full_pad + line for line in details_lines)
+
+        return [(base_first if (index == 0) else base_rest) + line
+                for index, line in enumerate(inner_lines)]
+
     for word in words:
+        is_instruction = type(word) is tuple
+
         if first_word:
             first_word = False
-            if isinstance(word, bytes):
+            if is_instruction:
+                sample = next((a for a in word[1:] if isinstance(a, (str, bytes))), '')
+            else:
+                sample = word
+            if isinstance(sample, bytes):
                 empty = lastword = b''
                 sentence_ending_punctuation = (b'.', b'?', b'!')
                 space1 = b' '
                 space2 = b'  '
                 linebreak = b'\n'
                 tab = b'\t'
+                indent_marker = b'indent'
+                fill_markers = (b'fill margin', b'fill previous', b'fill next')
+                def_markers = (b'def start', b'def end', b'term')
             else:
                 empty = lastword = ''
                 sentence_ending_punctuation = ('.', '?', '!')
@@ -1818,11 +1999,14 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
                 space2 = '  '
                 linebreak = '\n'
                 tab = '\t'
+                indent_marker = 'indent'
+                fill_markers = ('fill margin', 'fill previous', 'fill next')
+                def_markers = ('def start', 'def end', 'term')
+            indent_type = bytes if isinstance(sample, bytes) else str
             if indent or (code_indent is not None):
-                indent_type = bytes if isinstance(word, bytes) else str
                 if indent:
                     indents, widths = _normalize_indents(
-                        indent, 'indent', margin, tab_width, left_column, indent_type)
+                        indent, 'indent', margin, tab_width, left_column, indent_type, _measure)
                 else:
                     indents, widths = (empty,), (0,)
                 last_indent = len(indents) - 1
@@ -1833,8 +2017,83 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
                     last_code_indent = last_indent
                 else:
                     code_indents, code_widths = _normalize_indents(
-                        code_indent, 'code_indent', margin, tab_width, left_column, indent_type)
+                        code_indent, 'code_indent', margin, tab_width, left_column, indent_type, _measure)
                     last_code_indent = len(code_indents) - 1
+
+        if is_instruction:
+            instruction = word[0]
+            if instruction == indent_marker:
+                # switch the active indent context mid-stream; the next
+                # line starts fresh on the first-line prefix.
+                indents, widths = _normalize_indents(
+                    word[1:], 'indent', margin, tab_width, left_column, indent_type, _measure)
+                last_indent = len(indents) - 1
+                if code_indent is None:
+                    # no separate code indent: code lines follow the
+                    # active indent too (as they do at the front).
+                    code_indents = indents
+                    code_widths = widths
+                    last_code_indent = last_indent
+                line_number = 0
+                new_line = True
+                col = 0
+                continue
+            if instruction in fill_markers:
+                initial, fillchar, trailing = word[1], word[2], word[3]
+                if indents:
+                    index = min(line_number, last_indent)
+                    prefix = indents[index]
+                    prefix_w = widths[index]
+                else:
+                    prefix = empty
+                    prefix_w = 0
+                append(prefix)
+                if instruction == fill_markers[2]:               # fill next
+                    placeholder = _FillNext()
+                    append(placeholder)
+                    pending_next = (placeholder, prefix_w, initial, fillchar, trailing)
+                    pending_next_armed = False
+                    col = 0
+                else:
+                    target = margin if (instruction == fill_markers[0]) else last_line_len
+                    body = fill_body(initial, fillchar, trailing, target, prefix_w)
+                    append(body)
+                    col = prefix_w + _measure(body)
+                lastword = empty
+                new_line = False
+                continue
+            if instruction == def_markers[0]:                # 'def start'
+                # collect the whole list (balancing nested lists), then
+                # lay it out against the active indent.
+                items = []
+                depth = 1
+                for item in words:
+                    if type(item) is tuple:
+                        if item[0] == def_markers[0]:
+                            depth += 1
+                        elif item[0] == def_markers[1]:      # 'def end'
+                            depth -= 1
+                            if depth == 0:
+                                break
+                    items.append(item)
+                if indents:
+                    base_first, base_rest, base_w = indents[0], indents[-1], widths[0]
+                else:
+                    base_first = base_rest = empty
+                    base_w = 0
+                lines = render_deflist(items, base_first, base_rest, base_w)
+                for index, line in enumerate(lines):
+                    if index:
+                        append(linebreak)
+                    append(line)
+                col = _measure(lines[-1]) if lines else 0
+                last_line_len = col
+                lastword = empty
+                new_line = False
+                continue
+            if instruction in (def_markers[1], def_markers[2]):
+                continue                                     # stray 'def end'/'term'
+            raise ValueError(f"unknown wrap_words instruction {instruction!r}")
 
         rawword = _raw(word)
 
@@ -1845,6 +2104,7 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
                 # place the next word.
                 pending_tabs += 1
                 continue
+            complete_line(col)
             lastword = word
             append(word)
 
@@ -1894,6 +2154,7 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
                 # like a space would.
                 target = next_tab_stops(col, tabs)
                 if (target + l) > margin:
+                    complete_line(col)
                     append(linebreak)
                     new_line = True
                     line_number += 1
@@ -1911,6 +2172,7 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
 
                 wrap = (col + len_space + l) > margin
                 if wrap:
+                    complete_line(col)
                     append(linebreak)
                     new_line = True
                     line_number += 1
@@ -1943,7 +2205,9 @@ def wrap_words(words, margin=79, *, code_indent=None, indent='', left_column=1, 
     if first_word:
         raise ValueError("no words to wrap")
 
-    s = empty.join(text)
+    # resolve any 'fill next' placeholders (an unresolved one -- a fill
+    # next with no following line -- renders as its bare caps).
+    s = empty.join(p.value if (type(p) is _FillNext) else p for p in text)
     return s
 
 
@@ -3487,22 +3751,40 @@ def rows_markdown(rows):
     Corpus rows [(display, doc-lines), ...] as one Markdown
     definition list, definition order preserved (ruled
     2026-08-05).  An undocumented row is a term with an empty
-    definition.  Entry lines are already Markdown; continuation
-    lines re-indent under the ':'.
+    definition (': ' with nothing after it--bare ':' wouldn't
+    parse as a definition list).  Entry lines are already
+    Markdown; continuation lines re-indent under the ':'.
+
+    A nested option's row (its display carries two leading
+    spaces per depth level, from the merge) becomes a NESTED
+    definition list inside its parent's details (ruled
+    2026-08-06)--the rendered table indents sub-options beneath
+    the option that declares them.
     """
-    parts = []
-    for display, lines in rows:
+    def entry_block(display, lines, children):
         body = [l for l in lines] or ['']
-        # ': ' with nothing after it is the empty definition
-        # (bare ':' wouldn't parse as a definition list).  A
-        # nested option's depth prefix would read as Markdown
-        # continuation: the table is flat--the usage line shows
-        # the nesting inline.
-        display = display.lstrip()
         first = f": {body[0]}" if body[0] else ": "
         rest = [("  " + l) if l.strip() else '' for l in body[1:]]
-        parts.append('\n'.join([display, first] + rest))
-    return '\n\n'.join(parts)
+        block = [display, first] + rest
+        for child in children:
+            block.append('')
+            block.extend(("  " + l) if l.strip() else ''
+                         for l in entry_block(*child))
+        return block
+
+    # rebuild the tree the merge flattened: depth = the display's
+    # leading two-space pairs
+    roots = []
+    stack = []                  # (depth, entry) path to the tip
+    for display, lines in rows:
+        stripped = display.lstrip(' ')
+        depth = (len(display) - len(stripped)) // 2
+        entry = (stripped, lines, [])
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        (stack[-1][1][2] if stack else roots).append(entry)
+        stack.append((depth, entry))
+    return '\n\n'.join('\n'.join(entry_block(*e)) for e in roots)
 
 
 def render_markdown(text, margin=79, theme=None):
@@ -3515,12 +3797,14 @@ def render_markdown(text, margin=79, theme=None):
     standalone scripts wait on the stage-2 snippets (accepted,
     2026-08-05, heavy development mode).
     """
-    from big.markdown import (markdown_defaults, parse,
-                              render_terminal,
-                              split_styles_document, style_document)
-    from big.stylesheet import join_styles, plain_stylesheet
+    from big.markdown import (layout_document, markdown_defaults,
+                              parse, split_styles_document,
+                              style_document)
+    from big.stylesheet import (join_styles, plain_stylesheet,
+                                strip_styles)
     document = split_styles_document(style_document(parse(text)))
-    rendered = render_terminal(document, width=margin)
+    layout = layout_document(document)
+    rendered = wrap_words(layout, margin=margin, raw=strip_styles)
     sheet = plain_stylesheet | markdown_defaults
     return sheet.render(join_styles(rendered))
 
@@ -3922,7 +4206,17 @@ class optional(metaclass=_OptionalMeta):
         # and None renders into standalone scripts, which an
         # anonymous sentinel can't
         def option_value(value: str = None):
-            return T() if value is None else T(value)
+            if value is None:
+                return T()
+            try:
+                return T(value)
+            except (ValueError, TypeError):
+                # a conversion failure is the USER's error, not a
+                # crash (the greedy oparg ate the wrong token)
+                name = getattr(T, '__name__', 'value')
+                raise UsageError(
+                    f"invalid value {value!r} "
+                    f"(not a valid {name})") from None
         # usage metavar: show the OPTION'S parameter name, not
         # this closure's ('[-j|--jobs [jobs]]', not '[value]')
         option_value.__appeal_oparg_borrows_name__ = True

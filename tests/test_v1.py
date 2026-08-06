@@ -397,7 +397,9 @@ class SmokeTests(AppealTestsBase):
         global process
         app = appeal.Appeal(
             margin=80,
-            indent=2,
+            # indent=2 dropped: the knob was killed unshipped
+            # (ruled 2026-08-06)--big's renderer owns the
+            # definition-list layout now
             # positional_argument_usage_format="<{name.upper()}>",
             version="0.5",
             )

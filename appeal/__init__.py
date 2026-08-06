@@ -613,7 +613,7 @@ class Appeal:
     def __init__(self, name=None, *, parent=None,
                  theme=None, version=None, repeat=False,
                  errors=None, script=_sys.argv[0],
-                 margin=79, indent=4,
+                 margin=79,
                  positional_argument_usage_format='<{name.upper()}>',
                  default_options=default_options,
                  default_mappings=default_mappings(), doc=None):
@@ -638,7 +638,7 @@ class Appeal:
                          'default_mappings',
                          'positional_argument_usage_format',
                          'script', 'errors', 'repeat', 'theme',
-                         'margin', 'indent', 'templates'):
+                         'margin', 'templates'):
                 setattr(self, attr, getattr(parent, attr))
             self.version = None
             self._finalized = True      # the ROOT runs the pass
@@ -737,29 +737,20 @@ class Appeal:
         # (ruled 2026-08-01): doc= beats the global command's
         # docstring beats the shared module's docstring
         self.doc = doc
-        # the help formatter's knobs (v1's, wired 2026-07-09):
+        # the help formatter's knob (v1's, wired 2026-07-09):
         # margin caps the wrap width (narrow terminals re-wrap
-        # below it; pipes get the cap itself), and indent is the
-        # left indent of the help tables--applied by re-indenting
-        # the section templates, which own layout; overwrite
-        # app.templates to go further
-        for knob, value in (('margin', margin), ('indent', indent)):
-            if not isinstance(value, int) or value <= 0:
-                raise AppealConfigurationError(
-                    f"{knob} must be a positive int, not {value!r}")
+        # below it; pipes get the cap itself).  indent= died
+        # unshipped with the Markdown pivot (ruled 2026-08-06):
+        # big's renderer owns the definition-list layout
+        if not isinstance(margin, int) or margin <= 0:
+            raise AppealConfigurationError(
+                f"margin must be a positive int, not {margin!r}")
         self.margin = margin
-        self.indent = indent
-        # the help template: ONE string, five {sections}, yours
-        # to replace (see runtime.default_template; ruled
-        # 2026-08-01)
+        # the help template: ONE string, six {sections}, its
+        # headings Markdown, yours to replace (see
+        # runtime.default_template; the pivot, ruled 2026-08-05)
         from .runtime import default_template
         self.templates = default_template
-        if indent != 4:
-            import re as _re
-            pad = ' ' * indent
-            self.templates = _re.sub(
-                r'(?m)^[ \t]+(?=\{(?:arguments|options|commands)\})',
-                pad, self.templates)
         # concurrency (ruled 2026-07-11): compilation runs LOCK-
         # FREE (it inspects user code, and we never hold a lock
         # over foreign code); this plain Lock guards only the

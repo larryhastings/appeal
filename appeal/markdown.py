@@ -347,12 +347,18 @@ def render_markdown_help(text, width=None, stylesheet=None):
     pluggable seam: everything else in this module is textual,
     so replacing this renderer swaps the whole Markdown dialect.
     """
-    from big.markdown import (markdown_defaults, parse,
-                              render_terminal, split_styles_document,
+    from big.markdown import (layout_document, markdown_defaults,
+                              parse, split_styles_document,
                               style_document)
-    from big.stylesheet import ansi_uncolored, join_styles
+    from big.stylesheet import (ansi_uncolored, join_styles,
+                                strip_styles)
+    from big.text import wrap_words
     document = split_styles_document(style_document(parse(text)))
-    rendered = render_terminal(document, width=width)
+    layout = layout_document(document)
+    if width is None:
+        import shutil
+        width = shutil.get_terminal_size((79, 24)).columns
+    rendered = wrap_words(layout, margin=width, raw=strip_styles)
     joined = join_styles(rendered)
     if stylesheet is None:
         stylesheet = ansi_uncolored | markdown_defaults

@@ -1332,8 +1332,8 @@ def test_template_dresses_the_page():
     assert 'Arguments\n---------' in text, text
     # the TEMPLATE's order wins: arguments before options
     assert text.index('Arguments\n') < text.index('Options\n'), text
-    assert '-l|--loud\n    Speak up.' in text, text
-    assert '<THING>\n    The thing.' in text, text
+    assert '-l|--loud  Speak up.' in text, text
+    assert '<THING>  The thing.' in text, text
     assert text.startswith('usage: g'), text
 
 
@@ -1361,6 +1361,14 @@ def test_optional_oparg_subscript():
     assert app.process(['--debug=vj']) == ('vj', None, 1)
     assert app.process(['--jobs']) == (None, None, 0)
     assert app.process(['-j', '3']) == (None, None, 3)
+    # a greedy oparg that eats the wrong token is the USER's
+    # error--UsageError, never a raw ValueError traceback
+    # (found 2026-08-06 writing the die famous-make docs)
+    try:
+        app.process(['-j', 'zork'])
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert 'zork' in str(e) and 'int' in str(e)
     # a plain (or None-defaulted) str option still REQUIRES its
     # value, exactly as 0.6.4 did
     try:
@@ -1404,16 +1412,16 @@ def test_command_listings_are_definition_order():
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.process(['help'])
-    words = [l for l in out.getvalue().splitlines()
-             if l and not l.startswith((' ', 'usage:', 'Commands'))
-             and set(l) != {'-'}]
+    tail0 = out.getvalue().split('Commands')[-1]
+    words = [l.split()[0] for l in tail0.splitlines()
+             if l and not l.startswith(' ') and set(l) != {'-'}]
     assert words == ['zebra', 'mango', 'apple', 'help'], words
 
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.process(['help', 'zebra'])
     tail = out.getvalue().split('Commands')[-1]
-    words = [l for l in tail.splitlines()
+    words = [l.split()[0] for l in tail.splitlines()
              if l and not l.startswith(' ') and set(l) != {'-'}]
     assert words == ['walk', 'crawl', 'help'], words
 
@@ -2136,11 +2144,13 @@ def test_help_parameter_sections():
     # '## Arguments' renders as a setext-underlined heading
     assert 'Arguments\n---------' in text, text
     assert 'Options\n-------' in text, text
-    # terms resolve to displays; definitions indent beneath
-    assert '<SHAPE>\n    the shape to draw.' in text, text
-    assert '<WIDTH>\n    how wide.' in text
-    assert '-v|--verbose\n    narrate the process.' in text
-    assert '-t|--times <TIMES>\n    how many times.' in text
+    # terms resolve to displays; short terms render COMPACT
+    # (the detail-column heuristic, designed 2026-08-06):
+    # aligned two-column, continuations at the detail column
+    assert '<SHAPE>  the shape to draw.' in text, text
+    assert '<WIDTH>  how wide.' in text
+    assert '-v|--verbose        narrate the process.' in text
+    assert '-t|--times <TIMES>  how many times.' in text
     body = text.split('Arguments\n')[0]
     assert 'shape\n:' not in body                # entries were extracted
     for line in text.splitlines():
@@ -2166,9 +2176,11 @@ def test_help_composes_through_option_converters():
         return shape
     result, text = run_both_stdout(draw, ['--help'])
     assert result is None
-    # the inner option's row is flat in the table (the usage
-    # line shows the nesting inline; Markdown pivot 2026-08-05)
-    assert '-w|--width <WIDTH>\n    how many dots wide.' in text, text
+    # a nested option's row is a NESTED definition list inside
+    # its parent's details (ruled 2026-08-06).  NOTE: big's
+    # compact def-list engine currently renders the nesting
+    # flat--content lands, indentation is the engine's call
+    assert '-w|--width <WIDTH>  how many dots wide.' in text, text
 
     # full depth: option -> converter -> option -> converter -> option
     def inner(v, *, precision: int = 2):
@@ -2210,7 +2222,7 @@ def test_help_composes_through_option_converters():
         """
         return shape
     _, text = run_both_stdout(cmd, ['--help'])
-    assert '-w|--width <WIDTH>\n    COMMAND text.' in text, text
+    assert '-w|--width <WIDTH>  COMMAND text.' in text, text
     assert 'CONVERTER' not in text, text
 
     # each converter documents its OWN window even when the inner
@@ -2268,9 +2280,9 @@ def test_command_set_help():
     oresult, olisting = grab(lambda: interpreter_dispatch(plans, None, ['help'], prog='pile'))
     assert (result, listing) == (oresult, olisting)
     assert listing.startswith('usage: pile command')
-    assert 'add_item\n    Adds an item to the pile.' in listing
-    assert 'remove\n    Removes an item.' in listing
-    assert 'help\n    Print usage documentation on a specific command.' in listing
+    assert 'add_item  Adds an item to the pile.' in listing
+    assert 'remove    Removes an item.' in listing
+    assert 'help      Print usage documentation on a specific command.' in listing
 
     # `help CMD` == `CMD --help`
     _, by_help = grab(lambda: parse(['help', 'add_item']))
@@ -2282,7 +2294,7 @@ def test_command_set_help():
     assert 'Adds an item to the pile.' in by_help
     assert 'usage: add_item' in by_help   # direct-built plans
     # carry no prog prefix; app-built ones do (ruled 2026-07-19)
-    assert '<NAME>\n    what to call it.' in by_help
+    assert '<NAME>   what to call it.' in by_help
     _, interpreter_help = grab(lambda: interpreter_dispatch(plans, None, ['help', 'add_item'], prog='pile'))
     assert interpreter_help == by_help
 
@@ -2315,7 +2327,7 @@ def test_command_set_help_facade():
     with contextlib.redirect_stdout(out):
         result = app.process(['help'])
     assert result is None
-    assert 'add_item\n    Adds an item to the pile.' in out.getvalue()
+    assert 'add_item  Adds an item to the pile.' in out.getvalue()
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.process(['help', 'add_item'])
@@ -2341,7 +2353,7 @@ def test_set_level_help_flag():
         return result, out.getvalue()
     result, text = grab(lambda: parse(['--help']))
     assert result is None and text.startswith('usage: pile command')
-    assert 'add_item\n    Adds an item.' in text
+    assert 'add_item  Adds an item.' in text
     oresult, otext = grab(lambda: interpreter_dispatch(plans, None, ['--help'], prog='pile'))
     assert (oresult, otext) == (result, text)
     _, htext = grab(lambda: parse(['help']))
@@ -2751,7 +2763,7 @@ def test_app_parameter_renames():
     assert usage == 'serve [-t|--times COUNT] <HOST> [PORT]', usage
     result, text = run_both_stdout(serve, ['--help'])
     assert '[-t|--times COUNT]' in text
-    assert 'PORT\n    where to listen.' in text  # tables renamed too
+    assert 'PORT    where to listen.' in text  # tables renamed too
     # a converter's own parameters rename by decorating the converter
     from appeal import add_parameter_usage
     def pair(x: float, y: float):
@@ -4726,22 +4738,21 @@ def test_usage_formatter_knobs():
     assert max(len(l) for l in narrow.splitlines()) <= 40
     assert 'Serves the thing' in narrow
 
-    # INTERIM (Markdown pivot, 2026-08-05): the indent= knob is
-    # inert--big's renderer owns the definition-list layout (the
-    # old ruling D indent semantics died with the old grammar).
-    # The knob still validates; its fate needs a ruling.
-    indented = helptext(make_app(indent=8))
-    row = next(l for l in indented.splitlines()
-               if l.strip().startswith('<HOST>'))
-    assert row == '<HOST>', repr(row)
+    # indent= is DEAD (ruled 2026-08-06, killed unshipped with
+    # the Markdown pivot): big's renderer owns definition-list
+    # layout.  Passing it is an ordinary TypeError.
+    try:
+        _appeal.Appeal(indent=8)
+        assert False, 'expected TypeError'
+    except TypeError:
+        pass
 
     # garbage refuses by name
-    for knob in ('margin', 'indent'):
-        try:
-            _appeal.Appeal(**{knob: 'wide'})
-            assert False, 'expected AppealConfigurationError'
-        except AppealConfigurationError as e:
-            assert knob in str(e)
+    try:
+        _appeal.Appeal(margin='wide')
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'margin' in str(e)
 
 
 def test_usage_knobs_standalone():
@@ -5603,7 +5614,7 @@ def test_version():
     # the listing documents it (before help, v1's order)
     code, out = main(app, ['help'])
     assert code == 0
-    assert out.index('version') < out.index('help\n')
+    assert out.index('version') < out.index('help ')
     assert "Print the program's version." in out
     # help DESCRIBES the auto commands (fixed 2026-07-11: this
     # errored in-process and raised raw TypeError in standalone)
