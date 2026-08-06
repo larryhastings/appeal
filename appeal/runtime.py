@@ -1721,15 +1721,29 @@ def _parse_markup(s, delimiters):
 
 
 def _collect_style_runs(nodes, names, acc):
-    "Flatten parsed markup to (text_run, tuple_of_enclosing_span_names)."
+    """
+    Flatten parsed markup to (piece, tuple_of_enclosing_span_names).
+    A piece is a str text run, or a zero-arg _Span (a span with no
+    fields) -- treated as a single character, so it survives split and
+    join like ordinary content instead of vanishing (it has no text).
+    """
     for node in nodes:
         if isinstance(node, str):
+            acc.append((node, tuple(names)))
+        elif not node.fields:          # a zero-arg span: one character
             acc.append((node, tuple(names)))
         else:                          # a _Span: descend carrying its name
             names.append(node.name)
             for field in node.fields:
                 _collect_style_runs(field, names, acc)
             names.pop()
+
+
+def _inner_markup(piece):
+    "A collected run as final inner markup: text re-escaped, a zero-arg span verbatim."
+    if isinstance(piece, str):
+        return escape_styles(piece)    # _parse_markup unquoted it
+    return style(piece.name)           # ⦃name⦄, a character, kept as-is
 
 
 @export
@@ -1751,6 +1765,12 @@ def split_styles(s):
     _collect_style_runs(_parse_markup(s, style_delimiters), [], acc)
     out = []
     for run, names in acc:
+        if not isinstance(run, str):           # a zero-arg span: one verbatim word
+            word = style(run.name)
+            for name in reversed(names):
+                word = style(name, word)
+            out.append(word)
+            continue
         for word, gap in _multisplit(run, keep=True, separate=False, strip=False):
             if word:
                 word = escape_styles(word)     # _parse_markup unquoted it
@@ -1779,7 +1799,10 @@ def join_styles(s):
     """
     runs = []
     _collect_style_runs(_parse_markup(s, style_delimiters), [], runs)
-    runs = [[text, stack] for text, stack in runs]
+    # normalize each piece to final inner markup up front (escape literal
+    # text, keep a zero-arg span verbatim), so coalescing is plain string
+    # concatenation and a zero-arg span rides along as a character.
+    runs = [[_inner_markup(piece), stack] for piece, stack in runs]
     # promote a spaces/tabs-only plain gap to its neighbors' stack when
     # they match, so the gap joins the two spans instead of splitting them
     for i, run in enumerate(runs):
@@ -1799,8 +1822,7 @@ def join_styles(s):
             out.append([text, stack])
     pieces = []
     for text, stack in out:
-        text = escape_styles(text)     # _parse_markup unquoted it
-        for name in reversed(stack):   # inner span first
+        for name in reversed(stack):   # inner span first; text is already markup
             text = style(name, text)
         pieces.append(text)
     return ''.join(pieces)
@@ -2376,6 +2398,34 @@ markdown_defaults = _StyleSheet({
     'heading_warning':   ('T', '⦃heading2⦙⦃orange⦙T⦄⦄'),
     'caution':           ('T', '⦃red⦙T⦄'),
     'heading_caution':   ('T', '⦃heading2⦙⦃red⦙T⦄⦄'),
+    # the glyphs layout_document draws, as zero-arg roles (Unicode by
+    # default; ascii_glyphs()/unicode_glyphs() swap them without a sheet)
+    'bullet':          ('•',),
+    'quote_bar':       ('│ ',),
+    'thematic_break':  ('─',),
+    'heading1_rule':   ('=',),
+    'heading2_rule':   ('-',),
+    'note_emoji':      ('ℹ️',),
+    'tip_emoji':       ('💡',),
+    'important_emoji': ('✴',),
+    'warning_emoji':   ('⚠️',),
+    'caution_emoji':   ('🛑',),
+})
+
+# the same glyph roles, in ASCII -- for terminals (or pipes) that can't
+# show the Unicode glyphs.  Only the glyph roles; compose over a palette
+# for the rest, or resolve with ascii_glyphs().
+markdown_ascii_glyphs = _StyleSheet({
+    'bullet':          ('*',),
+    'quote_bar':       ('| ',),
+    'thematic_break':  ('-',),
+    'heading1_rule':   ('=',),
+    'heading2_rule':   ('-',),
+    'note_emoji':      ('(i)',),
+    'tip_emoji':       ('(*)',),
+    'important_emoji': ('(!)',),
+    'warning_emoji':   ('/!\\',),
+    'caution_emoji':   ('(x)',),
 })
 # --8<-- end big markdown defaults --8<--
 
@@ -4639,6 +4689,30 @@ def help_stylesheet(file=None):
     return markdown_defaults | best_palette(file=file)
 
 
+def resolve_glyphs(stylesheet):
+    """
+    Return a function that replaces big.markdown's glyph markup
+    (zero-arg spans: ⦃bullet⦄, ⦃note_emoji⦄, ...) with whatever
+    `stylesheet` renders them to.  The width math needs this:
+    a layout's glyphs occupy columns, and only the sheet knows
+    which characters they become.  (Mirror of big's
+    glyphs_from_stylesheet, discovering roles from the text
+    instead of a role list--one big-side export away from
+    deduplication.)
+    """
+    import re
+    pattern = re.compile('⦃([A-Za-z0-9_]+)⦄')
+    cache = {}
+    def resolve(s):
+        def sub(m):
+            markup = m.group(0)
+            if markup not in cache:
+                cache[markup] = stylesheet.render(markup)
+            return cache[markup]
+        return pattern.sub(sub, s)
+    return resolve
+
+
 def render_baked_help(pieces, margin=79, theme=None, file=None):
     """
     The runtime half of a help page.  pieces is the baked,
@@ -4651,6 +4725,8 @@ def render_baked_help(pieces, margin=79, theme=None, file=None):
     adjacent spans, and the terminal's stylesheet paints.
     """
     sheet = help_stylesheet(file)
+    glyphs = resolve_glyphs(sheet)
+    measure = lambda w: strip_styles(glyphs(w))
     out = []
     for piece in pieces:
         if piece[0] == 'usage':
@@ -4662,8 +4738,7 @@ def render_baked_help(pieces, margin=79, theme=None, file=None):
             out.append(body)
         else:
             layout = piece[1]
-            text = wrap_words(layout, margin=margin,
-                              raw=strip_styles)
+            text = wrap_words(layout, margin=margin, raw=measure)
             out.append(sheet.render(join_styles(text)).rstrip('\n'))
     text = '\n\n'.join(out)
     while '\n\n\n' in text:

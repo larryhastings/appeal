@@ -8,6 +8,11 @@
 ## colors.  EVERYTHING IS MEANT TO BE EDITED: the themes are
 ## plain dict literals right below, the sample page is one
 ## marked-up string, and rerunning the script shows your edits.
+## Glyphs (the bullet, quote bars, heading rules, alert emoji)
+## are zero-arg spans--⦃bullet⦄, ⦃note_emoji⦄--resolved by the
+## stylesheet, so a theme can re-glyph as well as recolor
+## (markdown_defaults supplies Unicode; big also ships
+## markdown_ascii_glyphs).
 ##
 ##     python3 tools/theme_lab.py            # all themes
 ##     python3 tools/theme_lab.py dark_cool  # just one
@@ -210,12 +215,12 @@ usage: ⦃program⦙serve⦄ [⦃option⦙-v⦄|⦃option⦙--verbose⦄] [⦃op
 Longer prose with ⦃bold⦙bold⦄, ⦃italic⦙italic⦄, and ⦃code⦙inline_code()⦄,
 plus a ⦃link⦙hyperlink⦄ and ⦃strikethrough⦙the old way⦄.
 
-⦃heading1⦙===========⦄
+⦃heading1⦙⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦄
 ⦃heading1⦙Heading One⦄
-⦃heading1⦙===========⦄
+⦃heading1⦙⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦄
 
 ⦃heading2⦙Heading Two⦄
-⦃heading2⦙-----------⦄
+⦃heading2⦙⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦄
 
 ⦃heading3⦙Heading Three⦄
 
@@ -225,26 +230,26 @@ plus a ⦃link⦙hyperlink⦄ and ⦃strikethrough⦙the old way⦄.
 
 ⦃heading6⦙Heading Six⦄
 
-  ⦃marker⦙•⦄ the first bullet
-  ⦃marker⦙•⦄ the second bullet
+  ⦃marker⦙⦃bullet⦄⦄ the first bullet
+  ⦃marker⦙⦃bullet⦄⦄ the second bullet
 
   ⦃codeblock⦙$ serve --port 8080 example.com
 serving example.com:8080⦄
 
-⦃note⦙│ ⦄⦃heading_note⦙ℹ️ Note⦄
-⦃note⦙│ ⦄Notes are blue.
+⦃note⦙⦃quote_bar⦄⦄⦃heading_note⦙⦃note_emoji⦄ Note⦄
+⦃note⦙⦃quote_bar⦄⦄Notes are blue.
 
-⦃tip⦙│ ⦄⦃heading_tip⦙💡 Tip⦄
-⦃tip⦙│ ⦄Tips are green.
+⦃tip⦙⦃quote_bar⦄⦄⦃heading_tip⦙⦃tip_emoji⦄ Tip⦄
+⦃tip⦙⦃quote_bar⦄⦄Tips are green.
 
-⦃important⦙│ ⦄⦃heading_important⦙✴ Important⦄
-⦃important⦙│ ⦄Important is purple.
+⦃important⦙⦃quote_bar⦄⦄⦃heading_important⦙⦃important_emoji⦄ Important⦄
+⦃important⦙⦃quote_bar⦄⦄Important is purple.
 
-⦃warning⦙│ ⦄⦃heading_warning⦙⚠️ Warning⦄
-⦃warning⦙│ ⦄Warnings are orange.
+⦃warning⦙⦃quote_bar⦄⦄⦃heading_warning⦙⦃warning_emoji⦄ Warning⦄
+⦃warning⦙⦃quote_bar⦄⦄Warnings are orange.
 
-⦃caution⦙│ ⦄⦃heading_caution⦙🛑 Caution⦄
-⦃caution⦙│ ⦄Caution is red.
+⦃caution⦙⦃quote_bar⦄⦄⦃heading_caution⦙⦃caution_emoji⦄ Caution⦄
+⦃caution⦙⦃quote_bar⦄⦄Caution is red.
 
 ⦃heading2⦙Arguments⦄
 ⦃heading2⦙---------⦄
