@@ -231,20 +231,20 @@ plus a ⦃link⦙hyperlink⦄ and ⦃strikethrough⦙the old way⦄.
   ⦃codeblock⦙$ serve --port 8080 example.com
 serving example.com:8080⦄
 
-⦃heading_note⦙▐ Note⦄
-⦃note⦙▐⦄ Notes are blue.
+⦃note⦙│ ⦄⦃heading_note⦙ℹ️ Note⦄
+⦃note⦙│ ⦄Notes are blue.
 
-⦃heading_tip⦙▐ Tip⦄
-⦃tip⦙▐⦄ Tips are green.
+⦃tip⦙│ ⦄⦃heading_tip⦙💡 Tip⦄
+⦃tip⦙│ ⦄Tips are green.
 
-⦃heading_important⦙▐ Important⦄
-⦃important⦙▐⦄ Important is purple.
+⦃important⦙│ ⦄⦃heading_important⦙✴ Important⦄
+⦃important⦙│ ⦄Important is purple.
 
-⦃heading_warning⦙▐ Warning⦄
-⦃warning⦙▐⦄ Warnings are orange.
+⦃warning⦙│ ⦄⦃heading_warning⦙⚠️ Warning⦄
+⦃warning⦙│ ⦄Warnings are orange.
 
-⦃heading_caution⦙▐ Caution⦄
-⦃caution⦙▐⦄ Caution is red.
+⦃caution⦙│ ⦄⦃heading_caution⦙🛑 Caution⦄
+⦃caution⦙│ ⦄Caution is red.
 
 ⦃heading2⦙Arguments⦄
 ⦃heading2⦙---------⦄
