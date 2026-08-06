@@ -2298,12 +2298,12 @@ export('ansi_uncolored')
 def best_palette(*, file=None):
     """
     The stock low-level palette best suited to `file` (default
-    sys.stdout).  If we can't colorize `file`, it's the uncolored map;
-    otherwise it's the deepest map the terminal advertises (see
-    can_colorize and ansi_color_depth).
+    sys.stdout).  If we can't colorize `file`, it's plain_stylesheet --
+    fully plain text, no escapes at all; otherwise it's the deepest map
+    the terminal advertises (see can_colorize and ansi_color_depth).
     """
     if not can_colorize(file=file):
-        return ansi_uncolored
+        return plain_stylesheet
     return {
         'truecolor': ansi_truecolor,
         '256color':  ansi_256,
@@ -4599,16 +4599,11 @@ def help_margin(max_columns=79):
 def help_stylesheet(file=None):
     """
     The StyleSheet a help page paints with, for this stream at
-    this moment: markdown_defaults over big's best_palette when
-    color is on, over plain_stylesheet (every span strips) when
-    it isn't.  The explicit can_colorize check exists because
-    best_palette's own no-color answer is ansi_uncolored, which
-    still emits attribute escapes (bold/italic)--right for a
-    colorless TERMINAL, wrong for a pipe or a capture, where no
-    escape of any kind belongs.
+    this moment: markdown_defaults over big's best_palette--
+    which answers plain_stylesheet (every span strips) when
+    can_colorize says no, so pipes and captures get no escapes
+    of any kind.
     """
-    if not can_colorize(file=file):
-        return markdown_defaults | plain_stylesheet
     return markdown_defaults | best_palette(file=file)
 
 
