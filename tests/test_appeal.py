@@ -4273,11 +4273,13 @@ def mark(label, *, at: _pt = 'origin'):
     """
     Marks a label on the canvas.
 
-    Arguments:
-      label: the text to place.
+    # Arguments
+    label
+    : the text to place.
 
-    Options:
-      at: where to place it.
+    # Options
+    at
+    : where to place it.
     """
     print('mark', label, at)
 
@@ -6595,13 +6597,6 @@ def test_standalone_star_args_windows():
         assert 'at least one' in r.stderr
 
 def test_standalone_help_sections():
-    # TEMPORARILY SKIPPED (Larry, 2026-08-05, heavy development
-    # mode): standalone help waits on big's stage-2 snippets
-    # (bake parse/style/layout at emission; wrap + stylesheet at
-    # runtime--the laundry list lives in
-    # big/appeal.markdown.snippets.md).  Un-skip when they land.
-    import unittest
-    raise unittest.SkipTest('standalone help awaits big stage-2 snippets')
     # parameter tables render inside a generated script, formatted
     # at run time by the embedded trio
     with tempfile.TemporaryDirectory() as d:
@@ -6611,19 +6606,13 @@ def test_standalone_help_sections():
         assert r.stdout.startswith('usage: '), r.stdout
         assert 'Marks a label on the canvas.' in r.stdout
         assert 'usage: mark' in r.stdout
-        assert 'Arguments:' in r.stdout and 'Options:' in r.stdout
-        assert '  <LABEL>  the text to place.' in r.stdout
+        assert 'Arguments\n---------' in r.stdout
+        assert 'Options\n-------' in r.stdout
+        assert '<LABEL>  the text to place.' in r.stdout
         assert '-a|--at <X> <Y>' in r.stdout
         assert 'where to place it.' in r.stdout
 
 def test_standalone_command_set_help():
-    # TEMPORARILY SKIPPED (Larry, 2026-08-05, heavy development
-    # mode): standalone help waits on big's stage-2 snippets
-    # (bake parse/style/layout at emission; wrap + stylesheet at
-    # runtime--the laundry list lives in
-    # big/appeal.markdown.snippets.md).  Un-skip when they land.
-    import unittest
-    raise unittest.SkipTest('standalone help awaits big stage-2 snippets')
     from appeal import emit_standalone_command_set
     with tempfile.TemporaryDirectory() as d:
         module_path = os.path.join(d, 'demo_cmds.py')
@@ -6654,14 +6643,14 @@ def test_standalone_command_set_help():
         assert r.returncode == 0 and r.stdout == r2.stdout
         assert r.stdout.startswith('usage: '), r.stdout
         assert 'Marks a label on the canvas.' in r.stdout
-        assert '  <LABEL>  the text to place.' in r.stdout
+        assert '<LABEL>  the text to place.' in r.stdout
 
 def test_standalone_help():
     # the north star: --help works in a generated script, formatted
     # at run time by the embedded trio, importing nothing
     with tempfile.TemporaryDirectory() as d:
         script_path, script = write_standalone_fixture(d, 'greet')
-        assert 'def render_help_page' in script
+        assert 'def render_baked_help' in script
         assert 'def wrap_words' in script
         r = run_script(script_path, ['--help'])
         assert r.returncode == 0, r.stderr
@@ -6708,7 +6697,7 @@ def test_standalone_plucks_minimal_runtime():
     with tempfile.TemporaryDirectory() as d:
         script_path, script = write_standalone_fixture(d, 'greet')
         for expected in ('def parse_tokens', 'def check_count', 'def run_main',
-                         'def render_help_page', 'def wrap_words'):
+                         'def render_baked_help', 'def wrap_words'):
             assert expected in script, f'minimal script is missing {expected!r}'
         for unexpected in ('def split(', 'def validate(', 'def counter(',
                            'class accumulator', 'def accumulate(',
@@ -6723,13 +6712,6 @@ def test_standalone_plucks_minimal_runtime():
         assert r.returncode == 0, r.stderr
 
 def test_standalone_is_standalone():
-    # TEMPORARILY SKIPPED (Larry, 2026-08-05, heavy development
-    # mode): standalone help waits on big's stage-2 snippets
-    # (bake parse/style/layout at emission; wrap + stylesheet at
-    # runtime--the laundry list lives in
-    # big/appeal.markdown.snippets.md).  Un-skip when they land.
-    import unittest
-    raise unittest.SkipTest('standalone help awaits big stage-2 snippets')
     # the north star's teeth, part 1: the generated text imports
     # nothing but the stdlib and the user's own module
     with tempfile.TemporaryDirectory() as d:

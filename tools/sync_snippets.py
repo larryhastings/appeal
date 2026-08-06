@@ -14,22 +14,34 @@ import sys
 
 try:
     from big.snip import sync_snippets
+    import big.markdown
+    import big.stylesheet
     import big.text
 except ImportError:
     sys.exit("Can't import big to copy from!  Giving up.")
 
-big_text_py = pathlib.Path(big.text.__file__)
 appeal_runtime_py = (pathlib.Path(__file__).resolve().parent.parent
                      / 'appeal' / 'runtime.py')
 assert appeal_runtime_py.exists()
 
-source = big_text_py.read_text(encoding='utf-8')
 destination = original = appeal_runtime_py.read_text(encoding='utf-8')
 
 # the warehouse folds together snippets borrowed from big and
 # Appeal's own; whitelist just big's (the 'big ' name prefix).
-updated = sync_snippets(source, destination,
-                        (lambda name: name.startswith('big ')))
+# Three source modules: the word-wrap trio (text), the
+# StyleSheet render core + ANSI stylesheets (stylesheet), and
+# markdown_defaults (markdown).  Each syncs only the regions it
+# defines.
+import re
+updated = destination
+for module in (big.text, big.stylesheet, big.markdown):
+    source = pathlib.Path(module.__file__).read_text(encoding='utf-8')
+    defined = set(re.findall(r'--8<-- start (big [^-]+?) --8<--',
+                             source))
+    if not defined:
+        continue
+    updated = sync_snippets(source, updated,
+                            (lambda name, d=defined: name in d))
 
 if updated == original:
     print(f'{appeal_runtime_py} unchanged.')

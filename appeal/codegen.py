@@ -38,7 +38,8 @@ from .runtime import (
     parse_tokens, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
     sibling_scopes,
-    Theme, default_template, render_command_listing, render_help_page,
+    Theme, default_template, help_page_pieces, render_baked_help,
+    render_command_listing, render_help_page,
     resolve_theme,
     did_you_mean, help_margin,
     greedy_sizes, run_command_set, run_main, runtime_source,
@@ -943,18 +944,22 @@ class _Emitter:
         self.line(f'def run_{self.symbol}(operands, given, positions=None, '
                   f'env=None):')
         if help_keys:
-            # compiled means the documentation too: the corpus is
-            # predigested at build time, formatted at runtime
+            # compiled means the documentation too: the whole
+            # Markdown pipeline runs at BUILD time (parse, style,
+            # layout--big's half), and the page bakes as pieces;
+            # the script wraps and paints at ITS runtime, at its
+            # real width, for its real terminal
             corpus = merge_docs(plan)
-            corpus_name = self.refs.add(f'_HELP_{self.symbol}', corpus, dedupe=False)
-            templates_name = self.refs.add(f'_TEMPLATES_{self.symbol}', self.templates, dedupe=False)
+            pieces = help_page_pieces(plan.usage(), corpus,
+                                      self.templates)
+            pieces_name = self.refs.add(f'_HELP_{self.symbol}',
+                                        pieces, dedupe=False)
             theme_name = self.refs.add(f'_THEME_{self.symbol}', self.theme, dedupe=False)
             self.line(f"    if given.pop('--help', False):")
-            self.line(f'        print(render_help_page({self.usage_const}, '
-                      f'{corpus_name}, {templates_name}, '
+            self.line(f'        print(render_baked_help({pieces_name}, '
                       f'margin=help_margin({self.max_columns!r}), '
-                      f'theme=resolve_theme({theme_name}, sys.stdout)), '
-                      f"end='')")
+                      f'theme=resolve_theme({theme_name}, sys.stdout), '
+                      f"file=sys.stdout), end='')")
             self.line(f'        return')
         self.line(f'    n = len(operands)')
         if self.sibling_parents:
@@ -1152,6 +1157,7 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
         'window_options': window_options,
         'greedy_sizes': greedy_sizes,
         'render_help_page': render_help_page,
+        'render_baked_help': render_baked_help,
         'help_margin': help_margin,
         'did_you_mean': did_you_mean,
         'resolve_theme': resolve_theme,
@@ -1303,8 +1309,9 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
                                 auto_version=auto_version)
     usage = render_command_listing(usage_line, corpus, templates,
                                    margin=max_columns)
-    corpus_name = refs.add('_HELP_command_set', corpus, dedupe=False)
-    templates_name = refs.add('_TEMPLATES_command_set', templates, dedupe=False)
+    listing_pieces = help_page_pieces(usage_line, corpus, templates)
+    pieces_name = refs.add('_HELP_command_set', listing_pieces,
+                           dedupe=False)
     theme_name = refs.add('_THEME_command_set', theme, dedupe=False)
     globals_name = (f'(scan_{sym(global_plan)}, run_{sym(global_plan)})'
                     if global_plan is not None else 'None')
@@ -1342,10 +1349,10 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
     lines = sub_lines + [f'_USAGE_command_set = {usage!r}',
              f'_USAGE_LINE_command_set = {usage_line!r}',
              f'_COMPLETE_command_set = {set_table}', '']
-    listing_stmt = (f"print(render_help_page(_USAGE_LINE_command_set, "
-                    f"{corpus_name}, {templates_name}, "
+    listing_stmt = (f"print(render_baked_help({pieces_name}, "
                     f"margin=help_margin({max_columns!r}), "
-                    f"theme=resolve_theme({theme_name}, sys.stdout)), end='')")
+                    f"theme=resolve_theme({theme_name}, sys.stdout), "
+                    f"file=sys.stdout), end='')")
     if auto_version:
         table += ", 'version': parse_version"
         lines.extend([
@@ -1462,6 +1469,7 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, t
         'window_options': window_options,
         'greedy_sizes': greedy_sizes,
         'render_help_page': render_help_page,
+        'render_baked_help': render_baked_help,
         'help_margin': help_margin,
         'did_you_mean': did_you_mean,
         'resolve_theme': resolve_theme,
@@ -1671,6 +1679,7 @@ _SOURCE_SNIPPETS = (
     ('window_options', 'appeal windows'),
     ('greedy_sizes', 'appeal windows'),
     ('run_command_set', 'appeal command set'),
+    ('render_baked_help', 'appeal help'),
     )
 
 
