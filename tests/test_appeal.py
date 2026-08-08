@@ -1285,6 +1285,25 @@ def test_wrapped_heading_fuses():
         '===============\n'), repr(page)
 
 
+def test_heading_with_inline_formatting():
+    # A heading containing inline markup (code, bold, a link)
+    # arrives as several same-role spans; join_styles fuses them
+    # --nested content included (big's fix, 2026-08-08)--so the
+    # structural entry fires ONCE.  Before the fix this garbled:
+    # three rule sandwiches sharing lines.
+    from appeal.runtime import (default_template, help_page_pieces,
+                                render_baked_help)
+    corpus = {'summary': [], 'documentation':
+              ['# Heading with `code` inside'],
+              'arguments': [], 'options': [], 'commands': []}
+    pieces = help_page_pieces('x', corpus, default_template,
+                              suppress=('usage',))
+    page = render_baked_help(pieces, margin=40)
+    assert page == ('========================\n'
+                    'Heading with code inside\n'
+                    '========================\n'), repr(page)
+
+
 def test_program_doc_three_tiers():
     # Ruled 2026-08-01: the program's documentation, highest
     # first: (1) Appeal(doc=...); (2) the global command's
