@@ -60,15 +60,19 @@ appeal_markdown_defaults = {
     # layout; the style paints them), h3 bold, h4-5 italic, h6
     # color only.
     'heading_color': ('T', 'T'),
-    # STRUCTURE IN THE SHEET (Larry's fill/strip design,
-    # 2026-08-08): big now has ⦃fill⦙pattern⦙model⦄ (repeat
-    # pattern, clipped to model's width), ⦃strip⦙T⦄ / ⦃lstrip⦙
-    # / ⦃rstrip⦙.  Once big's layout stops hard-coding heading
-    # rules, h1/h2 will carry their own, like:
+    # STRUCTURE IN THE SHEET (Larry's design, 2026-08-08): big
+    # has ⦃fill⦙pattern⦙model⦄ (repeat pattern, clipped to the
+    # model's width) and ⦃strip⦙T⦄ / ⦃lstrip⦙ / ⦃rstrip⦙; ruled
+    # to come: ⦃clip⦙model⦙T⦄ (truncate T to the model's width)
+    # and ⦃line⦄ ('-' repeated to the margin--a full-width rule
+    # bare, a margin-wide model inside clip/fill; the RENDERER
+    # injects it, since only the renderer knows the margin).
+    # The lab polyfills clip and line below.  Once big's layout
+    # stops hard-coding heading rules, h1/h2 carry their own:
     #   'heading1': ('T',
-    #       '⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄\n'
+    #       '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄\n'
     #       '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
-    #       '⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄'),
+    #       '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
     # Until then layout still draws h1/h2 rules (sheet-side ones
     # would double).  heading3 below demonstrates TODAY: layout
     # never rules h3, so its rule comes entirely from this entry
@@ -299,9 +303,19 @@ usage: ⦃program⦙serve⦄ [⦃option⦙-v⦄|⦃option⦙--verbose⦄] [⦃op
 ⦃command⦙stop⦄   Stop the server.
 
 ⦃error⦙error:⦄ unknown command 'zerve'
+
+⦃heading_color⦙⦃line⦄⦄
 """
 
 WIDTH = 72
+
+# big-spec preview (2026-08-08, pending in big): clip truncates
+# plain rendered text to the model's width; line is the margin
+# as a drawable string, injected by the renderer.
+SPEC_PREVIEW = {
+    'clip': lambda model, t: t[:len(model)],
+    'line': ('-' * WIDTH,),
+}
 
 
 def main(argv):
@@ -325,8 +339,8 @@ def main(argv):
         # markdown_defaults beneath (safety net), the transforms
         # (upper etc), the palette, then the theme outermost
         from big.stylesheet import transforms
-        sheet = (markdown_defaults | transforms | palette
-                 | StyleSheet(theme_dict))
+        sheet = (markdown_defaults | transforms | SPEC_PREVIEW
+                 | palette | StyleSheet(theme_dict))
         glyphs = glyphs_from_stylesheet(sheet)
         wrapped = wrap_words(layout, margin=WIDTH,
                              raw=lambda w: strip_styles(glyphs(w)))
