@@ -1261,9 +1261,10 @@ def test_renderer_injects_line():
 def test_wrapped_heading_fuses():
     # Larry's super-duper-long heading (2026-08-08): a heading
     # that wraps is ONE heading--adjacent same-role spans fuse
-    # across the line break (fuse_wrapped_spans), so the
-    # structural entry fires once: rules above and below the
-    # BLOCK, sized by clip-to-line, not a sandwich per line.
+    # across the line break (big's join_styles,
+    # span_linebreaks=True), so the structural entry fires once:
+    # rules above and below the BLOCK, sized by clip-to-line,
+    # not a sandwich per line.
     from appeal.runtime import (default_template, help_page_pieces,
                                 render_baked_help)
     corpus = {'summary': [], 'documentation':

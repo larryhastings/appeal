@@ -318,8 +318,6 @@ def main(argv):
     from big.stylesheet import join_styles, strip_styles
     from big.text import wrap_words
 
-    from appeal.runtime import fuse_wrapped_spans
-
     document = split_styles_document(style_document(
         parse(SAMPLE_MARKDOWN)))
     layout = layout_document(document)
@@ -344,7 +342,7 @@ def main(argv):
         print(f'==  {name}_theme  (over {_palette_name(palette)})')
         print(bar)
         print()
-        print(sheet.render(fuse_wrapped_spans(join_styles(wrapped))))
+        print(sheet.render(join_styles(wrapped, span_linebreaks=True)))
         print()
         print(sheet.render(ROLE_LINES))
         print()
