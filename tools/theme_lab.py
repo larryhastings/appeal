@@ -237,7 +237,7 @@ Start the server, and serve until interrupted.
 Longer prose with **bold**, *italic*, and `inline_code()`,
 plus a [hyperlink](https://example.com) and ~~the old way~~.
 
-# Heading One
+# Heading One which by the way is super duper long almost excessively so and it's kind of pointless like this
 
 ## Heading Two
 
@@ -318,6 +318,8 @@ def main(argv):
     from big.stylesheet import join_styles, strip_styles
     from big.text import wrap_words
 
+    from appeal.runtime import fuse_wrapped_spans
+
     document = split_styles_document(style_document(
         parse(SAMPLE_MARKDOWN)))
     layout = layout_document(document)
@@ -342,7 +344,7 @@ def main(argv):
         print(f'==  {name}_theme  (over {_palette_name(palette)})')
         print(bar)
         print()
-        print(sheet.render(join_styles(wrapped)))
+        print(sheet.render(fuse_wrapped_spans(join_styles(wrapped))))
         print()
         print(sheet.render(ROLE_LINES))
         print()

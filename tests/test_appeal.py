@@ -1258,6 +1258,32 @@ def test_renderer_injects_line():
     assert page == 'De\n', repr(page)    # clipped to the SHEET's 2-wide line
 
 
+def test_wrapped_heading_fuses():
+    # Larry's super-duper-long heading (2026-08-08): a heading
+    # that wraps is ONE heading--adjacent same-role spans fuse
+    # across the line break (fuse_wrapped_spans), so the
+    # structural entry fires once: rules above and below the
+    # BLOCK, sized by clip-to-line, not a sandwich per line.
+    from appeal.runtime import (default_template, help_page_pieces,
+                                render_baked_help)
+    corpus = {'summary': [], 'documentation':
+              ["# Heading One which by the way is super duper long "
+               "almost excessively so and it's kind of pointless "
+               "like this"],
+              'arguments': [], 'options': [], 'commands': []}
+    pieces = help_page_pieces('x', corpus, default_template,
+                              suppress=('usage',))
+    page = render_baked_help(pieces, margin=70)
+    assert page == (
+        '======================================================='
+        '===============\n'
+        'Heading One which by the way is super duper long almost '
+        'excessively so\n'
+        "and it's kind of pointless like this\n"
+        '======================================================='
+        '===============\n'), repr(page)
+
+
 def test_program_doc_three_tiers():
     # Ruled 2026-08-01: the program's documentation, highest
     # first: (1) Appeal(doc=...); (2) the global command's

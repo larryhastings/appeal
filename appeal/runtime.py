@@ -2148,6 +2148,25 @@ def help_stylesheet(file=None):
             | appeal_markdown_defaults)
 
 
+def fuse_wrapped_spans(text):
+    """
+    Fuse adjacent SAME-role spans across a line break into one
+    multi-line span.  A wrapped heading is one heading: its
+    structural entry must fire once (rules above and below the
+    block), not once per wrapped line.  Conservative: only spans
+    with plain contents fuse; paint-only roles are visually
+    unchanged by fusing (escapes span newlines fine).
+    """
+    import re
+    pattern = re.compile('⦃([A-Za-z0-9_]+)⦙([^⦃⦄]*)⦄\n⦃\\1⦙')
+    while True:
+        fused = pattern.sub(lambda m: f'⦃{m.group(1)}⦙{m.group(2)}\n',
+                            text)
+        if fused == text:
+            return text
+        text = fused
+
+
 def render_baked_help(pieces, margin=79, theme=None, file=None,
                       stylesheet=None):
     """
@@ -2182,7 +2201,8 @@ def render_baked_help(pieces, margin=79, theme=None, file=None,
         else:
             layout = piece[1]
             text = wrap_words(layout, margin=margin, raw=measure)
-            out.append(sheet.render(join_styles(text)).rstrip('\n'))
+            text = fuse_wrapped_spans(join_styles(text))
+            out.append(sheet.render(text).rstrip('\n'))
     text = '\n\n'.join(out)
     while '\n\n\n' in text:
         text = text.replace('\n\n\n', '\n\n')
