@@ -60,9 +60,23 @@ appeal_markdown_defaults = {
     # layout; the style paints them), h3 bold, h4-5 italic, h6
     # color only.
     'heading_color': ('T', 'T'),
+    # STRUCTURE IN THE SHEET (Larry's fill/strip design,
+    # 2026-08-08): big now has ⦃fill⦙pattern⦙model⦄ (repeat
+    # pattern, clipped to model's width), ⦃strip⦙T⦄ / ⦃lstrip⦙
+    # / ⦃rstrip⦙.  Once big's layout stops hard-coding heading
+    # rules, h1/h2 will carry their own, like:
+    #   'heading1': ('T',
+    #       '⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄\n'
+    #       '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
+    #       '⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄'),
+    # Until then layout still draws h1/h2 rules (sheet-side ones
+    # would double).  heading3 below demonstrates TODAY: layout
+    # never rules h3, so its rule comes entirely from this entry
+    # --delete a line, lose the line.
     'heading1':   ('T', '⦃bold⦙⦃heading_color⦙T⦄⦄'),
     'heading2':   ('T', '⦃bold⦙⦃heading_color⦙T⦄⦄'),
-    'heading3':   ('T', '⦃bold⦙⦃heading_color⦙T⦄⦄'),
+    'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
+                       '⦃heading_color⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
     'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
     'heading5':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
     'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
