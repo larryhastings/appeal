@@ -26,7 +26,8 @@ import sys
 from big.builtin import can_colorize
 from big.markdown import glyphs_from_stylesheet, markdown_defaults
 from big.stylesheet import (StyleSheet, best_palette, join_styles,
-                            plain_stylesheet, strip_styles, style)
+                            plain_stylesheet, strip_styles, style,
+                            transforms)
 from big.text import (OverflowStrategy, _iterate_over_bytes,
                       expand_tabs, format_definition_list,
                       merge_columns, split_text_with_code,
@@ -1293,7 +1294,38 @@ def _StyleSheet(*args, **kwargs):
 
 def _style_span(*args, **kwargs):
     return style(*args, **kwargs)
+
+def _gently_title(*args, **kwargs):
+    return gently_title(*args, **kwargs)
 # --8<-- end appeal stylesheet alias --8<--
+
+# --8<-- start appeal markdown defaults --8<--
+# Appeal owns the WIDTH-AWARE structure (ruled 2026-08-08: big
+# stays width-agnostic by design--its markdown_defaults are the
+# neutral look: headings unruled, the thematic break a short
+# dash).  These entries compose OVER big's defaults in every
+# help stylesheet: h1 between full-length rules, h2 over one,
+# the thematic break filled to the margin--all in terms of
+# `line`, which the renderer injects.  STRUCTURE only; the look
+# (attributes, colors) arrives with the themes.  Alert titles
+# say their kind colors directly--referencing heading2 would
+# inherit its rule, inside the quote bars.
+appeal_markdown_defaults = {
+    'heading1': ('T',
+        '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄\n'
+        '⦃strip⦙T⦄\n'
+        '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
+    'heading2': ('T',
+        '⦃strip⦙T⦄\n'
+        '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
+    'rule': ('T', '⦃fill⦙T⦙⦃line⦄⦄'),
+    'heading_note':      ('T', '⦃blue⦙T⦄'),
+    'heading_tip':       ('T', '⦃green⦙T⦄'),
+    'heading_important': ('T', '⦃purple⦙T⦄'),
+    'heading_warning':   ('T', '⦃orange⦙T⦄'),
+    'heading_caution':   ('T', '⦃red⦙T⦄'),
+}
+# --8<-- end appeal markdown defaults --8<--
 
 
 ##
@@ -2016,6 +2048,9 @@ def paint_usage(theme, text):
 # --8<-- requires big ansi stylesheets --8<--
 # --8<-- requires big markdown defaults --8<--
 # --8<-- requires big glyphs from stylesheet --8<--
+# --8<-- requires big gently_title --8<--
+# --8<-- requires big stylesheet transforms --8<--
+# --8<-- requires appeal markdown defaults --8<--
 def usage_units(usage):
     """
     Split a usage line into its unbreakable top-level units: the
@@ -2102,12 +2137,15 @@ def help_margin(max_columns=79):
 def help_stylesheet(file=None):
     """
     The StyleSheet a help page paints with, for this stream at
-    this moment: markdown_defaults over big's best_palette--
-    which answers plain_stylesheet (every span strips) when
-    can_colorize says no, so pipes and captures get no escapes
-    of any kind.
+    this moment: big's neutral markdown_defaults, the transforms
+    (fill/clip/strip/...), the palette the terminal deserves
+    (best_palette: plain_stylesheet when color is off, so pipes
+    and captures get no escapes of any kind), and--outermost--
+    appeal_markdown_defaults, the width-aware STRUCTURE appeal
+    owns (ruled 2026-08-08).
     """
-    return markdown_defaults | best_palette(file=file)
+    return (markdown_defaults | transforms | best_palette(file=file)
+            | appeal_markdown_defaults)
 
 
 def render_baked_help(pieces, margin=79, theme=None, file=None,

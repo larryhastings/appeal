@@ -60,25 +60,21 @@ appeal_markdown_defaults = {
     # layout; the style paints them), h3 bold, h4-5 italic, h6
     # color only.
     'heading_color': ('T', 'T'),
-    # STRUCTURE IN THE SHEET (Larry's design, 2026-08-08): big
-    # has ⦃fill⦙pattern⦙model⦄ (repeat pattern, clipped to the
-    # model's width) and ⦃strip⦙T⦄ / ⦃lstrip⦙ / ⦃rstrip⦙; ruled
-    # to come: ⦃clip⦙model⦙T⦄ (truncate T to the model's width)
-    # and ⦃line⦄ ('-' repeated to the margin--a full-width rule
-    # bare, a margin-wide model inside clip/fill; the RENDERER
-    # injects it, since only the renderer knows the margin).
-    # The lab polyfills clip and line below.  Once big's layout
-    # stops hard-coding heading rules, h1/h2 carry their own:
-    #   'heading1': ('T',
-    #       '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄\n'
-    #       '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
-    #       '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
-    # Until then layout still draws h1/h2 rules (sheet-side ones
-    # would double).  heading3 below demonstrates TODAY: layout
-    # never rules h3, so its rule comes entirely from this entry
-    # --delete a line, lose the line.
-    'heading1':   ('T', '⦃bold⦙⦃heading_color⦙T⦄⦄'),
-    'heading2':   ('T', '⦃bold⦙⦃heading_color⦙T⦄⦄'),
+    # STRUCTURE IN THE SHEET, live (ruled 2026-08-08; big's
+    # layout hard-codes nothing now).  h1 sits between full
+    # rules, h2 over one--⦃fill⦙pattern⦙model⦄ sizes the rule to
+    # the stripped heading, ⦃clip⦙⦃line⦄⦙...⦄ bounds it at the
+    # margin (`line` is renderer-injected: '-' to the margin).
+    # Delete a rule line, lose the rule; give heading4 one, it
+    # rules.  The transforms on call: fill clip center strip
+    # lstrip rstrip upper lower title.
+    'heading1':   ('T',
+        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄\n'
+        '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
+        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄'),
+    'heading2':   ('T',
+        '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
+        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄'),
     'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
                        '⦃heading_color⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
     'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
@@ -94,15 +90,15 @@ appeal_markdown_defaults = {
     'term':       ('T', '⦃bold⦙T⦄'),        # user deflists in prose
     # GitHub alerts: big's colors, kept
     'note':              ('T', '⦃blue⦙T⦄'),
-    'heading_note':      ('T', '⦃heading2⦙⦃blue⦙T⦄⦄'),
+    'heading_note':      ('T', '⦃bold⦙⦃blue⦙T⦄⦄'),
     'tip':               ('T', '⦃green⦙T⦄'),
-    'heading_tip':       ('T', '⦃heading2⦙⦃green⦙T⦄⦄'),
+    'heading_tip':       ('T', '⦃bold⦙⦃green⦙T⦄⦄'),
     'important':         ('T', '⦃purple⦙T⦄'),
-    'heading_important': ('T', '⦃heading2⦙⦃purple⦙T⦄⦄'),
+    'heading_important': ('T', '⦃bold⦙⦃purple⦙T⦄⦄'),
     'warning':           ('T', '⦃orange⦙T⦄'),
-    'heading_warning':   ('T', '⦃heading2⦙⦃orange⦙T⦄⦄'),
+    'heading_warning':   ('T', '⦃bold⦙⦃orange⦙T⦄⦄'),
     'caution':           ('T', '⦃red⦙T⦄'),
-    'heading_caution':   ('T', '⦃heading2⦙⦃red⦙T⦄⦄'),
+    'heading_caution':   ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
     # the roles, attribute-only defaults
     'program':    ('T', '⦃bold⦙T⦄'),
     'command':    ('T', '⦃bold⦙T⦄'),
@@ -286,18 +282,15 @@ usage: ⦃program⦙serve⦄ [⦃option⦙-v⦄|⦃option⦙--verbose⦄] [⦃op
 ⦃summary⦙Start the server, and serve until interrupted.⦄
 
 ⦃heading2⦙Arguments⦄
-⦃heading2⦙⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦄
 
 ⦃argument⦙<HOST>⦄  The interface to bind.
 
 ⦃heading2⦙Options⦄
-⦃heading2⦙⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦄
 
 ⦃option⦙-v⦄|⦃option⦙--verbose⦄        Narrate the process.
 ⦃option⦙-p⦄|⦃option⦙--port⦄ ⦃oparg⦙<PORT>⦄  The TCP port.
 
 ⦃heading2⦙Commands⦄
-⦃heading2⦙⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦄
 
 ⦃command⦙serve⦄  Start the server.
 ⦃command⦙stop⦄   Stop the server.
