@@ -309,11 +309,11 @@ usage: ⦃program⦙serve⦄ [⦃option⦙-v⦄|⦃option⦙--verbose⦄] [⦃op
 
 WIDTH = 72
 
-# big-spec preview (2026-08-08, pending in big): clip truncates
-# plain rendered text to the model's width; line is the margin
-# as a drawable string, injected by the renderer.
-SPEC_PREVIEW = {
-    'clip': lambda model, t: t[:len(model)],
+# the renderer injects `line` (ruled 2026-08-08): the margin as
+# a drawable string--only the renderer knows the margin.  This
+# is the same injection appeal's render_baked_help performs.
+# (clip is big's now, arriving via transforms.)
+RENDERER_INJECTS = {
     'line': ('-' * WIDTH,),
 }
 
@@ -339,7 +339,7 @@ def main(argv):
         # markdown_defaults beneath (safety net), the transforms
         # (upper etc), the palette, then the theme outermost
         from big.stylesheet import transforms
-        sheet = (markdown_defaults | transforms | SPEC_PREVIEW
+        sheet = (markdown_defaults | transforms | RENDERER_INJECTS
                  | palette | StyleSheet(theme_dict))
         glyphs = glyphs_from_stylesheet(sheet)
         wrapped = wrap_words(layout, margin=WIDTH,

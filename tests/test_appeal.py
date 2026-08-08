@@ -1224,6 +1224,40 @@ def test_documentation_markdown_formats():
         assert 'docx' in str(e)
 
 
+def test_renderer_injects_line():
+    # Ruled 2026-08-08: `line` is '-' repeated to the margin--a
+    # full-width rule bare, a margin-wide model inside big's
+    # clip/fill.  The RENDERER injects it (only the renderer
+    # knows the margin), underneath the sheet so a sheet's own
+    # `line` wins (the stylesheet= verbatim rule).
+    from appeal.runtime import render_baked_help
+    from big.markdown import markdown_defaults
+    from big.stylesheet import StyleSheet, plain_stylesheet, transforms
+    layout = ('⦃heading3⦙Deeds⦄',)
+    sheet = (markdown_defaults | transforms | plain_stylesheet
+             | StyleSheet({
+                 'heading3': ('T', '⦃strip⦙T⦄\n'
+                                   '⦃clip⦙⦃line⦄⦙⦃fill⦙*⦙⦃strip⦙T⦄⦄⦄'),
+               }))
+    page = render_baked_help((('markdown', layout),), margin=40,
+                             stylesheet=sheet)
+    assert page == 'Deeds\n*****\n', repr(page)
+    # a rule wider than the margin clips to it
+    wide = (markdown_defaults | transforms | plain_stylesheet
+            | StyleSheet({'heading3': ('T', '⦃clip⦙⦃line⦄⦙⦃fill⦙=⦙'
+                                            '⦃strip⦙T⦄xxxxxxxxxxxx⦄⦄')}))
+    page = render_baked_help((('markdown', layout),), margin=8,
+                             stylesheet=wide)
+    assert page == '========\n', repr(page)
+    # a sheet defining its OWN line wins over the injection
+    own = (markdown_defaults | transforms | plain_stylesheet
+           | StyleSheet({'line': ('##',),
+                         'heading3': ('T', '⦃clip⦙⦃line⦄⦙⦃strip⦙T⦄⦄')}))
+    page = render_baked_help((('markdown', layout),), margin=40,
+                             stylesheet=own)
+    assert page == 'De\n', repr(page)    # clipped to the SHEET's 2-wide line
+
+
 def test_program_doc_three_tiers():
     # Ruled 2026-08-01: the program's documentation, highest
     # first: (1) Appeal(doc=...); (2) the global command's

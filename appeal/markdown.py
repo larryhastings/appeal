@@ -362,4 +362,8 @@ def render_markdown_help(text, width=None, stylesheet=None):
     joined = join_styles(rendered)
     if stylesheet is None:
         stylesheet = uncolored_palette | markdown_defaults
+    # the renderer injects `line` (ruled 2026-08-08): the margin
+    # as a drawable string, underneath so the sheet's own wins
+    from big.stylesheet import StyleSheet
+    stylesheet = StyleSheet({'line': ('-' * width,)}) | stylesheet
     return stylesheet.render(joined)

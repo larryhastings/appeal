@@ -2124,6 +2124,12 @@ def render_baked_help(pieces, margin=79, theme=None, file=None,
     """
     sheet = (help_stylesheet(file) if stylesheet is None
              else stylesheet)
+    # the renderer injects `line`--'-' repeated to the margin, a
+    # full-width rule bare and a margin-wide model inside
+    # clip/fill (ruled 2026-08-08).  Only the renderer knows the
+    # margin; injected UNDERNEATH, so a sheet that defines its
+    # own `line` wins (the stylesheet= verbatim rule).
+    sheet = StyleSheet({'line': ('-' * margin,)}) | sheet
     glyphs = glyphs_from_stylesheet(sheet)
     measure = lambda w: strip_styles(glyphs(w))
     out = []
