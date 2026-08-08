@@ -2110,7 +2110,8 @@ def help_stylesheet(file=None):
     return markdown_defaults | best_palette(file=file)
 
 
-def render_baked_help(pieces, margin=79, theme=None, file=None):
+def render_baked_help(pieces, margin=79, theme=None, file=None,
+                      stylesheet=None):
     """
     The runtime half of a help page.  pieces is the baked,
     template-ordered tuple from help_page_pieces: ('usage',
@@ -2121,7 +2122,8 @@ def render_baked_help(pieces, margin=79, theme=None, file=None):
     (strip_styles measuring the words), join_styles fuses
     adjacent spans, and the terminal's stylesheet paints.
     """
-    sheet = help_stylesheet(file)
+    sheet = (help_stylesheet(file) if stylesheet is None
+             else stylesheet)
     glyphs = glyphs_from_stylesheet(sheet)
     measure = lambda w: strip_styles(glyphs(w))
     out = []

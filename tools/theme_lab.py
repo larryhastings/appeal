@@ -60,12 +60,12 @@ appeal_markdown_defaults = {
     # layout; the style paints them), h3 bold, h4-5 italic, h6
     # color only.
     'heading_color': ('T', 'T'),
-    'heading1':   ('T', '⦃bold⦙⦃heading_color⦙⦃upper⦙T⦄⦄⦄'),
+    'heading1':   ('T', '⦃bold⦙⦃heading_color⦙T⦄⦄'),
     'heading2':   ('T', '⦃bold⦙⦃heading_color⦙T⦄⦄'),
     'heading3':   ('T', '⦃bold⦙⦃heading_color⦙T⦄⦄'),
     'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
     'heading5':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
-    'heading6':   ('T', '⦃heading_color⦙T⦄'),
+    'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
     # inline structure
     'code':       ('T', 'T'),               # themes color this
     'codeblock':  ('T', '⦃code⦙T⦄'),        # inherits code
@@ -203,67 +203,83 @@ PAIRINGS = {
 
 
 ##
-## the sample page: one string wearing every role and concept.
-## (Hand-marked--the real flense will emit these spans itself.)
+## the sample page, two honest halves.
+##
+## SAMPLE_MARKDOWN runs through big's REAL pipeline (parse ->
+## style -> layout -> wrap -> render), so heading rules size
+## themselves, alerts get their bars and emoji from the sheet,
+## and bullets wear real markers--edit the Markdown freely.
+##
+## ROLE_LINES previews the spans Appeal's flense will emit
+## (usage line, tables, the error line)--hand-marked because
+## role spans are synthesized by Appeal, never written in a
+## docstring (the pipeline ESCAPES delimiters found in source
+## text, correctly).  These are single lines; no layout needed.
 ##
 
-SAMPLE = """\
+SAMPLE_MARKDOWN = """\
+Start the server, and serve until interrupted.
+
+Longer prose with **bold**, *italic*, and `inline_code()`,
+plus a [hyperlink](https://example.com) and ~~the old way~~.
+
+# Heading One
+
+## Heading Two
+
+### Heading Three
+
+#### Heading Four
+
+##### Heading Five
+
+###### Heading Six
+
+- the first bullet
+- the second bullet
+
+A code block, indented four:
+
+    $ serve --port 8080 example.com
+    serving example.com:8080
+
+> [!NOTE]
+> Notes are blue.
+
+> [!TIP]
+> Tips are green.
+
+> [!IMPORTANT]
+> Important is purple.
+
+> [!WARNING]
+> Warnings are orange.
+
+> [!CAUTION]
+> Caution is red.
+
+term of a definition list
+: with details beneath it.
+"""
+
+ROLE_LINES = """\
 usage: ⦃program⦙serve⦄ [⦃option⦙-v⦄|⦃option⦙--verbose⦄] [⦃option⦙-p⦄|⦃option⦙--port⦄ ⦃oparg⦙<PORT>⦄] ⦃argument⦙<HOST>⦄
 
 ⦃summary⦙Start the server, and serve until interrupted.⦄
 
-Longer prose with ⦃bold⦙bold⦄, ⦃italic⦙italic⦄, and ⦃code⦙inline_code()⦄,
-plus a ⦃link⦙hyperlink⦄ and ⦃strikethrough⦙the old way⦄.
-
-⦃heading1⦙⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦄
-⦃heading1⦙Heading One⦄
-⦃heading1⦙⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦃heading1_rule⦄⦄
-
-⦃heading2⦙Heading Two⦄
-⦃heading2⦙⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦄
-
-⦃heading3⦙Heading Three⦄
-
-⦃heading4⦙Heading Four⦄
-
-⦃heading5⦙Heading Five⦄
-
-⦃heading6⦙Heading Six⦄
-
-  ⦃marker⦙⦃bullet⦄⦄ the first bullet
-  ⦃marker⦙⦃bullet⦄⦄ the second bullet
-
-  ⦃codeblock⦙$ serve --port 8080 example.com
-serving example.com:8080⦄
-
-⦃note⦙⦃quote_bar⦄⦄⦃heading_note⦙⦃note_emoji⦄ Note⦄
-⦃note⦙⦃quote_bar⦄⦄Notes are blue.
-
-⦃tip⦙⦃quote_bar⦄⦄⦃heading_tip⦙⦃tip_emoji⦄ Tip⦄
-⦃tip⦙⦃quote_bar⦄⦄Tips are green.
-
-⦃important⦙⦃quote_bar⦄⦄⦃heading_important⦙⦃important_emoji⦄ Important⦄
-⦃important⦙⦃quote_bar⦄⦄Important is purple.
-
-⦃warning⦙⦃quote_bar⦄⦄⦃heading_warning⦙⦃warning_emoji⦄ Warning⦄
-⦃warning⦙⦃quote_bar⦄⦄Warnings are orange.
-
-⦃caution⦙⦃quote_bar⦄⦄⦃heading_caution⦙⦃caution_emoji⦄ Caution⦄
-⦃caution⦙⦃quote_bar⦄⦄Caution is red.
-
 ⦃heading2⦙Arguments⦄
-⦃heading2⦙---------⦄
+⦃heading2⦙⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦄
 
 ⦃argument⦙<HOST>⦄  The interface to bind.
 
 ⦃heading2⦙Options⦄
-⦃heading2⦙-------⦄
+⦃heading2⦙⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦄
 
 ⦃option⦙-v⦄|⦃option⦙--verbose⦄        Narrate the process.
 ⦃option⦙-p⦄|⦃option⦙--port⦄ ⦃oparg⦙<PORT>⦄  The TCP port.
 
 ⦃heading2⦙Commands⦄
-⦃heading2⦙--------⦄
+⦃heading2⦙⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦃heading2_rule⦄⦄
 
 ⦃command⦙serve⦄  Start the server.
 ⦃command⦙stop⦄   Stop the server.
@@ -271,8 +287,20 @@ serving example.com:8080⦄
 ⦃error⦙error:⦄ unknown command 'zerve'
 """
 
+WIDTH = 72
+
 
 def main(argv):
+    from big.markdown import (glyphs_from_stylesheet, layout_document,
+                              parse, split_styles_document,
+                              style_document)
+    from big.stylesheet import join_styles, strip_styles
+    from big.text import wrap_words
+
+    document = split_styles_document(style_document(
+        parse(SAMPLE_MARKDOWN)))
+    layout = layout_document(document)
+
     picks = argv or list(PAIRINGS)
     for name in picks:
         if name not in PAIRINGS:
@@ -280,17 +308,22 @@ def main(argv):
                      f"the menu is {', '.join(PAIRINGS)}")
         theme_dict, palette = PAIRINGS[name]
         # the composition, per the 2026-08-06 rulings:
-        # markdown_defaults beneath (safety net), palette, then
-        # the theme outermost
+        # markdown_defaults beneath (safety net), the transforms
+        # (upper etc), the palette, then the theme outermost
         from big.stylesheet import transforms
         sheet = (markdown_defaults | transforms | palette
                  | StyleSheet(theme_dict))
+        glyphs = glyphs_from_stylesheet(sheet)
+        wrapped = wrap_words(layout, margin=WIDTH,
+                             raw=lambda w: strip_styles(glyphs(w)))
         bar = '=' * 62
         print(bar)
         print(f'==  {name}_theme  (over {_palette_name(palette)})')
         print(bar)
         print()
-        print(sheet.render(SAMPLE))
+        print(sheet.render(join_styles(wrapped)))
+        print()
+        print(sheet.render(ROLE_LINES))
         print()
 
 
