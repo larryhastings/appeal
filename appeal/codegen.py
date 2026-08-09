@@ -1202,11 +1202,6 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
     command_words = (frozenset(commands)
                      | ({'help'} if auto_help else set())
                      | ({'version'} if auto_version else set()))
-    if global_plan is not None:
-        emitter = _Emitter(global_plan, refs, fill_names,
-                           max_columns=max_columns)
-        split = (global_plan.minimum, global_plan.maximum, command_words)
-        chunks.append(emitter.emit(command_split=split)[0])
     subs = subs or {}
     sub_repeat = sub_repeat or {}
     sub_defaults = sub_defaults or {}
@@ -1227,6 +1222,18 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             taken.add(symbol)
             symbols[id(plan)] = symbol
         return symbol
+    if global_plan is not None:
+        # THROUGH the registry, like every reference to it below:
+        # a program named for one of its commands (program `serve`,
+        # command `serve`) must not emit two _COMPLETE_serve and
+        # reference a _COMPLETE_serve2 that exists nowhere.  The
+        # global plan emits first, so it keeps the clean name and
+        # the same-named command takes the number.
+        emitter = _Emitter(global_plan, refs, fill_names,
+                           max_columns=max_columns,
+                           symbol=sym(global_plan))
+        split = (global_plan.minimum, global_plan.maximum, command_words)
+        chunks.append(emitter.emit(command_split=split)[0])
     emitted = set()
     def emit_one(plan, boundary='saturation'):
         if id(plan) in emitted:

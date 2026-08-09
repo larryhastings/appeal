@@ -4670,6 +4670,53 @@ def test_error_stream_knob():
         assert 'error:' in r.stdout and r.stderr == '', r.stderr
 
 
+def test_standalone_program_named_for_its_command():
+    # regression (found 2026-08-09): a program named for one of
+    # its commands--the tool named after its main verb--collided
+    # in standalone emission.  The global plan's emitter bypassed
+    # the sym() symbol registry, so `serve` the program and
+    # `serve` the command both emitted _COMPLETE_serve (second
+    # clobbered first) while the set table referenced
+    # _COMPLETE_serve2, which existed nowhere: the script died at
+    # import with NameError.
+    import appeal as _appeal
+    with tempfile.TemporaryDirectory() as d:
+        module_path = os.path.join(d, 'verb_mod.py')
+        with open(module_path, 'wt', encoding='utf-8') as f:
+            f.write('def serve(host):\n'
+                    "    print('serving ' + host)\n"
+                    'def stop():\n'
+                    "    print('stopped')\n")
+        sys.path.insert(0, d)
+        try:
+            import verb_mod
+            import importlib
+            importlib.reload(verb_mod)
+            app = _appeal.Appeal(name='serve')
+            app.command()(verb_mod.serve)
+            app.command()(verb_mod.stop)
+            script = app.standalone()
+        finally:
+            sys.path.remove(d)
+            sys.modules.pop('verb_mod', None)
+        script_path = os.path.join(d, 'serve.py')
+        with open(script_path, 'wt', encoding='utf-8') as f:
+            f.write(script)
+        # the script imports (the NameError is gone) and dispatches
+        r = run_script(script_path, ['serve', 'example.com'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == 'serving example.com'
+        r = run_script(script_path, ['stop'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == 'stopped'
+        # a bare line prints the listing to stdout and exits 1
+        # (orientation, not a diagnostic--run_command_set's
+        # documented contract)
+        r = run_script(script_path, [])
+        assert r.returncode == 1
+        assert 'usage:' in r.stdout and 'stop' in r.stdout
+
+
 def test_flag_explicit_boolean():
     # ruled 2026-07-09: a flag accepts an explicit boolean with
     # '=' only--exactly 'true' and 'false', no alternate-spelling
