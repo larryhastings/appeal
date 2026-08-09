@@ -3,7 +3,7 @@
 *The user guide for Appeal 1.0's help system: how docstrings become
 `--help` pages, how documentation composes across converters, how
 to reshape the page with the template, and how to color it with a
-theme.  The docstring format is Markdown (the pivot, ruled
+stylesheet.  The docstring format is Markdown (the pivot, ruled
 2026-08-05); big's Markdown parser renders it.  Every example here
 is executed by the test suite.*
 
@@ -226,19 +226,30 @@ to big's renderer.
 
 ## 4: Color
 
-Coloring is a `Theme`: named slots for the *roles* in Appeal's
-output, each slot a little symbolic string:
+Coloring is a **stylesheet**--big's `StyleSheet`, composed from
+four layers: big's neutral Markdown defaults, the transforms,
+a *palette*, and a *theme*.  A theme is plain data: a dict
+mapping the Markdown concepts (`heading1`..`heading6`, `code`,
+`link`, alerts, ...) and Appeal's role vocabulary (`program`,
+`command`, `option`, `argument`, `oparg`, `summary`, `error`)
+to style entries.  Colors in a theme are palette-independent
+*names* (`red`, `dark_red`, `orange`, ...); the palette maps
+them to escape sequences.  Appeal ships seven themes--
+`appeal_theme` (the default, designed against the ANSI 16, so
+your terminal's own light/dark scheme keeps it legible),
+`plain_theme`, `uncolored_theme`, and the four corners
+`light_warm_theme` / `dark_warm_theme` / `light_cool_theme` /
+`dark_cool_theme`:
 
     import appeal
 
-    theme = appeal.Theme(
-        program='bold',
-        option='bright-cyan',
-        metavar='dim',
-        heading='bold underline',
-        error='bold red',
-    )
-    app = appeal.Appeal(name='vivid', theme=theme)
+    from big.markdown import markdown_defaults
+    from big.stylesheet import (StyleSheet, ansi_truecolor_palette,
+                                transforms)
+
+    sheet = (markdown_defaults | transforms | ansi_truecolor_palette
+             | StyleSheet(appeal.dark_cool_theme))
+    app = appeal.Appeal(name='vivid', stylesheet=sheet)
 
     @app.global_command()
     def vivid(image, *, contrast: float = 1.0):
@@ -255,39 +266,35 @@ output, each slot a little symbolic string:
         import sys
         sys.exit(app.main())
 
-The vocabulary: `bold`, `dim`, `italic`, `underline`; the colors
-`black red green yellow blue magenta cyan white` and their
-`bright-*` variants; **other slot names**, which expand to that
-slot's style (`metavar='option dim'` = whatever options look
-like, dimmed); and, as an escape hatch, a raw ANSI sequence (a
-value starting with the escape character passes through
-verbatim).  Unknown words, and reference cycles, are errors at
-construction.  The seven slots: `program`, `option`, `metavar`,
-`operand`, `heading`, `error`, `summary`.
+`stylesheet=` takes the *complete* composition and uses it
+verbatim--Appeal adds nothing and second-guesses nothing (your
+sheet, your rules; that includes coloring output that lands in
+a pipe).  To recolor one thing, extend a shipped theme:
+`dict(appeal.appeal_theme, error=('T', '⦃bold⦙⦃orange⦙T⦄⦄'))`.
+`tools/theme_lab.py` renders a sample page under every theme,
+built to be hacked on.
 
-When color actually appears is a *runtime* decision, made the
-same way CPython itself makes it: `PYTHON_COLORS` beats
-`NO_COLOR` beats `FORCE_COLOR`, then `TERM=dumb`, then whether
-the stream is a terminal.  Your theme describes what color looks
-like; the user's environment decides whether it happens.
-`theme=None` (the default) means the stock theme under those same
-rules; `theme=False` means never.
-
-(Interim, accepted 2026-08-06: while the theming system moves
-onto big's StyleSheets, a theme paints the usage line; the
-Markdown body renders unpainted.  The rewrite brings the body's
-color back, richer--six pre-built themes are already specced.)
+`stylesheet=None` (the default) means: decide per stream, at
+print time, the same way CPython itself decides
+(`PYTHON_COLORS` beats `NO_COLOR` beats `FORCE_COLOR`, then
+`TERM=dumb`, then whether the stream is a terminal)--
+`appeal_theme` over the ANSI 16 when the stream wants color,
+the plain palette (no escapes of any kind) when it doesn't.
+`stylesheet=False` means never any color.
 
 Two guarantees worth knowing:
 
-* **Color never moves text.**  Layout is computed uncolored and
-  painted afterward, so a colored help page strips back to the
-  monochrome page byte-for-byte.  Piping `--help` through `sed
-  -e 's/\x1b\[[0-9;]*m//g'` proves it, if you're the proving
-  kind.
-* **The theme travels.**  A standalone script bakes the theme it
-  was emitted with and re-decides at *its* runtime--emitting on a
-  terminal doesn't color output that lands in a pipe.
+* **Color never moves text.**  Layout is computed on
+  styles-stripped text and painted afterward, so a colored help
+  page strips back to the monochrome page byte-for-byte.
+  Piping `--help` through `sed -e 's/\x1b\[[0-9;]*m//g'`
+  proves it, if you're the proving kind.
+* **The roles travel.**  A standalone script bakes the role
+  markup, not escape codes, and re-decides at *its* runtime--
+  emitting on a terminal doesn't color output that lands in a
+  pipe.  (A script bakes the default decision; a live composed
+  `stylesheet=` is refused at emission--it's made of functions
+  and can't ride a script.)
 
 ## 5: Your docs, elsewhere
 

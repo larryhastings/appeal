@@ -37,10 +37,21 @@ from .read import read_csv, read_iterable, read_mapping
 from .schema import schema, schema_set
 from .runtime import (
     AppealConfigurationError, AppealDataError, AppealError,
-    CommandError, MultiOption, Option, StrictOption, Theme,
+    CommandError, MultiOption, Option, StrictOption,
     UsageError, accumulator, counter, file, mapping, optional,
     run_main, split,
     validate, validate_range,
+    )
+
+# theming (Larry's design, 2026-08-06): themes are DATA--dicts of
+# StyleSheet entries, palette-independent; resolve_stylesheet
+# composes theme-over-palette; Appeal(stylesheet=) takes a
+# complete composition and uses it verbatim
+from .runtime import (
+    appeal_markdown_defaults, appeal_theme, dark_cool_theme,
+    dark_warm_theme, help_stylesheet, light_cool_theme,
+    light_warm_theme, plain_theme, resolve_stylesheet,
+    uncolored_theme,
     )
 
 # every exception, both spellings (the prefixed forms are the
@@ -622,7 +633,7 @@ class Appeal:
     first use (see "Laziness and late binding" in the grammar doc).
     """
     def __init__(self, name=None, *, parent=None,
-                 theme=None, version=None, repeat=False,
+                 stylesheet=None, version=None, repeat=False,
                  errors=None, script=_sys.argv[0],
                  margin=79,
                  positional_argument_usage_format='<{name.upper()}>',
@@ -648,7 +659,7 @@ class Appeal:
             for attr in ('_help_enabled', 'default_options',
                          'default_mappings',
                          'positional_argument_usage_format',
-                         'script', 'errors', 'repeat', 'theme',
+                         'script', 'errors', 'repeat', 'stylesheet',
                          'margin', 'templates'):
                 setattr(self, attr, getattr(parent, attr))
             self.version = None
@@ -740,9 +751,11 @@ class Appeal:
         # them, optional included--the next token may name another
         # command, and the line starts over (v1's repeat, rebuilt)
         self.repeat = repeat
-        # None = auto (stock theme on a tty), False = never, or a
-        # runtime.Theme; the environment always wins (resolve_theme).
-        self.theme = theme
+        # None = auto (appeal_theme when the stream wants color),
+        # False = never any color, or a complete composed
+        # StyleSheet, used VERBATIM (ruled 2026-08-06); the
+        # environment always wins (resolve_stylesheet's palette).
+        self.stylesheet = stylesheet
         self.version = version
         # the program's documentation, tier 1 of the doc chain
         # (ruled 2026-08-01): doc= beats the global command's
@@ -956,13 +969,12 @@ class Appeal:
         # a knob is off: render the page directly, same corpus
         # and template the compiled path bakes
         from .help import merge_docs
-        from .runtime import (help_margin, render_help_page,
-                              resolve_theme)
+        from .runtime import help_margin, render_help_page
         plan = root.plan_for(topic)
         text = render_help_page(
             plan.usage(), merge_docs(plan), root.templates,
             margin=help_margin(root.margin),
-            theme=resolve_theme(root.theme, _sys.stdout),
+            file=_sys.stdout, stylesheet=root.stylesheet,
             suppress=suppress).rstrip('\n')
         print(text)
 
@@ -1303,16 +1315,16 @@ class Appeal:
             corpus = command_set_corpus(
                 self.global_plan, entries, False, auto_version=False,
                 doc=self._program_doc_override())
-            from .runtime import help_margin, resolve_theme
+            from .runtime import help_margin
             text = render_help_page(
                 command_set_usage(self._prog(), self._display_global()),
                 corpus, self.templates,
                 margin=help_margin(self.margin),
-                theme=resolve_theme(self.theme, _sys.stdout),
+                file=_sys.stdout, stylesheet=self.stylesheet,
                 suppress=suppress).rstrip('\n')
         else:
             from .help import merge_docs, parse_docstring
-            from .runtime import help_margin, render_help_page, resolve_theme
+            from .runtime import help_margin, render_help_page
             plan = self.plan
             corpus = merge_docs(plan)
             override = self.root.doc
@@ -1325,7 +1337,7 @@ class Appeal:
             text = render_help_page(
                 plan.usage(), corpus, self.templates,
                 margin=help_margin(self.margin),
-                theme=resolve_theme(self.theme, _sys.stdout),
+                file=_sys.stdout, stylesheet=self.stylesheet,
                 suppress=suppress).rstrip('\n')
         print(text)
         # returns None: help is a COMMAND implementation now
@@ -1590,14 +1602,14 @@ class Appeal:
                 parse = compile_command_set(
                     sub_plans, self._plan_for_node(node, word),
                     prog=word,
-                    templates=self.templates, theme=self.theme,
+                    templates=self.templates, stylesheet=self.stylesheet,
                     max_columns=self.margin, help=self._help_enabled,
                     default=(self._build(default_fn)
                              if default_fn is not None else None))
             else:
                 parse = compile_plan(self._plan_for_node(node, word),
                                      templates=self.templates,
-                                     theme=self.theme,
+                                     stylesheet=self.stylesheet,
                                      max_columns=self.margin)
             with self._lock:
                 if self._parses is None:
@@ -1683,7 +1695,7 @@ class Appeal:
         from .runtime import listing_pieces
         parent_plan = self._plan_for_node(node, word)
         parent = compile_plan(parent_plan, templates=self.templates,
-                              theme=self.theme, boundary='flexible',
+                              stylesheet=self.stylesheet, boundary='flexible',
                               max_columns=self.margin)
         subs = {}
         listed = []
@@ -1699,7 +1711,7 @@ class Appeal:
             if owner is None:
                 _refuse_orphan_method(fn)
             sub = compile_plan(self._plan_for_node(child, w),
-                               templates=self.templates, theme=self.theme,
+                               templates=self.templates, stylesheet=self.stylesheet,
                                max_columns=self.margin)
             subs[w] = (sub.scan, sub.run)
         entries = listed
@@ -1711,7 +1723,7 @@ class Appeal:
         if default_fn is not None:
             compiled = compile_plan(self._build(default_fn),
                                     templates=self.templates,
-                                    theme=self.theme,
+                                    stylesheet=self.stylesheet,
                                     max_columns=self.margin)
             sub_default = (compiled.scan, compiled.run)
         else:
@@ -1737,7 +1749,7 @@ class Appeal:
             # a global command and nothing else: it owns the whole
             # line, options after operands and all
             fused = compile_plan(self.global_plan, templates=self.templates,
-                                 theme=self.theme,
+                                 stylesheet=self.stylesheet,
                                  max_columns=self.margin)
             def parse(argv):
                 processor = Processor(self)
@@ -1758,7 +1770,7 @@ class Appeal:
         command_words = frozenset(table)
         if global_plan is not None:
             fused = compile_plan(
-                global_plan, templates=self.templates, theme=self.theme,
+                global_plan, templates=self.templates, stylesheet=self.stylesheet,
                 max_columns=self.margin,
                 command_split=(global_plan.minimum, global_plan.maximum,
                                command_words))
@@ -1780,7 +1792,7 @@ class Appeal:
         auto_help = self._help_enabled and 'help' not in table
 
         default = (compile_plan(self._build(self._default), templates=self.templates,
-                                theme=self.theme,
+                                stylesheet=self.stylesheet,
                                 max_columns=self.margin)
                    if self._default is not None else None)
 
@@ -1952,7 +1964,7 @@ class Appeal:
                 processor = Processor(self)
                 processor.parse(list(args), _config)
                 return processor.execute()
-        _sys.exit(run_main(parse, args, theme=self.theme,
+        _sys.exit(run_main(parse, args, stylesheet=self.stylesheet,
                            errors=self.errors, margin=self.margin))
 
     def _mcp_instance(self, config):
@@ -2149,7 +2161,7 @@ class Appeal:
                  if w not in defaults},
                 self.global_plan,
                 argv0=argv0 or self._prog(),
-                templates=self.templates, theme=self.theme,
+                templates=self.templates, stylesheet=self.stylesheet,
                 repeat=self.repeat, subs=subs or None,
                 sub_repeat=dict(self._sub_repeat) or None,
                 errors=self.errors, version=self.version,
@@ -2161,7 +2173,7 @@ class Appeal:
                               for w, fn in self._sub_defaults.items()}
                              or None)
         return emit_standalone(self.global_plan, argv0=argv0,
-                               templates=self.templates, theme=self.theme,
+                               templates=self.templates, stylesheet=self.stylesheet,
                                errors=self.errors, version=self.version,
                                max_columns=self.margin)
 

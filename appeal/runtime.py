@@ -25,7 +25,8 @@ import sys
 # scripts themselves stay dependency-free.
 from big.builtin import can_colorize
 from big.markdown import glyphs_from_stylesheet, markdown_defaults
-from big.stylesheet import (StyleSheet, best_palette, join_styles,
+from big.stylesheet import (StyleSheet, ansi_16_color_palette,
+                            escape_styles, join_styles,
                             plain_stylesheet, strip_styles, style,
                             transforms)
 from big.text import (OverflowStrategy, _iterate_over_bytes,
@@ -1147,14 +1148,16 @@ def check_count(n, minimum, maximum, valid_counts, usage=None, what=None,
 # --8<-- requires appeal complete --8<--
 # --8<-- requires appeal exceptions --8<--
 # --8<-- requires appeal help --8<--
-def run_main(parse, args=None, theme=None, completion=None,
+def run_main(parse, args=None, stylesheet=None, completion=None,
              errors=None, version=None, margin=79):
     """
     The main() driver for a generated parser: parse and execute,
-    print errors the polite way, return the exit code.  theme (a
-    spec: None, False, a Theme, or a baked dict) paints the
-    'error:' prefix when the error stream wants color; the
-    environment always wins (resolve_theme).  completion, if
+    print errors the polite way, return the exit code.  stylesheet
+    (a spec: None for auto, False for never-color, or a complete
+    composed StyleSheet used verbatim) paints the 'error:' prefix
+    and any attached usage/listing when the error stream wants
+    color; the environment always wins (resolve_stylesheet via
+    can_colorize).  completion, if
     given, is (table, prog): with an empty args and
     _APPEAL_COMPLETE in the environment, the invocation is a
     shell-completion reentry and is answered instead of parsed.
@@ -1192,10 +1195,8 @@ def run_main(parse, args=None, theme=None, completion=None,
         return errors if errors is not None else sys.stderr
 
     def error_prefix():
-        active = resolve_theme(theme, error_stream())
-        if active is None:
-            return 'error:'
-        return active.paint('error', 'error:')
+        sheet = resolve_stylesheet(stylesheet, error_stream())
+        return sheet.render(style('error', 'error:'))
 
     def print_usage(usage):
         # a STRING is a usage line; a TUPLE is a baked listing
@@ -1204,9 +1205,8 @@ def run_main(parse, args=None, theme=None, completion=None,
         # 2026-08-06)
         if isinstance(usage, tuple):
             print(render_baked_help(usage, margin=help_margin(margin),
-                                    theme=resolve_theme(theme,
-                                                        error_stream()),
-                                    file=error_stream()),
+                                    file=error_stream(),
+                                    stylesheet=stylesheet),
                   end='', file=error_stream())
         else:
             print(f"usage: {usage}", file=error_stream())
@@ -1872,186 +1872,243 @@ def run_mcp(tools, name, version='0'):
 
 
 # --8<-- start appeal theme --8<--
-# --8<-- requires appeal exceptions --8<--
 # --8<-- requires appeal stylesheet preamble --8<--
+# --8<-- requires appeal stylesheet alias --8<--
+# --8<-- requires appeal markdown defaults --8<--
+# --8<-- requires big stylesheet render core --8<--
+# --8<-- requires big stylesheet transforms --8<--
+# --8<-- requires big ansi stylesheets --8<--
 # --8<-- requires big terminal color --8<--
+# --8<-- requires big markdown defaults --8<--
 
 ##
-## Colorization (proposal §8.8, plus the completion/colorization
-## rulings): a Theme styles semantic roles, not spans of text, and
-## painting happens strictly AFTER layout--the trio only ever
-## measures uncolored text.
+## Themes (Larry's design, 2026-08-06): a theme is DATA--a dict
+## of StyleSheet entries covering the Markdown concepts and
+## appeal's role vocabulary (program, command, option, argument,
+## oparg, summary, error).  Colors are palette-independent NAMES
+## (red, dark_red, light_red, orange, ...); the palette maps
+## them to escapes, so every theme works over every palette.  A
+## COMPLETE help stylesheet is the composition
+##
+##     markdown_defaults | transforms | palette | StyleSheet(theme)
+##
+## (resolve_stylesheet builds exactly that), and
+## Appeal(stylesheet=) takes such a composition and uses it
+## VERBATIM.  Painting happens strictly AFTER layout: roles ride
+## the baked pieces as style markup, measured styles-stripped,
+## resolved by whichever sheet the destination stream deserves.
+##
+## The colors below are the theme lab's strawmen--Larry's red
+## pen has the last word (tools/theme_lab.py is the bench).
 ##
 
-_SGR_WORDS = {
-    'bold': '1', 'dim': '2', 'italic': '3', 'underline': '4',
-    'black': '30', 'red': '31', 'green': '32', 'yellow': '33',
-    'blue': '34', 'magenta': '35', 'cyan': '36', 'white': '37',
-    'bright-black': '90', 'bright-red': '91', 'bright-green': '92',
-    'bright-yellow': '93', 'bright-blue': '94', 'bright-magenta': '95',
-    'bright-cyan': '96', 'bright-white': '97',
+# uncolored: structure and attributes, no color--the base every
+# colored theme extends.  heading_color is ONE slot: a theme
+# recolors all six headings (and their rules) with one entry.
+uncolored_theme = {
+    **appeal_markdown_defaults,
+    'heading_color': ('T', 'T'),
+    'heading1':   ('T',
+        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄\n'
+        '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
+        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄'),
+    'heading2':   ('T',
+        '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
+        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄'),
+    'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
+                       '⦃heading_color⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
+    'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
+    'heading5':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
+    'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
+    # inline structure
+    'code':       ('T', 'T'),               # themes color this
+    'codeblock':  ('T', '⦃code⦙T⦄'),        # inherits code
+    'link':       ('T', '⦃underline⦙T⦄'),
+    'marker':     ('T', 'T'),
+    'blockquote': ('T', 'T'),
+    'term':       ('T', '⦃bold⦙T⦄'),        # deflist terms
+    # GitHub alerts: bodies wear their kind's color too
+    'note':              ('T', '⦃blue⦙T⦄'),
+    'heading_note':      ('T', '⦃bold⦙⦃blue⦙T⦄⦄'),
+    'tip':               ('T', '⦃green⦙T⦄'),
+    'heading_tip':       ('T', '⦃bold⦙⦃green⦙T⦄⦄'),
+    'important':         ('T', '⦃purple⦙T⦄'),
+    'heading_important': ('T', '⦃bold⦙⦃purple⦙T⦄⦄'),
+    'warning':           ('T', '⦃orange⦙T⦄'),
+    'heading_warning':   ('T', '⦃bold⦙⦃orange⦙T⦄⦄'),
+    'caution':           ('T', '⦃red⦙T⦄'),
+    'heading_caution':   ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
+    # the roles, attribute-only defaults
+    'program':    ('T', '⦃bold⦙T⦄'),
+    'command':    ('T', '⦃bold⦙T⦄'),
+    'option':     ('T', '⦃bold⦙T⦄'),
+    'argument':   ('T', 'T'),
+    'oparg':      ('T', '⦃argument⦙T⦄'),    # ruled: defaults to argument
+    'summary':    ('T', '⦃bold⦙T⦄'),
+    'error':      ('T', '⦃bold⦙T⦄'),
 }
 
-_SGR_RESET = '\x1b[0m'
+# plain: every span strips to its text.
+plain_theme = {name: ('T', 'T') for name in uncolored_theme}
+plain_theme['codeblock'] = ('T', '⦃code⦙T⦄')
+plain_theme['oparg'] = ('T', '⦃argument⦙T⦄')
 
 
-class Theme:
+def _theme(**overrides):
+    "A theme: the uncolored base plus your colors."
+    t = dict(uncolored_theme)
+    t.update(overrides)
+    return t
+
+
+# appeal_theme: the default.  Designed against the ANSI 16
+# (terminal light/dark modes remap those for legibility, so it
+# looks right on both).
+appeal_theme = _theme(
+    command   = ('T', '⦃bold⦙⦃cyan⦙T⦄⦄'),
+    option    = ('T', '⦃cyan⦙T⦄'),
+    argument  = ('T', '⦃italic⦙T⦄'),
+    summary   = ('T', '⦃bold⦙T⦄'),
+    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
+    code      = ('T', '⦃green⦙T⦄'),          # ruled: code is green
+    marker    = ('T', '⦃yellow⦙T⦄'),
+    link      = ('T', '⦃underline⦙⦃blue⦙T⦄⦄'),
+    heading_color = ('T', '⦃cyan⦙T⦄'),
+)
+
+# the four corners: warm = red/orange/yellow, cool =
+# blue/green/cyan, purple in both.  light_* themes use dark_
+# colors (dark ink on a light page); dark_* themes use light_.
+
+light_warm_theme = _theme(
+    command   = ('T', '⦃bold⦙⦃dark_orange⦙T⦄⦄'),
+    option    = ('T', '⦃dark_red⦙T⦄'),
+    argument  = ('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄'),
+    summary   = ('T', '⦃bold⦙⦃dark_red⦙T⦄⦄'),
+    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
+    code      = ('T', '⦃dark_orange⦙T⦄'),
+    marker    = ('T', '⦃dark_yellow⦙T⦄'),
+    link      = ('T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),
+    heading_color = ('T', '⦃dark_red⦙T⦄'),
+)
+
+dark_warm_theme = _theme(
+    command   = ('T', '⦃bold⦙⦃light_orange⦙T⦄⦄'),
+    option    = ('T', '⦃light_red⦙T⦄'),
+    argument  = ('T', '⦃italic⦙⦃light_gray⦙T⦄⦄'),
+    summary   = ('T', '⦃bold⦙⦃light_orange⦙T⦄⦄'),
+    error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
+    code      = ('T', '⦃light_orange⦙T⦄'),
+    marker    = ('T', '⦃light_yellow⦙T⦄'),
+    link      = ('T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),
+    heading_color = ('T', '⦃light_red⦙T⦄'),
+)
+
+light_cool_theme = _theme(
+    command   = ('T', '⦃bold⦙⦃dark_cyan⦙T⦄⦄'),
+    option    = ('T', '⦃dark_blue⦙T⦄'),
+    argument  = ('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄'),
+    summary   = ('T', '⦃bold⦙⦃dark_blue⦙T⦄⦄'),
+    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),     # errors stay red, even here
+    code      = ('T', '⦃dark_green⦙T⦄'),
+    marker    = ('T', '⦃dark_cyan⦙T⦄'),
+    link      = ('T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),
+    heading_color = ('T', '⦃dark_blue⦙T⦄'),
+)
+
+dark_cool_theme = _theme(
+    command   = ('T', '⦃bold⦙⦃light_cyan⦙T⦄⦄'),
+    option    = ('T', '⦃light_blue⦙T⦄'),
+    argument  = ('T', '⦃italic⦙⦃light_gray⦙T⦄⦄'),
+    summary   = ('T', '⦃bold⦙⦃light_cyan⦙T⦄⦄'),
+    error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
+    code      = ('T', '⦃light_green⦙T⦄'),
+    marker    = ('T', '⦃light_cyan⦙T⦄'),
+    link      = ('T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),
+    heading_color = ('T', '⦃light_blue⦙T⦄'),
+)
+
+
+def resolve_stylesheet(spec, file=None):
     """
-    Colors for appeal's own output--help and error messages.
-    Each slot's value is a little symbolic language: space-
-    separated words from {bold, dim, italic, underline}, the eight
-    colors {black, red, green, yellow, blue, magenta, cyan,
-    white}, their bright-* variants, and the names of other slots,
-    which expand to that slot's resolved words.  Resolved once,
-    here; reference cycles and unknown words are refused by name.
-    The empty string means "leave that role alone".  A value that
-    starts with an escape character (\x1b) passes through
-    verbatim--the escape hatch for styling we don't model (it
-    can't be referenced by other slots).
-
-    Theme() with no arguments is the stock theme.  Whether a theme
-    is USED is a separate, runtime question (resolve_theme):
-    NO_COLOR and friends always win.
+    The runtime half of the stylesheet decision.  spec is what
+    the program was configured with: None (auto), False (never
+    any color), or a complete composed StyleSheet, used VERBATIM
+    (ruled 2026-08-06).  Auto composes appeal_theme over the
+    ANSI 16 when this stream wants color at this moment
+    (can_colorize: NO_COLOR and friends always win)--the 16
+    because the terminal remaps them to its own scheme, so the
+    theme stays legible on light and dark alike (ruled
+    2026-08-06); False (and colorless auto) gets the plain
+    palette: no escapes of any kind.
     """
-    def __init__(self, *, program='bold', option='cyan',
-                 metavar='dim', operand='', heading='bold',
-                 error='bold red', summary=''):
-        self.spec = {
-            'program': program, 'option': option, 'metavar': metavar,
-            'operand': operand, 'heading': heading, 'error': error,
-            'summary': summary,
-        }
-        self.sgr = {}
-        resolving = []
-
-        def resolve(slot):
-            if slot in self.sgr:
-                return self.sgr[slot]
-            if slot in resolving:
-                raise AppealConfigurationError(
-                    f"theme: reference cycle: "
-                    f"{' -> '.join(resolving + [slot])}")
-            resolving.append(slot)
-            value = self.spec[slot]
-            if value.startswith('\x1b'):
-                codes = None
-                on = value
-            else:
-                codes = []
-                for word in value.split():
-                    if word in _SGR_WORDS:
-                        codes.append(_SGR_WORDS[word])
-                        continue
-                    if word in self.spec:
-                        referenced = resolve(word)
-                        if referenced[0] is None:
-                            raise AppealConfigurationError(
-                                f"theme: {slot!r} references {word!r}, "
-                                f"which is a raw escape sequence")
-                        codes.extend(referenced[0])
-                        continue
-                    raise AppealConfigurationError(
-                        f"theme: {slot!r}: unknown word {word!r}")
-                on = ('\x1b[' + ';'.join(codes) + 'm') if codes else ''
-            resolving.pop()
-            self.sgr[slot] = (codes, on)
-            return self.sgr[slot]
-
-        for slot in self.spec:
-            resolve(slot)
-
-    def paint(self, slot, s):
-        "Wrap s in the slot's escape codes; a plain slot returns s as-is."
-        on = self.sgr[slot][1]
-        if not on or not s:
-            return s
-        return f'{on}{s}{_SGR_RESET}'
+    if spec is None or spec is False:
+        palette = (ansi_16_color_palette
+                   if (spec is None) and can_colorize(file=file)
+                   else plain_stylesheet)
+        return (markdown_defaults | transforms | palette
+                | _StyleSheet(appeal_theme))
+    return spec
 
 
-def resolve_theme(spec, file):
+def usage_markup(usage):
     """
-    The runtime half of the theme decision.  spec is what the
-    program was configured with: None (auto: the stock theme),
-    False (never), a Theme, or a dict of symbolic strings (a baked
-    theme in a generated script).  Returns a Theme to paint with,
-    or None for monochrome.  The environment always wins: NO_COLOR
-    and friends silence any theme.
-    """
-    if spec is False:
-        return None
-    if not can_colorize(file=file):
-        return None
-    if spec is None:
-        return Theme()
-    if isinstance(spec, Theme):
-        return spec
-    return Theme(**spec)
-
-
-def _paint_atoms(theme, text):
-    """
-    Paint the atoms inside a laid-out span: '<metavar>'s and
-    '-'-led option strings.  Painting happens inside spans the
-    layout already placed, never across them, so the escape codes
-    can't perturb any width arithmetic--it already happened.
+    Dress a usage line in role spans: the first bare word is the
+    program, '-'-led words are options, <words> are arguments at
+    the top level and opargs inside brackets, other bare words
+    at the top level are arguments.  Structural characters
+    (brackets, pipes, ellipses) stay bare.  Purely lexical and
+    purely additive--the visible text is unchanged, so
+    usage_units and the wrap see the same units, and a plain
+    sheet strips the spans back to the input.
     """
     out = []
     append = out.append
+    depth = 0
+    saw_program = False
     i = 0
-    n = len(text)
+    n = len(usage)
     while i < n:
-        c = text[i]
+        c = usage[i]
         if c == '<':
-            j = text.find('>', i)
+            j = usage.find('>', i)
             if j == -1:
-                append(text[i:])
+                append(escape_styles(usage[i:]))
                 break
-            append(theme.paint('metavar', text[i:j + 1]))
+            role = 'oparg' if depth else 'argument'
+            append(style(role, escape_styles(usage[i:j + 1])))
             i = j + 1
             continue
-        if c == '-' and ((i == 0) or (text[i - 1] in '[|= ')):
+        if c == '-' and ((i == 0) or (usage[i - 1] in '[|= ')):
             j = i
-            while j < n and (text[j].isalnum() or text[j] in '-_'):
+            while j < n and (usage[j].isalnum() or usage[j] in '-_'):
                 j += 1
-            append(theme.paint('option', text[i:j]))
+            append(style('option', escape_styles(usage[i:j])))
             i = j
             continue
-        append(c)
+        if c.isalnum() or c in '_.':
+            j = i
+            while j < n and (usage[j].isalnum() or usage[j] in '_.'):
+                j += 1
+            word = usage[i:j]
+            if not any(ch.isalnum() for ch in word):
+                append(escape_styles(word))      # '...' and friends
+            elif not saw_program:
+                append(style('program', escape_styles(word)))
+                saw_program = True
+            elif not depth:
+                append(style('argument', escape_styles(word)))
+            else:
+                append(escape_styles(word))
+            i = j
+            continue
+        if c == '[':
+            depth += 1
+        elif c == ']':
+            depth = max(0, depth - 1)
+        append(escape_styles(c))
         i += 1
     return ''.join(out)
-
-
-def _bare_word(token):
-    "True if the token is a bare name (an operand in a usage line)."
-    return token and all(c.isalnum() or c in '_.' for c in token)
-
-
-def paint_usage(theme, text):
-    """
-    Paint a rendered usage block, token by token: the program name,
-    option strings, metavars, and bare operand names.  Structural
-    characters (brackets, pipes, ellipses) stay plain.  Tokens are
-    whole--wrap_words wraps usage at whole units--so every painted
-    span survived layout intact.
-    """
-    painted_program = False
-    lines = []
-    for line in text.split('\n'):
-        stripped = line.lstrip(' ')
-        indent = line[:len(line) - len(stripped)]
-        tokens = []
-        for token in stripped.split(' '):
-            if token == 'usage:':
-                tokens.append(token)
-            elif not painted_program:
-                tokens.append(theme.paint('program', token))
-                painted_program = True
-            elif _bare_word(token.rstrip('.')):
-                tokens.append(theme.paint('operand', token))
-            else:
-                tokens.append(_paint_atoms(theme, token))
-        lines.append(indent + ' '.join(tokens))
-    return '\n'.join(lines)
 # --8<-- end appeal theme --8<--
 
 
@@ -2144,32 +2201,30 @@ def help_margin(max_columns=79):
 
 def help_stylesheet(file=None):
     """
-    The StyleSheet a help page paints with, for this stream at
-    this moment: big's neutral markdown_defaults, the transforms
-    (fill/clip/strip/...), the palette the terminal deserves
-    (best_palette: plain_stylesheet when color is off, so pipes
-    and captures get no escapes of any kind), and--outermost--
-    appeal_markdown_defaults, the width-aware STRUCTURE appeal
-    owns (ruled 2026-08-08).
+    The StyleSheet a help page paints with by default, for this
+    stream at this moment: appeal_theme over the ANSI 16 when
+    the stream wants color, the plain palette (no escapes of any
+    kind) when it doesn't--pipes and captures stay clean.
+    Exactly resolve_stylesheet(None, file).
     """
-    return (markdown_defaults | transforms | best_palette(file=file)
-            | appeal_markdown_defaults)
+    return resolve_stylesheet(None, file)
 
 
-def render_baked_help(pieces, margin=79, theme=None, file=None,
+def render_baked_help(pieces, margin=79, file=None,
                       stylesheet=None):
     """
     The runtime half of a help page.  pieces is the baked,
     template-ordered tuple from help_page_pieces: ('usage',
-    prefix, usage-string) entries render through the usage
-    wrapper (wrapped at whole units, painted when themed);
-    ('markdown', layout) entries carry big's width-independent
-    layout tuples--wrap_words lays them out at the real margin
+    prefix, usage-string) entries are dressed in role spans
+    (usage_markup) and wrapped at whole units; ('markdown',
+    layout) entries carry big's width-independent layout
+    tuples--wrap_words lays them out at the real margin
     (strip_styles measuring the words), join_styles fuses
-    adjacent spans, and the terminal's stylesheet paints.
+    adjacent spans.  Either way the stylesheet paints last:
+    stylesheet is a spec (None auto per stream, False never,
+    or a composed StyleSheet used verbatim).
     """
-    sheet = (help_stylesheet(file) if stylesheet is None
-             else stylesheet)
+    sheet = resolve_stylesheet(stylesheet, file)
     # the renderer injects `line`--'-' repeated to the margin, a
     # full-width rule bare and a margin-wide model inside
     # clip/fill (ruled 2026-08-08).  Only the renderer knows the
@@ -2190,11 +2245,12 @@ def render_baked_help(pieces, margin=79, theme=None, file=None,
     for piece in pieces:
         if piece[0] == 'usage':
             prefix, usage = piece[1], piece[2]
-            body = wrap_words(usage_units(usage), margin,
+            # roles are lexical and additive, so the units and
+            # their widths are those of the bare usage line
+            body = wrap_words(usage_units(usage_markup(usage)),
+                              margin, raw=measure,
                               indent=(prefix, ' ' * len(prefix)))
-            if theme is not None:
-                body = paint_usage(theme, body)
-            out.append(body)
+            out.append(sheet.render(body))
         else:
             layout = piece[1]
             text = wrap_words(layout, margin=margin, raw=measure)
@@ -2296,28 +2352,6 @@ def rows_markdown(rows):
     return '\n\n'.join('\n'.join(entry_block(*e)) for e in roots)
 
 
-def render_markdown(text, margin=79, theme=None):
-    """
-    Markdown -> terminal text via big's whole pipeline: parse ->
-    style_document -> split_styles_document -> render_terminal ->
-    join_styles -> StyleSheet.render.  theme=None renders plain
-    (styles resolve to nothing); themed rendering arrives with
-    the StyleSheet-based theming rewrite.  Requires big:
-    standalone scripts wait on the stage-2 snippets (accepted,
-    2026-08-05, heavy development mode).
-    """
-    from big.markdown import (layout_document, markdown_defaults,
-                              parse, split_styles_document,
-                              style_document)
-    from big.stylesheet import (join_styles, plain_stylesheet,
-                                strip_styles)
-    document = split_styles_document(style_document(parse(text)))
-    layout = layout_document(document)
-    rendered = wrap_words(layout, margin=margin, raw=strip_styles)
-    sheet = plain_stylesheet | markdown_defaults
-    return sheet.render(join_styles(rendered))
-
-
 def listing_pieces(usage, corpus, templates):
     """
     The terse command listing as BAKED PIECES: the usage line and
@@ -2332,8 +2366,8 @@ def listing_pieces(usage, corpus, templates):
                                       'arguments', 'options'))
 
 
-def render_help_page(usage, corpus, templates, margin=79, theme=None,
-                     suppress=()):
+def render_help_page(usage, corpus, templates, margin=79,
+                     file=None, stylesheet=None, suppress=()):
     """
     The --help page, the Markdown pivot's engine (ruled
     2026-08-05): the template establishes the page's ORDER and
@@ -2355,13 +2389,87 @@ def render_help_page(usage, corpus, templates, margin=79, theme=None,
     """
     return render_baked_help(
         help_page_pieces(usage, corpus, templates, suppress),
-        margin, theme)
+        margin, file=file, stylesheet=stylesheet)
+
+
+def term_markup(word, role):
+    """
+    Dress one laid-out table-term word in its role span: 'option'
+    terms lexically (option strings and <oparg>s), 'argument' and
+    'command' terms whole.  The word usually wears the Markdown
+    'term' wrapper; the role span nests INSIDE it, so a themed
+    table term is bold AND role-colored.  The word came out of
+    the styled pipeline, so its text is already escaped.
+    """
+    prefix = suffix = ''
+    inner = word
+    open_ = style_delimiters[0] + 'term' + style_delimiters[1]
+    close = style_delimiters[2]
+    if word.startswith(open_) and word.endswith(close):
+        inner = word[len(open_):-len(close)]
+        prefix, suffix = open_, close
+    if not inner:
+        return word
+    if role != 'option':
+        return prefix + style(role, inner) + suffix
+    out = []
+    append = out.append
+    i = 0
+    n = len(inner)
+    while i < n:
+        c = inner[i]
+        if c == '<':
+            j = inner.find('>', i)
+            if j == -1:
+                append(inner[i:])
+                break
+            append(style('oparg', inner[i:j + 1]))
+            i = j + 1
+            continue
+        if c == '-' and ((i == 0) or (inner[i - 1] in '[|= ')):
+            j = i
+            while j < n and (inner[j].isalnum() or inner[j] in '-_'):
+                j += 1
+            append(style('option', inner[i:j]))
+            i = j
+            continue
+        append(c)
+        i += 1
+    return prefix + ''.join(out) + suffix
+
+
+_SECTION_TERM_ROLES = {'options': 'option', 'arguments': 'argument',
+                       'commands': 'command'}
+
+
+def role_layout(layout, section):
+    """
+    Dress one laid-out help section in appeal's role spans--the
+    bake half of themed help.  Table sections mark their
+    definition-list terms (term_markup); the summary marks every
+    word (join_styles fuses them back into one span at render).
+    Purely additive: a plain sheet strips the spans, so unthemed
+    output is unchanged.
+    """
+    role = _SECTION_TERM_ROLES.get(section)
+    out = []
+    for item in layout:
+        if role and (type(item) is tuple) and item and (item[0] == 'term'):
+            out.append(('term',) + tuple(term_markup(w, role)
+                                         for w in item[1:]))
+        elif ((section == 'summary') and isinstance(item, str)
+              and item.strip()):
+            out.append(style('summary', item))
+        else:
+            out.append(item)
+    return tuple(out)
 
 
 def help_page_pieces(usage, corpus, templates, suppress=()):
     """
     The bake half of a help page: assemble the template-ordered
-    Markdown, parse/style/lay it out via big, and return the
+    Markdown, parse/style/lay it out via big, dress the flense's
+    sections in role spans (role_layout), and return the
     template-ordered piece tuple render_baked_help consumes at
     runtime--('usage', prefix, usage-string) for the usage line,
     ('markdown', layout) for everything else, where layout is
@@ -2372,15 +2480,18 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
     from big.markdown import (layout_document, parse,
                               split_styles_document, style_document)
     pieces = []
-    md = []            # pending markdown, flushed around usage
+    md = []            # pending markdown, flushed per role change
 
-    def flush():
+    def flush(section=None):
         text = ''.join(md)
         md.clear()
         if text.strip():
             document = split_styles_document(
                 style_document(parse(text)))
-            pieces.append(('markdown', layout_document(document)))
+            layout = layout_document(document)
+            if section:
+                layout = role_layout(layout, section)
+            pieces.append(('markdown', layout))
 
     for name, header, indent in parse_help_template(templates):
         if name in suppress:
@@ -2399,7 +2510,14 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
             content = rows_markdown(corpus[name])
         if not content.strip():
             continue
+        if name == 'doc':
+            md.append(header + content)
+            continue
+        # a roled section bakes alone, so role_layout knows whose
+        # terms (or words) it is dressing
+        flush()
         md.append(header + content)
+        flush(name)
     flush()
     return tuple(pieces)
 

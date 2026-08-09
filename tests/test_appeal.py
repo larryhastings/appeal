@@ -7258,37 +7258,51 @@ def test_merge_docs_errors():
 # colorization (proposal §8.8, the completion/colorization rulings)
 
 def test_theme():
-    from appeal.runtime import Theme, _SGR_RESET
+    # the theme lift (task #20): themes are DATA--dicts of
+    # StyleSheet entries--and the stylesheet decision is
+    # resolve_stylesheet: None auto, False never, a composed
+    # sheet verbatim
+    import io
+    from appeal.runtime import (appeal_theme, plain_theme,
+                                resolve_stylesheet, uncolored_theme,
+                                usage_markup)
 
-    # symbolic strings compile once, to SGR
-    t = Theme()
-    assert t.paint('option', '--verbose') == '\x1b[36m--verbose' + _SGR_RESET
-    # the empty string means "leave that role alone"
-    assert t.paint('operand', 'host') == 'host'
-    # painting nothing is nothing
-    assert t.paint('error', '') == ''
+    # every theme speaks the same vocabulary
+    for theme in (plain_theme, uncolored_theme, appeal_theme):
+        for role in ('program', 'command', 'option', 'argument',
+                     'oparg', 'summary', 'error', 'heading_color',
+                     'code', 'term'):
+            assert role in theme, role
+    # plain strips; appeal colors (ruled: code is green)
+    assert plain_theme['option'] == ('T', 'T')
+    assert 'cyan' in appeal_theme['option'][1]
+    assert 'green' in appeal_theme['code'][1]
 
-    # slot references: slot names join the vocabulary and expand
-    # to that slot's resolved words
-    t = Theme(option='cyan', metavar='option dim')
-    assert t.sgr['metavar'][0] == ['36', '2']
-    # bright-* variants
-    assert Theme(error='bold bright-red').sgr['error'][0] == ['1', '91']
-    # raw-SGR passthrough: a value starting with an escape
-    t = Theme(heading='\x1b[7m')
-    assert t.paint('heading', 'X') == '\x1b[7mX' + _SGR_RESET
+    # resolve_stylesheet: a composed sheet is used VERBATIM
+    # (ruled 2026-08-06)--even for a non-tty stream
+    from big.markdown import markdown_defaults
+    from big.stylesheet import (StyleSheet, ansi_16_color_palette,
+                                transforms)
+    sheet = (markdown_defaults | transforms | ansi_16_color_palette
+             | StyleSheet(appeal_theme))
+    assert resolve_stylesheet(sheet, io.StringIO()) is sheet
+    # None and False resolve to compositions that render
+    resolved = resolve_stylesheet(None, io.StringIO())
+    assert resolved.render('⦃error⦙error:⦄') == 'error:'   # pipe: plain
+    never = resolve_stylesheet(False, io.StringIO())
+    assert never.render('⦃error⦙error:⦄') == 'error:'
 
-    # refusals, by name
-    for bad, needle in (
-        (dict(error='heading', heading='error'), 'cycle'),
-        (dict(option='chartreuse'), 'chartreuse'),
-        (dict(metavar='\x1b[9m', option='metavar'), 'raw escape'),
-    ):
-        try:
-            Theme(**bad)
-            assert False, f'expected refusal for {bad}'
-        except AppealConfigurationError as e:
-            assert needle in str(e), e
+    # usage_markup: lexical, additive--strip the spans, get the
+    # input back
+    from big.stylesheet import strip_styles
+    usage = 'serve [-v|--verbose] [-p|--port <PORT>] <HOST> ...'
+    marked = usage_markup(usage)
+    assert strip_styles(marked) == usage
+    assert '⦃program⦙serve⦄' in marked
+    assert '⦃option⦙-v⦄|⦃option⦙--verbose⦄' in marked
+    assert '⦃oparg⦙<PORT>⦄' in marked          # inside brackets
+    assert '⦃argument⦙<HOST>⦄' in marked       # at the top level
+    assert '⦃' not in marked.split('⦃argument⦙<HOST>⦄')[1]  # '...' bare
 
 
 def test_can_colorize_precedence():
@@ -7350,32 +7364,39 @@ def test_colorized_help_paints_after_layout():
     import io, contextlib
     from appeal.build import build
     from appeal.help import merge_docs
-    from appeal.runtime import Theme, default_template, render_help_page
+    from appeal.runtime import (appeal_theme, default_template,
+                                render_help_page)
+    from big.markdown import markdown_defaults
+    from big.stylesheet import (StyleSheet, ansi_16_color_palette,
+                                transforms)
 
+    sheet = (markdown_defaults | transforms | ansi_16_color_palette
+             | StyleSheet(appeal_theme))
     plan = build(draw)
     corpus = merge_docs(plan)
     plain = render_help_page(plan.usage(), corpus, default_template)
     painted = render_help_page(plan.usage(), corpus, default_template,
-                               theme=Theme())
+                               stylesheet=sheet)
     assert painted != plain
     assert '\x1b[' in painted
     assert decolor(painted) == plain
-    # INTERIM (Markdown pivot, 2026-08-05): only the usage line
-    # paints--the Markdown body renders unpainted until the
-    # StyleSheet-based theming rewrite (task #20) maps Appeal
-    # themes onto big stylesheets.  The invariant above (paint
-    # never moves layout) is the load-bearing assertion.
-    assert '\x1b[36m--verbose\x1b[0m' in painted     # usage line
+    # the usage line: options wear the option role (cyan under
+    # appeal_theme over the ANSI 16)
+    assert '\x1b[36m--verbose\x1b[39m' in painted     # usage line
+    # the theme lift (task #20): the BODY paints now too--the
+    # flense baked role spans into the tables
     body = painted.split('\n\n', 1)[1]
-    assert '\x1b[' not in body, body
+    assert '\x1b[' in body, body
+    assert '\x1b[36m--verbose\x1b[39m' in body        # options table term
 
-    # angle-bracketed metavars (positional_argument_usage_format=
-    # '<{name}>') paint as 'metavar' spans in the USAGE line
+    # angle-bracketed operands (positional_argument_usage_format=
+    # '<{name}>') wear oparg inside brackets--which defaults to
+    # argument (ruled), italic under appeal_theme
     from appeal.plan import DEFAULT_ARG_FORMAT
     plan.arg_format = '<{name}>'
     bracketed = render_help_page(plan.usage(), merge_docs(plan),
-                                 default_template, theme=Theme())
-    assert '\x1b[2m<times>\x1b[0m' in bracketed, bracketed
+                                 default_template, stylesheet=sheet)
+    assert '\x1b[3m<times>\x1b[23m' in bracketed, bracketed
     plan.arg_format = DEFAULT_ARG_FORMAT
 
 
@@ -7387,7 +7408,7 @@ def test_standalone_colorized_help_and_errors():
     decolor = lambda s: _re.sub('\x1b\\[[0-9;]*m', '', s)
     with tempfile.TemporaryDirectory() as d:
         script_path, script = write_standalone_fixture(d, 'mark')
-        assert "theme=None" in script            # auto by default
+        assert "stylesheet=None" in script       # auto by default
         base = subprocess_env()
         plain = run_script(script_path, ['--help'])
         forced = sub_run(
@@ -7408,7 +7429,10 @@ def test_standalone_colorized_help_and_errors():
             capture_output=True, text=True, cwd=d,
             env={**base, 'FORCE_COLOR': '1'})
         assert err.returncode == 2
-        assert err.stderr.startswith('\x1b[1;31merror:\x1b[0m ')
+        # bold red under appeal_theme (spans nest: bold opens,
+        # red opens, red closes, bold closes)
+        assert err.stderr.startswith('\x1b[1m\x1b[31merror:\x1b[39m\x1b[22m '), \
+            err.stderr[:40]
         assert not err.stdout
         plain_err = run_script(script_path, [])
         assert decolor(err.stderr) == plain_err.stderr

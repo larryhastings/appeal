@@ -2051,8 +2051,9 @@ def test_format_definition_list_more():
 
 def test_theme_resolution_and_markup():
     from appeal.runtime import (
-        Theme, can_colorize, resolve_theme, _paint_atoms,
+        can_colorize, resolve_stylesheet, usage_markup,
         )
+    from big.stylesheet import strip_styles
     assert can_colorize(file=object()) is False
     class FakeTTY(io.StringIO):
         def isatty(self):
@@ -2064,16 +2065,22 @@ def test_theme_resolution_and_markup():
     os.environ['TERM'] = 'xterm-256color'
     try:
         if can_colorize(file=tty):
-            assert resolve_theme(False, tty) is None
-            assert isinstance(resolve_theme(None, tty), Theme)
-            t = Theme()
-            assert resolve_theme(t, tty) is t
-            assert isinstance(resolve_theme({}, tty), Theme)
+            # False: no escapes even on a willing tty; None: the
+            # ANSI 16 paint the error role
+            assert '\x1b[' not in resolve_stylesheet(False, tty).render(
+                '⦃error⦙error:⦄')
+            assert '\x1b[' in resolve_stylesheet(None, tty).render(
+                '⦃error⦙error:⦄')
+        # a composed sheet is verbatim: identity, any stream
+        sentinel = resolve_stylesheet(None, tty)
+        assert resolve_stylesheet(sentinel, io.StringIO()) is sentinel
     finally:
         os.environ.clear()
         os.environ.update(old_env)
-    # markup: an unclosed atom renders as-is
-    assert '<oops' in _paint_atoms(Theme(), 'a <oops')
+    # markup: an unclosed atom renders as-is (and stripping the
+    # roles always recovers the input)
+    assert '<oops' in strip_styles(usage_markup('a <oops'))
+    assert strip_styles(usage_markup('a <oops')) == 'a <oops'
 
 
 def test_section_template_validation():
@@ -2571,7 +2578,7 @@ def test_scoped_strict_repeats():
 
 
 def test_run_main_themed_and_set_completion():
-    from appeal.runtime import Theme, UsageError, run_main
+    from appeal.runtime import UsageError, run_main
     from appeal.complete import completion_set_table
     class FakeTTY(io.StringIO):
         def isatty(self):
@@ -2584,7 +2591,9 @@ def test_run_main_themed_and_set_completion():
     def parse_bad(argv):
         raise UsageError('nope', 'prog x')
     try:
-        code = run_main(parse_bad, [], theme=Theme(), errors=tty)
+        # stylesheet=None: auto--the fake tty (and willing TERM)
+        # gets appeal_theme over the ANSI 16
+        code = run_main(parse_bad, [], errors=tty)
     finally:
         os.environ.clear()
         os.environ.update(old_env)
@@ -3012,7 +3021,7 @@ def test_branch_run_main_error_edges():
     def quiet_main(fn):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = run_main(lambda argv: fn(), [], theme=False)
+            code = run_main(lambda argv: fn(), [], stylesheet=False)
         return code, err.getvalue()
 
     # a real AppealDataError WITHOUT usage: no usage line printed
@@ -3126,7 +3135,8 @@ def test_branch_text_formatter_edges():
     from appeal.runtime import (wrap_words, split_text_with_code,
                                 usage_units, format_definition_list,
                                 merge_columns, OverflowStrategy,
-                                render_help_page, default_template, Theme)
+                                render_help_page, default_template,
+                                appeal_theme)
 
     # code_indent=0 turns code detection off entirely
     split_text_with_code('para one\n\n    indented, not code\n',
@@ -3166,8 +3176,14 @@ def test_branch_text_formatter_edges():
           times: short.
         """
     plan = build(draw)
+    from big.markdown import markdown_defaults
+    from big.stylesheet import (StyleSheet, ansi_16_color_palette,
+                                transforms)
+    sheet = (markdown_defaults | transforms | ansi_16_color_palette
+             | StyleSheet(appeal_theme))
     page = render_help_page(plan.usage(), merge_docs(plan),
-                            default_template, margin=50, theme=Theme())
+                            default_template, margin=50,
+                            stylesheet=sheet)
     assert '\x1b[' in page
 
 

@@ -38,9 +38,8 @@ from .runtime import (
     parse_tokens, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
     sibling_scopes,
-    Theme, default_template, help_page_pieces, render_baked_help,
+    default_template, help_page_pieces, render_baked_help,
     listing_pieces, render_help_page,
-    resolve_theme,
     did_you_mean, help_margin,
     greedy_sizes, run_command_set, run_main, runtime_source,
     window_options,
@@ -100,7 +99,7 @@ def _ident(name):
 
 
 class _Emitter:
-    def __init__(self, plan, refs=None, fill_names=None, templates=None, theme=None,
+    def __init__(self, plan, refs=None, fill_names=None, templates=None, stylesheet=None,
                  boundary='saturation', max_columns=79, symbol=None):
         # refs and fill_names may be shared across the emitters of
         # a command set, so converters common to several commands
@@ -112,7 +111,7 @@ class _Emitter:
         self.plan = plan
         self.symbol = symbol or _ident(plan.name)
         self.templates = default_template if templates is None else templates
-        self.theme = theme
+        self.stylesheet = stylesheet
         self.max_columns = max_columns
         self.refs = Refs() if refs is None else refs
         self.lines = []
@@ -954,12 +953,12 @@ class _Emitter:
                                       self.templates)
             pieces_name = self.refs.add(f'_HELP_{self.symbol}',
                                         pieces, dedupe=False)
-            theme_name = self.refs.add(f'_THEME_{self.symbol}', self.theme, dedupe=False)
+            sheet_name = self.refs.add(f'_SHEET_{self.symbol}', self.stylesheet, dedupe=False)
             self.line(f"    if given.pop('--help', False):")
             self.line(f'        print(render_baked_help({pieces_name}, '
                       f'margin=help_margin({self.max_columns!r}), '
-                      f'theme=resolve_theme({theme_name}, sys.stdout), '
-                      f"file=sys.stdout), end='')")
+                      f'file=sys.stdout, '
+                      f"stylesheet={sheet_name}), end='')")
             self.line(f'        return')
         self.line(f'    n = len(operands)')
         if self.sibling_parents:
@@ -1121,15 +1120,15 @@ class _Emitter:
         return source, self.refs
 
 
-def emit(plan, templates=None, theme=None, max_columns=79):
+def emit(plan, templates=None, stylesheet=None, max_columns=79):
     """
     Generate the parser source for a plan.  Returns (source, refs).
     """
-    return _Emitter(plan, templates=templates, theme=theme,
+    return _Emitter(plan, templates=templates, stylesheet=stylesheet,
                     max_columns=max_columns).emit()
 
 
-def compile_plan(plan, command_split=None, templates=None, theme=None,
+def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
                  max_columns=79,
                  boundary='saturation'):
     """
@@ -1141,7 +1140,7 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
     command_split compiles the plan as a global command (see
     parse_tokens): the parse function returns (result, rest).
     """
-    source, refs = _Emitter(plan, templates=templates, theme=theme,
+    source, refs = _Emitter(plan, templates=templates, stylesheet=stylesheet,
                             boundary=boundary,
                             max_columns=max_columns).emit(command_split)
     filename = f'<appeal generated: {plan.name}>'
@@ -1160,7 +1159,6 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
         'render_baked_help': render_baked_help,
         'help_margin': help_margin,
         'did_you_mean': did_you_mean,
-        'resolve_theme': resolve_theme,
         'sys': sys,
         'check_count': check_count,
         'absorb_take': absorb_take,
@@ -1184,7 +1182,7 @@ def compile_plan(plan, command_split=None, templates=None, theme=None,
     return parse
 
 
-def emit_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None):
+def emit_command_set(commands, global_plan=None, prog=None, templates=None, stylesheet=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None):
     """
     Generate the source for a multi-command program: one parse
     function per command, an optional global-command parse function
@@ -1235,7 +1233,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
             return
         emitted.add(id(plan))
         emitter = _Emitter(plan, refs, fill_names, templates=templates,
-                           theme=theme, boundary=boundary,
+                           stylesheet=stylesheet, boundary=boundary,
                            max_columns=max_columns, symbol=sym(plan))
         chunks.append(emitter.emit()[0])
     for word, plan in commands.items():
@@ -1311,7 +1309,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
     page_pieces = help_page_pieces(usage_line, corpus, templates)
     pieces_name = refs.add('_HELP_command_set', page_pieces,
                            dedupe=False)
-    theme_name = refs.add('_THEME_command_set', theme, dedupe=False)
+    sheet_name = refs.add('_SHEET_command_set', stylesheet, dedupe=False)
     globals_name = (f'(scan_{sym(global_plan)}, run_{sym(global_plan)})'
                     if global_plan is not None else 'None')
     table = ', '.join(
@@ -1350,8 +1348,8 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
              f'_COMPLETE_command_set = {set_table}', '']
     listing_stmt = (f"print(render_baked_help({pieces_name}, "
                     f"margin=help_margin({max_columns!r}), "
-                    f"theme=resolve_theme({theme_name}, sys.stdout), "
-                    f"file=sys.stdout), end='')")
+                    f"file=sys.stdout, "
+                    f"stylesheet={sheet_name}), end='')")
     if auto_version:
         table += ", 'version': parse_version"
         lines.extend([
@@ -1449,13 +1447,13 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
     return '\n\n'.join(chunks), refs
 
 
-def compile_command_set(commands, global_plan=None, prog=None, templates=None, theme=None, max_columns=79, help=True, default=None, sub_defaults=None):
+def compile_command_set(commands, global_plan=None, prog=None, templates=None, stylesheet=None, max_columns=79, help=True, default=None, sub_defaults=None):
     """
     In-process mode for a multi-command program.  Returns the
     dispatching parse function.
     """
     source, refs = emit_command_set(commands, global_plan, prog, templates,
-                                    theme, max_columns=max_columns, help=help,
+                                    stylesheet, max_columns=max_columns, help=help,
                                     default=default,
                                     sub_defaults=sub_defaults)
     filename = '<appeal generated: command set>'
@@ -1474,7 +1472,6 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, t
         'render_baked_help': render_baked_help,
         'help_margin': help_margin,
         'did_you_mean': did_you_mean,
-        'resolve_theme': resolve_theme,
         'sys': sys,
         'check_count': check_count,
         'run_command_set': run_command_set,
@@ -1741,7 +1738,7 @@ def _needed_snippets(source, refs):
     return sorted(needed)
 
 
-def _standalone_script(source, refs, prog, description, entry, theme=None, completion_name=None, errors=None, version=None, max_columns=79):
+def _standalone_script(source, refs, prog, description, entry, stylesheet=None, completion_name=None, errors=None, version=None, max_columns=79):
     """
     Assemble a standalone script around generated parser source.
     Renders every ref *first*, so refusals happen before we commit
@@ -1768,7 +1765,11 @@ def _standalone_script(source, refs, prog, description, entry, theme=None, compl
         parts.append('\n'.join(constants) + '\n')
     parts.append('\n# ---- generated parser ----\n')
     parts.append(source)
-    theme_spec = theme.spec if isinstance(theme, Theme) else theme
+    if not (stylesheet is None or stylesheet is False):
+        raise AppealConfigurationError(
+            "can't emit a standalone script: stylesheet= is a live"
+            " StyleSheet; a standalone script composes its stylesheet"
+            " at runtime (only None and False bake)")
     completion_arg = (f', completion=({completion_name}, {prog!r})'
                       if completion_name else '')
     # the error stream bakes as an expression: only the two
@@ -1787,7 +1788,7 @@ def _standalone_script(source, refs, prog, description, entry, theme=None, compl
                    else f', version={str(version)!r}')
     parts.append(
         f'\nif __name__ == "__main__":\n'
-        f'    sys.exit(run_main({entry}, theme={theme_spec!r}'
+        f'    sys.exit(run_main({entry}, stylesheet={stylesheet!r}'
         f'{completion_arg}{errors_arg}{version_arg}'
         f', margin={max_columns!r}))\n'
         )
@@ -1898,7 +1899,7 @@ def emit_standalone_mcp(commands, *, argv0=None, version='0',
     return '\n'.join(parts)
 
 
-def emit_standalone(plan, *, argv0=None, templates=None, theme=None,
+def emit_standalone(plan, *, argv0=None, templates=None, stylesheet=None,
                     errors=None, version=None, max_columns=79):
     """
     Standalone mode: the complete text of a dependency-free script
@@ -1906,31 +1907,31 @@ def emit_standalone(plan, *, argv0=None, templates=None, theme=None,
     Appeal\'s runtime is embedded (scissors), user callables are
     imported, defaults are literals.
     """
-    source, refs = emit(plan, templates=templates, theme=theme,
+    source, refs = emit(plan, templates=templates, stylesheet=stylesheet,
                         max_columns=max_columns)
     prog = argv0 or plan.name
     return _standalone_script(
         source, refs, prog,
         f'command-line parsing for {plan.name!r}',
-        f'parse_{plan.name}', theme=theme,
+        f'parse_{plan.name}', stylesheet=stylesheet,
         completion_name=f'_COMPLETE_{plan.name}', errors=errors,
         version=version, max_columns=max_columns)
 
 
-def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None):
+def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, stylesheet=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None):
     """
     Standalone mode for a multi-command program: every command\'s
     parser plus the dispatcher, in one dependency-free script.
     """
     prog = argv0 or 'program'
     source, refs = emit_command_set(commands, global_plan, prog, templates,
-                                    theme, repeat, subs, sub_repeat,
+                                    stylesheet, repeat, subs, sub_repeat,
                                     version=version, max_columns=max_columns,
                                     help=help, default=default,
                                     sub_defaults=sub_defaults, doc=doc)
     return _standalone_script(
         source, refs, prog,
         f'command-line parsing ({", ".join(commands)})',
-        'parse_command_set', theme=theme,
+        'parse_command_set', stylesheet=stylesheet,
         completion_name='_COMPLETE_command_set', errors=errors,
         version=version, max_columns=max_columns)
