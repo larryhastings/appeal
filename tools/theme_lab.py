@@ -33,7 +33,12 @@
 ## white, black); the palette maps them to escapes at the end.
 ##
 
+import os
 import sys
+
+# the lab belongs to THIS repo's appeal, not any installed one
+sys.path.insert(0, os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 
 from big.markdown import markdown_defaults
 from big.stylesheet import (
@@ -217,18 +222,25 @@ PAIRINGS = {
 
 
 ##
-## the sample page, two honest halves.
+## the sample page, two honest halves--ONE technology.  Both
+## halves are "baked pieces", the same things Appeal bakes into
+## a compiled script, and both finish through Appeal's REAL
+## finisher, render_baked_help (wrap at the margin, fuse spans,
+## paint with the sheet).  They differ only in provenance:
 ##
-## SAMPLE_MARKDOWN runs through big's REAL pipeline (parse ->
-## style -> layout -> wrap -> render), so heading rules size
-## themselves, alerts get their bars and emoji from the sheet,
-## and bullets wear real markers--edit the Markdown freely.
+## SAMPLE_MARKDOWN is baked by big's real ingestion (parse ->
+## style -> layout), like a docstring--edit the Markdown freely.
 ##
-## ROLE_LINES previews the spans Appeal's flense will emit
-## (usage line, tables, the error line)--hand-marked because
-## role spans are synthesized by Appeal, never written in a
-## docstring (the pipeline ESCAPES delimiters found in source
-## text, correctly).  These are single lines; no layout needed.
+## ROLE_PIECES simulates the OUTPUT of Appeal's flense (the
+## usage line, the Arguments/Options/Commands tables, the error
+## line)--hand-baked because the flense doesn't emit role spans
+## yet (that's the theme lift, waiting on these very colors),
+## and role markup can never ride a docstring anyway: the
+## pipeline ESCAPES delimiters found in source text, correctly.
+## The vocabulary is the layout grammar the flense will speak:
+## role-styled words, ('indent', first, rest), and the
+## definition-list markers--so the tables go through the real
+## compact layout, not hand-spaced columns.
 ##
 
 SAMPLE_MARKDOWN = """\
@@ -272,55 +284,87 @@ A code block, indented four:
 > [!CAUTION]
 > Caution is red.
 
-term of a definition list
-: with details beneath it.
+A definition list, through the real compact layout--the
+column sits at the 80th-percentile term, so the short terms
+share it and the monster falls back man-style:
+
+`-q`|`--quiet`
+: Hush.
+
+`-v`|`--verbose`
+: Narrate the process.
+
+`--config` *FILE*
+: Read configuration from *FILE*.
+
+`-p`|`--port` *PORT*
+: The TCP port to bind.  Defaults to 8080, or the value of
+  the `SERVE_PORT` environment variable if set.
+
+`--enable-experimental-quantum-transport`
+: You have been warned.
 """
 
-ROLE_LINES = """\
-usage: ⦃program⦙serve⦄ [⦃option⦙-v⦄|⦃option⦙--verbose⦄] [⦃option⦙-p⦄|⦃option⦙--port⦄ ⦃oparg⦙<PORT>⦄] ⦃argument⦙<HOST>⦄
+def _mark(role, text):
+    "Per-word role spans; join_styles refuses them back together."
+    return tuple(f'⦃{role}⦙{word}⦄' for word in text.split())
 
-⦃summary⦙Start the server, and serve until interrupted.⦄
 
-⦃heading2⦙Arguments⦄
-
-⦃argument⦙<HOST>⦄  The interface to bind.
-
-⦃heading2⦙Options⦄
-
-⦃option⦙-v⦄|⦃option⦙--verbose⦄        Narrate the process.
-⦃option⦙-p⦄|⦃option⦙--port⦄ ⦃oparg⦙<PORT>⦄  The TCP port.
-
-⦃heading2⦙Commands⦄
-
-⦃command⦙serve⦄  Start the server.
-⦃command⦙stop⦄   Stop the server.
-
-⦃error⦙error:⦄ unknown command 'zerve'
-
-⦃heading_color⦙⦃line⦄⦄
-"""
+ROLE_PIECES = (
+    # the flense's line between the doc and the machine-made
+    # sections--also proves the renderer's `line` injection.
+    ('markdown', ('⦃heading_color⦙⦃line⦄⦄',)),
+    # the usage line: each bracket group is ONE word, so wrapping
+    # never splits a unit (usage_units' rule).
+    ('markdown', (
+        ('indent', 'usage: ', '       '),
+        '⦃program⦙serve⦄',
+        '[⦃option⦙-v⦄|⦃option⦙--verbose⦄]',
+        '[⦃option⦙-p⦄|⦃option⦙--port⦄ ⦃oparg⦙<PORT>⦄]',
+        '⦃argument⦙<HOST>⦄',
+    )),
+    ('markdown', _mark('summary',
+        'Start the server, and serve until interrupted.')),
+    ('markdown', (
+        '⦃heading2⦙Arguments⦄', '\n\n',
+        ('def start',),
+        ('term', '⦃argument⦙<HOST>⦄'),
+        'The', 'interface', 'to', 'bind.',
+        ('def end',),
+    )),
+    ('markdown', (
+        '⦃heading2⦙Options⦄', '\n\n',
+        ('def start',),
+        ('term', '⦃option⦙-v⦄|⦃option⦙--verbose⦄'),
+        'Narrate', 'the', 'process.',
+        ('term', '⦃option⦙-p⦄|⦃option⦙--port⦄', '⦃oparg⦙<PORT>⦄'),
+        'The', 'TCP', 'port.',
+        ('def end',),
+    )),
+    ('markdown', (
+        '⦃heading2⦙Commands⦄', '\n\n',
+        ('def start',),
+        ('term', '⦃command⦙serve⦄'),
+        'Start', 'the', 'server.',
+        ('term', '⦃command⦙stop⦄'),
+        'Stop', 'the', 'server.',
+        ('def end',),
+    )),
+    ('markdown', ('⦃error⦙error:⦄', 'unknown', 'command', "'zerve'")),
+)
 
 WIDTH = 72
 
-# the renderer injects `line` (ruled 2026-08-08): the margin as
-# a drawable string--only the renderer knows the margin.  This
-# is the same injection appeal's render_baked_help performs.
-# (clip is big's now, arriving via transforms.)
-RENDERER_INJECTS = {
-    'line': ('-' * WIDTH,),
-}
-
 
 def main(argv):
-    from big.markdown import (glyphs_from_stylesheet, layout_document,
-                              parse, split_styles_document,
-                              style_document)
-    from big.stylesheet import join_styles, strip_styles
-    from big.text import wrap_words
+    from big.markdown import (layout_document, parse,
+                              split_styles_document, style_document)
+    from big.stylesheet import transforms
+    from appeal.runtime import render_baked_help
 
     document = split_styles_document(style_document(
         parse(SAMPLE_MARKDOWN)))
-    layout = layout_document(document)
+    pieces = (('markdown', layout_document(document)),) + ROLE_PIECES
 
     picks = argv or list(PAIRINGS)
     for name in picks:
@@ -330,22 +374,18 @@ def main(argv):
         theme_dict, palette = PAIRINGS[name]
         # the composition, per the 2026-08-06 rulings:
         # markdown_defaults beneath (safety net), the transforms
-        # (upper etc), the palette, then the theme outermost
-        from big.stylesheet import transforms
-        sheet = (markdown_defaults | transforms | RENDERER_INJECTS
+        # (upper etc), the palette, then the theme outermost.
+        # `line` is the renderer's business: render_baked_help
+        # injects it at the real margin (ruled 2026-08-08).
+        sheet = (markdown_defaults | transforms
                  | palette | StyleSheet(theme_dict))
-        glyphs = glyphs_from_stylesheet(sheet)
-        wrapped = wrap_words(layout, margin=WIDTH,
-                             raw=lambda w: strip_styles(glyphs(w)))
         bar = '=' * 62
         print(bar)
         print(f'==  {name}_theme  (over {_palette_name(palette)})')
         print(bar)
         print()
-        print(sheet.render(join_styles(wrapped, span_linebreaks=True)))
-        print()
-        print(sheet.render(ROLE_LINES))
-        print()
+        print(render_baked_help(pieces, margin=WIDTH,
+                                stylesheet=sheet))
 
 
 def _palette_name(palette):

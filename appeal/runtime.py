@@ -2177,7 +2177,15 @@ def render_baked_help(pieces, margin=79, theme=None, file=None,
     # own `line` wins (the stylesheet= verbatim rule).
     sheet = StyleSheet({'line': ('-' * margin,)}) | sheet
     glyphs = glyphs_from_stylesheet(sheet)
-    measure = lambda w: strip_styles(glyphs(w))
+    # ...and measures it: glyphs_from_stylesheet only knows big's
+    # markdown glyph roles, so a bare ⦃line⦄ word in a layout
+    # would measure zero-wide and wrap_words would drop it.  Same
+    # symmetry as the injection--only the renderer knows how wide
+    # a line is.
+    line_span = _style_span('line')
+    line_glyph = sheet.render(line_span)
+    measure = lambda w: strip_styles(
+        glyphs(w).replace(line_span, line_glyph))
     out = []
     for piece in pieces:
         if piece[0] == 'usage':
