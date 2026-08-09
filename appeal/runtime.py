@@ -1483,6 +1483,75 @@ def resolve_fingerprint_path(fn, path, option_overrides=None):
 ##
 
 _OPTION_UNSET = object()      # option(default=...) omitted marker
+_KNOB_UNSET = object()        # constructor knob omitted marker
+
+##
+## the compiled module's POLICY VOCABULARY: stand-ins wearing the
+## public names, so the same program source spells
+## appeal.default_mappings(...) / appeal.default_long_option in
+## both worlds.  Their EFFECTS are baked into the compiled
+## grammar; these exist to be compared against what was baked
+## (and to refuse loudly if anything ever tries to RUN one).
+## NOTE: executing inside appeal/runtime.py these define
+## runtime-module aliases too--harmless, the real ones live in
+## build/__init__ and nothing imports these from here.
+##
+
+default_mappings_help = ('-h', '--help', 'help')
+default_mappings_version = ('-V', '--version', 'version')
+
+
+def default_mappings(*options):
+    "The factory's compiled stand-in: selection recorded, no effect."
+    if not options:
+        options = default_mappings_help + default_mappings_version
+    def default_mappings_policy(app):
+        raise AppealConfigurationError(
+            "a compiled parser's default mappings are baked; this "
+            "stand-in never runs")
+    default_mappings_policy.appeal_requested = frozenset(options)
+    return default_mappings_policy
+
+
+def _policy_stand_in(name):
+    def policy(*args, **kwargs):
+        raise AppealConfigurationError(
+            f"a compiled parser's option strings are baked; the "
+            f"{name} stand-in never runs")
+    policy.__name__ = name
+    policy.appeal_policy_name = name
+    return policy
+
+
+default_options = _policy_stand_in('default_options')
+default_long_option = _policy_stand_in('default_long_option')
+default_short_option = _policy_stand_in('default_short_option')
+
+
+def policy_token(policy):
+    """
+    A comparable rendering of a default_options policy: the stock
+    name when it is (or stands in for) a stock policy, else the
+    custom callable's fingerprint plus a bytecode digest (a
+    policy's BODY is grammar--editing it must read as stale).
+    """
+    name = getattr(policy, 'appeal_policy_name', None)
+    if name is not None:
+        return name
+    import hashlib
+    return repr((fingerprint(policy),
+                 hashlib.blake2b(policy.__code__.co_code,
+                                 digest_size=16).hexdigest()))
+
+
+def mappings_token(product):
+    "A comparable rendering of a default_mappings selection."
+    if product is None:
+        return 'None'
+    requested = getattr(product, 'appeal_requested', None)
+    if requested is None:
+        return 'custom'
+    return repr(sorted(requested))
 
 
 def _standalone_appeal(spec, namespace):
@@ -1499,7 +1568,8 @@ def _standalone_appeal(spec, namespace):
                      stylesheet=None, version=None, repeat=False,
                      errors=None, script=None, margin=79,
                      positional_argument_usage_format=None,
-                     default_options=None, default_mappings=None,
+                     default_options=_KNOB_UNSET,
+                     default_mappings=_KNOB_UNSET,
                      doc=None):
             # live knobs: these never touched the baked grammar
             # or pieces, so they simply apply, custom values and
@@ -1525,13 +1595,24 @@ def _standalone_appeal(spec, namespace):
                     self._staleness.append(
                         f"Appeal({knob}=...): compiled with "
                         f"{baked}, now {_stable_repr(value)}")
-            for knob, value in (('default_options', default_options),
-                                ('default_mappings', default_mappings)):
-                if value is not None:
-                    raise AppealConfigurationError(
-                        f"a compiled parser can't take {knob}= "
-                        f"(its effects are baked in); regenerate "
-                        f"the standalone module instead")
+            # the policy knobs: their effects are baked; the
+            # shim verifies the SAME policies are being asked for
+            if default_options is not _KNOB_UNSET:
+                got = policy_token(default_options)
+                baked = spec['config'].get('default_options_policy')
+                if got != baked:
+                    self._staleness.append(
+                        f"Appeal(default_options=...): compiled "
+                        f"with {baked}, now {got}")
+            if default_mappings is not _KNOB_UNSET:
+                got = mappings_token(default_mappings)
+                baked = spec['config'].get('default_mappings_sel')
+                if got != baked or got == 'custom':
+                    self._staleness.append(
+                        f"Appeal(default_mappings=...): compiled "
+                        f"with {baked}, now {got}"
+                        + (" (a custom mappings callable can't be "
+                           "verified)" if got == 'custom' else ''))
             self._bound = {}        # id(spec entry) -> binding
             # method functions decorated BEFORE their class
             # exists (§8.6: @app.command() in a class body runs

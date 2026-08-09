@@ -2942,27 +2942,25 @@ def test_default_options_policy():
 
 def test_default_options_policy_standalone():
     # NORTH STAR: the policy runs on the BUILD host; only its
-    # output (the option strings) is baked.  Under the compiled-
-    # module form the shim can't take Appeal(default_options=)
-    # yet (its effects are baked; the knob refuses by name).
-    # TODO(standalone-module): teach the shim the policy knob,
-    # then restore the emitted long-only assertions from git
-    # history.  Meanwhile: the refusal is loud and named.
-    from appeal import default_long_option
-    from appeal.runtime import _standalone_appeal
-    spec = {'templates': None,
-            'config': {k: 'None' for k in
-                       ('name', 'version', 'repeat', 'margin',
-                        'positional_argument_usage_format', 'doc',
-                        'templates')},
-            'program': 'x', 'entry': 'parse_x', 'complete': None,
-            'global': None, 'commands': {}}
-    ShimAppeal = _standalone_appeal(spec, {})
-    try:
-        ShimAppeal(default_options=default_long_option)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'default_options' in str(e)
+    # output (the option strings) is baked.  The compiled module
+    # exports policy STAND-INS wearing the public names, so the
+    # same source spells appeal.default_long_option in both
+    # worlds; the shim verifies the program still asks for the
+    # same policy (the knob lift, 2026-08-09).
+    with tempfile.TemporaryDirectory() as d:
+        prog, module = write_standalone_program(d, (
+            DEMO_MODULE
+            + "\napp = appeal.Appeal(name='greet',\n"
+            '                   default_options='
+            'appeal.default_long_option)\n'
+            'app.global_command()(greet)\n'), 'greet')
+        # the long works; the suppressed short is unknown
+        r = run_script(prog, ['dave', '--times', '2'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'hello, dave! hello, dave!\n', r.stdout
+        r = run_script(prog, ['dave', '-t', '2'])
+        assert r.returncode == 2
+        assert "unknown option '-t'" in r.stderr, r.stderr
 
 def test_help_yields_to_user_options():
     # a program that claims --help keeps it; no automatic help
@@ -3065,13 +3063,24 @@ def test_help_disabled_parity_and_standalone():
     assert a[0] == b[0] == 'usage', (a, b)
     assert 'unknown command' in a[1] and 'unknown command' in b[1]
 
-    # standalone: help=False comes from default_mappings=, an
-    # Appeal() knob the compiled-module shim can't verify or
-    # spell yet (the module ships no default_mappings factory).
-    # TODO(standalone-module): teach the shim the mappings
-    # factory, then restore the emitted no-help assertions from
-    # git history (they proved help=False baked no automatic
-    # help: `help` unknown, `greet --help` unknown option)
+    # standalone: help=False spelled through default_mappings=,
+    # via the compiled module's factory stand-in (the knob lift,
+    # 2026-08-09)--no automatic help baked
+    with tempfile.TemporaryDirectory() as d:
+        prog, module = write_standalone_program(d, (
+            DEMO_MODULE
+            + "\napp = appeal.Appeal(name='tool',\n"
+            '                   default_mappings='
+            'appeal.default_mappings(\n'
+            '    *appeal.default_mappings_version))\n'
+            'app.command()(greet)\n'
+            'app.command()(cp)\n'), 'tool')
+        r = run_script(prog, ['help'])
+        assert r.returncode == 2, r.stdout
+        assert 'unknown command' in r.stderr, r.stderr
+        r = run_script(prog, ['greet', '--help'])
+        assert r.returncode == 2
+        assert "unknown option '--help'" in r.stderr, r.stderr
 
 def test_generated_code_name_collisions():
     # the corpus caught this: a converter parameter named `i`

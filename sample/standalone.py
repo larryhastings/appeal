@@ -1225,6 +1225,75 @@ def resolve_fingerprint_path(fn, path, option_overrides=None):
 ##
 
 _OPTION_UNSET = object()      # option(default=...) omitted marker
+_KNOB_UNSET = object()        # constructor knob omitted marker
+
+##
+## the compiled module's POLICY VOCABULARY: stand-ins wearing the
+## public names, so the same program source spells
+## appeal.default_mappings(...) / appeal.default_long_option in
+## both worlds.  Their EFFECTS are baked into the compiled
+## grammar; these exist to be compared against what was baked
+## (and to refuse loudly if anything ever tries to RUN one).
+## NOTE: executing inside appeal/runtime.py these define
+## runtime-module aliases too--harmless, the real ones live in
+## build/__init__ and nothing imports these from here.
+##
+
+default_mappings_help = ('-h', '--help', 'help')
+default_mappings_version = ('-V', '--version', 'version')
+
+
+def default_mappings(*options):
+    "The factory's compiled stand-in: selection recorded, no effect."
+    if not options:
+        options = default_mappings_help + default_mappings_version
+    def default_mappings_policy(app):
+        raise AppealConfigurationError(
+            "a compiled parser's default mappings are baked; this "
+            "stand-in never runs")
+    default_mappings_policy.appeal_requested = frozenset(options)
+    return default_mappings_policy
+
+
+def _policy_stand_in(name):
+    def policy(*args, **kwargs):
+        raise AppealConfigurationError(
+            f"a compiled parser's option strings are baked; the "
+            f"{name} stand-in never runs")
+    policy.__name__ = name
+    policy.appeal_policy_name = name
+    return policy
+
+
+default_options = _policy_stand_in('default_options')
+default_long_option = _policy_stand_in('default_long_option')
+default_short_option = _policy_stand_in('default_short_option')
+
+
+def policy_token(policy):
+    """
+    A comparable rendering of a default_options policy: the stock
+    name when it is (or stands in for) a stock policy, else the
+    custom callable's fingerprint plus a bytecode digest (a
+    policy's BODY is grammar--editing it must read as stale).
+    """
+    name = getattr(policy, 'appeal_policy_name', None)
+    if name is not None:
+        return name
+    import hashlib
+    return repr((fingerprint(policy),
+                 hashlib.blake2b(policy.__code__.co_code,
+                                 digest_size=16).hexdigest()))
+
+
+def mappings_token(product):
+    "A comparable rendering of a default_mappings selection."
+    if product is None:
+        return 'None'
+    requested = getattr(product, 'appeal_requested', None)
+    if requested is None:
+        return 'custom'
+    return repr(sorted(requested))
 
 
 def _standalone_appeal(spec, namespace):
@@ -1241,7 +1310,8 @@ def _standalone_appeal(spec, namespace):
                      stylesheet=None, version=None, repeat=False,
                      errors=None, script=None, margin=79,
                      positional_argument_usage_format=None,
-                     default_options=None, default_mappings=None,
+                     default_options=_KNOB_UNSET,
+                     default_mappings=_KNOB_UNSET,
                      doc=None):
             # live knobs: these never touched the baked grammar
             # or pieces, so they simply apply, custom values and
@@ -1267,14 +1337,29 @@ def _standalone_appeal(spec, namespace):
                     self._staleness.append(
                         f"Appeal({knob}=...): compiled with "
                         f"{baked}, now {_stable_repr(value)}")
-            for knob, value in (('default_options', default_options),
-                                ('default_mappings', default_mappings)):
-                if value is not None:
-                    raise AppealConfigurationError(
-                        f"a compiled parser can't take {knob}= "
-                        f"(its effects are baked in); regenerate "
-                        f"the standalone module instead")
-            self._bound = {}        # spec key -> live function
+            # the policy knobs: their effects are baked; the
+            # shim verifies the SAME policies are being asked for
+            if default_options is not _KNOB_UNSET:
+                got = policy_token(default_options)
+                baked = spec['config'].get('default_options_policy')
+                if got != baked:
+                    self._staleness.append(
+                        f"Appeal(default_options=...): compiled "
+                        f"with {baked}, now {got}")
+            if default_mappings is not _KNOB_UNSET:
+                got = mappings_token(default_mappings)
+                baked = spec['config'].get('default_mappings_sel')
+                if got != baked or got == 'custom':
+                    self._staleness.append(
+                        f"Appeal(default_mappings=...): compiled "
+                        f"with {baked}, now {got}"
+                        + (" (a custom mappings callable can't be "
+                           "verified)" if got == 'custom' else ''))
+            self._bound = {}        # id(spec entry) -> binding
+            # method functions decorated BEFORE their class
+            # exists (§8.6: @app.command() in a class body runs
+            # first; the class decorator reclaims by identity)
+            self._pending = []
             # what @app.option/@app.parameter expressed, keyed by
             # the decorated callable--recorded HERE, never on the
             # user's objects (ruled 2026-08-09)
@@ -1282,17 +1367,87 @@ def _standalone_appeal(spec, namespace):
             self._parameter_usage = {}
 
         # -- registration: match, don't build --------------------
+        # the spec is the command TREE; command('db') returns a
+        # child node over the baked subtree, wearing the same API
+        # (the real facade's tree-of-Appeals shape)
 
-        def command(self, name=None):
-            def register(fn):
-                word = name if name is not None else fn.__name__
-                if word not in spec['commands']:
-                    known = ', '.join(sorted(spec['commands']))
+        def _bind(self, entry, label, fn):
+            # re-registration replaces (v1: the second wins)
+            self._bound[id(entry)] = (entry, label, fn)
+
+        def _command_in(self, table, prefix, name, repeat, parent):
+            if parent is not None:
+                if name is not None:
+                    raise AppealConfigurationError(
+                        "command(): give a name or parent=, "
+                        "not both")
+                name = parent
+            def fetch(word):
+                entry = table.get(word)
+                if entry is None:
+                    known = ', '.join(sorted(table)) or '(none)'
+                    where = (f"under {prefix!r}" if prefix
+                             else "at the top level")
                     raise AppealConfigurationError(
                         f"this compiled parser has no command "
-                        f"{word!r} (it knows: {known}); regenerate "
-                        f"the standalone module")
-                self._bound[('command', word)] = fn
+                        f"{word!r} {where} (it knows: {known}); "
+                        f"regenerate the standalone module")
+                if repeat and not entry.get('repeat'):
+                    self._staleness.append(
+                        f"command {word!r}: repeat=True now, but "
+                        f"this parser was compiled without it")
+                return entry
+            def label(word):
+                return (prefix + ' ' + word).strip()
+            if name is not None:
+                return _Node(self, fetch(name), label(name))
+            def decorator(fn):
+                word = getattr(fn, '__name__', None)
+                if isinstance(fn, type):
+                    # a class command: bind it, then reclaim its
+                    # decorated methods from the parking lot
+                    entry = fetch(word)
+                    self._bind(entry, label(word), fn)
+                    self._reclaim(entry, label(word), fn)
+                    return fn
+                entry = table.get(word)
+                if entry is None:
+                    # maybe a method of a class registered later
+                    # (its own decorator ran first, inside the
+                    # class body)--park it; main() yells about
+                    # leftovers nothing reclaimed
+                    self._pending.append((word, fn))
+                    return fn
+                self._bind(entry, label(word), fn)
+                return fn
+            return decorator
+
+        def _reclaim(self, entry, label_, cls):
+            # §8.6's reclaim, by IDENTITY: parked functions found
+            # in the class's own dict become its subcommands
+            target = getattr(cls, '__wrapped__', cls)
+            members = list(target.__dict__.values())
+            children = entry.get('commands') or {}
+            leftovers = []
+            for word, fn in self._pending:
+                child = children.get(word)
+                if child is not None and any(fn is m for m in members):
+                    self._bind(child, f'{label_} {word}', fn)
+                else:
+                    leftovers.append((word, fn))
+            self._pending[:] = leftovers
+
+        def command(self, name=None, *, repeat=False, parent=None):
+            return self._command_in(spec['commands'], '',
+                                    name, repeat, parent)
+
+        def default_command(self):
+            def register(fn):
+                if spec.get('default') is None:
+                    raise AppealConfigurationError(
+                        "this compiled parser has no root default "
+                        "command; regenerate the standalone module")
+                self._bind(spec['default'], '<default>', fn)
                 return fn
             return register
 
@@ -1302,7 +1457,7 @@ def _standalone_appeal(spec, namespace):
                     raise AppealConfigurationError(
                         "this compiled parser has no global "
                         "command; regenerate the standalone module")
-                self._bound[('global',)] = fn
+                self._bind(spec['global'], '<global>', fn)
                 return fn
             return register
 
@@ -1344,21 +1499,36 @@ def _standalone_appeal(spec, namespace):
 
         # -- verification: all-or-nothing, at main() -------------
 
+        def _walk_spec(self):
+            """Every entry in the baked tree, with what to call it."""
+            out = []
+            if spec['global'] is not None:
+                out.append((spec['global'], 'the global command'))
+            if spec.get('default') is not None:
+                out.append((spec['default'], 'the default command'))
+            def walk(table, prefix):
+                for word, entry in table.items():
+                    label = (prefix + ' ' + word).strip()
+                    out.append((entry, f'command {label!r}'))
+                    if entry.get('default') is not None:
+                        out.append((entry['default'],
+                                    f'the default command of '
+                                    f'{label!r}'))
+                    walk(entry.get('commands') or {}, label)
+            walk(spec['commands'], '')
+            return out
+
         def _verify_and_bind(self):
             problems = list(self._staleness)
             known = set()       # everything this parser resolves
-            entries = [(('global',), spec['global'])] if spec['global'] else []
-            entries += [(('command', word), entry)
-                        for word, entry in spec['commands'].items()]
-            for key, entry in entries:
-                what = (f"command {key[1]!r}" if key[0] == 'command'
-                        else "the global command")
-                fn = self._bound.get(key)
-                if fn is None:
+            for entry, what in self._walk_spec():
+                binding = self._bound.get(id(entry))
+                if binding is None:
                     problems.append(
                         f"{what} was compiled in but never "
                         f"registered with @app.command()")
                     continue
+                _, _, fn = binding
                 known.add(fn)
                 if fingerprint(fn) != entry['fingerprint']:
                     problems.append(
@@ -1406,6 +1576,11 @@ def _standalone_appeal(spec, namespace):
                         continue
                     namespace[ref_name] = obj
                 namespace[entry['impl']] = fn
+            for word, fn in self._pending:
+                problems.append(
+                    f"@app.command() registered {word!r}, which "
+                    f"this compiled parser doesn't know (and no "
+                    f"class command reclaimed it)")
             # a decoration aimed at something this parser never
             # resolves is drift too--yell, don't ignore
             for registry in (self._option_overrides,
@@ -1464,6 +1639,50 @@ def _standalone_appeal(spec, namespace):
                 f"parser; if the program needs it, regenerate "
                 f"with a current appeal (in-process-only APIs "
                 f"never compile)")
+
+    class _Node:
+        """
+        A compiled subtree wearing the child-Appeal API: callable
+        (registers the parent's own function), .command() for its
+        children, .default_command(), and the decoration
+        decorators delegating to the root (one registry per
+        tree, like the real facade).
+        """
+        def __init__(self, shim, entry, label):
+            self._shim = shim
+            self._entry = entry
+            self._label = label
+
+        def __call__(self, fn):
+            self._shim._bind(self._entry, self._label, fn)
+            if isinstance(fn, type):
+                self._shim._reclaim(self._entry, self._label, fn)
+            return fn
+
+        def command(self, name=None, *, repeat=False, parent=None):
+            return self._shim._command_in(
+                self._entry.get('commands') or {}, self._label,
+                name, repeat, parent)
+
+        def default_command(self):
+            entry = self._entry.get('default')
+            def register(fn):
+                if entry is None:
+                    raise AppealConfigurationError(
+                        f"this compiled parser has no default "
+                        f"command under {self._label!r}; "
+                        f"regenerate the standalone module")
+                self._shim._bind(entry,
+                                 f'{self._label} <default>', fn)
+                return fn
+            return register
+
+        def option(self, *args, **kwargs):
+            return self._shim.option(*args, **kwargs)
+
+        def parameter(self, *args, **kwargs):
+            return self._shim.parameter(*args, **kwargs)
+        argument = parameter
 
     return Appeal
 # --8<-- end appeal standalone shim --8<--
@@ -5118,7 +5337,7 @@ def _fill_option_value(operands, i, remaining, given):
 def scan_weather(argv, command_words=None):
     # the global command: its arguments end at the first
     # operand naming a command (or at the maximum)
-    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, _USAGE_weather, command_split=(0, 0, frozenset({'report', 'forecast', 'help'})))
+    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, _USAGE_weather, command_split=(0, 0, frozenset({'help', 'forecast', 'report'})))
     _topic = None
     if _topic is None and '-h' in given:
         _topic = list(given.pop('-h'))
@@ -5277,6 +5496,6 @@ def parse_command_set(argv):
 
 
 # ---- the Appeal your program imports ----
-_STANDALONE = {'program': 'weather', 'entry': 'parse_command_set', 'complete': '_COMPLETE_command_set', 'templates': 'usage: {usage}\n\n{summary}\n\n{doc}\n\n## Arguments\n{arguments}\n\n## Options\n{options}\n\n## Commands\n{commands}\n', 'config': {'name': "'weather'", 'version': 'None', 'repeat': 'False', 'margin': '79', 'margin_value': 79, 'positional_argument_usage_format': "'<{name.upper()}>'", 'doc': 'None', 'templates': "'usage: {usage}\\n\\n{summary}\\n\\n{doc}\\n\\n## Arguments\\n{arguments}\\n\\n## Options\\n{options}\\n\\n## Commands\\n{commands}\\n'"}, 'global': None, 'commands': {'report': {'impl': '_report', 'fingerprint': ('report', 1, 0, 2, False, False, ('city', 'units', 'verbose'), 'None', "{'units': 'C', 'verbose': False}", (), '76c7a20e44e4e723e32365d603750508'), 'decorations': ((), ()), 'refs': ()}, 'forecast': {'impl': '_forecast', 'fingerprint': ('forecast', 2, 0, 0, False, False, ('city', 'days'), '(3,)', 'None', (), '7a663722c063d857c2c348f671058581'), 'decorations': ((), ()), 'refs': ()}}}
+_STANDALONE = {'program': 'weather', 'entry': 'parse_command_set', 'complete': '_COMPLETE_command_set', 'templates': 'usage: {usage}\n\n{summary}\n\n{doc}\n\n## Arguments\n{arguments}\n\n## Options\n{options}\n\n## Commands\n{commands}\n', 'config': {'name': "'weather'", 'version': 'None', 'repeat': 'False', 'margin': '79', 'margin_value': 79, 'positional_argument_usage_format': "'<{name.upper()}>'", 'doc': 'None', 'templates': "'usage: {usage}\\n\\n{summary}\\n\\n{doc}\\n\\n## Arguments\\n{arguments}\\n\\n## Options\\n{options}\\n\\n## Commands\\n{commands}\\n'", 'default_options_policy': 'default_options', 'default_mappings_sel': "['--help', '--version', '-V', '-h', 'help', 'version']"}, 'global': None, 'default': None, 'commands': {'report': {'impl': '_report', 'fingerprint': ('report', 1, 0, 2, False, False, ('city', 'units', 'verbose'), 'None', "{'units': 'C', 'verbose': False}", (), '76c7a20e44e4e723e32365d603750508'), 'decorations': ((), ()), 'refs': ()}, 'forecast': {'impl': '_forecast', 'fingerprint': ('forecast', 2, 0, 0, False, False, ('city', 'days'), '(3,)', 'None', (), '7a663722c063d857c2c348f671058581'), 'decorations': ((), ()), 'refs': ()}}}
 
 Appeal = _standalone_appeal(_STANDALONE, globals())

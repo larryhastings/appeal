@@ -2181,6 +2181,24 @@ class Appeal:
         }
         if self.version is not None:
             config['version_value'] = str(self.version)
+        # the policy knobs bake as comparable tokens: the shim
+        # verifies the program still asks for the same policies
+        from .build import (default_long_option, default_short_option)
+        from .build import default_options as _stock_options
+        from .runtime import mappings_token, policy_token
+        policy = self.default_options
+        for stock, pname in ((_stock_options, 'default_options'),
+                             (default_long_option,
+                              'default_long_option'),
+                             (default_short_option,
+                              'default_short_option')):
+            if policy is stock:
+                config['default_options_policy'] = pname
+                break
+        else:
+            config['default_options_policy'] = policy_token(policy)
+        config['default_mappings_sel'] = mappings_token(
+            self.default_mappings)
         if words:
             text = emit_standalone_module(
                 {w: self.plan_for(w) for w in words},
