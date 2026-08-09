@@ -6366,15 +6366,10 @@ def test_two_classes_same_method_name():
             import twins_mod
             import importlib
             importlib.reload(twins_mod)
-            # the compiled-module form (ruled 2026-08-09) doesn't
-            # cover class commands yet: the loud refusal.
-            # TODO(standalone-module): lift, then restore the
-            # run_run/run_run2 emitted assertions from git history
-            try:
-                twins_mod.app.standalone()
-                assert False, 'expected AppealConfigurationError'
-            except AppealConfigurationError as e:
-                assert "compiled-module form" in str(e)
+            # the class-command lift (2026-08-09): each `run`
+            # binds to its own class's instance, compiled
+            script = twins_mod.app.standalone()
+            assert 'def run_run(' in script and 'def run_run2(' in script
         finally:
             sys.path.remove(d)
             sys.modules.pop('twins_mod', None)
@@ -6624,27 +6619,36 @@ class MyApp:
 
 
 def test_standalone_class_app():
-    # the compiled-module form (ruled 2026-08-09) doesn't cover
-    # class commands (§8.6) yet: assert the loud refusal.
-    # TODO(standalone-module): lift, then restore the emitted
-    # construct-at-dispatch assertions from git history
+    # the class-command lift (2026-08-09): §8.6 compiled--the
+    # class binds live at registration (never imported), methods
+    # parked by their own decorators and reclaimed by identity,
+    # the instance constructed at dispatch
     with tempfile.TemporaryDirectory() as d:
-        module_path = os.path.join(d, 'clsapp_cmds.py')
-        with open(module_path, 'wt', encoding='utf-8') as f:
-            f.write(CLASS_MODULE)
-        sys.path.insert(0, d)
-        try:
-            import clsapp_cmds
-            import importlib
-            importlib.reload(clsapp_cmds)
-            try:
-                clsapp_cmds.app.standalone()
-                assert False, 'expected AppealConfigurationError'
-            except AppealConfigurationError as e:
-                assert "compiled-module form" in str(e)
-        finally:
-            sys.path.remove(d)
-            sys.modules.pop('clsapp_cmds', None)
+        prog, module = write_standalone_program(d, (
+            "app = appeal.Appeal(name='fgrep')\n"
+            '@app.global_command()\n'
+            'class MyApp:\n'
+            '    def __init__(self, *, verbose=False):\n'
+            '        self.verbose = verbose\n'
+            '    @app.command()\n'
+            '    def fgrep(self, pattern, file, *, count: int = None):\n'
+            "        print('fgrep', self.verbose, pattern, file, count)\n"
+            '    @app.command()\n'
+            '    def count(self, x):\n'
+            "        print('count', self.verbose, x)\n"), 'fgrep')
+        assert '_MyApp = None' in module        # the class slot
+
+        r = run_script(prog, ['-v', 'fgrep', 'patt', 'file', '-c', '33'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'fgrep True patt file 33\n', r.stdout
+
+        r = run_script(prog, ['count', 'x'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'count False x\n', r.stdout
+
+        r = run_script(prog, ['helper'])
+        assert r.returncode == 2
+        assert 'unknown command' in r.stderr
 
 
 def test_standalone_gate_rule():

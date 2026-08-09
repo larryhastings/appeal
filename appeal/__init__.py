@@ -2154,10 +2154,6 @@ class Appeal:
                     if getattr(fn, '__func__', None) in
                     (cls.help, cls.print_version)}
         words = [w for w in table if w not in defaults]
-        if self._method_owner:
-            raise AppealConfigurationError(
-                "the compiled-module form doesn't cover "
-                "class commands yet")
         def sub_plan(name, fn):
             # nested parents are fine: self._subs is flat (every
             # parent maps its own children), and the emitter

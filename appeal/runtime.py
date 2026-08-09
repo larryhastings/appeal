@@ -1532,7 +1532,11 @@ def _standalone_appeal(spec, namespace):
                         f"a compiled parser can't take {knob}= "
                         f"(its effects are baked in); regenerate "
                         f"the standalone module instead")
-            self._bound = {}        # spec key -> live function
+            self._bound = {}        # id(spec entry) -> binding
+            # method functions decorated BEFORE their class
+            # exists (§8.6: @app.command() in a class body runs
+            # first; the class decorator reclaims by identity)
+            self._pending = []
             # what @app.option/@app.parameter expressed, keyed by
             # the decorated callable--recorded HERE, never on the
             # user's objects (ruled 2026-08-09)
@@ -1575,10 +1579,40 @@ def _standalone_appeal(spec, namespace):
             if name is not None:
                 return _Node(self, fetch(name), label(name))
             def decorator(fn):
-                word = fn.__name__
-                self._bind(fetch(word), label(word), fn)
+                word = getattr(fn, '__name__', None)
+                if isinstance(fn, type):
+                    # a class command: bind it, then reclaim its
+                    # decorated methods from the parking lot
+                    entry = fetch(word)
+                    self._bind(entry, label(word), fn)
+                    self._reclaim(entry, label(word), fn)
+                    return fn
+                entry = table.get(word)
+                if entry is None:
+                    # maybe a method of a class registered later
+                    # (its own decorator ran first, inside the
+                    # class body)--park it; main() yells about
+                    # leftovers nothing reclaimed
+                    self._pending.append((word, fn))
+                    return fn
+                self._bind(entry, label(word), fn)
                 return fn
             return decorator
+
+        def _reclaim(self, entry, label_, cls):
+            # §8.6's reclaim, by IDENTITY: parked functions found
+            # in the class's own dict become its subcommands
+            target = getattr(cls, '__wrapped__', cls)
+            members = list(target.__dict__.values())
+            children = entry.get('commands') or {}
+            leftovers = []
+            for word, fn in self._pending:
+                child = children.get(word)
+                if child is not None and any(fn is m for m in members):
+                    self._bind(child, f'{label_} {word}', fn)
+                else:
+                    leftovers.append((word, fn))
+            self._pending[:] = leftovers
 
         def command(self, name=None, *, repeat=False, parent=None):
             return self._command_in(spec['commands'], '',
@@ -1719,6 +1753,11 @@ def _standalone_appeal(spec, namespace):
                         continue
                     namespace[ref_name] = obj
                 namespace[entry['impl']] = fn
+            for word, fn in self._pending:
+                problems.append(
+                    f"@app.command() registered {word!r}, which "
+                    f"this compiled parser doesn't know (and no "
+                    f"class command reclaimed it)")
             # a decoration aimed at something this parser never
             # resolves is drift too--yell, don't ignore
             for registry in (self._option_overrides,
@@ -1793,6 +1832,8 @@ def _standalone_appeal(spec, namespace):
 
         def __call__(self, fn):
             self._shim._bind(self._entry, self._label, fn)
+            if isinstance(fn, type):
+                self._shim._reclaim(self._entry, self._label, fn)
             return fn
 
         def command(self, name=None, *, repeat=False, parent=None):
