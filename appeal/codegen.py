@@ -1283,7 +1283,10 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
                      else 'saturation')
         sub_entries = [(w, summary(p.callable))
                        for w, p in sub_plans.items()]
-        sub_corpus = command_set_corpus(parent_plan, sub_entries, False)
+        # auto_help=True: the facade's nested listing shows the
+        # help row (cycling pops `help` up to the root handler)
+        sub_corpus = command_set_corpus(parent_plan, sub_entries,
+                                        help)
         sub_usage = listing_pieces(
             command_set_usage(parent_word, parent_plan), sub_corpus,
             templates or default_template)
@@ -1967,7 +1970,8 @@ def _classify_refs(refs, impls, harvests, decorations):
         for name, obj in pending:
             done.add(name)
             if id(obj) in impls:
-                impl_names[impls[id(obj)]] = name
+                for key in impls[id(obj)]:
+                    impl_names[key] = name
                 slots.append(name)
                 continue
             if not getattr(obj, '__appeal_recipe__', None):
@@ -2004,7 +2008,9 @@ def _classify_refs(refs, impls, harvests, decorations):
 
 
 def emit_standalone_module(commands, global_plan=None, *, argv0=None,
-                           templates=None, repeat=False, version=None,
+                           templates=None, repeat=False, subs=None,
+                           sub_repeat=None, default=None,
+                           sub_defaults=None, version=None,
                            max_columns=79, help=True, doc=None,
                            config=None, global_is_user=False,
                            decorations=None):
@@ -2038,11 +2044,16 @@ def emit_standalone_module(commands, global_plan=None, *, argv0=None,
     # (the synthesized dispatcher and the stock precommand carry
     # no function for the shim to match)
     user_global = global_is_user and global_plan is not None
+    subs = subs or {}
+    sub_repeat = sub_repeat or {}
+    sub_defaults = sub_defaults or {}
     if commands:
         source, refs = emit_command_set(
             commands, global_plan, prog, templates, None,
-            repeat, None, None, version=version,
-            max_columns=max_columns, help=help, doc=doc)
+            repeat, subs or None, sub_repeat or None,
+            version=version, max_columns=max_columns, help=help,
+            default=default, sub_defaults=sub_defaults or None,
+            doc=doc)
         entry = 'parse_command_set'
         complete = '_COMPLETE_command_set'
         description = f'command-line parsing ({", ".join(commands)})'
@@ -2059,7 +2070,9 @@ def emit_standalone_module(commands, global_plan=None, *, argv0=None,
     fingerprints = {}
     decor_fingerprints = {}
     def note_fn(key, fn):
-        impls[id(fn)] = key
+        # one function may serve several nodes: every key maps to
+        # the one slot the refs dedupe to
+        impls.setdefault(id(fn), []).append(key)
         harvests.append((key, _harvest_paths(fn, decorations)))
         fingerprints[key] = fingerprint(fn)
         decor_fingerprints[key] = decoration_fingerprint(
@@ -2067,6 +2080,13 @@ def emit_standalone_module(commands, global_plan=None, *, argv0=None,
             decorations.parameter_usage)
     for word, plan in commands.items():
         note_fn(('command', word), plan.callable)
+    for parent, table in subs.items():
+        for sub, plan in table.items():
+            note_fn(('sub', parent, sub), plan.callable)
+    if default is not None:
+        note_fn(('default',), default.callable)
+    for parent, plan in sub_defaults.items():
+        note_fn(('subdefault', parent), plan.callable)
     if user_global:
         note_fn(('global',), global_plan.callable)
 
@@ -2079,6 +2099,22 @@ def emit_standalone_module(commands, global_plan=None, *, argv0=None,
                 'decorations': decor_fingerprints[key],
                 'refs': tuple(sorted(ref_specs[key]))}
 
+    def node_entry(word, key):
+        # the spec is the command TREE: a parent's entry carries
+        # its children (and its default), each a full entry--the
+        # shim's child nodes walk this shape
+        entry_ = entry_literal(key)
+        if sub_repeat.get(word):
+            entry_['repeat'] = True
+        table = subs.get(word)
+        if table:
+            entry_['commands'] = {
+                sub: node_entry(sub, ('sub', word, sub))
+                for sub in table}
+        if word in sub_defaults:
+            entry_['default'] = entry_literal(('subdefault', word))
+        return entry_
+
     spec = {
         'program': prog,
         'entry': entry,
@@ -2086,7 +2122,9 @@ def emit_standalone_module(commands, global_plan=None, *, argv0=None,
         'templates': templates,
         'config': dict(config or {}),
         'global': entry_literal(('global',)) if user_global else None,
-        'commands': {word: entry_literal(('command', word))
+        'default': (entry_literal(('default',))
+                    if default is not None else None),
+        'commands': {word: node_entry(word, ('command', word))
                      for word in commands},
     }
 

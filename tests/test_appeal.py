@@ -5141,19 +5141,38 @@ def test_deep_nested_sets():
                 assert exit_code(lambda: app.main(
                     ['db', 'main', 'migrate', 'two', 'up'])) == 2
 
-            # the compiled-module form (ruled 2026-08-09)
-            # doesn't cover nested sets yet: the loud refusal.
-            # TODO(standalone-module): lift, then restore the
-            # emitted argv matrix / help db / completion-chain /
-            # no-work assertions from git history
-            try:
-                app.standalone()
-                assert False, 'expected AppealConfigurationError'
-            except AppealConfigurationError as e:
-                assert "compiled-module form" in str(e)
         finally:
             sys.path.remove(d)
             sys.modules.pop('deepmod', None)
+        # the compiled-module rung, three levels deep (the
+        # nested-set lift, 2026-08-09)
+        prog, module = write_standalone_program(d, (
+            DEEP_MODULE
+            + "\napp = appeal.Appeal(name='t', repeat=True)\n"
+            'app.command()(status)\n'
+            'app.command()(db)\n'
+            "dbn = app.command('db', repeat=True)\n"
+            'dbn.command()(migrate)\n'
+            "mig = dbn.command('migrate', repeat=True)\n"
+            'mig.command()(up)\n'
+            'mig.command()(down)\n'), 't')
+        r = run_script(prog, ['db', 'main', 'migrate', 'two',
+                              'up', '3', 'down', '1', 'status'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == ('db main\nmigrate two\nup 3\ndown 1\n'
+                            'status\n'), r.stdout
+        # help describes a nested parent instead of unpacking its
+        # _SET_ dict
+        r = run_script(prog, ['help', 'db'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.startswith('usage: db')
+        assert 'migrate' in r.stdout
+        # a CONVERSION failure deep in the tree is stage 2:
+        # commands to its left already ran (the original pin)
+        r = run_script(prog, ['db', 'main', 'migrate', 'two', 'up',
+                              'x', 'status'])
+        assert r.returncode == 2
+        assert r.stdout.startswith('db main\nmigrate two\n'), r.stdout
 
 
 TREE_MODULE = """\
@@ -5268,18 +5287,25 @@ def test_appeal_tree_default_commands():
                 app.process([])
             assert out.getvalue() == 'root-default\n', out.getvalue()
 
-            # the compiled-module form (ruled 2026-08-09) doesn't
-            # cover this shape yet: assert the loud refusal.
-            # TODO(standalone-module): lift, then restore the
-            # emitted-parity assertions from git history
-            try:
-                app.standalone(argv0='t')
-                assert False, 'expected AppealConfigurationError'
-            except AppealConfigurationError as e:
-                assert "compiled-module form" in str(e)
         finally:
             sys.path.remove(d)
             sys.modules.pop('treemod', None)
+        # the compiled-module rung agrees on all three (the
+        # default-command lift, 2026-08-09)
+        prog, module = write_standalone_program(d, (
+            TREE_MODULE
+            + "\napp = appeal.Appeal(name='t')\n"
+            'app.command()(db)\n'
+            "node = app.command('db')\n"
+            'node.command()(deploy)\n'
+            'node.default_command()(db_default)\n'
+            'app.default_command()(root_default)\n'), 't')
+        r = run_script(prog, ['db', '--host', 'prod'])
+        assert (r.returncode, r.stdout) == (0, 'db prod\ndb-default\n'), r
+        r = run_script(prog, ['db', 'deploy', '5'])
+        assert (r.returncode, r.stdout) == (0, 'db local\ndeploy 5\n'), r
+        r = run_script(prog, [])
+        assert (r.returncode, r.stdout) == (0, 'root-default\n'), r
 
 
 REPEAT_MODULE = '\n'.join(
@@ -5354,18 +5380,33 @@ def test_subcommands_interacting_with_repeat():
             except _appeal.AppealUsageError as e:
                 assert 'AxB' in str(e), e
 
-            # the compiled-module form (ruled 2026-08-09) doesn't
-            # cover nested sets yet: assert the loud refusal.
-            # TODO(standalone-module): lift, then restore the
-            # emitted-parity assertions from git history
-            try:
-                app.standalone(argv0='t')
-                assert False, 'expected AppealConfigurationError'
-            except AppealConfigurationError as e:
-                assert "compiled-module form" in str(e)
         finally:
             sys.path.remove(d)
             sys.modules.pop('repeatmod', None)
+        # the compiled-module rung agrees, token for token (the
+        # nested-set lift, 2026-08-09)
+        prog, module = write_standalone_program(d, (
+            REPEAT_MODULE
+            + "\napp = appeal.Appeal(name='t', repeat=True)\n"
+            'app.command()(A)\n'
+            "a = app.command('A', repeat=True)\n"
+            'a.command()(Ax)\n'
+            "ax = a.command('Ax', repeat=True)\n"
+            'ax.command()(AxA)\n'
+            'ax.command()(AxB)\n'
+            'a.command()(Ay)\n'
+            "ay = a.command('Ay', repeat=True)\n"
+            'ay.command()(AyA)\n'
+            'ay.command()(AyB)\n'
+            'app.command()(B)\n'
+            'app.command()(C)\n'
+            "c = app.command('C', repeat=True)\n"
+            'c.command()(Ca)\n'
+            "ca = c.command('Ca', repeat=True)\n"
+            'ca.command()(CaX)\n'), 't')
+        r = run_script(prog, list(line))
+        assert (r.returncode, r.stdout) == (0, expected), (r.stdout,
+                                                           r.stderr)
 
 
 def test_documentation_man():
@@ -6222,34 +6263,45 @@ def test_nested_cycling_and_popup():
 
 
 def test_standalone_nested_cycling():
-    # the compiled-module form (ruled 2026-08-09) doesn't cover
-    # nested sets yet: assert the loud refusal.
-    # TODO(standalone-module): lift, then restore the emitted
-    # cycling/malformed/stage-2 assertions from git history
-    import appeal as _appeal
+    # the nested-set lift (2026-08-09): the same tree, compiled
     with tempfile.TemporaryDirectory() as d:
-        module_path = os.path.join(d, 'nest_cmds.py')
-        with open(module_path, 'wt', encoding='utf-8') as f:
-            f.write(NESTED_MODULE)
-        sys.path.insert(0, d)
-        try:
-            import nest_cmds
-            import importlib
-            importlib.reload(nest_cmds)
-            app = _appeal.Appeal(name='tool', repeat=True)
-            app.command()(nest_cmds.db)
-            app.command()(nest_cmds.status)
-            reg = app.command('db', repeat=True)
-            reg.command()(nest_cmds.add)
-            reg.command()(nest_cmds.remove)
-            try:
-                app.standalone()
-                assert False, 'expected AppealConfigurationError'
-            except AppealConfigurationError as e:
-                assert "compiled-module form" in str(e)
-        finally:
-            sys.path.remove(d)
-            sys.modules.pop('nest_cmds', None)
+        prog, module = write_standalone_program(d, (
+            NESTED_MODULE
+            + "\napp = appeal.Appeal(name='tool', repeat=True)\n"
+            'app.command()(db)\n'
+            'app.command()(status)\n'
+            "reg = app.command('db', repeat=True)\n"
+            'reg.command()(add)\n'
+            'reg.command()(remove)\n'), 'tool')
+
+        r = run_script(prog, ['db', 'add', '3', 'remove', '4'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'db False\nadd 3\nremove 4\n', r.stdout
+
+        r = run_script(prog,
+                       ['db', 'add', '1', 'status', 'db', '-v', 'remove', '2'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'db False\nadd 1\nstatus\ndb True\nremove 2\n', r.stdout
+
+        # the bare parent errors with its own set's usage
+        r = run_script(prog, ['db'])
+        assert r.returncode == 2
+        assert 'no command specified' in r.stderr
+        assert 'add' in r.stderr and 'remove' in r.stderr
+
+        # STRUCTURALLY malformed mid-cycle: nothing runs (stage 1)
+        # --stdout is EMPTY ('db' never printed)
+        r = run_script(prog, ['db', 'add', '1', '2', 'status'])
+        assert r.returncode == 2
+        assert 'unknown command' in r.stderr
+        assert r.stdout == '', r.stdout
+
+        # but a CONVERSION failure is stage 2 (ruled): commands to
+        # its left already ran, like make stopping mid-build
+        r = run_script(prog, ['db', 'add', 'x', 'status'])
+        assert r.returncode == 2
+        assert r.stdout == 'db False\n', r.stdout
+        assert 'error:' in r.stderr
 
 
 def test_two_classes_same_method_name():

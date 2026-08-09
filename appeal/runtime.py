@@ -1540,17 +1540,57 @@ def _standalone_appeal(spec, namespace):
             self._parameter_usage = {}
 
         # -- registration: match, don't build --------------------
+        # the spec is the command TREE; command('db') returns a
+        # child node over the baked subtree, wearing the same API
+        # (the real facade's tree-of-Appeals shape)
 
-        def command(self, name=None):
-            def register(fn):
-                word = name if name is not None else fn.__name__
-                if word not in spec['commands']:
-                    known = ', '.join(sorted(spec['commands']))
+        def _bind(self, entry, label, fn):
+            # re-registration replaces (v1: the second wins)
+            self._bound[id(entry)] = (entry, label, fn)
+
+        def _command_in(self, table, prefix, name, repeat, parent):
+            if parent is not None:
+                if name is not None:
+                    raise AppealConfigurationError(
+                        "command(): give a name or parent=, "
+                        "not both")
+                name = parent
+            def fetch(word):
+                entry = table.get(word)
+                if entry is None:
+                    known = ', '.join(sorted(table)) or '(none)'
+                    where = (f"under {prefix!r}" if prefix
+                             else "at the top level")
                     raise AppealConfigurationError(
                         f"this compiled parser has no command "
-                        f"{word!r} (it knows: {known}); regenerate "
-                        f"the standalone module")
-                self._bound[('command', word)] = fn
+                        f"{word!r} {where} (it knows: {known}); "
+                        f"regenerate the standalone module")
+                if repeat and not entry.get('repeat'):
+                    self._staleness.append(
+                        f"command {word!r}: repeat=True now, but "
+                        f"this parser was compiled without it")
+                return entry
+            def label(word):
+                return (prefix + ' ' + word).strip()
+            if name is not None:
+                return _Node(self, fetch(name), label(name))
+            def decorator(fn):
+                word = fn.__name__
+                self._bind(fetch(word), label(word), fn)
+                return fn
+            return decorator
+
+        def command(self, name=None, *, repeat=False, parent=None):
+            return self._command_in(spec['commands'], '',
+                                    name, repeat, parent)
+
+        def default_command(self):
+            def register(fn):
+                if spec.get('default') is None:
+                    raise AppealConfigurationError(
+                        "this compiled parser has no root default "
+                        "command; regenerate the standalone module")
+                self._bind(spec['default'], '<default>', fn)
                 return fn
             return register
 
@@ -1560,7 +1600,7 @@ def _standalone_appeal(spec, namespace):
                     raise AppealConfigurationError(
                         "this compiled parser has no global "
                         "command; regenerate the standalone module")
-                self._bound[('global',)] = fn
+                self._bind(spec['global'], '<global>', fn)
                 return fn
             return register
 
@@ -1602,21 +1642,36 @@ def _standalone_appeal(spec, namespace):
 
         # -- verification: all-or-nothing, at main() -------------
 
+        def _walk_spec(self):
+            """Every entry in the baked tree, with what to call it."""
+            out = []
+            if spec['global'] is not None:
+                out.append((spec['global'], 'the global command'))
+            if spec.get('default') is not None:
+                out.append((spec['default'], 'the default command'))
+            def walk(table, prefix):
+                for word, entry in table.items():
+                    label = (prefix + ' ' + word).strip()
+                    out.append((entry, f'command {label!r}'))
+                    if entry.get('default') is not None:
+                        out.append((entry['default'],
+                                    f'the default command of '
+                                    f'{label!r}'))
+                    walk(entry.get('commands') or {}, label)
+            walk(spec['commands'], '')
+            return out
+
         def _verify_and_bind(self):
             problems = list(self._staleness)
             known = set()       # everything this parser resolves
-            entries = [(('global',), spec['global'])] if spec['global'] else []
-            entries += [(('command', word), entry)
-                        for word, entry in spec['commands'].items()]
-            for key, entry in entries:
-                what = (f"command {key[1]!r}" if key[0] == 'command'
-                        else "the global command")
-                fn = self._bound.get(key)
-                if fn is None:
+            for entry, what in self._walk_spec():
+                binding = self._bound.get(id(entry))
+                if binding is None:
                     problems.append(
                         f"{what} was compiled in but never "
                         f"registered with @app.command()")
                     continue
+                _, _, fn = binding
                 known.add(fn)
                 if fingerprint(fn) != entry['fingerprint']:
                     problems.append(
@@ -1722,6 +1777,48 @@ def _standalone_appeal(spec, namespace):
                 f"parser; if the program needs it, regenerate "
                 f"with a current appeal (in-process-only APIs "
                 f"never compile)")
+
+    class _Node:
+        """
+        A compiled subtree wearing the child-Appeal API: callable
+        (registers the parent's own function), .command() for its
+        children, .default_command(), and the decoration
+        decorators delegating to the root (one registry per
+        tree, like the real facade).
+        """
+        def __init__(self, shim, entry, label):
+            self._shim = shim
+            self._entry = entry
+            self._label = label
+
+        def __call__(self, fn):
+            self._shim._bind(self._entry, self._label, fn)
+            return fn
+
+        def command(self, name=None, *, repeat=False, parent=None):
+            return self._shim._command_in(
+                self._entry.get('commands') or {}, self._label,
+                name, repeat, parent)
+
+        def default_command(self):
+            entry = self._entry.get('default')
+            def register(fn):
+                if entry is None:
+                    raise AppealConfigurationError(
+                        f"this compiled parser has no default "
+                        f"command under {self._label!r}; "
+                        f"regenerate the standalone module")
+                self._shim._bind(entry,
+                                 f'{self._label} <default>', fn)
+                return fn
+            return register
+
+        def option(self, *args, **kwargs):
+            return self._shim.option(*args, **kwargs)
+
+        def parameter(self, *args, **kwargs):
+            return self._shim.parameter(*args, **kwargs)
+        argument = parameter
 
     return Appeal
 # --8<-- end appeal standalone shim --8<--

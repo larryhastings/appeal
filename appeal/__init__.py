@@ -2154,15 +2154,22 @@ class Appeal:
                     if getattr(fn, '__func__', None) in
                     (cls.help, cls.print_version)}
         words = [w for w in table if w not in defaults]
-        for shape, present in (
-                ('nested command sets', self._subs),
-                ('default commands', self._default is not None
-                 or self._sub_defaults),
-                ('class commands', self._method_owner)):
-            if present:
-                raise AppealConfigurationError(
-                    f"the compiled-module form doesn't cover "
-                    f"{shape} yet")
+        if self._method_owner:
+            raise AppealConfigurationError(
+                "the compiled-module form doesn't cover "
+                "class commands yet")
+        def sub_plan(name, fn):
+            # nested parents are fine: self._subs is flat (every
+            # parent maps its own children), and the emitter
+            # reassembles the tree, deepest first.  argv0 matches
+            # _plan_for_node's: error usage says `tool add <X>`
+            plan = self._build(fn, name=name,
+                               method_of=self._method_owner.get(id(fn)))
+            plan.argv0 = self._prog()
+            return plan
+        subs = {parent: {name: sub_plan(name, fn)
+                         for name, fn in entries}
+                for parent, entries in self._subs.items()}
         # the baked-knob blob the module's shim compares its
         # constructor arguments against (drift = regenerate)
         config = {
@@ -2184,9 +2191,16 @@ class Appeal:
                 self.global_plan,
                 argv0=argv0 or self._prog(),
                 templates=self.templates, repeat=self.repeat,
+                subs=subs or None,
+                sub_repeat=dict(self._sub_repeat) or None,
                 version=self.version, max_columns=self.margin,
                 help=self._help_enabled,
                 doc=self._program_doc_override(),
+                default=(self._build(self._default)
+                         if self._default is not None else None),
+                sub_defaults={w: self._build(fn)
+                              for w, fn in self._sub_defaults.items()}
+                             or None,
                 config=config, decorations=self._decorations,
                 global_is_user=(self._impl is not None))
         else:
