@@ -570,6 +570,9 @@ def run_command_set(argv, parse_globals, commands, usage=None,
     if tail == ('bare',):
         if listing is not None:
             listing()
+        elif isinstance(usage, tuple):
+            print(render_baked_help(usage, margin=help_margin(79)),
+                  end='')
         else:
             print(f"usage: {usage}")
         return 1
@@ -1143,8 +1146,9 @@ def check_count(n, minimum, maximum, valid_counts, usage=None, what=None,
 # --8<-- requires appeal theme --8<--
 # --8<-- requires appeal complete --8<--
 # --8<-- requires appeal exceptions --8<--
+# --8<-- requires appeal help --8<--
 def run_main(parse, args=None, theme=None, completion=None,
-             errors=None, version=None):
+             errors=None, version=None, margin=79):
     """
     The main() driver for a generated parser: parse and execute,
     print errors the polite way, return the exit code.  theme (a
@@ -1193,6 +1197,20 @@ def run_main(parse, args=None, theme=None, completion=None,
             return 'error:'
         return active.paint('error', 'error:')
 
+    def print_usage(usage):
+        # a STRING is a usage line; a TUPLE is a baked listing
+        # (pieces), finished here--at the real margin, styled for
+        # the error stream (errors ride the pipeline too, ruled
+        # 2026-08-06)
+        if isinstance(usage, tuple):
+            print(render_baked_help(usage, margin=help_margin(margin),
+                                    theme=resolve_theme(theme,
+                                                        error_stream()),
+                                    file=error_stream()),
+                  end='', file=error_stream())
+        else:
+            print(f"usage: {usage}", file=error_stream())
+
     try:
         result = parse(list(args))
     except SystemExit as e:
@@ -1211,7 +1229,7 @@ def run_main(parse, args=None, theme=None, completion=None,
     except AppealDataError as e:
         print(f"{error_prefix()} {e}", file=error_stream())
         if e.usage:
-            print(f"usage: {e.usage}", file=error_stream())
+            print_usage(e.usage)
         return 2
     except AppealConfigurationError:
         raise               # a bug in the program: traceback
@@ -1231,7 +1249,7 @@ def run_main(parse, args=None, theme=None, completion=None,
             print(f"{error_prefix()} {e}", file=error_stream())
             usage = getattr(e, 'usage', None)
             if usage:
-                print(f"usage: {usage}", file=error_stream())
+                print_usage(usage)
             return 2
         if kind == 'command':
             print(f"{error_prefix()} {e}", file=error_stream())
@@ -2076,16 +2094,6 @@ def usage_units(usage):
     return units
 
 
-def render_usage(usage, margin=79):
-    """
-    The 'usage:' line, wrapped at whole units, continuation lines
-    indented to align under the first.
-    """
-    prefix = 'usage: '
-    return wrap_words(usage_units(usage), margin,
-        indent=(prefix, ' ' * len(prefix)))
-
-
 ##
 ## Templates (Larry's single-template model, ruled 2026-08-01).
 ## ONE template string defines the help page: six {sections}--
@@ -2239,40 +2247,6 @@ def parse_help_template(template):
     return sections
 
 
-_SECTION_TERM_SLOTS = {'arguments': 'operand', 'commands': None,
-                       'options': None}
-
-
-def _render_rows(name, rows, indent, margin=79, theme=None):
-    """
-    One definition-list section body--no heading.  rows of
-    (display, documentation-lines) through format_definition_list
-    at the given indent.  With a theme, each row's term is
-    painted where it landed (terms never wrap, so the span
-    survived layout intact).
-    """
-    if not rows:
-        return ''
-    pairs = [(display, '\n'.join(lines)) for display, lines in rows]
-    body = format_definition_list(pairs, margin, indent=indent,
-                                  spacer='  ')
-    if theme is None:
-        return body
-    slot = _SECTION_TERM_SLOTS.get(name)
-    lines = body.split('\n')
-    cursor = 0
-    for display, _ in pairs:
-        prefix = indent + display
-        for i in range(cursor, len(lines)):
-            if lines[i].startswith(prefix):
-                painted = (theme.paint(slot, display) if slot
-                           else _paint_atoms(theme, display))
-                lines[i] = indent + painted + lines[i][len(prefix):]
-                cursor = i + 1
-                break
-    return '\n'.join(lines)
-
-
 def rows_markdown(rows):
     """
     Corpus rows [(display, doc-lines), ...] as one Markdown
@@ -2334,6 +2308,20 @@ def render_markdown(text, margin=79, theme=None):
     rendered = wrap_words(layout, margin=margin, raw=strip_styles)
     sheet = plain_stylesheet | markdown_defaults
     return sheet.render(join_styles(rendered))
+
+
+def listing_pieces(usage, corpus, templates):
+    """
+    The terse command listing as BAKED PIECES: the usage line and
+    the Commands table, no prose.  Attached to dispatch-level
+    UsageErrors and printed for a bare command line;
+    render_baked_help finishes it at print time--wrapped at the
+    real margin, styled for the real stream (the 2026-08-06
+    ruling: errors render through the pipeline too).
+    """
+    return help_page_pieces(usage, corpus, templates,
+                            suppress=('summary', 'doc',
+                                      'arguments', 'options'))
 
 
 def render_help_page(usage, corpus, templates, margin=79, theme=None,
@@ -2406,30 +2394,6 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
         md.append(header + content)
     flush()
     return tuple(pieces)
-
-
-def render_command_listing(usage, corpus, templates, margin=79):
-    """
-    The compact command listing: the usage line plus the commands
-    table, no prose.  This is the `usage` string attached to
-    dispatch-level UsageErrors--helpful enough to name the valid
-    commands, terse enough for an error.
-    """
-    parsed = parse_help_template(templates)
-    header = indent = None
-    for name, h, ind in parsed:
-        if name == 'commands':
-            header, indent = h, ind
-    body = _render_rows('commands', corpus['commands'], indent,
-                        margin)
-    # the template's headers are Markdown ('## Commands'); the
-    # terse listing wants plain text--strip ATX marks and setext
-    # underlines, spell it heading-colon
-    words = [l.lstrip('#').strip() for l in header.split('\n')
-             if l.strip() and set(l.strip()) - set('=-')]
-    heading = (words[0] + ':') if words else 'Commands:'
-    return usage + '\n\n' + (heading + '\n' + body).rstrip('\n') \
-        if body else usage
 
 
 ##

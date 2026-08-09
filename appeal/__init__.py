@@ -374,6 +374,14 @@ class Processor:
             argv, parse_globals, commands, usage, default, repeat, words)
         return self
 
+    def _print_listing(self):
+        "The set listing: baked pieces, rendered at the real margin."
+        from .runtime import help_margin, render_baked_help
+        app = self.app
+        print(render_baked_help(app._pieces[3],
+                                margin=help_margin(app.margin)),
+              end='')
+
     def execute(self):
         "Stage 2: conversions and commands, left to right."
         if self.invocations is None:
@@ -383,8 +391,11 @@ class Processor:
         app._last_processor = self
         if self._tail == ('bare',):
             # an empty command line: the listing, stdout, exit 1
-            # (ruled 2026-07-09, git-style); nothing runs
-            print('usage: ' + app._pieces[3])
+            # (ruled 2026-07-09, git-style); nothing runs.  The
+            # listing is baked pieces, finished at print time
+            # (errors and orientation ride the pipeline, ruled
+            # 2026-08-06)
+            self._print_listing()
             self.result = 1
             return 1
         result = None
@@ -435,7 +446,7 @@ class Processor:
         if self._tail is not None:
             kind = self._tail[0]
             if kind == 'listing':
-                print('usage: ' + app._pieces[3])
+                self._print_listing()
                 result = None
             elif kind == 'fused':
                 _, word, fn, tokens = self._tail
@@ -1669,7 +1680,7 @@ class Appeal:
             return entry
         from .plan import command_set_usage
         from .help import summary, command_set_corpus
-        from .runtime import render_command_listing
+        from .runtime import listing_pieces
         parent_plan = self._plan_for_node(node, word)
         parent = compile_plan(parent_plan, templates=self.templates,
                               theme=self.theme, boundary='flexible',
@@ -1693,9 +1704,9 @@ class Appeal:
             subs[w] = (sub.scan, sub.run)
         entries = listed
         corpus = command_set_corpus(parent_plan, entries, False)
-        sub_usage = render_command_listing(
+        sub_usage = listing_pieces(
             command_set_usage(word, parent_plan), corpus,
-            self.templates, margin=self.margin)
+            self.templates)
         default_fn = node._node_default
         if default_fn is not None:
             compiled = compile_plan(self._build(default_fn),
@@ -1755,15 +1766,15 @@ class Appeal:
         else:
             parse_globals = None
         from .help import summary, command_set_corpus
-        from .runtime import render_command_listing
+        from .runtime import listing_pieces
         entries = [(word, summary(callable))
                    for word, callable in table.items()]
         corpus = command_set_corpus(
             global_plan, entries, False, auto_version=False,
             doc=self._program_doc_override())
-        usage = render_command_listing(
+        usage = listing_pieces(
             command_set_usage(self._prog(), self._display_global()),
-            corpus, self.templates, margin=self.margin)
+            corpus, self.templates)
 
         commands = _CompileOnDispatch(self, usage)
         auto_help = self._help_enabled and 'help' not in table
@@ -1942,7 +1953,7 @@ class Appeal:
                 processor.parse(list(args), _config)
                 return processor.execute()
         _sys.exit(run_main(parse, args, theme=self.theme,
-                           errors=self.errors))
+                           errors=self.errors, margin=self.margin))
 
     def _mcp_instance(self, config):
         """

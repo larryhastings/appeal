@@ -2114,7 +2114,10 @@ def test_appeal_facade_dispatch():
     # on stdout, exit 1 (ruled 2026-07-09, git-style)
     with contextlib.redirect_stdout(io.StringIO()) as out:
         assert exit_code(lambda: app.main([])) == 1
-    assert 'Commands:' in out.getvalue()
+    # the bare-line listing is baked pieces rendered at print
+    # time (errors and orientation ride the pipeline, ruled
+    # 2026-08-06): template-dressed heading, compact rows
+    assert 'Commands\n--------' in out.getvalue()
 
 def run_both_stdout(command, argv):
     "run_both for parses that print (--help): compare text too."

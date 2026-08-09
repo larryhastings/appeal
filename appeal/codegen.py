@@ -39,7 +39,7 @@ from .runtime import (
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
     sibling_scopes,
     Theme, default_template, help_page_pieces, render_baked_help,
-    render_command_listing, render_help_page,
+    listing_pieces, render_help_page,
     resolve_theme,
     did_you_mean, help_margin,
     greedy_sizes, run_command_set, run_main, runtime_source,
@@ -1275,9 +1275,9 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
         sub_entries = [(w, summary(p.callable))
                        for w, p in sub_plans.items()]
         sub_corpus = command_set_corpus(parent_plan, sub_entries, False)
-        sub_usage = render_command_listing(
+        sub_usage = listing_pieces(
             command_set_usage(parent_word, parent_plan), sub_corpus,
-            templates or default_template, margin=max_columns)
+            templates or default_template)
         sub_table = ', '.join(
             (f'{w!r}: _SET_{sym(p)}' if w in subs
              else f'{w!r}: (scan_{sym(p)}, run_{sym(p)})')
@@ -1307,10 +1307,9 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
     usage_line = command_set_usage(prog or 'program', display_global)
     corpus = command_set_corpus(global_plan, entries, auto_help, doc=doc,
                                 auto_version=auto_version)
-    usage = render_command_listing(usage_line, corpus, templates,
-                                   margin=max_columns)
-    listing_pieces = help_page_pieces(usage_line, corpus, templates)
-    pieces_name = refs.add('_HELP_command_set', listing_pieces,
+    usage = listing_pieces(usage_line, corpus, templates)
+    page_pieces = help_page_pieces(usage_line, corpus, templates)
+    pieces_name = refs.add('_HELP_command_set', page_pieces,
                            dedupe=False)
     theme_name = refs.add('_THEME_command_set', theme, dedupe=False)
     globals_name = (f'(scan_{sym(global_plan)}, run_{sym(global_plan)})'
@@ -1389,7 +1388,10 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, them
             '                         f"{did_you_mean(argv[0], _COMMANDS)}",',
             '                         _USAGE_command_set)',
             '    if isinstance(entry, dict):',
-            "        print('usage: ' + entry['usage'])",
+            '        # a nested set: its listing, baked pieces,',
+            '        # finished at the real margin',
+            f"        print(render_baked_help(entry['usage'], "
+            f"margin=help_margin({max_columns!r})), end='')",
             '        return',
             '    scan, run = entry',
             "    operands, given, rest, positions = scan(['--help'])",
@@ -1739,7 +1741,7 @@ def _needed_snippets(source, refs):
     return sorted(needed)
 
 
-def _standalone_script(source, refs, prog, description, entry, theme=None, completion_name=None, errors=None, version=None):
+def _standalone_script(source, refs, prog, description, entry, theme=None, completion_name=None, errors=None, version=None, max_columns=79):
     """
     Assemble a standalone script around generated parser source.
     Renders every ref *first*, so refusals happen before we commit
@@ -1786,7 +1788,8 @@ def _standalone_script(source, refs, prog, description, entry, theme=None, compl
     parts.append(
         f'\nif __name__ == "__main__":\n'
         f'    sys.exit(run_main({entry}, theme={theme_spec!r}'
-        f'{completion_arg}{errors_arg}{version_arg}))\n'
+        f'{completion_arg}{errors_arg}{version_arg}'
+        f', margin={max_columns!r}))\n'
         )
     return '\n'.join(parts)
 
@@ -1911,7 +1914,7 @@ def emit_standalone(plan, *, argv0=None, templates=None, theme=None,
         f'command-line parsing for {plan.name!r}',
         f'parse_{plan.name}', theme=theme,
         completion_name=f'_COMPLETE_{plan.name}', errors=errors,
-        version=version)
+        version=version, max_columns=max_columns)
 
 
 def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templates=None, theme=None, repeat=False, subs=None, sub_repeat=None, errors=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None):
@@ -1930,4 +1933,4 @@ def emit_standalone_command_set(commands, global_plan=None, *, argv0=None, templ
         f'command-line parsing ({", ".join(commands)})',
         'parse_command_set', theme=theme,
         completion_name='_COMPLETE_command_set', errors=errors,
-        version=version)
+        version=version, max_columns=max_columns)

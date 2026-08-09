@@ -18,8 +18,8 @@ from .runtime import (
     UsageError, absorb_take, accumulate, call_converter,
     collect_mapping, convert, fold, greedy_sizes, parse_tokens,
     check_count,
-    default_template, did_you_mean, help_margin, render_command_listing,
-    render_help_page,
+    default_template, did_you_mean, help_margin, listing_pieces,
+    render_baked_help, render_help_page,
     scoped_forces, scoped_next, scoped_resolve, scoped_rewind,
     scoped_window, scopes_for, sibling_scopes, window_options,
     )
@@ -593,7 +593,7 @@ def dispatch(commands, global_plan, argv, prog=None, repeat=False, help=True):
     auto_help = help and 'help' not in commands
     usage_line = command_set_usage(prog or 'program', global_plan)
     corpus = command_set_corpus(global_plan, entries, auto_help)
-    set_usage = render_command_listing(usage_line, corpus, default_template)
+    set_usage = listing_pieces(usage_line, corpus, default_template)
     command_words = frozenset(commands) | ({'help'} if auto_help else set())
 
     def listing():
