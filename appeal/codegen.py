@@ -1353,10 +1353,18 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
     lines = sub_lines + [f'_USAGE_command_set = {usage!r}',
              f'_USAGE_LINE_command_set = {usage_line!r}',
              f'_COMPLETE_command_set = {set_table}', '']
+    # two listing surfaces (matching the in-process facade):
+    # set-level --help and bare `help` print the FULL set page;
+    # a bare command line prints the TERSE listing--usage and
+    # the Commands table, no prose (orientation, not a manual)
     listing_stmt = (f"print(render_baked_help({pieces_name}, "
                     f"margin=help_margin({max_columns!r}), "
                     f"file=sys.stdout, "
                     f"stylesheet={sheet_name}), end='')")
+    terse_stmt = (f"print(render_baked_help(_USAGE_command_set, "
+                  f"margin=help_margin({max_columns!r}), "
+                  f"file=sys.stdout, "
+                  f"stylesheet={sheet_name}), end='')")
     if auto_version:
         table += ", 'version': parse_version"
         lines.extend([
@@ -1407,6 +1415,9 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         'def _print_listing():',
         f'    {listing_stmt}',
         '',
+        'def _print_terse_listing():',
+        f'    {terse_stmt}',
+        '',
         ])
     body = ['def parse_command_set(argv):']
     pre_src = None
@@ -1445,7 +1456,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
                 f'_COMMANDS, _USAGE_command_set, '
                 f'{default_arg}'
                 f'repeat={repeat!r}, words=_COMMAND_WORDS, '
-                f'listing=_print_listing)')
+                f'listing=_print_terse_listing)')
     words_literal = ', '.join(repr(w) for w in sorted(command_words))
     lines.extend([f'_COMMANDS = {{{table}}}',
                   f'_COMMAND_WORDS = frozenset(({words_literal},))', ''])
