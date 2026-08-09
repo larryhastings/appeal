@@ -1294,7 +1294,7 @@ def _deref_annotated(value):
     return value
 
 
-def _annotation_token(value):
+def _annotation_token(value, owner_module=None):
     "One annotation, as stable, bakeable text."
     value = _deref_annotated(value)
     recipe = getattr(value, '__appeal_recipe__', None)
@@ -1310,6 +1310,13 @@ def _annotation_token(value):
     qualname = getattr(value, '__qualname__', None)
     if qualname and '<locals>' in qualname:
         return qualname             # closures: structure, not home
+    if qualname and owner_module is not None and module == owner_module:
+        # defined in the same file as its owner: a LOCAL
+        # reference.  The file's own name is volatile--imported
+        # at compile time it's `weather`, run directly it's
+        # `__main__`--but the two flip together, so locality is
+        # the stable fact.
+        return f'local.{qualname}'
     if qualname:
         return f'{module}.{qualname}'
     return _stable_repr(value)      # list[int], dict[str,int], ...
@@ -1359,6 +1366,15 @@ def fingerprint(fn):
     varkw = bool(code.co_flags & 0x08)
     named = code.co_argcount + code.co_kwonlyargcount
     annotations = getattr(host, '__annotations__', None) or {}
+    owner_module = getattr(fn, '__module__', None)
+    doc = getattr(fn, '__doc__', None)
+    if doc is not None:
+        # the help was baked from it, so it's identity--but the
+        # spec doesn't need a second copy of the text (Larry's
+        # ruling: hash it)
+        import hashlib
+        doc = hashlib.blake2b(doc.encode('utf-8'),
+                              digest_size=16).hexdigest()
     return (
         fn.__name__,
         code.co_argcount,
@@ -1368,21 +1384,48 @@ def fingerprint(fn):
         code.co_varnames[:named + varargs + varkw],
         _stable_repr(getattr(host, '__defaults__', None)),
         _stable_repr(getattr(host, '__kwdefaults__', None)),
-        tuple(sorted((name, _annotation_token(value))
+        tuple(sorted((name, _annotation_token(value, owner_module))
                      for name, value in annotations.items())),
-        getattr(fn, '__doc__', None),
-        _stable_repr(getattr(fn, '_appeal_option_overrides', None)),
-        _stable_repr(getattr(fn, '_appeal_parameter_usage', None)),
+        doc,
     )
 
 
-def resolve_fingerprint_path(fn, path):
+def decoration_fingerprint(fn, option_overrides, parameter_usage):
+    """
+    A stable rendering of everything @app.option and
+    @app.parameter said about fn--recorded in the APP, never on
+    the function (ruled 2026-08-09), so it fingerprints
+    separately: the function vouches for the function, the app
+    vouches for the registration.  option_overrides and
+    parameter_usage are callable-keyed dicts (the app registry's,
+    or the shim's replay).
+    """
+    owner_module = getattr(fn, '__module__', None)
+    overrides = option_overrides.get(fn) or {}
+    usage = parameter_usage.get(fn) or {}
+    return (
+        tuple(sorted(
+            (param,
+             tuple((decl['strings'],
+                    _annotation_token(decl['annotation'],
+                                      owner_module),
+                    _stable_repr(decl['default']))
+                   for decl in decls))
+            for param, decls in overrides.items())),
+        tuple(sorted(usage.items())),
+    )
+
+
+def resolve_fingerprint_path(fn, path, option_overrides=None):
     """
     Walk from a live decorated function to one of the callables
     its grammar uses, by the recipe the emitter baked: a tuple of
-    ('annotation', param) / ('default_type', param) steps.  The
-    exact mirror of codegen's harvest--the converter arrives LIVE
-    at decoration time, never by import.
+    ('annotation', param) / ('default_type', param) /
+    ('override', (param, index)) steps.  The exact mirror of
+    codegen's harvest--the converter arrives LIVE at registration
+    time, never by import.  option_overrides is the
+    callable-keyed @option registry (needed only for 'override'
+    steps).
     """
     obj = fn
     for kind, name in path:
@@ -1396,10 +1439,10 @@ def resolve_fingerprint_path(fn, path):
             obj = type(_parameter_default(host, name))
         elif kind == 'override':
             # an @app.option(annotation=...) converter: recorded
-            # on the function itself, reachable by declaration
+            # in the app's registry, reachable by declaration
             # index
             param, index = name
-            declaration = obj._appeal_option_overrides[param][index]
+            declaration = (option_overrides or {})[obj][param][index]
             obj = _deref_annotated(declaration['annotation'])
         else:
             raise AppealConfigurationError(
@@ -1439,8 +1482,17 @@ def resolve_fingerprint_path(fn, path):
 ## the remedy (regenerate) in the message.
 ##
 
+_OPTION_UNSET = object()      # option(default=...) omitted marker
+
+
 def _standalone_appeal(spec, namespace):
     "Build the Appeal class a compiled module exports."
+
+    class _NotCompiled(AppealConfigurationError, AttributeError):
+        # both: loud and named for the user, honest to the
+        # attribute protocol (hasattr/getattr probes see an
+        # AttributeError, not a lie)
+        pass
 
     class Appeal:
         def __init__(self, name=None, *,
@@ -1481,6 +1533,11 @@ def _standalone_appeal(spec, namespace):
                         f"(its effects are baked in); regenerate "
                         f"the standalone module instead")
             self._bound = {}        # spec key -> live function
+            # what @app.option/@app.parameter expressed, keyed by
+            # the decorated callable--recorded HERE, never on the
+            # user's objects (ruled 2026-08-09)
+            self._option_overrides = {}
+            self._parameter_usage = {}
 
         # -- registration: match, don't build --------------------
 
@@ -1508,25 +1565,26 @@ def _standalone_appeal(spec, namespace):
             return register
 
         def option(self, parameter_name, *strings,
-                   annotation=None, default=None):
-            # records on the function, exactly as the real facade
-            # does (build.add_option_override)--the fingerprint
-            # covers the result, so a changed @option call reads
-            # as staleness at main()
+                   annotation=None, default=_OPTION_UNSET):
+            # records IN THE APP, exactly like the real facade
+            # (ruled 2026-08-09: the decorated object is never
+            # touched); the decoration fingerprint compares this
+            # replay against what the parser was baked with, so a
+            # changed @option call reads as staleness at main().
+            # Sentinels mirror the facade: annotation=None means
+            # "the parameter's own"; default omitted means
+            # Parameter.empty; an explicit default=None is a real
+            # None.
             from inspect import Parameter
             annotation = (Parameter.empty if annotation is None
                           else annotation)
-            default = (Parameter.empty if default is None
+            default = (Parameter.empty if default is _OPTION_UNSET
                        else default)
             def register(fn):
-                overrides = getattr(fn, '_appeal_option_overrides',
-                                    None)
-                if overrides is None:
-                    overrides = {}
-                    fn._appeal_option_overrides = overrides
                 declaration = {'strings': tuple(strings),
                                'annotation': annotation,
                                'default': default}
+                overrides = self._option_overrides.setdefault(fn, {})
                 declarations = overrides.setdefault(parameter_name,
                                                     [])
                 if declaration not in declarations:
@@ -1536,10 +1594,7 @@ def _standalone_appeal(spec, namespace):
 
         def parameter(self, parameter_name, *, usage=None):
             def register(fn):
-                names = getattr(fn, '_appeal_parameter_usage', None)
-                if names is None:
-                    names = {}
-                    fn._appeal_parameter_usage = names
+                names = self._parameter_usage.setdefault(fn, {})
                 names[parameter_name] = usage
                 return fn
             return register
@@ -1549,6 +1604,7 @@ def _standalone_appeal(spec, namespace):
 
         def _verify_and_bind(self):
             problems = list(self._staleness)
+            known = set()       # everything this parser resolves
             entries = [(('global',), spec['global'])] if spec['global'] else []
             entries += [(('command', word), entry)
                         for word, entry in spec['commands'].items()]
@@ -1561,22 +1617,33 @@ def _standalone_appeal(spec, namespace):
                         f"{what} was compiled in but never "
                         f"registered with @app.command()")
                     continue
+                known.add(fn)
                 if fingerprint(fn) != entry['fingerprint']:
                     problems.append(
                         f"{what} has changed since this parser "
                         f"was compiled (signature, defaults, "
-                        f"annotations, docstring, or @option/"
-                        f"@parameter decorations)")
+                        f"annotations, or docstring)")
                     continue
-                for ref_name, path, ref_fpr in entry['refs']:
+                if decoration_fingerprint(
+                        fn, self._option_overrides,
+                        self._parameter_usage) != entry['decorations']:
+                    problems.append(
+                        f"{what}: its @app.option/@app.parameter "
+                        f"decorations have changed since this "
+                        f"parser was compiled")
+                    continue
+                known.add(fn)
+                for ref_name, path, ref_fpr, ref_decor in entry['refs']:
                     try:
-                        obj = resolve_fingerprint_path(fn, path)
+                        obj = resolve_fingerprint_path(
+                            fn, path, self._option_overrides)
                     except Exception:
                         problems.append(
                             f"{what}: converter for {ref_name!r} "
                             f"can't be resolved from the live "
                             f"function")
                         continue
+                    known.add(obj)
                     if (ref_fpr is not None
                             and fingerprint(obj) != ref_fpr):
                         problems.append(
@@ -1585,8 +1652,29 @@ def _standalone_appeal(spec, namespace):
                             f"has changed since this parser was "
                             f"compiled")
                         continue
+                    if decoration_fingerprint(
+                            obj, self._option_overrides,
+                            self._parameter_usage) != ref_decor:
+                        problems.append(
+                            f"{what}: the @app.option/@app.parameter "
+                            f"decorations of converter "
+                            f"{getattr(obj, '__name__', ref_name)!r} "
+                            f"have changed since this parser was "
+                            f"compiled")
+                        continue
                     namespace[ref_name] = obj
                 namespace[entry['impl']] = fn
+            # a decoration aimed at something this parser never
+            # resolves is drift too--yell, don't ignore
+            for registry in (self._option_overrides,
+                             self._parameter_usage):
+                for target in registry:
+                    if target not in known:
+                        problems.append(
+                            f"@app.option/@app.parameter decorates "
+                            f"{getattr(target, '__name__', target)!r}, "
+                            f"which this compiled parser doesn't "
+                            f"know")
             if _stable_repr(self.templates) != spec['config']['templates']:
                 problems.append(
                     "app.templates has changed since this parser "
@@ -1607,7 +1695,9 @@ def _standalone_appeal(spec, namespace):
             self._verify_and_bind()
             parse = namespace[spec['entry']]
             complete = spec.get('complete')
-            completion = ((namespace[complete], spec['program'])
+            # the table factory evaluates NOW, with every slot
+            # bound--a module-exec-time table would hold the Nones
+            completion = ((namespace[complete](), spec['program'])
                           if complete and complete in namespace
                           else None)
             sys.exit(run_main(parse, args,
@@ -1627,7 +1717,7 @@ def _standalone_appeal(spec, namespace):
                 "compiled module is absent)")
 
         def __getattr__(self, name):
-            raise AppealConfigurationError(
+            raise _NotCompiled(
                 f"Appeal.{name} isn't part of this compiled "
                 f"parser; if the program needs it, regenerate "
                 f"with a current appeal (in-process-only APIs "

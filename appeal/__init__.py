@@ -10,7 +10,7 @@
 # The spec of record is appeal.grammar.md; the design rationale
 # is appeal.proposal.md.  North star: every command must be
 # emittable as a *standalone*, dependency-free Python script
-# (see codegen.emit_standalone).
+# (see codegen.emit_standalone_module).
 
 """
 Appeal: give Appeal your function's signature, get a command-line
@@ -20,16 +20,13 @@ interface--in process, or as a generated standalone script.
 __version__ = '1.0'
 
 from .build import (
-    add_option_override, add_parameter_usage, build,
+    Decorations, build,
     default_options, default_long_option, default_short_option,
     strip_first_argument_from_signature, strip_self_from_signature,
     )
 from .codegen import (
     compile_command_set, compile_plan, emit, emit_command_set,
     emit_standalone_mcp, emit_standalone_module,
-    # BRIDGE, dying with the test migration (ruled 2026-08-09:
-    # the entry-point-script form does not ship)
-    emit_standalone, emit_standalone_command_set,
     )
 from .interpreter import dispatch as interpreter_dispatch
 from .interpreter import parse as interpreter_parse
@@ -668,7 +665,7 @@ class Appeal:
             self.version = None
             self._finalized = True      # the ROOT runs the pass
             self._precommand_options = {}
-            self._method_option_overrides = {}
+            self._decorations = parent.root._decorations
             self._lock = _threading.Lock()
             self._method_owner = parent._method_owner
             self._init_caches()
@@ -715,12 +712,11 @@ class Appeal:
         self.default_mappings = default_mappings
         self._finalized = False
         self._precommand_options = {}   # param -> (strings...)
-        # option declarations for OTHER bound Appeal methods
-        # registered as commands (help's knobs): method __name__
-        # -> {param -> [declarations]}--the same shape
-        # add_option_override stamps on plain functions, kept
-        # per-app because bound methods can't hold attributes
-        self._method_option_overrides = {}
+        # EVERYTHING @app.option/@app.parameter expressed, keyed
+        # by the decorated callable (ruled 2026-08-09: Appeal
+        # never modifies objects the user owns--decoration writes
+        # it down HERE and moves on).  One registry per tree.
+        self._decorations = Decorations()
         # how an operand renders in usage lines and help tables:
         # a format string over the parameter NAME (v1's knob,
         # restored).  '{name}' (default) shows the bare name; the
@@ -1227,28 +1223,28 @@ class Appeal:
                 return callable
             if (_inspect.ismethod(callable)
                     and isinstance(callable.__self__, Appeal)):
-                # any other bound app method registered as a
-                # command (help's knobs, ruled 2026-08-05): same
-                # can't-stick problem as the precommand, so the
-                # declaration lives in the app's own table and
-                # _build merges it in
-                if name not in _inspect.signature(callable).parameters:
+                # a bound app method registered as a command
+                # (help's knobs, ruled 2026-08-05): bound methods
+                # mint a fresh object per attribute access, but
+                # they hash by (instance, function), so the
+                # registry's key still finds them.  Cheap
+                # validation off the code object (rule 2: no
+                # inspect.signature at decoration time).
+                code = callable.__func__.__code__
+                named = code.co_argcount + code.co_kwonlyargcount
+                if name not in code.co_varnames[1:named]:
                     raise AppealConfigurationError(
                         f"option: {callable.__func__.__name__} has "
                         f"no parameter {name!r}")
                 root = callable.__self__.root
-                table = root._method_option_overrides.setdefault(
-                    callable.__func__.__name__, {})
-                declaration = {'strings': tuple(options),
-                               'annotation': annotation,
-                               'default': default}
-                decls = table.setdefault(name, [])
-                if declaration not in decls:
-                    decls.append(declaration)
+                root._decorations.add_option(
+                    callable, name, options,
+                    annotation=annotation, default=default)
                 root._invalidate()
                 return callable
-            add_option_override(callable, name, options,
-                                annotation=annotation, default=default)
+            self.root._decorations.add_option(
+                callable, name, options,
+                annotation=annotation, default=default)
             self._invalidate()
             return callable
         return decorator
@@ -1455,7 +1451,8 @@ class Appeal:
         @app.parameter only reached operands.
         """
         def decorator(callable):
-            add_parameter_usage(callable, parameter_name, usage)
+            self.root._decorations.add_usage(callable,
+                                             parameter_name, usage)
             self._invalidate()
             return callable
         return decorator
@@ -1517,14 +1514,10 @@ class Appeal:
         # the policy registers via the registrar-proxy's
         # app.option() (arglet style, Larry's design 2026-07-22);
         # build constructs the proxy around the real app
-        extra = None
-        if (_inspect.ismethod(callable)
-                and isinstance(callable.__self__, Appeal)):
-            extra = self.root._method_option_overrides.get(
-                callable.__func__.__name__)
         plan = build(callable,
                      default_options=self.root.default_options,
-                     app=self.root, extra_overrides=extra, **kwargs)
+                     app=self.root,
+                     decorations=self.root._decorations, **kwargs)
         plan.arg_format = self.positional_argument_usage_format
         plan.auto_help = self._help_enabled
         return plan
@@ -1870,10 +1863,11 @@ class Appeal:
             def precommand(*, help: optional[str] = None):
                 app.precommand(help=help)
         if want_v:
-            add_option_override(precommand, 'version',
-                                mapped['version'])
+            app.root._decorations.add_option(precommand, 'version',
+                                             mapped['version'])
         if want_h:
-            add_option_override(precommand, 'help', mapped['help'])
+            app.root._decorations.add_option(precommand, 'help',
+                                             mapped['help'])
         cls = type(app)
         precommand.appeal_help = app.help
         precommand.appeal_precommand = True
@@ -2193,7 +2187,7 @@ class Appeal:
                 version=self.version, max_columns=self.margin,
                 help=self._help_enabled,
                 doc=self._program_doc_override(),
-                config=config,
+                config=config, decorations=self._decorations,
                 global_is_user=(self._impl is not None))
         else:
             text = emit_standalone_module(
@@ -2201,7 +2195,8 @@ class Appeal:
                 argv0=argv0 or self._prog(),
                 templates=self.templates,
                 version=self.version, max_columns=self.margin,
-                config=config, global_is_user=True)
+                config=config, decorations=self._decorations,
+                global_is_user=True)
         if path is not None:
             with open(path, 'wt', encoding='utf-8') as f:
                 f.write(text)

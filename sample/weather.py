@@ -60,7 +60,7 @@ def report(city, *, units='C', verbose=False):
 
 
 @app.command()
-def forecast(city, days: int = 3):
+def forecast(city, days = 3):
     """
     Forecast the next few days.
 

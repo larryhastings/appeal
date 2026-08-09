@@ -25,9 +25,9 @@ from appeal import (
 from appeal import runtime
 
 
-def both(fn, argv):
+def both(fn, argv, decorations=None):
     "rung parity, returning outcome; errors compare by text."
-    plan = build(fn)
+    plan = build(fn, decorations=decorations)
     results = []
     for drive in (lambda: interpreter_parse(plan, list(argv)),
                   lambda: compile_plan(plan)(list(argv))):
@@ -548,7 +548,7 @@ def test_interpreter_class_dispatch():
 def test_interpreter_scoped_overlay_more_kinds():
     # the overlay branches my first scoped test missed: nullary,
     # fold1 (StrictOption), and a group with operands
-    from appeal.build import add_option_override
+    from appeal.build import Decorations
 
     class Where(appeal.StrictOption):
         def init(self, default):
@@ -562,12 +562,13 @@ def test_interpreter_scoped_overlay_more_kinds():
         return (x, y)
     def child(p, *, mode='', where: Where = None, spot: pt = None):
         return (p, where, spot)
-    add_option_override(child, 'mode', ('--north',),
-                        annotation=lambda: 'north')
+    d = Decorations()
+    d.add_option(child, 'mode', ('--north',),
+                 annotation=lambda: 'north')
     def two(a: child = None, b: child = None):
         return (a, b)
     got = both(two, ['--north', '--where', '1', '2',
-                     '--spot', '3', '4', 'A'])
+                     '--spot', '3', '4', 'A'], decorations=d)
     assert got[0] == 'ok', got
     a, b = got[1]
     assert a[0] == 'A' and a[1] == (1, 2) and a[2] == (3, 4)
@@ -1026,12 +1027,13 @@ def test_schema_leaf_fallbacks():
     assert props['p']['anyOf'][0] == {'type': 'string'}
     assert props['spot']['type'] == 'array'
     # an option metavar rename rides along as 'usage'
-    from appeal.build import add_parameter_usage
+    from appeal.build import Decorations
     from appeal.schema import schema as describe
     def q(*, level: int = 0):
         return level
-    add_parameter_usage(q, 'level', 'LVL')
-    opt = describe(build(q))['options'][0]
+    d = Decorations()
+    d.add_usage(q, 'level', 'LVL')
+    opt = describe(build(q, decorations=d))['options'][0]
     assert (opt['name'], opt['usage']) == ('level', 'LVL')
     # a repeat slot with a strict group child: array of objects
     def pt2(x: int, y: int):
@@ -1712,15 +1714,16 @@ def test_build_repeat_group_refusals():
 
 
 def test_build_override_validation_and_names():
-    from appeal.build import add_option_override, add_parameter_usage
+    from appeal.build import Decorations
     import functools
     def f(x, *, mode=''):
         return (x, mode)
+    d = Decorations()
     # zero strings is LEGAL now (ruled 2026-07-25): the explicit
     # per-parameter unmap--configured, no rule, default fills
-    add_option_override(f, 'mode', ())
+    d.add_option(f, 'mode', ())
     try:
-        add_parameter_usage(f, 'mode', '')
+        d.add_usage(f, 'mode', '')
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -1780,18 +1783,19 @@ def test_codegen_forcing_and_flag_default():
     # a skippable group with options: giving one FORCES the group
     # (emitted both dry and live); an overridden flag keeps its
     # own default when absent
-    from appeal.build import add_option_override
+    from appeal.build import Decorations
     def g(a=1, *, deep=False):
         return (a, deep)
     def f(x, s: g = None, *, mode=''):
         return (x, s, mode)
-    add_option_override(f, 'mode', ('--loud',), annotation=bool,
-                        default=False)
-    got = both(f, ['X'])
+    d = Decorations()
+    d.add_option(f, 'mode', ('--loud',), annotation=bool,
+                 default=False)
+    got = both(f, ['X'], decorations=d)
     assert got == ('ok', ('X', None, '')), got
-    got = both(f, ['X', '--deep'])
+    got = both(f, ['X', '--deep'], decorations=d)
     assert got == ('ok', ('X', (1, True), '')), got
-    got = both(f, ['X', '--loud', '2'])
+    got = both(f, ['X', '--loud', '2'], decorations=d)
     assert got == ('ok', ('X', (2, False), True)), got
 
 
@@ -1811,14 +1815,15 @@ def test_codegen_scoped_forcing():
 def test_codegen_kwargs_options():
     # @app.option declarations without matching parameters land in
     # **kwargs--and stay out of the call when absent (v1)
-    from appeal.build import add_option_override
+    from appeal.build import Decorations
     def f(x, **extras):
         return (x, extras)
-    add_option_override(f, 'zesty', ('--zesty',), annotation=str,
-                        default=None)
-    got = both(f, ['a', '--zesty', 'yes'])
+    d = Decorations()
+    d.add_option(f, 'zesty', ('--zesty',), annotation=str,
+                 default=None)
+    got = both(f, ['a', '--zesty', 'yes'], decorations=d)
     assert got == ('ok', ('a', {'zesty': 'yes'})), got
-    got = both(f, ['a'])
+    got = both(f, ['a'], decorations=d)
     assert got == ('ok', ('a', {})), got
 
 
@@ -2364,24 +2369,27 @@ def test_child_kwargs_options_parity():
     # used as a group: the option is recognized and delivered into
     # the sink, v1-style, on both rungs (regression: v2 once made
     # these converters terminals and dropped the option)
-    from appeal.build import add_option_override
+    from appeal.build import Decorations
     def kg(a, **kws):
         return (a, kws)
-    add_option_override(kg, 'zesty', ('--zesty',), annotation=str,
-                        default=None)
+    d = Decorations()
+    d.add_option(kg, 'zesty', ('--zesty',), annotation=str,
+                 default=None)
     def h2(x, s: kg = None):
         return (x, s)
-    assert both(h2, ['X', 'a']) == ('ok', ('X', ('a', {})))
-    assert both(h2, ['X', 'a', '--zesty', 'v']) == \
+    assert both(h2, ['X', 'a'], decorations=d) == \
+        ('ok', ('X', ('a', {})))
+    assert both(h2, ['X', 'a', '--zesty', 'v'], decorations=d) == \
         ('ok', ('X', ('a', {'zesty': 'v'})))
     # a two-positional kwargs converter consumes both operands
     def two(a, b, **kws):
         return (a, b, kws)
-    add_option_override(two, 'flavor', ('--flavor',), annotation=str,
-                        default=None)
+    d.add_option(two, 'flavor', ('--flavor',), annotation=str,
+                 default=None)
     def h3(x, s: two = None):
         return (x, s)
-    assert both(h3, ['X', 'p', 'q', '--flavor', 'hot']) == \
+    assert both(h3, ['X', 'p', 'q', '--flavor', 'hot'],
+                decorations=d) == \
         ('ok', ('X', ('p', 'q', {'flavor': 'hot'})))
 
 
@@ -2756,14 +2764,15 @@ def test_codegen_absorbing_nonzero_minimum():
 def test_windowed_group_kwargs_options():
     # a *args group carrying **kwargs declarations: windowed
     # delivery works (unlike a plain group's--see the parity pin)
-    from appeal.build import add_option_override
+    from appeal.build import Decorations
     def rep(x, *, deep=False, **kws):
         return (x, deep, kws)
-    add_option_override(rep, 'zesty', ('--zesty',), annotation=str,
-                        default=None)
+    d = Decorations()
+    d.add_option(rep, 'zesty', ('--zesty',), annotation=str,
+                 default=None)
     def f(*occ: rep):
         return occ
-    got = both(f, ['a', '--zesty', 'v'])
+    got = both(f, ['a', '--zesty', 'v'], decorations=d)
     assert got == ('ok', (('a', False, {'zesty': 'v'}),)), got
 
 
@@ -2977,17 +2986,20 @@ def test_branch_schema_and_read_edges():
     # filler
     def h(a, *, real: int = 1, **kw):
         return (a, real, kw)
-    appeal.add_option_override(h, 'extra', ('--extra',),
-                               annotation=str, default=None)
-    assert read_mapping(build(h), {'a': 'x'}) == ('x', 1, {})
+    d = appeal.Decorations()
+    d.add_option(h, 'extra', ('--extra',),
+                 annotation=str, default=None)
+    assert read_mapping(build(h, decorations=d),
+                        {'a': 'x'}) == ('x', 1, {})
 
     def gconv(u: int = 0, *, gopt: int = 1, **gkw):
         return (u, gopt, gkw)
-    appeal.add_option_override(gconv, 'gextra', ('--gextra',),
-                               annotation=str, default=None)
+    d.add_option(gconv, 'gextra', ('--gextra',),
+                 annotation=str, default=None)
     def h2(a, *, where: gconv = None):
         return (a, where)
-    got = read_mapping(build(h2), {'a': 'x', 'where': [5]})
+    got = read_mapping(build(h2, decorations=d),
+                       {'a': 'x', 'where': [5]})
     assert got == ('x', (5, 1, {})), got
 
 
@@ -2998,11 +3010,13 @@ def test_branch_interpreter_edges():
     # option (the scan iterates past the foreign key)
     def f(z, *, direction='n', verbose=False):
         return (z, direction, verbose)
-    appeal.add_option_override(f, 'direction', ('--north',),
-                               annotation=str, default='n')
-    appeal.add_option_override(f, 'direction', ('--south',),
-                               annotation=str, default='s')
-    got = iparse(build(f), ['--verbose', '--north', 'up', 'Z'])
+    d = appeal.Decorations()
+    d.add_option(f, 'direction', ('--north',),
+                 annotation=str, default='n')
+    d.add_option(f, 'direction', ('--south',),
+                 annotation=str, default='s')
+    got = iparse(build(f, decorations=d),
+                 ['--verbose', '--north', 'up', 'Z'])
     assert got == ('Z', 'up', True), got
 
     # an absent option group whose child declares TWO options: the
@@ -3328,45 +3342,54 @@ def test_branch_standalone_imports_public_module_not_private():
     # on the intermediate one (which does)--exercising both the
     # keep-looking and the found arcs.
     import tempfile
-    from appeal import emit_standalone
     with tempfile.TemporaryDirectory() as d:
         top = os.path.join(d, 'pubpriv')
         sub = os.path.join(top, 'sub')
         os.makedirs(sub)
         open(os.path.join(top, '__init__.py'), 'wt').close()  # no re-export
         with open(os.path.join(sub, '__init__.py'), 'wt') as f:
-            f.write('from pubpriv.sub._impl import cmd\n')
+            f.write('from pubpriv.sub._impl import conv\n')
         with open(os.path.join(sub, '_impl.py'), 'wt') as f:
-            f.write('def cmd(x):\n    return x\n')
+            f.write('def conv(v):\n    return v\n')
         sys.path.insert(0, d)
         try:
             import pubpriv.sub
-            assert pubpriv.sub.cmd.__module__ == 'pubpriv.sub._impl'  # trap
-            script = emit_standalone(build(pubpriv.sub.cmd), argv0='cmd')
-            assert 'from pubpriv.sub import cmd' in script, script
-            assert '_impl' not in script, script
+            assert pubpriv.sub.conv.__module__ == 'pubpriv.sub._impl'  # trap
+            # in the compiled-module form COMMANDS never import--
+            # the surviving import arc is an importable CONVERTER
+            def cmd(x: pubpriv.sub.conv):
+                return x
+            app = Appeal(name='cmd')
+            app.global_command()(cmd)
+            script = app.standalone()
+            assert 'from pubpriv.sub import conv' in script, \
+                [l for l in script.split('\n') if 'pubpriv' in l]
+            # no IMPORT touches the private module (the
+            # fingerprint token may name it--that's the object's
+            # true home, identical in both worlds)
+            assert not any(line.startswith(('from', 'import'))
+                           and '_impl' in line
+                           for line in script.split('\n'))
         finally:
             sys.path.remove(d)
             for name in ('pubpriv', 'pubpriv.sub', 'pubpriv.sub._impl'):
                 sys.modules.pop(name, None)
 
 
-def test_branch_standalone_refuses_main_defined():
-    # a command defined in the user's OWN __main__ script can't be
-    # imported by the generated standalone--refused by name.  (The
-    # test suite is never __main__--the driver imports it--so
-    # reproduce the real scenario with the callable's own __module__,
-    # exactly what Python stamps on a function defined in a script.)
-    from appeal import emit_standalone
+def test_branch_standalone_embraces_main_defined():
+    # the compiled-module form (ruled 2026-08-09): a command
+    # defined in the user's own __main__ script is LEGAL--the
+    # module never imports it, the function arrives live at
+    # registration.  (The old entry-point form refused this by
+    # name; the refusal died with it.)
     def cmd(x):
         return x
     cmd.__qualname__ = 'cmd'         # a top-level name, no '<locals>'
     cmd.__module__ = '__main__'
-    try:
-        emit_standalone(build(cmd))
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert '__main__' in str(e), e
+    app = Appeal(name='cmd')
+    app.global_command()(cmd)
+    script = app.standalone()
+    assert '_cmd = None' in script       # the impl slot
 
 
 def test_branch_emission_edges():
@@ -3374,7 +3397,6 @@ def test_branch_emission_edges():
     # required-without-coverage sweep; a container default whose
     # repr round-trips UNEQUAL refuses by name
     import tempfile
-    from appeal import emit_standalone
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, 'branch_edge_mod.py')
         with open(path, 'wt', encoding='utf-8') as f:
@@ -3387,8 +3409,10 @@ def test_branch_emission_edges():
             script = branch_edge_mod.app.standalone_mcp()
             assert 'import appeal' not in script
             try:
-                emit_standalone(build(branch_edge_mod.sneaky_default),
-                                argv0='sd')
+                sd_app = Appeal(name='sd')
+                sd_app.global_command()(
+                    branch_edge_mod.sneaky_default)
+                sd_app.standalone()
                 assert False, 'expected refusal of the lying repr'
             except AppealConfigurationError:
                 pass

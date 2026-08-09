@@ -328,7 +328,7 @@ class _PolicyRegistrar:
 
 def build(callable, name=None, method_of=None,
           default_options=default_options, app=None,
-          extra_overrides=None):
+          extra_overrides=None, decorations=None):
     """
     Analyze a callable's signature and produce its Plan.
 
@@ -357,8 +357,11 @@ def build(callable, name=None, method_of=None,
             grammar = callable.__get__(_Probe(), _Probe)
         except Exception:
             grammar = callable
+    memo = {}
+    if decorations is not None:
+        memo[_DECORATIONS_KEY] = decorations
     plan = _build(grammar, name or getattr(callable, '__name__', None),
-                  memo={}, stack=(), top=True,
+                  memo=memo, stack=(), top=True,
                   skip_first=method_of is not None
                   and not isinstance(callable, type)
                   and not wrapped_class,
@@ -575,7 +578,12 @@ def _repeat_group_plan(annotation, context, memo, stack):
     terminal (a converter inside a *args group is still out of
     the grammar).
     """
-    plan = _build(annotation, None, {}, stack, top=False)
+    # a fresh memo (no shared cache), but the decorations registry
+    # rides along--windowed-ness is per-use, decorations aren't
+    fresh = {}
+    if _DECORATIONS_KEY in memo:
+        fresh[_DECORATIONS_KEY] = memo[_DECORATIONS_KEY]
+    plan = _build(annotation, None, fresh, stack, top=False)
     for slot in plan.slots:
         if not isinstance(slot.child, Terminal):
             raise AppealConfigurationError(
@@ -801,57 +809,63 @@ def validate_option_string(s):
     return s
 
 
-OPTION_OVERRIDES_ATTRIBUTE = '_appeal_option_overrides'
-PARAMETER_USAGE_ATTRIBUTE = '_appeal_parameter_usage'
+class Decorations:
+    """
+    Everything @app.option and @app.parameter EXPRESSED, recorded
+    inside the app and keyed by the decorated callable (ruled
+    2026-08-09: Appeal never modifies objects the user owns--no
+    attributes planted on functions, classes, or anything else;
+    and decoration only writes down what was said).  Functions,
+    classes, and bound methods are all hashable keys--bound
+    methods compare by (instance, function), so the fresh object
+    minted per attribute access still finds its entry.
+    """
+    def __init__(self):
+        self.option_overrides = {}   # callable -> {param: [decls]}
+        self.parameter_usage = {}    # callable -> {param: usage}
+
+    def add_option(self, callable, parameter_name, strings,
+                   annotation=inspect.Parameter.empty,
+                   default=inspect.Parameter.empty):
+        # zero strings is legal (ruled 2026-07-25): "I'm speaking
+        # for this parameter: nothing"--the explicit per-parameter
+        # unmap, symmetric with a policy declining.  The parameter
+        # stays keyword-only, its default always fills.
+        for s in strings:
+            validate_option_string(s)
+        declaration = {'strings': tuple(strings),
+                       'annotation': annotation, 'default': default}
+        overrides = self.option_overrides.setdefault(callable, {})
+        declarations = overrides.setdefault(parameter_name, [])
+        if declaration not in declarations:
+            # re-applying the same declaration is a no-op (REPLs
+            # and test harnesses re-decorate freely)
+            declarations.append(declaration)
+
+    def add_usage(self, callable, parameter_name, usage):
+        if not (isinstance(usage, str) and usage):
+            raise AppealConfigurationError(
+                f"@parameter for {parameter_name!r}: usage must be "
+                f"a nonempty string")
+        names = self.parameter_usage.setdefault(callable, {})
+        names[parameter_name] = usage
+
+    def overrides_for(self, callable):
+        return self.option_overrides.get(callable) or {}
+
+    def usage_for(self, callable):
+        return dict(self.parameter_usage.get(callable) or {})
 
 
-def add_parameter_usage(callable, parameter_name, usage):
-    """
-    The machinery behind @app.parameter: records, on the function
-    itself, the usage presentation name for one of its parameters--
-    the operand name in usage lines and help tables, or the metavar
-    of an option (v1's @app.parameter only reached operands; the
-    metavar extension is new).
-    """
-    if not (isinstance(usage, str) and usage):
-        raise AppealConfigurationError(
-            f"@parameter for {parameter_name!r}: usage must be a "
-            f"nonempty string")
-    names = getattr(callable, PARAMETER_USAGE_ATTRIBUTE, None)
-    if names is None:
-        names = {}
-        setattr(callable, PARAMETER_USAGE_ATTRIBUTE, names)
-    names[parameter_name] = usage
+# the decorations ride the build's memo dict under this sentinel:
+# the memo threads through every recursion site already, and its
+# other keys are callables, so the sentinel can't collide
+_DECORATIONS_KEY = object()
+_NO_DECORATIONS = Decorations()
 
 
-def add_option_override(callable, parameter_name, strings,
-                        annotation=inspect.Parameter.empty,
-                        default=inspect.Parameter.empty):
-    """
-    The machinery behind @app.option: records, on the function
-    itself, that parameter_name's option should use these strings
-    (replacing the auto-generated long and short), and optionally
-    a different annotation and/or default.  Multiple calls for the
-    same parameter accumulate strings.
-    """
-    # zero strings is legal (ruled 2026-07-25): "I'm speaking
-    # for this parameter: nothing"--the explicit per-parameter
-    # unmap, symmetric with a policy declining.  The parameter
-    # stays keyword-only, its default always fills.
-    for s in strings:
-        validate_option_string(s)
-    overrides = getattr(callable, OPTION_OVERRIDES_ATTRIBUTE, None)
-    if overrides is None:
-        overrides = {}
-        setattr(callable, OPTION_OVERRIDES_ATTRIBUTE, overrides)
-    declaration = {'strings': tuple(strings), 'annotation': annotation,
-                   'default': default}
-    declarations = overrides.setdefault(parameter_name, [])
-    if declaration not in declarations:
-        # re-binding the same declaration is a no-op: the overrides
-        # live on the function, and test harnesses (and REPLs)
-        # re-apply decorators to module-level functions freely
-        declarations.append(declaration)
+def _decorations_of(memo):
+    return memo.get(_DECORATIONS_KEY) or _NO_DECORATIONS
 
 
 def _build(callable, name, memo, stack, top, skip_first=False,
@@ -875,16 +889,17 @@ def _build(callable, name, memo, stack, top, skip_first=False,
         allow_trailing = top
     signature = inspect.signature(callable)
     stack = stack + (callable,)
-    overrides = dict(getattr(callable, OPTION_OVERRIDES_ATTRIBUTE, None) or {})
+    decorations = _decorations_of(memo)
+    overrides = {param: list(decls) for param, decls
+                 in decorations.overrides_for(callable).items()}
     if extra_overrides:
-        # per-app declarations for a bound Appeal-method command
-        # (help's knobs): bound methods mint fresh objects per
-        # attribute access, so these can't live on the callable
+        # per-app declarations delivered directly (the bound
+        # precommand's version/help strings)
         for param, decls in extra_overrides.items():
             merged = list(overrides.get(param, ()))
             merged.extend(d for d in decls if d not in merged)
             overrides[param] = merged
-    usage_names = dict(getattr(callable, PARAMETER_USAGE_ATTRIBUTE, None) or {})
+    usage_names = decorations.usage_for(callable)
 
     slots = []
     trailing_slots = []
