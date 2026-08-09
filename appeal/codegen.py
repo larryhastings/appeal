@@ -1917,6 +1917,249 @@ def emit_standalone_mcp(commands, *, argv0=None, version='0',
     return '\n'.join(parts)
 
 
+def _harvest_paths(fn):
+    """
+    {id(callable): (obj, path)} for every callable reachable from
+    fn the way build reaches converters: parameter annotations
+    (Annotated dereferenced), @option override annotations, and
+    type-of-default inference, recursively.  The paths are the
+    recipes a compiled module's shim walks at registration time
+    (runtime.resolve_fingerprint_path is the exact mirror), so a
+    converter arrives LIVE from the decorated function--never by
+    import.
+    """
+    from .runtime import (_deref_annotated, _parameter_default,
+                          _params_host)
+    out = {}
+
+    def note(child, path, depth):
+        if callable(child) and id(child) not in out:
+            out[id(child)] = (child, path)
+            walk(child, path, depth + 1)
+
+    def walk(obj, path, depth):
+        if depth > 8:
+            return
+        host = _params_host(obj)
+        if host is None or not hasattr(host, '__code__'):
+            return
+        code = host.__code__
+        named = code.co_argcount + code.co_kwonlyargcount
+        annotations = getattr(host, '__annotations__', None) or {}
+        kwdefaults = getattr(host, '__kwdefaults__', None) or {}
+        defaults = getattr(host, '__defaults__', None) or ()
+        positional = code.co_varnames[:code.co_argcount]
+        for pname in code.co_varnames[:named]:
+            annotation = annotations.get(pname)
+            if annotation is not None:
+                note(_deref_annotated(annotation),
+                     path + (('annotation', pname),), depth)
+                continue
+            has_default = (pname in kwdefaults
+                           or (pname in positional
+                               and positional.index(pname)
+                               >= code.co_argcount - len(defaults)))
+            if has_default:
+                note(type(_parameter_default(host, pname)),
+                     path + (('default_type', pname),), depth)
+        import inspect
+        empty = inspect.Parameter.empty
+        overrides = getattr(obj, '_appeal_option_overrides', None) or {}
+        for pname, declarations in overrides.items():
+            for index, declaration in enumerate(declarations):
+                annotation = declaration['annotation']
+                if (annotation is not None and annotation is not empty
+                        and callable(annotation)):
+                    note(_deref_annotated(annotation),
+                         path + (('override', (pname, index)),),
+                         depth)
+
+    walk(fn, (), 0)
+    return out
+
+
+def _classify_refs(refs, impls, harvests):
+    """
+    Render the refs of a compiled MODULE.  Four fates: an impl
+    callable (a command function) becomes a SLOT, bound live by
+    the shim at registration; a vocabulary product re-runs its
+    recipe, as ever; a callable reachable from its command's live
+    function but NOT importable becomes a slot with a resolution
+    path; everything else renders as today (imports, literals)--
+    importable converters keep importing, the proven path.
+    Returns (imports, constants, slots, impl_names, ref_specs).
+    """
+    from .runtime import fingerprint, _params_host
+    imports, constants, slots = [], [], []
+    impl_names = {}
+    ref_specs = {key: [] for key, _ in harvests}
+    done = set()
+
+    def importable(obj):
+        module = getattr(obj, '__module__', None)
+        qualname = getattr(obj, '__qualname__', None)
+        return (module and qualname and module != '__main__'
+                and '<' not in qualname)
+
+    while True:
+        pending = [(n, o) for n, o in refs.objects.items()
+                   if n not in done]
+        if not pending:
+            return imports, constants, slots, impl_names, ref_specs
+        for name, obj in pending:
+            done.add(name)
+            if id(obj) in impls:
+                impl_names[impls[id(obj)]] = name
+                slots.append(name)
+                continue
+            if not getattr(obj, '__appeal_recipe__', None):
+                if callable(obj) and not importable(obj):
+                    owner = None
+                    for key, table in harvests:
+                        hit = table.get(id(obj))
+                        if hit is not None:
+                            owner = (key, hit[1])
+                            break
+                    if owner is not None:
+                        key, path = owner
+                        fingerprintable = _params_host(obj) is not None
+                        ref_specs[key].append(
+                            (name, path,
+                             fingerprint(obj) if fingerprintable
+                             else None))
+                        slots.append(name)
+                        continue
+            rendered = render_ref(name, obj, refs)
+            if rendered.startswith('from ') and '\n' in rendered:
+                line, _, assignment = rendered.partition('\n')
+                if line not in imports:
+                    imports.append(line)
+                constants.append(assignment)
+            elif rendered.startswith('from '):
+                if rendered not in imports:
+                    imports.append(rendered)
+            else:
+                constants.append(rendered)
+
+
+def emit_standalone_module(commands, global_plan=None, *, argv0=None,
+                           templates=None, repeat=False, version=None,
+                           max_columns=79, help=True, doc=None,
+                           config=None, global_is_user=False):
+    """
+    The compiled standalone MODULE (Larry's design, 2026-08-09):
+    an importable file WEARING THE APPEAL API, so the program
+    that uses it is the documented spelling, unchanged--
+
+        try:
+            import standalone as appeal
+        except ImportError:
+            import appeal
+
+    Appeal() and the decorators in the module don't build
+    anything: they match the live functions to the precompiled
+    bits by fingerprint (all-or-nothing verification at main();
+    any drift is a loud regenerate error naming every offender).
+    commands maps user command words to their plans; global_plan
+    is the set's global (spec-visible only when a user registered
+    it--the synthesized dispatcher and stock precommand carry no
+    function to match).  config is the baked-knob blob the shim
+    compares its constructor arguments against.
+    """
+    from .runtime import _params_host, _stable_repr, fingerprint
+    prog = argv0 or 'program'
+    # the facade says whether a USER registered the global command
+    # (the synthesized dispatcher and the stock precommand carry
+    # no function for the shim to match)
+    user_global = global_is_user and global_plan is not None
+    if commands:
+        source, refs = emit_command_set(
+            commands, global_plan, prog, templates, None,
+            repeat, None, None, version=version,
+            max_columns=max_columns, help=help, doc=doc)
+        entry = 'parse_command_set'
+        complete = '_COMPLETE_command_set'
+        description = f'command-line parsing ({", ".join(commands)})'
+    else:
+        source, refs = emit(global_plan, templates=templates,
+                            max_columns=max_columns)
+        symbol = _ident(global_plan.name)
+        entry = f'parse_{symbol}'
+        complete = f'_COMPLETE_{symbol}'
+        description = f'command-line parsing for {global_plan.name!r}'
+
+    impls = {}
+    harvests = []
+    fingerprints = {}
+    for word, plan in commands.items():
+        key = ('command', word)
+        impls[id(plan.callable)] = key
+        harvests.append((key, _harvest_paths(plan.callable)))
+        fingerprints[key] = fingerprint(plan.callable)
+    if user_global:
+        key = ('global',)
+        impls[id(global_plan.callable)] = key
+        harvests.append((key, _harvest_paths(global_plan.callable)))
+        fingerprints[key] = fingerprint(global_plan.callable)
+
+    imports, constants, slots, impl_names, ref_specs = _classify_refs(
+        refs, impls, harvests)
+
+    def entry_literal(key):
+        return {'impl': impl_names[key],
+                'fingerprint': fingerprints[key],
+                'refs': tuple(sorted(ref_specs[key]))}
+
+    spec = {
+        'program': prog,
+        'entry': entry,
+        'complete': complete,
+        'templates': templates,
+        'config': dict(config or {}),
+        'global': entry_literal(('global',)) if user_global else None,
+        'commands': {word: entry_literal(('command', word))
+                     for word in commands},
+    }
+
+    header = (
+        f'#\n'
+        f'# {prog} -- {description}\n'
+        f'# Generated by Appeal: a compiled standalone parser '
+        f'MODULE, wearing the Appeal API.\n'
+        f'# Import it AS appeal and your program is unchanged:\n'
+        f'#\n'
+        f'#     try:\n'
+        f'#         import standalone as appeal\n'
+        f'#     except ImportError:\n'
+        f'#         import appeal\n'
+        f'#\n'
+        f'# No dependency on appeal or big.  Regenerate rather '
+        f'than edit.\n'
+        )
+
+    needed = set(_needed_snippets(source, refs))
+    needed.update(('appeal fingerprint', 'appeal standalone shim'))
+    parts = [header]
+    parts.append('\n# ---- the appeal runtime, plucked out of appeal/runtime.py (one copy in the world) ----\n')
+    parts.append('import enum\nimport operator\nimport sys\n\n')
+    parts.append(_extract_snippets()(snippet_source(), *sorted(needed)))
+    parts.append('\n# ---- your program (bound live at registration) ----\n')
+    if imports:
+        parts.append('\n'.join(imports) + '\n')
+    if constants:
+        parts.append('\n'.join(constants) + '\n')
+    if slots:
+        parts.append('\n'.join(f'{name} = None' for name in slots)
+                     + '\n')
+    parts.append('\n# ---- generated parser ----\n')
+    parts.append(source)
+    parts.append(f'\n# ---- the Appeal your program imports ----\n'
+                 f'_STANDALONE = {spec!r}\n\n'
+                 f'Appeal = _standalone_appeal(_STANDALONE, '
+                 f'globals())\n')
+    return '\n'.join(parts)
+
+
 def emit_standalone(plan, *, argv0=None, templates=None, stylesheet=None,
                     errors=None, version=None, max_columns=79):
     """

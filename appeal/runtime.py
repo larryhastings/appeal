@@ -1267,6 +1267,376 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
 # --8<-- end appeal run main --8<--
 
 
+# --8<-- start appeal fingerprint --8<--
+##
+## Fingerprints (Larry's design, 2026-08-09): a compiled
+## standalone module identifies--and polices--the functions
+## handed to its decorators by fingerprint.  Everything the
+## grammar and the baked help were derived from is in here:
+## parameter shape, defaults, annotations, the docstring, and
+## the @option/@parameter attributes.  Hand-rolled from the
+## function and code objects--inspect.signature knows nothing
+## these don't, and it's slow.
+##
+
+def _stable_repr(obj):
+    "repr with memory addresses masked--id churn isn't drift."
+    import re
+    return re.sub(r'0x[0-9a-fA-F]+', '0x?', repr(obj))
+
+
+def _deref_annotated(value):
+    # Annotated[T, converter]: the LAST metadata element is the
+    # converter (v1's documented rule, kept)
+    metadata = getattr(value, '__metadata__', None)
+    if metadata:
+        return metadata[-1]
+    return value
+
+
+def _annotation_token(value):
+    "One annotation, as stable, bakeable text."
+    value = _deref_annotated(value)
+    recipe = getattr(value, '__appeal_recipe__', None)
+    if recipe:
+        # a vocabulary product (validate(1, 2), accumulator[Path],
+        # ...): its identity IS its recipe.  The product's
+        # __module__ differs by world (appeal.runtime in-process,
+        # the compiled module standalone)--the recipe doesn't.
+        kind, factory, args, kwargs = recipe
+        return (f'recipe:{kind}:{factory}:'
+                f'{_stable_repr(args)}:{_stable_repr(kwargs)}')
+    module = getattr(value, '__module__', None)
+    qualname = getattr(value, '__qualname__', None)
+    if qualname and '<locals>' in qualname:
+        return qualname             # closures: structure, not home
+    if qualname:
+        return f'{module}.{qualname}'
+    return _stable_repr(value)      # list[int], dict[str,int], ...
+
+
+def _parameter_default(fn, name):
+    "The default of fn's parameter `name`, from the raw objects."
+    kwdefaults = getattr(fn, '__kwdefaults__', None) or {}
+    if name in kwdefaults:
+        return kwdefaults[name]
+    code = fn.__code__
+    defaults = getattr(fn, '__defaults__', None) or ()
+    positional = code.co_varnames[:code.co_argcount]
+    if name in positional:
+        index = positional.index(name) - (code.co_argcount
+                                          - len(defaults))
+        if index >= 0:
+            return defaults[index]
+    raise AppealConfigurationError(
+        f"parameter {name!r} of {fn.__name__!r} has no default")
+
+
+def _params_host(obj):
+    "Where a callable keeps its parameters: itself, or __init__."
+    if hasattr(obj, '__code__'):
+        return obj
+    init = getattr(obj, '__init__', None)
+    if init is not None and hasattr(init, '__code__'):
+        return init
+    return None
+
+
+def fingerprint(fn):
+    """
+    The identity a compiled parser was baked from: a nested tuple
+    of plain data, equal iff nothing the grammar or the help
+    depends on has changed.  reprs into a script as a literal.
+    A class converter's parameters live on __init__ (the host);
+    its docstring and decorations stay its own.
+    """
+    host = _params_host(fn)
+    if host is None:
+        raise AppealConfigurationError(
+            f"can't fingerprint {fn!r}: no code object")
+    code = host.__code__
+    varargs = bool(code.co_flags & 0x04)
+    varkw = bool(code.co_flags & 0x08)
+    named = code.co_argcount + code.co_kwonlyargcount
+    annotations = getattr(host, '__annotations__', None) or {}
+    return (
+        fn.__name__,
+        code.co_argcount,
+        getattr(code, 'co_posonlyargcount', 0),
+        code.co_kwonlyargcount,
+        varargs, varkw,
+        code.co_varnames[:named + varargs + varkw],
+        _stable_repr(getattr(host, '__defaults__', None)),
+        _stable_repr(getattr(host, '__kwdefaults__', None)),
+        tuple(sorted((name, _annotation_token(value))
+                     for name, value in annotations.items())),
+        getattr(fn, '__doc__', None),
+        _stable_repr(getattr(fn, '_appeal_option_overrides', None)),
+        _stable_repr(getattr(fn, '_appeal_parameter_usage', None)),
+    )
+
+
+def resolve_fingerprint_path(fn, path):
+    """
+    Walk from a live decorated function to one of the callables
+    its grammar uses, by the recipe the emitter baked: a tuple of
+    ('annotation', param) / ('default_type', param) steps.  The
+    exact mirror of codegen's harvest--the converter arrives LIVE
+    at decoration time, never by import.
+    """
+    obj = fn
+    for kind, name in path:
+        host = _params_host(obj)
+        if host is None:
+            raise AppealConfigurationError(
+                f"can't resolve {name!r} on {obj!r}")
+        if kind == 'annotation':
+            obj = _deref_annotated(host.__annotations__[name])
+        elif kind == 'default_type':
+            obj = type(_parameter_default(host, name))
+        elif kind == 'override':
+            # an @app.option(annotation=...) converter: recorded
+            # on the function itself, reachable by declaration
+            # index
+            param, index = name
+            declaration = obj._appeal_option_overrides[param][index]
+            obj = _deref_annotated(declaration['annotation'])
+        else:
+            raise AppealConfigurationError(
+                f"unknown fingerprint path step {kind!r}")
+    return obj
+# --8<-- end appeal fingerprint --8<--
+
+
+# --8<-- start appeal standalone shim --8<--
+# --8<-- requires appeal exceptions --8<--
+# --8<-- requires appeal fingerprint --8<--
+# --8<-- requires appeal run main --8<--
+
+##
+## The standalone shim (Larry's design, 2026-08-09): a compiled
+## module WEARS THE APPEAL API.  The user's program is the
+## documented spelling, unchanged--
+##
+##     try:
+##         from . import standalone as appeal
+##     except ImportError:
+##         import appeal
+##
+## --and when the compiled module is the one imported, Appeal()
+## and its decorators don't build anything: @app.command() on
+## `forecast` says "I have the precompiled bits for that over
+## here", fingerprints the live function against what the parser
+## was baked from, and binds it as the thing run_forecast calls.
+## Converters bind the same way, resolved from the live
+## function's annotations--nothing imports the user's code, the
+## relationship runs the other way.
+##
+## Verification is all-or-nothing at main(): EVERY mapped
+## function checks, not just the one dispatched (ruled: editing
+## foo's signature yells even when you ran bar), plus baked
+## configuration.  Any mismatch is a loud, complete list, with
+## the remedy (regenerate) in the message.
+##
+
+def _standalone_appeal(spec, namespace):
+    "Build the Appeal class a compiled module exports."
+
+    class Appeal:
+        def __init__(self, name=None, *,
+                     stylesheet=None, version=None, repeat=False,
+                     errors=None, script=None, margin=79,
+                     positional_argument_usage_format=None,
+                     default_options=None, default_mappings=None,
+                     doc=None):
+            # live knobs: these never touched the baked grammar
+            # or pieces, so they simply apply, custom values and
+            # all (stylesheet compositions and custom error
+            # streams are LEGAL here--everything is runtime)
+            self.stylesheet = stylesheet
+            self.errors = errors
+            self.templates = spec['templates']
+            # baked knobs: the grammar and help were derived from
+            # these; a different value now means a stale parser
+            self._staleness = []
+            for knob, value in (('name', name),
+                                ('version', version),
+                                ('repeat', repeat),
+                                ('margin', margin),
+                                ('positional_argument_usage_format',
+                                 positional_argument_usage_format),
+                                ('doc', doc)):
+                baked = spec['config'][knob]
+                if value is None and knob != 'repeat':
+                    continue        # unspecified: the baked value
+                if _stable_repr(value) != baked:
+                    self._staleness.append(
+                        f"Appeal({knob}=...): compiled with "
+                        f"{baked}, now {_stable_repr(value)}")
+            for knob, value in (('default_options', default_options),
+                                ('default_mappings', default_mappings)):
+                if value is not None:
+                    raise AppealConfigurationError(
+                        f"a compiled parser can't take {knob}= "
+                        f"(its effects are baked in); regenerate "
+                        f"the standalone module instead")
+            self._bound = {}        # spec key -> live function
+
+        # -- registration: match, don't build --------------------
+
+        def command(self, name=None):
+            def register(fn):
+                word = name if name is not None else fn.__name__
+                if word not in spec['commands']:
+                    known = ', '.join(sorted(spec['commands']))
+                    raise AppealConfigurationError(
+                        f"this compiled parser has no command "
+                        f"{word!r} (it knows: {known}); regenerate "
+                        f"the standalone module")
+                self._bound[('command', word)] = fn
+                return fn
+            return register
+
+        def global_command(self):
+            def register(fn):
+                if spec['global'] is None:
+                    raise AppealConfigurationError(
+                        "this compiled parser has no global "
+                        "command; regenerate the standalone module")
+                self._bound[('global',)] = fn
+                return fn
+            return register
+
+        def option(self, parameter_name, *strings,
+                   annotation=None, default=None):
+            # records on the function, exactly as the real facade
+            # does (build.add_option_override)--the fingerprint
+            # covers the result, so a changed @option call reads
+            # as staleness at main()
+            from inspect import Parameter
+            annotation = (Parameter.empty if annotation is None
+                          else annotation)
+            default = (Parameter.empty if default is None
+                       else default)
+            def register(fn):
+                overrides = getattr(fn, '_appeal_option_overrides',
+                                    None)
+                if overrides is None:
+                    overrides = {}
+                    fn._appeal_option_overrides = overrides
+                declaration = {'strings': tuple(strings),
+                               'annotation': annotation,
+                               'default': default}
+                declarations = overrides.setdefault(parameter_name,
+                                                    [])
+                if declaration not in declarations:
+                    declarations.append(declaration)
+                return fn
+            return register
+
+        def parameter(self, parameter_name, *, usage=None):
+            def register(fn):
+                names = getattr(fn, '_appeal_parameter_usage', None)
+                if names is None:
+                    names = {}
+                    fn._appeal_parameter_usage = names
+                names[parameter_name] = usage
+                return fn
+            return register
+        argument = parameter            # v1's deprecated alias
+
+        # -- verification: all-or-nothing, at main() -------------
+
+        def _verify_and_bind(self):
+            problems = list(self._staleness)
+            entries = [(('global',), spec['global'])] if spec['global'] else []
+            entries += [(('command', word), entry)
+                        for word, entry in spec['commands'].items()]
+            for key, entry in entries:
+                what = (f"command {key[1]!r}" if key[0] == 'command'
+                        else "the global command")
+                fn = self._bound.get(key)
+                if fn is None:
+                    problems.append(
+                        f"{what} was compiled in but never "
+                        f"registered with @app.command()")
+                    continue
+                if fingerprint(fn) != entry['fingerprint']:
+                    problems.append(
+                        f"{what} has changed since this parser "
+                        f"was compiled (signature, defaults, "
+                        f"annotations, docstring, or @option/"
+                        f"@parameter decorations)")
+                    continue
+                for ref_name, path, ref_fpr in entry['refs']:
+                    try:
+                        obj = resolve_fingerprint_path(fn, path)
+                    except Exception:
+                        problems.append(
+                            f"{what}: converter for {ref_name!r} "
+                            f"can't be resolved from the live "
+                            f"function")
+                        continue
+                    if (ref_fpr is not None
+                            and fingerprint(obj) != ref_fpr):
+                        problems.append(
+                            f"{what}: converter "
+                            f"{getattr(obj, '__name__', ref_name)!r} "
+                            f"has changed since this parser was "
+                            f"compiled")
+                        continue
+                    namespace[ref_name] = obj
+                namespace[entry['impl']] = fn
+            if _stable_repr(self.templates) != spec['config']['templates']:
+                problems.append(
+                    "app.templates has changed since this parser "
+                    "was compiled")
+            if problems:
+                bullets = '\n'.join(f'  - {p}' for p in problems)
+                raise AppealConfigurationError(
+                    f"stale compiled parser "
+                    f"({spec['program']}):\n{bullets}\n"
+                    f"Regenerate it: run this program against "
+                    f"installed appeal (delete or ignore the "
+                    f"compiled module) and call "
+                    f"app.standalone(path=...) again.")
+
+        # -- running ---------------------------------------------
+
+        def main(self, args=None):
+            self._verify_and_bind()
+            parse = namespace[spec['entry']]
+            complete = spec.get('complete')
+            completion = ((namespace[complete], spec['program'])
+                          if complete and complete in namespace
+                          else None)
+            sys.exit(run_main(parse, args,
+                              stylesheet=self.stylesheet,
+                              completion=completion,
+                              errors=self.errors,
+                              version=spec['config'].get('version_value'),
+                              margin=spec['config']['margin_value']))
+
+        # -- the honest refusals ---------------------------------
+
+        def standalone(self, path=None, **kwargs):
+            raise AppealConfigurationError(
+                "this IS the compiled parser; to regenerate, run "
+                "the program against installed appeal (the "
+                "try/except import falls through when the "
+                "compiled module is absent)")
+
+        def __getattr__(self, name):
+            raise AppealConfigurationError(
+                f"Appeal.{name} isn't part of this compiled "
+                f"parser; if the program needs it, regenerate "
+                f"with a current appeal (in-process-only APIs "
+                f"never compile)")
+
+    return Appeal
+# --8<-- end appeal standalone shim --8<--
+
+
 ##
 ## big's snippet regions--the word-wrap trio, the StyleSheet
 ## renderer, the ANSI stylesheets, terminal color detection--

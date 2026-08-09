@@ -26,7 +26,10 @@ from .build import (
     )
 from .codegen import (
     compile_command_set, compile_plan, emit, emit_command_set,
-    emit_standalone, emit_standalone_command_set, emit_standalone_mcp,
+    emit_standalone_mcp, emit_standalone_module,
+    # BRIDGE, dying with the test migration (ruled 2026-08-09:
+    # the entry-point-script form does not ship)
+    emit_standalone, emit_standalone_command_set,
     )
 from .interpreter import dispatch as interpreter_dispatch
 from .interpreter import parse as interpreter_parse
@@ -2126,56 +2129,83 @@ class Appeal:
         from .runtime import completion_script
         return completion_script(shell, self._prog())
 
-    def standalone(self, *, argv0=None):
+    def standalone(self, path=None, *, argv0=None):
         """
-        The text of a standalone script implementing this program.
-        Necessarily eager: the script is a whole-program artifact,
-        so every command is built and every ref rendered (refusals
-        included--the north star's teeth bite here).
+        The text of a compiled standalone MODULE implementing this
+        program: an importable file WEARING THE APPEAL API (ruled
+        2026-08-09), so the program that imports it--
+
+            try:
+                import standalone as appeal
+            except ImportError:
+                import appeal
+
+        --runs unchanged, decorators and all: the module's
+        Appeal() matches the live functions to the precompiled
+        bits by fingerprint, and any drift (an edited signature,
+        docstring, or decoration, on ANY registered function)
+        raises a loud regenerate error at main().  path, if
+        given, also writes the text there.  Necessarily eager:
+        the module is a whole-program artifact, so every command
+        is built and every ref rendered (refusals included--the
+        north star's teeth bite here).
         """
+        from .runtime import _stable_repr
         self._finalize()
         table = self._table()
-        # the stock help/version commands are bound methods of the
-        # app--unimportable by a standalone script.  The generated
-        # parse_help/parse_version machinery IS their standalone
-        # rendering, so those words step aside here and the
-        # emitter's auto commands cover them.
+        # the stock help/version commands are covered by the
+        # emitter's auto commands; those words step aside here
         cls = Appeal
         defaults = {w for w, fn in table.items()
                     if getattr(fn, '__func__', None) in
                     (cls.help, cls.print_version)}
-        if set(table) - defaults:
-            def sub_plan(name, fn):
-                # nested parents are fine: self._subs is flat
-                # (every parent maps its own children), and the
-                # emitter reassembles the tree, deepest first.
-                # _build stamps the app's arg_format, help, and
-                # option policy so nested commands match the root.
-                return self._build(fn, name=name,
-                             method_of=self._method_owner.get(id(fn)))
-            subs = {parent: {name: sub_plan(name, fn)
-                             for name, fn in entries}
-                    for parent, entries in self._subs.items()}
-            return emit_standalone_command_set(
-                {w: self.plan_for(w) for w in table
-                 if w not in defaults},
+        words = [w for w in table if w not in defaults]
+        for shape, present in (
+                ('nested command sets', self._subs),
+                ('default commands', self._default is not None
+                 or self._sub_defaults),
+                ('class commands', self._method_owner)):
+            if present:
+                raise AppealConfigurationError(
+                    f"the compiled-module form doesn't cover "
+                    f"{shape} yet")
+        # the baked-knob blob the module's shim compares its
+        # constructor arguments against (drift = regenerate)
+        config = {
+            'name': _stable_repr(self.name),
+            'version': _stable_repr(self.version),
+            'repeat': _stable_repr(self.repeat),
+            'margin': _stable_repr(self.margin),
+            'margin_value': self.margin,
+            'positional_argument_usage_format':
+                _stable_repr(self.positional_argument_usage_format),
+            'doc': _stable_repr(self.doc),
+            'templates': _stable_repr(self.templates),
+        }
+        if self.version is not None:
+            config['version_value'] = str(self.version)
+        if words:
+            text = emit_standalone_module(
+                {w: self.plan_for(w) for w in words},
                 self.global_plan,
                 argv0=argv0 or self._prog(),
-                templates=self.templates, stylesheet=self.stylesheet,
-                repeat=self.repeat, subs=subs or None,
-                sub_repeat=dict(self._sub_repeat) or None,
-                errors=self.errors, version=self.version,
-                max_columns=self.margin, help=self._help_enabled,
+                templates=self.templates, repeat=self.repeat,
+                version=self.version, max_columns=self.margin,
+                help=self._help_enabled,
                 doc=self._program_doc_override(),
-                default=(self._build(self._default)
-                         if self._default is not None else None),
-                sub_defaults={w: self._build(fn)
-                              for w, fn in self._sub_defaults.items()}
-                             or None)
-        return emit_standalone(self.global_plan, argv0=argv0,
-                               templates=self.templates, stylesheet=self.stylesheet,
-                               errors=self.errors, version=self.version,
-                               max_columns=self.margin)
+                config=config,
+                global_is_user=(self._impl is not None))
+        else:
+            text = emit_standalone_module(
+                {}, self.global_plan,
+                argv0=argv0 or self._prog(),
+                templates=self.templates,
+                version=self.version, max_columns=self.margin,
+                config=config, global_is_user=True)
+        if path is not None:
+            with open(path, 'wt', encoding='utf-8') as f:
+                f.write(text)
+        return text
 
     def standalone_mcp(self, *, argv0=None, config=None, version=None):
         """

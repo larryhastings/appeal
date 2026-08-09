@@ -2443,9 +2443,16 @@ def test_emission_ref_shapes():
 
         text = standalone_for(mod.streams)
         assert 'sys.stderr' in text and 'sys.stdin' in text
+        # the compiled-module form (ruled 2026-08-09): a CLOSURE
+        # converter is no longer a refusal--it rides as a slot,
+        # resolved live from the decorated function's annotation
+        # at registration (the old entry-point script had to
+        # import it, and couldn't)
+        text = standalone_for(mod.localconv)
+        assert '_conv = None' in text
+        assert "('annotation', 'x')" in text
         for fn, complaint in ((mod.unrenderable, 'round-trip'),
-                              (mod.opaque, 'how to render'),
-                              (mod.localconv, '<')):
+                              (mod.opaque, 'how to render')):
             try:
                 standalone_for(fn)
                 assert False, 'expected refusal for %r' % (fn,)
