@@ -528,11 +528,19 @@ outcome, value, AND type.  22 raw divergences, clustering into:
 
 ## Rounds still to run
 
-2. **Differential fuzz resurrection**: site-packages has 0.6.3,
-   git has 0.6.4; rebuild the retired fuzz harness, run at
-   volume, and extend the generator into post-July feature space
-   (scoped windows, greedy operands, config injection) that the
-   corpus never covers.
+2. **Differential fuzz resurrection**: RUN (2026-08-09).
+   Rebuilt as test_differential_fuzz_v1_greedy: random
+   shared-grammar programs through REAL v1 (git master,
+   extracted to a tempdir, subprocess driver, fresh Appeal per
+   argv) and both 1.0 rungs via run_both.  Generator aims at
+   the post-July space the old harness never covered: greedy
+   *args converter groups (optional tails) and windowed
+   per-instance flags.  Contract: v1 ok ==> 1.0 ok with the
+   identical result.  Suite runs 35 programs x 5 argvs each
+   time; volume validation 2026-08-09: three extra seeds x 150
+   programs x 6 argvs (~2700 cases), ZERO divergences.  Still
+   unexplored: config injection, scoped-window docs pathways
+   (both 1.0-only surfaces--no v1 oracle exists for them).
 3. **The edit register**: diff `33ffcce:tests/test_all.py`
    against today's `tests/test_v1.py` -- every golden edit, skip,
    and reinterpretation any session ever made, classified

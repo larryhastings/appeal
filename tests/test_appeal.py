@@ -3425,6 +3425,125 @@ def test_streamed_snippets_run_bare():
     assert wrapped == big.text.wrap_words(list(words), 30)
 
 
+def test_differential_fuzz_v1_greedy():
+    # Audit round 2, resurrected (2026-08-09): random
+    # shared-grammar programs through REAL v1 (extracted from git
+    # master into a tempdir, run in a subprocess--v1 leaks state,
+    # so the driver builds a fresh Appeal per argv) and through
+    # BOTH 1.0 rungs (run_both: interpreter/codegen parity rides
+    # along free).  The generator aims at the post-July space the
+    # old harness never covered: greedy *args converter groups
+    # (optional tails) and windowed per-instance flags.
+    # Contract: v1 ok ==> 1.0 ok with the identical result.
+    # Deterministic seed; ~35 programs x 5 argvs.
+    import json, os.path, random, subprocess, sys, tempfile
+
+    rng = random.Random(20260809)
+
+    def gen_program(i):
+        n_opt = rng.randrange(0, 3)
+        flag = rng.random() < 0.5
+        names = ['a'] + ['b', 'c'][:n_opt]
+        params = ['a'] + [f"{n}='{n.upper()}'" for n in ['b', 'c'][:n_opt]]
+        if flag:
+            params.append('*, flag=False')
+        rets = names + (['flag'] if flag else [])
+        ret = '(' + ', '.join(rets) + (',)' if len(rets) == 1 else ')')
+        pre = rng.randrange(0, 2)
+        pre_names = ['x', 'y'][:pre]
+        cmd_params = ', '.join(pre_names + ['*items: conv'])
+        cmd_ret = '(' + ', '.join(pre_names + ['items']) + ')'
+        src = (f"def conv({', '.join(params)}):\n"
+               f"    return {ret}\n"
+               f"def cmd({cmd_params}):\n"
+               f"    return {cmd_ret}\n")
+        return src, pre, flag
+
+    def gen_argv(pre, flag):
+        argv = [f'p{k}' for k in range(rng.randrange(0, pre + 1))]
+        argv += [str(rng.randrange(10))
+                 for _ in range(rng.randrange(0, 7))]
+        if flag and rng.random() < 0.6:
+            argv.insert(rng.randrange(0, len(argv) + 1), '--flag')
+        return argv
+
+    jobs = []
+    for i in range(35):
+        src, pre, flag = gen_program(i)
+        argvs = [gen_argv(pre, flag) for _ in range(5)]
+        jobs.append((src, argvs))
+
+    # extract v1 and run every job through it, one subprocess
+    with tempfile.TemporaryDirectory() as d:
+        v1dir = os.path.join(d, 'v1')
+        os.makedirs(v1dir)
+        r = subprocess.run(
+            f'git -C {repo_dir} archive master appeal | '
+            f'tar -x -C {v1dir}',
+            shell=True, capture_output=True, text=True)
+        if r.returncode != 0:
+            print('  (git archive failed; differential skipped)')
+            return
+        driver = os.path.join(d, 'driver.py')
+        with open(driver, 'wt', encoding='utf-8') as f:
+            f.write(
+                "import io, json, sys, contextlib\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import appeal\n"
+                "jobs = json.load(open(sys.argv[2]))\n"
+                "out = []\n"
+                "for src, argvs in jobs:\n"
+                "    results = []\n"
+                "    for argv in argvs:\n"
+                "        ns = {}\n"
+                "        exec(src, ns)\n"
+                "        app = appeal.Appeal()\n"
+                "        app.global_command()(ns['cmd'])\n"
+                "        sink = io.StringIO()\n"
+                "        try:\n"
+                "            with contextlib.redirect_stdout(sink), \\\n"
+                "                 contextlib.redirect_stderr(sink):\n"
+                "                r = app.process(list(argv))\n"
+                "            results.append(['ok', repr(r)])\n"
+                "        except SystemExit as e:\n"
+                "            results.append(['exit', str(e.code)])\n"
+                "        except BaseException as e:\n"
+                "            results.append(['error',\n"
+                "                            type(e).__name__])\n"
+                "    out.append(results)\n"
+                "with open(sys.argv[3], 'wt') as f:\n"
+                "    json.dump(out, f)\n")
+        jobs_path = os.path.join(d, 'jobs.json')
+        with open(jobs_path, 'wt', encoding='utf-8') as f:
+            json.dump(jobs, f)
+        out_path = os.path.join(d, 'out.json')
+        r = subprocess.run([sys.executable, driver, v1dir,
+                            jobs_path, out_path],
+                           capture_output=True, text=True, timeout=300)
+        assert r.returncode == 0, f'v1 driver crashed:\n{r.stderr[-2000:]}'
+        with open(out_path, 'rt', encoding='utf-8') as f:
+            v1_results = json.load(f)
+
+    compared = superset = 0
+    for (src, argvs), results in zip(jobs, v1_results):
+        ns = {}
+        exec(src, ns)
+        for argv, (kind, payload) in zip(argvs, results):
+            ours = run_both(ns['cmd'], argv)     # both rungs agree
+            if kind != 'ok':
+                superset += 1                     # v1 refused; ours free
+                continue
+            compared += 1
+            assert ours[0] == 'ok', (
+                f'v1 accepted, 1.0 refused:\n{src}\n'
+                f'argv={argv!r}\nv1={payload}\nours={ours!r}')
+            assert repr(ours[1]) == payload, (
+                f'DIVERGENCE:\n{src}\nargv={argv!r}\n'
+                f'v1={payload}\nours={ours[1]!r}')
+    # the run must actually exercise the contract
+    assert compared >= 60, (compared, superset)
+
+
 def test_fuzz_parity():
     # the two rungs, adversarially: random signatures, random
     # command lines (valid and invalid counts, options for groups
