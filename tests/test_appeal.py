@@ -6705,6 +6705,26 @@ def test_subcommand_same_world():
     except AppealConfigurationError as e:
         assert 'same-world' in str(e)
 
+    # a BOUND method is a different category (ruled
+    # 2026-08-10): the user already supplied the instance, so
+    # it's an ordinary callable--mountable anywhere.  Same-world
+    # constrains only the automatic bind-through-the-parent's-
+    # instance machinery, i.e. raw functions claimed from a
+    # mounted class's __dict__.
+    free = _appeal.Appeal(name='free')
+    @free.command()
+    def anywhere():
+        pass
+    class Tool:
+        def __init__(self, tag):
+            self.tag = tag
+        def stamp(self, x):
+            return ('stamp', self.tag, x)
+    tool = Tool('mine')
+    free.subcommand('anywhere')(tool.stamp)
+    assert free.process(['anywhere', 'stamp', 'hi']) == \
+        ('stamp', 'mine', 'hi')
+
     # refused: a method under ANOTHER METHOD (Larry's
     # formulation: methods don't hang off each other)
     bad2 = _appeal.Appeal(name='bad2')
