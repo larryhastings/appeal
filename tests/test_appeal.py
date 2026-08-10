@@ -4024,7 +4024,7 @@ def test_command_name_override():
         def __init__(self, label):
             self.label = label
 
-        @app.command()
+        @app.subcommand('db')
         def wipe(self):
             ran.append(('wipe', self.label))
 
@@ -6326,7 +6326,7 @@ def test_two_classes_same_method_name():
     class Alpha:
         def __init__(self):
             pass
-        @app.command()
+        @app.subcommand('alpha')
         def run(self):
             return 'alpha-run'
 
@@ -6334,7 +6334,7 @@ def test_two_classes_same_method_name():
     class Beta:
         def __init__(self):
             pass
-        @app.command()
+        @app.subcommand('beta')
         def run(self):
             return 'beta-run'
 
@@ -6360,14 +6360,14 @@ def test_two_classes_same_method_name():
                 "class Alpha:\n"
                 "    def __init__(self):\n"
                 "        pass\n"
-                "    @app.command()\n"
+                "    @app.subcommand('alpha')\n"
                 "    def run(self):\n"
                 "        print('alpha-run')\n\n"
                 "@app.command(name='beta')\n"
                 "class Beta:\n"
                 "    def __init__(self):\n"
                 "        pass\n"
-                "    @app.command()\n"
+                "    @app.subcommand('beta')\n"
                 "    def run(self):\n"
                 "        print('beta-run')\n")
         sys.path.insert(0, d)
@@ -6390,10 +6390,10 @@ def test_two_classes_same_method_name():
     class Gamma:
         def __init__(self):
             pass
-        @dup.command(name='x')
+        @dup.subcommand('gamma', name='x')
         def one(self):
             pass
-        @dup.command(name='x')
+        @dup.subcommand('gamma', name='x')
         def two(self):
             pass
     (word_fn,) = [fn for w, fn in dup._subs['gamma'] if w == 'x']
@@ -6406,22 +6406,22 @@ def test_two_classes_same_method_name():
         class Left:
             def __init__(self):
                 pass
-            @bad2.command(name='db')
+            @bad2.subcommand('left', name='db')
             class DbL:
                 def __init__(self):
                     pass
-                @bad2.command()
+                @bad2.subcommand('left db')
                 def wipe(self):
                     pass
         @bad2.command(name='right')
         class Right:
             def __init__(self):
                 pass
-            @bad2.command(name='db')
+            @bad2.subcommand('right', name='db')
             class DbR:
                 def __init__(self):
                     pass
-                @bad2.command()
+                @bad2.subcommand('right db')
                 def nuke(self):
                     pass
         # registration is lazy; the flat-view refusal fires at
@@ -6546,7 +6546,7 @@ def test_class_as_app_nested():
                 self.name = name
                 out.append(('db', name))
 
-            @app.command()
+            @app.subcommand('Db')
             def add(self, x: int):
                 out.append(('add', self.name, x))
 
@@ -6589,6 +6589,141 @@ def test_class_as_app_bic():
     assert out == [('job', True, 'nightly', True)], out
     command, instance = app.instances[1]
     assert type(instance).__name__ == 'Job'
+
+
+def test_subcommand():
+    # @app.subcommand(parent, name=) (ruled 2026-08-10): parent
+    # is a command word PATH string or None, EXPLICIT always--
+    # Appeal never infers subcommand-ness.  Declarations resolve
+    # lazily, so registration order is free.
+    import appeal as _appeal
+    ran = []
+    app = _appeal.Appeal(name='t')
+
+    @app.subcommand('db')            # declared BEFORE its parent
+    def add(x: int):
+        ran.append(('add', x))
+
+    @app.command()
+    def db(*, verbose=False):
+        ran.append(('db', verbose))
+
+    dbcmd = app.subcommand('db')     # the tear-off, reusable
+    @dbcmd
+    def remove(x: int):
+        ran.append(('remove', x))
+    @dbcmd
+    def drop():
+        ran.append('drop')
+
+    app.process(['db', 'add', '1'])
+    app.process(['db', 'remove', '2'])
+    app.process(['db', 'drop'])
+    assert ran == [('db', False), ('add', 1), ('db', False),
+                   ('remove', 2), ('db', False), 'drop'], ran
+
+    # a deep path attaches at depth; name= renames
+    @app.subcommand('db add', name='audit-log')
+    def audit():
+        pass
+    assert ('audit-log', audit) in app._subs['add']
+
+    # an object is refused by name: the parent is a PATH
+    try:
+        app.subcommand(db)
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'word path' in str(e)
+
+    # a path nothing ever registers refuses at first use, named
+    app2 = _appeal.Appeal(name='u')
+    @app2.subcommand('ghost')
+    def lost():
+        pass
+    try:
+        app2._subs
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert "'ghost'" in str(e)
+
+    # command() IS subcommand(None)
+    app3 = _appeal.Appeal(name='v')
+    @app3.subcommand(None)
+    def solo(x):
+        return ('solo', x)
+    assert app3.process(['solo', 'a']) == ('solo', 'a')
+
+
+def test_subcommand_same_world():
+    # the same-world rule (ruled 2026-08-10, deliberately
+    # restrictive--relaxable later, never the reverse): a method
+    # mounts at its class's own mount or under another method of
+    # the same class; never under a plain function.
+    import appeal as _appeal
+
+    ok = _appeal.Appeal(name='ok')
+    @ok.global_command()
+    class A1:
+        def __init__(self):
+            pass
+        @ok.command()
+        def parent(self):
+            pass
+        @ok.subcommand('parent')
+        def foo(self):
+            pass
+    @ok.subcommand('parent foo')
+    def bar():                      # plain BELOW a method: fine
+        pass
+    ok._subs                        # resolves without complaint
+
+    bad = _appeal.Appeal(name='bad')
+    @bad.command()
+    def gravy():
+        pass
+    @bad.global_command()
+    class A2:
+        def __init__(self):
+            pass
+        @bad.subcommand('gravy')    # method under a plain fn
+        def foo(self):
+            pass
+    try:
+        bad._subs
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'same-world' in str(e)
+
+
+def test_standalone_nested_class_chain():
+    # Larry's spec example (2026-08-10), compiled: `myapp foo 3
+    # bar monitor hi` instantiates MyApp, then foo, then bar,
+    # then calls bar.monitor--each construction at its mount,
+    # explicit subcommand paths throughout
+    with tempfile.TemporaryDirectory() as d:
+        prog, module = write_standalone_program(d, (
+            "app = appeal.Appeal(name='myapp')\n"
+            '@app.global_command()\n'
+            'class MyApp:\n'
+            '    def __init__(self, *, verbose=False):\n'
+            "        print('MyApp', verbose)\n"
+            '    @app.command()\n'
+            '    class foo:\n'
+            '        def __init__(self, x: int):\n'
+            "            print('foo', x)\n"
+            "        @app.subcommand('foo')\n"
+            '        class bar:\n'
+            '            def __init__(self):\n'
+            "                print('bar')\n"
+            "            @app.subcommand('foo bar')\n"
+            '            def monitor(self, msg):\n'
+            "                print('monitor', msg)\n"), 'myapp')
+        r = run_script(prog, ['foo', '3', 'bar', 'monitor', 'hi'])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == 'MyApp False\nfoo 3\nbar\nmonitor hi\n', \
+            r.stdout
+        # a method of bar mounted outside its world refuses at
+        # COMPILE time in the recompile run (same-world)
 
 
 def test_class_as_app_refusals():

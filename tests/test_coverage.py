@@ -1277,7 +1277,7 @@ def test_nested_class_repeat_and_parse_for():
         def __init__(self, label):
             self.label = label
             ran.append(('db', label))
-        @app.command()
+        @app.subcommand('db')
         def wipe(self):
             ran.append(('wipe', self.label))
     parse = app._parse_for('db')
@@ -1400,7 +1400,7 @@ def test_mcp_entry_branches():
     class Db:
         def __init__(self, label):
             self.label = label
-        @app2.command()
+        @app2.subcommand('db')
         def wipe(self):
             pass
     for entry in (app2.mcp, app2.standalone_mcp):
@@ -2205,7 +2205,7 @@ def test_completion_candidate_edges():
     class Db:
         def __init__(self, label):
             self.label = label
-        @app.command()
+        @app.subcommand('db')
         def wipe(self):
             pass
     assert 'go' in app.complete([], 'g')
@@ -2705,7 +2705,7 @@ def test_completion_more_corners():
     class Db:
         def __init__(self, label, *, tag=''):
             self.label = label
-        @app4.command()
+        @app4.subcommand('db')
         def wipe(self):
             pass
     got = app4.complete(['db'], '-')

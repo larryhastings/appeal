@@ -717,6 +717,10 @@ class Appeal:
         # never modifies objects the user owns--decoration writes
         # it down HERE and moves on).  One registry per tree.
         self._decorations = Decorations()
+        # @app.subcommand('path') declarations, written down at
+        # decoration and resolved lazily (ruled 2026-08-10:
+        # explicit parentage, registration order free)
+        self._pending_subcommands = []
         # how an operand renders in usage lines and help tables:
         # a format string over the parameter NAME (v1's knob,
         # restored).  '{name}' (default) shows the bare name; the
@@ -827,12 +831,6 @@ class Appeal:
         name and the function's own name is ignored.  On the root
         it sets the global command.  Decorating again replaces.
         """
-        if _is_class_command(callable):
-            if self.parent is None:
-                self._adopt_class(callable, global_=True)
-            else:
-                self.parent._adopt_class(callable, name=self.name)
-            return callable
         self._impl = callable
         self._invalidate()
         return callable
@@ -936,6 +934,8 @@ class Appeal:
                 root._help_enabled = bool(
                     root._precommand_options.get('help')
                     or 'help' in root._children)
+        root._resolve_subcommands()
+        root._derive_method_owners()
 
     def print_version(self):
         "Print the program's version."
@@ -1048,6 +1048,7 @@ class Appeal:
         unique tree-wide (restrictive; path-addressed sets can
         relax it later).
         """
+        self.root._finalize()   # drain the subcommand ledger
         out = {}
         for word, node in self._iter_set_nodes():
             if word in out:
@@ -1095,27 +1096,7 @@ class Appeal:
                 raise AppealConfigurationError(
                     "command(): give a name or parent=, not both")
             name = parent
-        if name is not None:
-            if not isinstance(name, str):
-                raise AppealConfigurationError(
-                    f"command(): the command word must be a "
-                    f"string, not {name!r}")
-            node = self._child(name)
-            if repeat and not node._node_repeat:
-                node._node_repeat = True
-                self._invalidate()
-            return node
-        def decorator(callable):
-            if _is_class_command(callable):
-                # a class as a command: its __init__ is the parent
-                # of its own little set, its decorated methods are
-                # the subcommands (see _adopt_class)
-                self._adopt_class(callable, repeat=repeat)
-                return callable
-            node = self._child(callable.__name__)
-            node._node_repeat = node._node_repeat or repeat
-            return node(callable)
-        return decorator
+        return self.subcommand(None, name, repeat=repeat)
 
     def default_command(self):
         """
@@ -1136,58 +1117,175 @@ class Appeal:
 
     def global_command(self):
         def decorator(callable):
-            if _is_class_command(callable):
-                # class-as-app (§8.6): the class's __init__ is the
-                # global command; its decorated methods are the
-                # program's commands.  Nothing is automatic--
-                # decorate a method to expose it.
-                self._adopt_class(callable, global_=True)
-                return callable
+            # a class here is class-as-app (§8.6): its __init__
+            # is the global command's grammar; its methods
+            # register themselves explicitly and membership
+            # derivation binds them (ruled 2026-08-10)
             self._impl = callable
             self._invalidate()
             return callable
         return decorator
 
-    def _adopt_class(self, cls, global_=False, repeat=False, name=None):
+    def subcommand(self, parent, name=None, *, repeat=False):
         """
-        §8.6's reclaim, by identity: @app.command() in the class
-        body registered plain functions (and nested classes--their
-        own decorators ran first); here they become this class's.
-        Methods bind to the instance the class-command constructs;
-        nested classes construct from the parent instance, so a
-        bound inner class composes without Appeal knowing.
+        Register a command under `parent`--a command word PATH
+        string, root-relative: subcommand('db') for a child of
+        db, subcommand('db migrate') for depth.  EXPLICIT by
+        ruling (2026-08-10): Appeal never infers subcommand-ness;
+        you say what the thing is a subcommand of, or it's a
+        top-level command.  parent=None IS the top level--
+        command() is exactly subcommand(None).
+
+        The decoration writes down what was said and moves on;
+        the path resolves at first use, so registration order is
+        free (declare the child before the parent, fine).  A path
+        nothing ever registers is a loud error naming it.  The
+        returned decorator is REUSABLE--a tear-off:
+
+            dbcmd = app.subcommand('db')
+            @dbcmd
+            def add(...): ...
+            @dbcmd
+            def remove(...): ...
+
+        A method command may mount only at its class's own mount
+        or under another method of the same class (the same-world
+        rule, ruled 2026-08-10: commands are sentences about the
+        object; once a path leaves the object's world it doesn't
+        come back).
         """
-        word = name or cls.__name__
-        key = cls.__qualname__
-        target = getattr(cls, '__wrapped__', cls)
-        members = list(target.__dict__.values())
-        claimed = [(w, node) for w, node in self._children.items()
-                   if node._impl is not None
-                   and any(node._impl is m for m in members)]
-        for w, node in claimed:
-            # ownership is keyed by the CALLABLE, never the bare
-            # word: two classes may each expose `run`, and each
-            # method must bind to its own class's instance
-            self._method_owner[id(node._impl)] = key
-        if global_:
-            # the class IS the app: its set is the top-level set;
-            # the claimed commands stay top-level, now bound
-            self._impl = cls
-        else:
-            # a command: parent of its own little set--reparent
-            # the claimed nodes under it
-            for w, node in claimed:
-                del self._children[w]
-            parent_node = self._child(word)
-            parent_node._impl = cls
-            if repeat:
-                parent_node._node_repeat = True
-            for w, node in claimed:
-                node.parent = parent_node
-                parent_node._children[w] = node
-            # no decorated methods: a leaf command that constructs
-            # (the class-as-namespace pattern)
-        self._invalidate()
+        if parent is None:
+            # the top level: the tree registration, eager
+            # (nothing to resolve).  With a name, the node comes
+            # back--decorator AND chaining handle, v1's shape.
+            if name is not None:
+                if not isinstance(name, str):
+                    raise AppealConfigurationError(
+                        f"command(): the command word must be a "
+                        f"string, not {name!r}")
+                node = self._child(name)
+                if repeat and not node._node_repeat:
+                    node._node_repeat = True
+                    self._invalidate()
+                return node
+            def decorator(callable):
+                node = self._child(callable.__name__)
+                node._node_repeat = node._node_repeat or repeat
+                return node(callable)
+            return decorator
+        if not isinstance(parent, str):
+            raise AppealConfigurationError(
+                f"subcommand: the parent is a command word path "
+                f"(a string) or None, not {parent!r}")
+        root = self.root
+        def decorator(callable):
+            if root._finalized:
+                # late registration: the tree exists, attach now
+                root._attach_subcommand(parent, name, repeat,
+                                        callable)
+            else:
+                root._pending_subcommands.append(
+                    (parent, name, repeat, callable))
+            root._invalidate()
+            return callable
+        return decorator
+
+    def _node_at_path(self, path):
+        "The COMMAND node at a word path, or None while unresolved."
+        node = self.root
+        for word in path.split():
+            child = node._children.get(word)
+            if child is None or child._command_callable() is None:
+                return None
+            node = child
+        return node
+
+    def _attach_subcommand(self, parent, name, repeat, callable):
+        node = self._node_at_path(parent)
+        if node is None:
+            raise AppealConfigurationError(
+                f"subcommand: no command at path {parent!r} (for "
+                f"{getattr(callable, '__name__', callable)!r})")
+        child = node._child(name or callable.__name__)
+        child._node_repeat = child._node_repeat or repeat
+        child(callable)
+
+    def _resolve_subcommands(self):
+        """
+        Drain the subcommand ledger to a fixpoint--a parent may
+        itself arrive by subcommand--and refuse, naming paths,
+        anything left unresolvable.
+        """
+        pending = self._pending_subcommands
+        while pending:
+            remaining = []
+            progressed = False
+            for item in pending:
+                if self._node_at_path(item[0]) is None:
+                    remaining.append(item)
+                    continue
+                self._attach_subcommand(*item)
+                progressed = True
+            if not progressed:
+                paths = sorted({item[0] for item in remaining})
+                raise AppealConfigurationError(
+                    f"subcommand: no command was ever registered "
+                    f"at path{'s' if len(paths) > 1 else ''} "
+                    f"{', '.join(map(repr, paths))}")
+            pending[:] = remaining
+
+    def _derive_method_owners(self):
+        """
+        Membership derivation (ruled 2026-08-10): a registered
+        command function found--by IDENTITY--in the __dict__ of a
+        mounted class is that class's method command; self binds
+        to the instance constructed at the class's mount.  Not
+        signature-sniffing: two explicit declarations (the class
+        mounted, the function registered) plus membership,
+        deterministically combined.  Enforces same-world: a
+        method mounts at its class's own mount or under another
+        method of the same class, nowhere else.
+        """
+        owners = self._method_owner
+        classes = []                    # (cls, mount node)
+        if self._impl is not None and _is_class_command(self._impl):
+            classes.append((self._impl, self))
+        def find(node):
+            for child in node._children.values():
+                impl = child._impl
+                if impl is not None and _is_class_command(impl):
+                    classes.append((impl, child))
+                find(child)
+        find(self)
+        for cls, mount in classes:
+            target = getattr(cls, '__wrapped__', cls)
+            members = {id(m) for m in target.__dict__.values()}
+            key = cls.__qualname__
+            def claim(node):
+                for child in node._children.values():
+                    fn = child._impl
+                    # class members too: a nested (or bound
+                    # inner) class found in the parent's dict
+                    # constructs through the parent instance's
+                    # attribute--BIC composes without Appeal
+                    # knowing
+                    if fn is not None and id(fn) in members:
+                        owners[id(fn)] = key
+                        p = child.parent
+                        ok = (p is mount
+                              or (p._impl is not None
+                                  and owners.get(id(p._impl))
+                                  == key))
+                        if not ok:
+                            where = p.name or '<the top level>'
+                            raise AppealConfigurationError(
+                                f"{fn.__name__!r} is a method of "
+                                f"{key!r}, but it's mounted under "
+                                f"{where!r}, which isn't "
+                                f"{key!r}'s mount or one of its "
+                                f"methods (the same-world rule)")
+                    claim(child)
+            claim(self)
 
     def option(self, name, *options, annotation=None,
                default=_inspect.Parameter.empty):
@@ -1470,7 +1568,7 @@ class Appeal:
         """
         def app_class_decorator():
             def decorator(cls):
-                self._adopt_class(cls, global_=True)
+                self.global_command()(cls)
                 return cls
             return decorator
         def command_method(name=None):
@@ -1579,6 +1677,7 @@ class Appeal:
         return self._plan_for_node(node, word)
 
     def _parse_for(self, word):
+        self.root._finalize()   # drain the subcommand ledger
         node = self._node_for(word)
         if node is None:
             raise AppealConfigurationError(f"no command named {word!r}")

@@ -2094,7 +2094,10 @@ def emit_standalone_module(commands, global_plan=None, *, argv0=None,
         refs, impls, harvests, decorations)
 
     def entry_literal(key):
-        return {'impl': impl_names[key],
+        # an owned nested class constructs through the parent
+        # instance's attribute: no reference to bake, no slot--
+        # the entry is verify-only (impl None)
+        return {'impl': impl_names.get(key),
                 'fingerprint': fingerprints[key],
                 'decorations': decor_fingerprints[key],
                 'refs': tuple(sorted(ref_specs[key]))}

@@ -1614,10 +1614,6 @@ def _standalone_appeal(spec, namespace):
                         + (" (a custom mappings callable can't be "
                            "verified)" if got == 'custom' else ''))
             self._bound = {}        # id(spec entry) -> binding
-            # method functions decorated BEFORE their class
-            # exists (§8.6: @app.command() in a class body runs
-            # first; the class decorator reclaims by identity)
-            self._pending = []
             # what @app.option/@app.parameter expressed, keyed by
             # the decorated callable--recorded HERE, never on the
             # user's objects (ruled 2026-08-09)
@@ -1661,39 +1657,33 @@ def _standalone_appeal(spec, namespace):
                 return _Node(self, fetch(name), label(name))
             def decorator(fn):
                 word = getattr(fn, '__name__', None)
-                if isinstance(fn, type):
-                    # a class command: bind it, then reclaim its
-                    # decorated methods from the parking lot
-                    entry = fetch(word)
-                    self._bind(entry, label(word), fn)
-                    self._reclaim(entry, label(word), fn)
-                    return fn
-                entry = table.get(word)
-                if entry is None:
-                    # maybe a method of a class registered later
-                    # (its own decorator ran first, inside the
-                    # class body)--park it; main() yells about
-                    # leftovers nothing reclaimed
-                    self._pending.append((word, fn))
-                    return fn
-                self._bind(entry, label(word), fn)
+                self._bind(fetch(word), label(word), fn)
                 return fn
             return decorator
 
-        def _reclaim(self, entry, label_, cls):
-            # §8.6's reclaim, by IDENTITY: parked functions found
-            # in the class's own dict become its subcommands
-            target = getattr(cls, '__wrapped__', cls)
-            members = list(target.__dict__.values())
-            children = entry.get('commands') or {}
-            leftovers = []
-            for word, fn in self._pending:
-                child = children.get(word)
-                if child is not None and any(fn is m for m in members):
-                    self._bind(child, f'{label_} {word}', fn)
-                else:
-                    leftovers.append((word, fn))
-            self._pending[:] = leftovers
+        def subcommand(self, parent, name=None, *, repeat=False):
+            # the explicit spelling (ruled 2026-08-10): parent is
+            # a word path string or None; the baked spec IS the
+            # resolved tree, so the path checks immediately
+            if parent is None:
+                return self.command(name, repeat=repeat)
+            if not isinstance(parent, str):
+                raise AppealConfigurationError(
+                    f"subcommand: the parent is a command word "
+                    f"path (a string) or None, not {parent!r}")
+            table = spec['commands']
+            label = ''
+            for word in parent.split():
+                entry = table.get(word)
+                if entry is None:
+                    raise AppealConfigurationError(
+                        f"this compiled parser has no command at "
+                        f"path {parent!r}; regenerate the "
+                        f"standalone module")
+                label = (label + ' ' + word).strip()
+                table = entry.get('commands') or {}
+            return self._command_in(table, label, name, repeat,
+                                    None)
 
         def command(self, name=None, *, repeat=False, parent=None):
             return self._command_in(spec['commands'], '',
@@ -1833,12 +1823,8 @@ def _standalone_appeal(spec, namespace):
                             f"compiled")
                         continue
                     namespace[ref_name] = obj
-                namespace[entry['impl']] = fn
-            for word, fn in self._pending:
-                problems.append(
-                    f"@app.command() registered {word!r}, which "
-                    f"this compiled parser doesn't know (and no "
-                    f"class command reclaimed it)")
+                if entry['impl'] is not None:
+                    namespace[entry['impl']] = fn
             # a decoration aimed at something this parser never
             # resolves is drift too--yell, don't ignore
             for registry in (self._option_overrides,
@@ -1913,8 +1899,6 @@ def _standalone_appeal(spec, namespace):
 
         def __call__(self, fn):
             self._shim._bind(self._entry, self._label, fn)
-            if isinstance(fn, type):
-                self._shim._reclaim(self._entry, self._label, fn)
             return fn
 
         def command(self, name=None, *, repeat=False, parent=None):
