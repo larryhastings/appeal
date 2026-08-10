@@ -1242,9 +1242,12 @@ class Appeal:
         to the instance constructed at the class's mount.  Not
         signature-sniffing: two explicit declarations (the class
         mounted, the function registered) plus membership,
-        deterministically combined.  Enforces same-world: a
-        method mounts at its class's own mount or under another
-        method of the same class, nowhere else.
+        deterministically combined.  Enforces SAME-WORLD (Larry's
+        formulation, 2026-08-10): a method is either (a) a
+        top-level command, its class being the GLOBAL command, or
+        (b) a direct subcommand of its class's own mount, the
+        class being a command (or subcommand) itself.  Nowhere
+        else--methods don't hang off each other.
         """
         owners = self._method_owner
         classes = []                    # (cls, mount node)
@@ -1271,19 +1274,21 @@ class Appeal:
                     # knowing
                     if fn is not None and id(fn) in members:
                         owners[id(fn)] = key
-                        p = child.parent
-                        ok = (p is mount
-                              or (p._impl is not None
-                                  and owners.get(id(p._impl))
-                                  == key))
-                        if not ok:
-                            where = p.name or '<the top level>'
+                        # class members too: a nested class
+                        # constructs from its owner's instance,
+                        # which exists only at the owner's mount
+                        if child.parent is not mount:
+                            where = (child.parent.name
+                                     or '<the top level>')
+                            place = ('the top level'
+                                     if mount is self else
+                                     f"{key!r}'s own mount")
                             raise AppealConfigurationError(
                                 f"{fn.__name__!r} is a method of "
                                 f"{key!r}, but it's mounted under "
-                                f"{where!r}, which isn't "
-                                f"{key!r}'s mount or one of its "
-                                f"methods (the same-world rule)")
+                                f"{where!r}; a method mounts only "
+                                f"at {place} (the same-world "
+                                f"rule)")
                     claim(child)
             claim(self)
 

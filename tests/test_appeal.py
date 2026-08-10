@@ -6655,10 +6655,12 @@ def test_subcommand():
 
 
 def test_subcommand_same_world():
-    # the same-world rule (ruled 2026-08-10, deliberately
-    # restrictive--relaxable later, never the reverse): a method
-    # mounts at its class's own mount or under another method of
-    # the same class; never under a plain function.
+    # SAME-WORLD, Larry's formulation (ruled 2026-08-10,
+    # deliberately restrictive--relaxable later, never the
+    # reverse): a method is (a) a top-level command, its class
+    # the GLOBAL command, or (b) a direct subcommand of its
+    # class's own mount.  Nowhere else--not under plain
+    # functions, not even under other methods.
     import appeal as _appeal
 
     ok = _appeal.Appeal(name='ok')
@@ -6667,16 +6669,25 @@ def test_subcommand_same_world():
         def __init__(self):
             pass
         @ok.command()
-        def parent(self):
+        def parent(self):           # (a): top-level method
             pass
-        @ok.subcommand('parent')
-        def foo(self):
-            pass
-    @ok.subcommand('parent foo')
-    def bar():                      # plain BELOW a method: fine
+    @ok.subcommand('parent')
+    def below():                    # plain BELOW a method: fine
         pass
     ok._subs                        # resolves without complaint
 
+    # (b): a method directly under its class's own mount
+    ok2 = _appeal.Appeal(name='ok2')
+    @ok2.command()
+    class Db:
+        def __init__(self):
+            pass
+        @ok2.subcommand('Db')
+        def wipe(self):
+            pass
+    ok2._subs
+
+    # refused: a method under a PLAIN FUNCTION
     bad = _appeal.Appeal(name='bad')
     @bad.command()
     def gravy():
@@ -6685,11 +6696,30 @@ def test_subcommand_same_world():
     class A2:
         def __init__(self):
             pass
-        @bad.subcommand('gravy')    # method under a plain fn
+        @bad.subcommand('gravy')
         def foo(self):
             pass
     try:
         bad._subs
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'same-world' in str(e)
+
+    # refused: a method under ANOTHER METHOD (Larry's
+    # formulation: methods don't hang off each other)
+    bad2 = _appeal.Appeal(name='bad2')
+    @bad2.global_command()
+    class A3:
+        def __init__(self):
+            pass
+        @bad2.command()
+        def parent(self):
+            pass
+        @bad2.subcommand('parent')
+        def chained(self):
+            pass
+    try:
+        bad2._subs
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'same-world' in str(e)
