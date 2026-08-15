@@ -1215,10 +1215,16 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         result = parse(list(args))
     except SystemExit as e:
         # the precommand exits (program metadata: -V, ...);
-        # main()'s contract is to RETURN the exit code
+        # main()'s contract is to RETURN the exit code.  A non-int,
+        # non-None code is a message -- Python prints it to stderr
+        # and exits 1; reproduce that half of the contract too.
         code = e.code
-        return code if isinstance(code, int) else (0 if code is None
-                                                   else 1)
+        if isinstance(code, int):
+            return code
+        if code is None:
+            return 0
+        print(code, file=error_stream())
+        return 1
     except KeyboardInterrupt:
         # a process ended by SIGINT dies quietly with 128+SIGINT
         # (the shell already echoed ^C).  ONLY here (ruled
@@ -2778,7 +2784,11 @@ def usage_markup(usage):
 # --8<-- start appeal help --8<--
 # --8<-- requires appeal theme --8<--
 # --8<-- requires big word wrap trio --8<--
-# --8<-- requires big format_definition_list --8<--
+# (big format_definition_list requires removed 2026-08-15: the
+# runtime deflist path is wrap_words' own render_deflist; nothing
+# in a generated script calls format_definition_list, so the
+# ~10KB region no longer rides along.  Appeal still imports it
+# in-process for the borrowed-trio tests.)
 # --8<-- requires appeal stylesheet preamble --8<--
 # --8<-- requires big terminal color --8<--
 # --8<-- requires big stylesheet render core --8<--
