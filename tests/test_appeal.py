@@ -3674,6 +3674,147 @@ def test_differential_fuzz_v1_greedy():
     assert compared >= 60, (compared, superset)
 
 
+def test_differential_fuzz_converter_group_conversion_and_arity():
+    # A BIDIRECTIONAL sweep vs real 0.6.4 aimed at converter-group
+    # bugs the one-directional greedy fuzz can't see (both found
+    # 2026-08-16, both hidden by str-typed fixtures):
+    #   * single-parameter groups off *args skipping their leaf
+    #     conversion (0.6.4 int(3), 1.0 returned '3')--MIXED leaf
+    #     types make it a repr divergence;
+    #   * a defaulted operand with a required one behind it not
+    #     promoted (1.0 accepted fewer operands than 0.6.4).
+    # Contract: (a) 0.6.4 ok ==> 1.0 ok with the IDENTICAL result;
+    # (b) 1.0's minimum accepted operand count is never BELOW
+    # 0.6.4's (no arity too-lenient).  Deterministic; 0.6.4 extracted
+    # from git master into a subprocess.
+    import json, os.path, random, subprocess, sys, tempfile
+
+    LEAF = ['int', 'float', 'str']
+    DEFV = {'int': '0', 'float': '0.0', 'str': "'d'"}
+
+    def gen_group(gi, depth, rng, done):
+        nparams = rng.randint(1, 3)
+        ndef = rng.randint(0, nparams)
+        decls, names, mn = [], [], 0
+        for k in range(nparams):
+            defaulted = k >= (nparams - ndef)
+            names.append(f'p{k}')
+            if depth > 0 and done and not defaulted and rng.random() < 0.4:
+                gn, gm = rng.choice(done)
+                decls.append(f'p{k}: {gn}'); mn += gm
+            else:
+                t = rng.choice(LEAF)
+                decls.append(f'p{k}: {t} = {DEFV[t]}' if defaulted
+                             else f'p{k}: {t}')
+                mn += 0 if defaulted else 1
+        ret = '(' + ', '.join(names) + (',)' if len(names) == 1 else ')')
+        return f"def g{gi}({', '.join(decls)}):\n    return {ret}\n", mn
+
+    def gen_program(rng):
+        ng = rng.randint(1, 3)
+        gsrc, done = [], []
+        for gi in range(ng):
+            src, mn = gen_group(gi, rng.randint(0, 2), rng, done)
+            gsrc.append(src); done.append((f'g{gi}', mn))
+        decls, names = [], []
+        for s in range(rng.randint(1, 4)):
+            names.append(f's{s}')
+            decls.append(f's{s}: g{rng.randrange(ng)}' if rng.random() < 0.55
+                         else f's{s}: {rng.choice(LEAF)}')
+        r = rng.random()
+        if r < 0.25:
+            decls += ['*', 'z: int']; names.append('z')
+        elif r < 0.45:
+            ok = [j for j in range(ng) if done[j][1] >= 1]
+            if ok:
+                decls.append(f'*rest: g{rng.choice(ok)}'); names.append('rest')
+        ret = '(' + ', '.join(names) + (',)' if len(names) == 1 else ')')
+        return "".join(gsrc) + f"def cmd({', '.join(decls)}):\n    return {ret}\n"
+
+    rng = random.Random(20260816)
+    # each program tried at operand counts 0..7 (all valid ints)
+    argvs = [[str(v) for v in range(1, c + 1)] for c in range(0, 8)]
+    jobs = [(gen_program(rng), argvs) for _ in range(40)]
+
+    with tempfile.TemporaryDirectory() as d:
+        v1dir = os.path.join(d, 'v1'); os.makedirs(v1dir)
+        r = subprocess.run(
+            f'git -C {repo_dir} archive master appeal | tar -x -C {v1dir}',
+            shell=True, capture_output=True, text=True)
+        if r.returncode != 0:
+            print('  (git archive failed; differential skipped)')
+            return
+        driver = os.path.join(d, 'driver.py')
+        with open(driver, 'wt', encoding='utf-8') as f:
+            f.write(
+                "import io, json, sys, contextlib\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import appeal\n"
+                "jobs = json.load(open(sys.argv[2]))\n"
+                "out = []\n"
+                "for src, argvs in jobs:\n"
+                "    res = []\n"
+                "    for argv in argvs:\n"
+                "        ns = {}\n"
+                "        exec(src, ns)\n"
+                "        app = appeal.Appeal()\n"
+                "        app.global_command()(ns['cmd'])\n"
+                "        sink = io.StringIO()\n"
+                "        try:\n"
+                "            with contextlib.redirect_stdout(sink), \\\n"
+                "                 contextlib.redirect_stderr(sink):\n"
+                "                r = app.process(list(argv))\n"
+                "            res.append(['ok', repr(r)])\n"
+                "        except BaseException as e:\n"
+                "            res.append(['no', type(e).__name__])\n"
+                "    out.append(res)\n"
+                "json.dump(out, open(sys.argv[3], 'wt'))\n")
+        jobs_path = os.path.join(d, 'jobs.json')
+        json.dump(jobs, open(jobs_path, 'wt'))
+        out_path = os.path.join(d, 'out.json')
+        r = subprocess.run([sys.executable, driver, v1dir, jobs_path, out_path],
+                           capture_output=True, text=True, timeout=300)
+        assert r.returncode == 0, f'v1 driver crashed:\n{r.stderr[-2000:]}'
+        v1_results = json.load(open(out_path))
+
+    compared = 0
+    for (src, args), results in zip(jobs, v1_results):
+        ns = {}
+        exec(src, ns)
+        v1_ok_counts, our_ok_counts = [], []
+        deferred = False
+        for argv, (kind, payload) in zip(args, results):
+            try:
+                ours = run_both(ns['cmd'], argv)         # both rungs agree
+            except AppealConfigurationError as e:
+                if 'awaits the streaming driver' in str(e):
+                    deferred = True; break               # known 1.0 deferral
+                raise
+            n = len(argv)
+            if kind == 'ok':
+                v1_ok_counts.append(n)
+            if ours[0] == 'ok':
+                our_ok_counts.append(n)
+            if kind == 'ok':
+                compared += 1
+                assert ours[0] == 'ok', (
+                    f'0.6.4 accepted, 1.0 refused:\n{src}\nargv={argv!r}\n'
+                    f'v1={payload}\nours={ours!r}')
+                assert repr(ours[1]) == payload, (
+                    f'DIVERGENCE (conversion?):\n{src}\nargv={argv!r}\n'
+                    f'v1={payload}\nours={ours[1]!r}')
+        if deferred:
+            continue
+        # promotion-class guard: 1.0 must never accept FEWER operands
+        # than 0.6.4 (a defaulted operand behind a required one)
+        if v1_ok_counts and our_ok_counts:
+            assert min(our_ok_counts) >= min(v1_ok_counts), (
+                f'1.0 accepts fewer operands than 0.6.4 (promotion?):\n'
+                f'{src}\n0.6.4 min={min(v1_ok_counts)} '
+                f'1.0 min={min(our_ok_counts)}')
+    assert compared >= 40, compared
+
+
 def test_fuzz_parity():
     # the two rungs, adversarially: random signatures, random
     # command lines (valid and invalid counts, options for groups
