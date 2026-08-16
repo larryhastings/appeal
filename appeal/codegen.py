@@ -1943,13 +1943,18 @@ def _harvest_paths(fn, decorations=None):
 
 def _classify_refs(refs, impls, harvests, decorations):
     """
-    Render the refs of a compiled MODULE.  Four fates: an impl
-    callable (a command function) becomes a SLOT, bound live by
-    the shim at registration; a vocabulary product re-runs its
-    recipe, as ever; a callable reachable from its command's live
-    function but NOT importable becomes a slot with a resolution
-    path; everything else renders as today (imports, literals)--
-    importable converters keep importing, the proven path.
+    Render the refs of a compiled MODULE.  Three fates: an impl
+    callable (a command function) becomes a SLOT, bound live by the
+    shim at registration; a vocabulary product re-runs its recipe,
+    as ever; ANY converter reachable from its command's live
+    function becomes a slot with a resolution PATH--importable or
+    not, the compiled module imports NONE of the user's grammar (it
+    walks the live function's annotations, ruled 2026-08-16, the
+    relationship runs the other way).  Everything else (constants,
+    non-converter refs) renders as today.  A converter's SIGNATURE
+    drift is caught by its command's recursive fingerprint; the
+    per-converter decoration fingerprint stays (@option/@parameter
+    on a converter isn't in the signature).
     Returns (imports, constants, slots, impl_names, ref_specs).
     """
     from .runtime import (decoration_fingerprint, fingerprint,
@@ -1960,12 +1965,6 @@ def _classify_refs(refs, impls, harvests, decorations):
     option_overrides = decorations.option_overrides
     parameter_usage = decorations.parameter_usage
     done = set()
-
-    def importable(obj):
-        module = getattr(obj, '__module__', None)
-        qualname = getattr(obj, '__qualname__', None)
-        return (module and qualname and module != '__main__'
-                and '<' not in qualname)
 
     while True:
         pending = [(n, o) for n, o in refs.objects.items()
@@ -1979,26 +1978,25 @@ def _classify_refs(refs, impls, harvests, decorations):
                     impl_names[key] = name
                 slots.append(name)
                 continue
-            if not getattr(obj, '__appeal_recipe__', None):
-                if callable(obj) and not importable(obj):
-                    owner = None
-                    for key, table in harvests:
-                        hit = table.get(id(obj))
-                        if hit is not None:
-                            owner = (key, hit[1])
-                            break
-                    if owner is not None:
-                        key, path = owner
-                        fingerprintable = _params_host(obj) is not None
-                        ref_specs[key].append(
-                            (name, path,
-                             fingerprint(obj) if fingerprintable
-                             else None,
-                             decoration_fingerprint(
-                                 obj, option_overrides,
-                                 parameter_usage)))
-                        slots.append(name)
-                        continue
+            if not getattr(obj, '__appeal_recipe__', None) and callable(obj):
+                owner = None
+                for key, table in harvests:
+                    hit = table.get(id(obj))
+                    if hit is not None:
+                        owner = (key, hit[1])
+                        break
+                if owner is not None:
+                    key, path = owner
+                    fingerprintable = _params_host(obj) is not None
+                    ref_specs[key].append(
+                        (name, path,
+                         fingerprint(obj) if fingerprintable
+                         else None,
+                         decoration_fingerprint(
+                             obj, option_overrides,
+                             parameter_usage)))
+                    slots.append(name)
+                    continue
             rendered = render_ref(name, obj, refs)
             if rendered.startswith('from ') and '\n' in rendered:
                 line, _, assignment = rendered.partition('\n')

@@ -3393,14 +3393,15 @@ def test_branch_standalone_imports_public_module_not_private():
             app = Appeal(name='cmd')
             app.global_command()(cmd)
             script = app.standalone()
-            assert 'from pubpriv.sub import conv' in script, \
+            # unification (2026-08-16): a converter is path-resolved
+            # from the live function's annotations, never imported.
+            # So NEITHER the public nor the private module is imported
+            # for conv--the private-module hazard is sidestepped
+            # entirely (no import to canonicalize).
+            assert not any(line.startswith(('from ', 'import '))
+                           and 'pubpriv' in line
+                           for line in script.split('\n')), \
                 [l for l in script.split('\n') if 'pubpriv' in l]
-            # no IMPORT touches the private module (the
-            # fingerprint token may name it--that's the object's
-            # true home, identical in both worlds)
-            assert not any(line.startswith(('from', 'import'))
-                           and '_impl' in line
-                           for line in script.split('\n'))
         finally:
             sys.path.remove(d)
             for name in ('pubpriv', 'pubpriv.sub', 'pubpriv.sub._impl'):
