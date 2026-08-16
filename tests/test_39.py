@@ -20,8 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from test_appeal import (
     Appeal, AppealConfigurationError, UsageError, appeal, test,
-    build, run_both, run_script, subprocess_env, repo_dir,
-    write_standalone_fixture,
+    build, run_both, repo_dir,
     )
 import subprocess
 import tempfile

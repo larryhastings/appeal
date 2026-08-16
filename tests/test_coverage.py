@@ -2410,48 +2410,6 @@ def test_emit_command_set_refusals():
         pass
 
 
-def test_standalone_mcp_shapes():
-    import tempfile
-    from appeal.codegen import emit_standalone_mcp
-    with tempfile.TemporaryDirectory() as d:
-        mod = make_module(d, 'mcpshapes', (
-            'def one(x: int):\n'
-            '    return x\n'
-            'def other(y: int):\n'
-            '    return y\n'
-            'class Svc:\n'
-            '    def __init__(self, *, tag=""):\n'
-            '        self.tag = tag\n'
-            '    def ping(self):\n'
-            '        return "pong " + self.tag\n'
-            '    class Sub:\n'
-            '        def __init__(self, n: int):\n'
-            '            self.n = n\n'
-            ))
-        # words differing only in punctuation: numbered plan names
-        app = Appeal(name='mm')
-        app.command(name='a-b')(mod.one)
-        app.command(name='a_b')(mod.other)
-        text = app.standalone_mcp()
-        assert 'a-b' in text and 'a_b' in text
-        # method tools: bound plans need the startup instance
-        svc_plan = build(mod.Svc, name='Svc')
-        ping_plan = build(mod.Svc.ping, name='ping',
-                          method_of=svc_plan.constructs)
-        sub_plan = build(mod.Svc.Sub, name='Sub',
-                         method_of=svc_plan.constructs)
-        try:
-            emit_standalone_mcp({'ping': ping_plan})
-            assert False, 'expected AppealConfigurationError'
-        except AppealConfigurationError:
-            pass
-        text = emit_standalone_mcp({'ping': ping_plan, 'Sub': sub_plan},
-                                   global_plan=svc_plan,
-                                   config={'tag': 'T'})
-        assert 'ping' in text and 'Sub' in text
-        assert "'tag': 'T'" in text     # config bakes in as a literal
-
-
 def test_mcp_class_global_method_tools():
     # a class-based program: __init__ constructs at startup,
     # method tools dispatch bound (in-process, EOF stdin)

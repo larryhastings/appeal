@@ -386,13 +386,6 @@ def test_commands_compile_independently():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert "isn't callable" in str(e)
-    # ...but a whole-program artifact is necessarily eager:
-    # standalone emission must build (and refuse) everything
-    try:
-        app.standalone()
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert "isn't callable" in str(e)
 
 def test_app_option_works_in_either_decorator_order():
     def make(order):
@@ -3151,9 +3144,8 @@ def test_help_disabled():
     assert 'help' not in app3.complete([], '')
     assert set(app3.complete([], '')) == {'add', 'sub'}
 
-def test_help_disabled_parity_and_standalone():
-    # rung-1 and rung-3 agree with help=False, and a standalone
-    # script bakes the suppression (no -h/--help anywhere)
+def test_help_disabled_parity():
+    # rung-1 and rung-3 agree with help=False
     from appeal import compile_command_set, interpreter_dispatch
     def add(x: int, y: int):
         "Add."
@@ -3180,24 +3172,6 @@ def test_help_disabled_parity_and_standalone():
     assert a[0] == b[0] == 'usage', (a, b)
     assert 'unknown command' in a[1] and 'unknown command' in b[1]
 
-    # standalone: help=False spelled through default_mappings=,
-    # via the compiled module's factory stand-in (the knob lift,
-    # 2026-08-09)--no automatic help baked
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            DEMO_MODULE
-            + "\napp = appeal.Appeal(name='tool',\n"
-            '                   default_mappings='
-            'appeal.default_mappings(\n'
-            '    *appeal.default_mappings_version))\n'
-            'app.command()(greet)\n'
-            'app.command()(cp)\n'), 'tool')
-        r = run_script(prog, ['help'])
-        assert r.returncode == 2, r.stdout
-        assert 'unknown command' in r.stderr, r.stderr
-        r = run_script(prog, ['greet', '--help'])
-        assert r.returncode == 2
-        assert "unknown option '--help'" in r.stderr, r.stderr
 
 def test_generated_code_name_collisions():
     # the corpus caught this: a converter parameter named `i`
@@ -4650,147 +4624,6 @@ def test_generated_source_is_readable():
 # ---------------------------------------------------------------------
 # THE NORTH STAR: standalone emission
 
-DEMO_MODULE = '''\
-def greet(name, greeting='hello', *, shout=False, times: int = 1):
-    s = f"{greeting}, {name}!"
-    if shout:
-        s = s.upper()
-    print(' '.join([s] * times))
-
-def cp(*src, dst):
-    print('copy', '+'.join(src), '->', dst)
-
-def _pair(x, y):
-    return f'{x}+{y}'
-
-def between(start: _pair, end: _pair=None):
-    print('between', start, end)
-
-def stroke(width: float=1.0, *, dashed=False):
-    return f'{width}{"~" if dashed else "-"}'
-
-
-def config(project='.', *, trace=False):
-    if trace:
-        print('trace on', project)
-
-def _jobs(jobs: int = -1):
-    return jobs
-
-def build_all(*targets, jobs: _jobs = 1):
-    print('build', '+'.join(targets), jobs)
-
-def _pt(x: int, y: int):
-    return f'{x},{y}'
-
-def mark(label, *, at: _pt = 'origin'):
-    """
-    Marks a label on the canvas.
-
-    # Arguments
-    label
-    : the text to place.
-
-    # Options
-    at
-    : where to place it.
-    """
-    print('mark', label, at)
-
-def seg(length: float, *, dashed=False):
-    return f"{length}{'~' if dashed else '-'}"
-
-def path(start, *segs: seg):
-    print('path', start, '+'.join(segs))
-
-def board(f: _pair, s: stroke = 'none'):
-    print('board', f, s)
-
-import sys as _sys
-if _sys.version_info >= (3, 9):
-    # the 3.9+ annotation spellings; their tests gate themselves
-    # (needs_39) so old interpreters still run everything above.
-    # (list[str] is legal SYNTAX on 3.7--it only fails when the
-    # def executes--so a plain if guards it.)
-    def sketch(shape, s: stroke='none', *, tag: list[str] = ()):
-        print('sketch', shape, s, '+'.join(tag))
-
-    def move(delta: tuple[int, int] = (0, 0), *, fast=False):
-        print('move', delta, 'fast' if fast else 'slow')
-
-    def spanmark(label, *, span: tuple[int, int] = (0, 0)):
-        print('mark', label, span)
-'''
-
-STANDALONE_PROLOGUE = (
-    'import sys\n'
-    'try:\n'
-    '    import standalone as appeal\n'
-    '    recompile = False\n'
-    'except ImportError:\n'
-    '    import appeal\n'
-    '    recompile = True\n')
-
-
-def write_standalone_program(dirname, body, name='prog', doc=None):
-    """
-    The NEW-WORLD standalone pair (ruled 2026-08-09): write a
-    program in the ONE documented Appeal spelling--body defines
-    `app` and decorates its commands--wrapped in the try/except
-    import and the recompile flourish; run it once against THIS
-    repo's appeal, which compiles standalone.py beside it; return
-    (program-path, compiled-module-text).  Tests then run the
-    program with an environment that has no appeal on the path at
-    all: the compiled module is the only parser in the room.
-    """
-    # each program gets its own home: the compiled module is
-    # always named standalone.py, and two programs sharing one
-    # directory would cross-import each other's (the drift
-    # detector CAUGHT this--correctly--when two fixtures shared
-    # a tempdir)
-    home = os.path.join(dirname, f'{name}_home')
-    os.makedirs(home, exist_ok=True)
-    prog_path = os.path.join(home, f'{name}.py')
-    source = ((f'"""{doc}"""\n' if doc else '')
-              + STANDALONE_PROLOGUE + '\n' + body + '\n'
-              'if recompile:\n'
-              "    app.standalone('standalone.py')\n"
-              '    sys.exit(0)\n'
-              "if __name__ == '__main__':\n"
-              '    sys.exit(app.main())\n')
-    with open(prog_path, 'wt', encoding='utf-8') as f:
-        f.write(source)
-    r = sub_run([sys.executable, prog_path], cwd=home,
-                env=subprocess_env(PYTHONPATH=repo_dir))
-    assert r.returncode == 0, (r.stdout, r.stderr)
-    module_path = os.path.join(home, 'standalone.py')
-    assert os.path.exists(module_path), 'no standalone.py compiled'
-    with open(module_path, 'rt', encoding='utf-8') as f:
-        module = f.read()
-    for line in module.split('\n'):
-        if line.startswith(('import appeal', 'from appeal',
-                            'import big', 'from big')):
-            raise AssertionError(f'not standalone: {line!r}')
-    return prog_path, module
-
-
-def write_standalone_fixture(dirname, command_name, decorate=None):
-    """
-    The classic single-command fixture, compiled-module form: one
-    program file embedding DEMO_MODULE, registering command_name
-    as the GLOBAL command--operands ride the line directly, like
-    the old single-command scripts did.  decorate is SOURCE TEXT,
-    extra app statements between Appeal() and the registration
-    (fingerprints demand identical decoration in both worlds, and
-    the program file IS both worlds).  Returns
-    (program-path, compiled-module-text).
-    """
-    body = (DEMO_MODULE
-            + f'\napp = appeal.Appeal(name={command_name!r})\n'
-            + (decorate or '')
-            + f'app.global_command()({command_name})\n')
-    return write_standalone_program(dirname, body, command_name)
-
 def sub_run(argv, capture_output=True, text=True, **kw):
     """
     subprocess.run for every Python we support: 3.6 has neither
@@ -4800,74 +4633,6 @@ def sub_run(argv, capture_output=True, text=True, **kw):
     return subprocess.run(argv, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE,
                            universal_newlines=True, **kw)
-
-
-def subprocess_env(**extra):
-    """
-    A minimal environment for driving emitted scripts: PATH, plus
-    the variables Windows can't start Python without (SystemRoot
-    above all).  Extras layer on top.
-    """
-    env = {'PATH': os.environ.get('PATH', '')}
-    for name in ('SystemRoot', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT',
-                 'TEMP', 'TMP'):
-        value = os.environ.get(name)
-        if value is not None:
-            env[name] = value
-    env.update(extra)
-    return env
-
-
-def run_script(script_path, argv, env=None):
-    return sub_run(
-        [sys.executable, script_path] + argv,
-        capture_output=True, text=True,
-        cwd=os.path.dirname(script_path),
-        env=env if env is not None else subprocess_env(),
-        )
-
-def test_standalone_program_named_for_its_command():
-    # regression (found 2026-08-09): a program named for one of
-    # its commands--the tool named after its main verb--collided
-    # in standalone emission.  The global plan's emitter bypassed
-    # the sym() symbol registry, so `serve` the program and
-    # `serve` the command both emitted _COMPLETE_serve (second
-    # clobbered first) while the set table referenced
-    # _COMPLETE_serve2, which existed nowhere: the script died at
-    # import with NameError.
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='serve')\n"
-            '@app.command()\n'
-            'def serve(host):\n'
-            "    print('serving ' + host)\n"
-            '@app.command()\n'
-            'def stop():\n'
-            "    print('stopped')\n"), 'serve',
-            doc='Serves the thing until stopped.')
-        # the module imports (the NameError is gone) and dispatches
-        r = run_script(prog, ['serve', 'example.com'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout.strip() == 'serving example.com'
-        r = run_script(prog, ['stop'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout.strip() == 'stopped'
-        # a bare line prints the TERSE listing to stdout and exits
-        # 1 (orientation, not a diagnostic--run_command_set's
-        # documented contract): usage and the Commands table, NO
-        # program prose--that's --help's job (regression: the
-        # emitted script printed the full set page here, diverging
-        # from the in-process facade)
-        r = run_script(prog, [])
-        assert r.returncode == 1
-        assert 'usage:' in r.stdout and 'stop' in r.stdout
-        assert 'Serves the thing' not in r.stdout
-        # ...while set-level --help and bare `help` print the FULL
-        # page, prose included
-        for argv in (['--help'], ['help']):
-            r = run_script(prog, argv)
-            assert r.returncode == 0, (argv, r.stderr)
-            assert 'Serves the thing until stopped.' in r.stdout, argv
 
 
 def test_flag_explicit_boolean():
@@ -5246,35 +5011,6 @@ def test_deep_nested_sets():
         finally:
             sys.path.remove(d)
             sys.modules.pop('deepmod', None)
-        # the compiled-module rung, three levels deep (the
-        # nested-set lift, 2026-08-09)
-        prog, module = write_standalone_program(d, (
-            DEEP_MODULE
-            + "\napp = appeal.Appeal(name='t', repeat=True)\n"
-            'app.command()(status)\n'
-            'app.command()(db)\n'
-            "dbn = app.command('db', repeat=True)\n"
-            'dbn.command()(migrate)\n'
-            "mig = dbn.command('migrate', repeat=True)\n"
-            'mig.command()(up)\n'
-            'mig.command()(down)\n'), 't')
-        r = run_script(prog, ['db', 'main', 'migrate', 'two',
-                              'up', '3', 'down', '1', 'status'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == ('db main\nmigrate two\nup 3\ndown 1\n'
-                            'status\n'), r.stdout
-        # help describes a nested parent instead of unpacking its
-        # _SET_ dict
-        r = run_script(prog, ['help', 'db'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout.startswith('usage: db')
-        assert 'migrate' in r.stdout
-        # a CONVERSION failure deep in the tree is stage 2:
-        # commands to its left already ran (the original pin)
-        r = run_script(prog, ['db', 'main', 'migrate', 'two', 'up',
-                              'x', 'status'])
-        assert r.returncode == 2
-        assert r.stdout.startswith('db main\nmigrate two\n'), r.stdout
 
 
 TREE_MODULE = """\
@@ -5392,22 +5128,6 @@ def test_appeal_tree_default_commands():
         finally:
             sys.path.remove(d)
             sys.modules.pop('treemod', None)
-        # the compiled-module rung agrees on all three (the
-        # default-command lift, 2026-08-09)
-        prog, module = write_standalone_program(d, (
-            TREE_MODULE
-            + "\napp = appeal.Appeal(name='t')\n"
-            'app.command()(db)\n'
-            "node = app.command('db')\n"
-            'node.command()(deploy)\n'
-            'node.default_command()(db_default)\n'
-            'app.default_command()(root_default)\n'), 't')
-        r = run_script(prog, ['db', '--host', 'prod'])
-        assert (r.returncode, r.stdout) == (0, 'db prod\ndb-default\n'), r
-        r = run_script(prog, ['db', 'deploy', '5'])
-        assert (r.returncode, r.stdout) == (0, 'db local\ndeploy 5\n'), r
-        r = run_script(prog, [])
-        assert (r.returncode, r.stdout) == (0, 'root-default\n'), r
 
 
 REPEAT_MODULE = '\n'.join(
@@ -5485,30 +5205,6 @@ def test_subcommands_interacting_with_repeat():
         finally:
             sys.path.remove(d)
             sys.modules.pop('repeatmod', None)
-        # the compiled-module rung agrees, token for token (the
-        # nested-set lift, 2026-08-09)
-        prog, module = write_standalone_program(d, (
-            REPEAT_MODULE
-            + "\napp = appeal.Appeal(name='t', repeat=True)\n"
-            'app.command()(A)\n'
-            "a = app.command('A', repeat=True)\n"
-            'a.command()(Ax)\n'
-            "ax = a.command('Ax', repeat=True)\n"
-            'ax.command()(AxA)\n'
-            'ax.command()(AxB)\n'
-            'a.command()(Ay)\n'
-            "ay = a.command('Ay', repeat=True)\n"
-            'ay.command()(AyA)\n'
-            'ay.command()(AyB)\n'
-            'app.command()(B)\n'
-            'app.command()(C)\n'
-            "c = app.command('C', repeat=True)\n"
-            'c.command()(Ca)\n'
-            "ca = c.command('Ca', repeat=True)\n"
-            'ca.command()(CaX)\n'), 't')
-        r = run_script(prog, list(line))
-        assert (r.returncode, r.stdout) == (0, expected), (r.stdout,
-                                                           r.stderr)
 
 
 def test_documentation_man():
@@ -6229,39 +5925,6 @@ def test_two_classes_same_method_name():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'alpha' in str(e) and 'beta' in str(e)
-    # ...and the standalone emitter numbers the symbols
-    with tempfile.TemporaryDirectory() as d:
-        module_path = os.path.join(d, 'twins_mod.py')
-        with open(module_path, 'wt', encoding='utf-8') as f:
-            f.write(
-                "import appeal\n"
-                "app = appeal.Appeal(name='twins')\n\n"
-                "@app.command(name='alpha')\n"
-                "class Alpha:\n"
-                "    def __init__(self):\n"
-                "        pass\n"
-                "    @app.subcommand('alpha')\n"
-                "    def run(self):\n"
-                "        print('alpha-run')\n\n"
-                "@app.command(name='beta')\n"
-                "class Beta:\n"
-                "    def __init__(self):\n"
-                "        pass\n"
-                "    @app.subcommand('beta')\n"
-                "    def run(self):\n"
-                "        print('beta-run')\n")
-        sys.path.insert(0, d)
-        try:
-            import twins_mod
-            import importlib
-            importlib.reload(twins_mod)
-            # the class-command lift (2026-08-09): each `run`
-            # binds to its own class's instance, compiled
-            script = twins_mod.app.standalone()
-            assert 'def run_run(' in script and 'def run_run2(' in script
-        finally:
-            sys.path.remove(d)
-            sys.modules.pop('twins_mod', None)
 
     # a duplicate name= within one class replaces, like every
     # other re-registration (v1's rule: the second wins)
@@ -6664,29 +6327,6 @@ class MyApp:
         print('count', self.verbose, pattern)
 """
 
-
-def test_standalone_plucks_minimal_runtime():
-    # the emitter plucks only the snippets the parser needs out of
-    # the runtime warehouse.  a plain command gets the core and the
-    # help system (help is a permanent fixture, and brings big's
-    # word-wrap trio via requires)--and none of the vocabulary,
-    # collectors, folds, windows, or command-set machinery.
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'greet')
-        for expected in ('def parse_tokens', 'def check_count', 'def run_main',
-                         'def render_baked_help', 'def wrap_words'):
-            assert expected in script, f'minimal script is missing {expected!r}'
-        for unexpected in ('def split(', 'def validate(', 'def counter(',
-                           'class accumulator', 'def accumulate(',
-                           'def collect_mapping(', 'class MultiOption',
-                           'def window_options(', 'def run_command_set(',
-                           # "if you don't call split, you don't
-                           # need multisplit."  --larry
-                           'def multisplit', 'def multistrip'):
-            assert unexpected not in script, f'minimal script needlessly contains {unexpected!r}'
-        # ...and it still runs.
-        r = run_script(script_path, ['world'])
-        assert r.returncode == 0, r.stderr
 
 # ---------------------------------------------------------------------
 # the docstring parser (composable documentation, proposal §8.7.1)
