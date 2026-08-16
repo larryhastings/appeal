@@ -25,7 +25,26 @@ app = appeal.Appeal('weather')
 
 @app.command()
 def report(city, *, units='C', verbose=False):
-    "Report the current weather for a city."
+    """
+    Report the current weather for a city.
+
+    The temperature is invented fresh every run, which is about as
+    accurate as the real forecasters manage, and considerably more
+    honest about it.
+
+    ## Arguments
+
+    city
+    : Which city to report on.
+
+    ## Options
+
+    units
+    : Temperature scale: `C` or `F`.
+
+    verbose
+    : Also narrate the barometric mood.
+    """
     degrees = 21 if units == 'C' else 70
     print(f'{city}: {degrees}\N{DEGREE SIGN}{units}, partly cloudy')
     if verbose:
@@ -34,7 +53,17 @@ def report(city, *, units='C', verbose=False):
 
 @app.command()
 def forecast(city, days: int = 3):
-    "Forecast the next few days."
+    """
+    Forecast the next few days of imaginary but plausible weather.
+
+    ## Arguments
+
+    city
+    : Which city to forecast.
+
+    days
+    : How many days ahead to guess.
+    """
     for day in range(1, days + 1):
         print(f'{city} day {day}: sunny, probably')
 

@@ -1,78 +1,71 @@
 """
-compiled -- a PRE-COMPILED weather parser that WEARS the Appeal API.
-
-Import it AS appeal and your program is unchanged:
+compiled -- a PRE-COMPILED weather parser that WEARS the Appeal API,
+with full help by FALLBACK.
 
     if 1:
         import compiled as appeal
     else:
         import appeal
 
-Unlike the standalone script, this is NOT self-contained: it
-imports appeal_runtime (the minimal, stdlib-only parse/dispatch
-core) for speed.  It just doesn't drag in help/color/build -- so
-importing it costs about as much as bare Python.
+The fast path -- parse a valid command line and dispatch -- touches
+NOTHING heavy: no help text, no rendering, and it never imports
+appeal.  It goes python-start to dispatch at bare-Python speed.
 
-Same idea as the standalone shim: the decorators don't BUILD
-anything.  @app.command() matches your live function to the
-pre-compiled parse function baked in here (by command word) and
-binds it into a slot the parser calls.  (This prototype matches by
-name; the real thing fingerprints, and regenerates on drift.)
+The moment the minimal runtime raises (a usage error, or a `--help`
+it doesn't recognize), we fall back: import the real Appeal, build
+the app from the SAME live functions, and let it render full
+color, word-wrapped help / rich errors from their docstrings.  So
+this module carries zero pre-digested help -- the help lives in the
+functions, and real Appeal reads it only when actually asked.
 
-Everything below the divider is what codegen would emit.
+Everything above the divider is what codegen would emit.
 """
 
 import sys
 
-from appeal_runtime import UsageError, parse_tokens, check_count, run_main
+from appeal_runtime import UsageError, parse_tokens, check_count
 
 
 # =====================================================================
-# ---- generated: per-command parsers + dispatch (the baked bits) -----
+# ---- generated: per-command SCAN (parse only) + dispatch ------------
 # =====================================================================
+#
+# scan_* PARSE and return (word, args, kwargs) -- they never execute
+# the command, so a parse failure raises before anything runs, and
+# main() can fall back cleanly.  No usage strings are baked: on any
+# failure, real Appeal produces the message.
 
 _impls = {}          # command word -> the live function, bound at registration
 
 
-# report [-u|--units <UNITS>] [-v|--verbose] <CITY>
 _REPORT_OPTS = {'-u': ('units', 'value'), '--units': ('units', 'value'),
                 '-v': ('verbose', 'flag'), '--verbose': ('verbose', 'flag')}
-_REPORT_USAGE = 'weather report [-u|--units <UNITS>] [-v|--verbose] <CITY>'
 
-def parse_report(argv):
+def scan_report(argv):
     operands, given = parse_tokens(argv, _REPORT_OPTS)
-    check_count(len(operands), 1, 1, _REPORT_USAGE)
-    return _impls['report'](operands[0],
-                            units=given.get('units', 'C'),
-                            verbose=given.get('verbose', False))
+    check_count(len(operands), 1, 1, None)
+    return 'report', (operands[0],), {'units': given.get('units', 'C'),
+                                      'verbose': given.get('verbose', False)}
 
 
-# forecast <CITY> [<DAYS>]
-_FORECAST_USAGE = 'weather forecast <CITY> [<DAYS>]'
-
-def parse_forecast(argv):
+def scan_forecast(argv):
     operands, given = parse_tokens(argv, {})
-    check_count(len(operands), 1, 2, _FORECAST_USAGE)
-    if len(operands) == 2:               # the int() converter, baked inline
-        try:
-            days = int(operands[1])
-        except ValueError:
-            raise UsageError(f"invalid <DAYS> {operands[1]!r}", _FORECAST_USAGE)
-    else:
-        days = 3
-    return _impls['forecast'](operands[0], days)
+    check_count(len(operands), 1, 2, None)
+    days = int(operands[1]) if len(operands) == 2 else 3   # int(), baked
+    return 'forecast', (operands[0], days), {}
 
 
-_COMMANDS = {'report': parse_report, 'forecast': parse_forecast}
-_USAGE = 'weather {report|forecast} ...'
+_COMMANDS = {'report': scan_report, 'forecast': scan_forecast}
 
-def _dispatch(argv):
+
+def _scan(argv):
+    "Parse only.  Returns (word, args, kwargs); raises UsageError."
     if not argv:
-        raise UsageError('no command given', _USAGE)
-    parse = _COMMANDS.get(argv[0])
-    if parse is None:
-        raise UsageError(f"unknown command {argv[0]!r}", _USAGE)
-    return parse(argv[1:])
+        raise UsageError('no command given')
+    scan = _COMMANDS.get(argv[0])
+    if scan is None:
+        raise UsageError(f"unknown command {argv[0]!r}")
+    return scan(argv[1:])
 
 
 # =====================================================================
@@ -85,13 +78,13 @@ class ConfigurationError(Exception):
 
 class Appeal:
     """
-    The compiled parser's public face.  Matches, never builds:
-    each decorator binds a live function into the baked parser.
+    Matches, never builds.  The fast path dispatches directly; help
+    and errors fall back to the real Appeal, rebuilt from the same
+    functions.
     """
     def __init__(self, name=None, **ignored):
-        # baked-in knobs are ignored in this prototype; the real
-        # shim verifies them against what was compiled
         self.name = name
+        self._registered = []          # (word, fn) -- for the fallback
 
     def command(self, name=None):
         def register(fn):
@@ -102,15 +95,37 @@ class Appeal:
                     f"this compiled parser has no command {word!r} "
                     f"(it knows: {known}); regenerate it")
             _impls[word] = fn
+            self._registered.append((word, fn))
             return fn
         return register
 
     def main(self, args=None):
-        # all-or-nothing, like the real shim: every baked command
-        # must have been registered
+        if args is None:
+            args = sys.argv[1:]
         missing = [w for w in _COMMANDS if w not in _impls]
         if missing:
             raise ConfigurationError(
                 f"compiled command(s) never registered: "
                 f"{', '.join(missing)}; regenerate the parser")
-        return run_main(_dispatch, args)
+        try:
+            word, cargs, ckwargs = _scan(list(args))     # FAST: parse only
+        except UsageError:
+            return self._fallback(args)                  # help / error: full Appeal
+        result = _impls[word](*cargs, **ckwargs)         # FAST: execute
+        return result if isinstance(result, int) else 0
+
+    def _fallback(self, args):
+        """
+        The slow path: real Appeal, built from the live functions,
+        renders full color word-wrapped help and rich errors.  Only
+        reached on `--help` or a bad command line -- never on the
+        hot path -- so paying the import+build here is fine.
+        """
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))))   # demo: pin the repo
+        import appeal
+        real = appeal.Appeal(self.name)
+        for word, fn in self._registered:
+            real.command(name=word)(fn)
+        return real.main(list(args))

@@ -35,15 +35,36 @@ Python-start to dispatched command at bare-Python speed, with the
 Appeal interface intact.  The whole runtime is 3 KB instead of
 200 KB.
 
+## Help by fallback -- not baked in
+
+The compiled module carries **no** pre-digested help text: no
+docstrings, no layout tuples, no renderer.  That's deliberate --
+importing even the digested help would cost time the fast path
+shouldn't spend.
+
+So the fast path (parse a valid line, dispatch) touches nothing
+heavy and never imports appeal.  The instant the minimal runtime
+raises -- a usage error, or a `--help` it doesn't recognize --
+`compiled` falls back: it imports the real Appeal, rebuilds the app
+from the *same live functions*, and lets it render full color,
+word-wrapped help straight from their docstrings.
+
+    weather report portland -v     # fast path: 0 appeal modules loaded
+    weather report --help          # fallback: full color help
+    weather report                 # fallback: rich usage error
+
+Cold start (`report portland -v` vs `report --help`):
+
+    fast path (dispatch) ..... 11.2 ms   (bare python: 12.2)
+    fallback (--help) ........ 44.2 ms
+
 ## What's faked (this is a prototype)
 
 * The baked parsers are hand-written; codegen would emit them.
 * The decorators match commands by *name*; the real shim
   fingerprints the live functions and reports drift ("regenerate
   the parser").  There's no lazy-recompile step here.
-* No help, no color -- a real compiled module would import a
-  `render` module lazily on `--help` or on an error that needs a
-  usage listing.
 
-The point it proves: keep the Appeal interface, drop the import
-weight, and a pre-compiled parser is as fast as Python can start.
+The point it proves: keep the Appeal interface AND full help, drop
+the import weight from the hot path, and a pre-compiled parser is
+as fast as Python can start.
