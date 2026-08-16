@@ -74,11 +74,10 @@ def parse_tokens(argv, options):
                     val = argv[i]
                 if kind == 'multi':
                     given.setdefault(name, []).append(val)
-                else:                       # 'value': last wins, but the
-                    if name in given:       # overridden occurrences are
-                        given.setdefault(   # stashed so scan_* can validate
-                            ('overridden', name), []).append(given[name])
-                    given[name] = val
+                else:                       # 'value': collect every
+                    # occurrence in order; scan_* converts them all
+                    # (validate) and the last wins
+                    given.setdefault(name, []).append(val)
         else:
             operands.append(tok)
         i += 1

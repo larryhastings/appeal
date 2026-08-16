@@ -642,13 +642,14 @@ class _Emitter:
             return (f'{fill}(list({source}[{key!r}]), 0, '
                     f'len({source}[{key!r}]), given{extra}{sib})[0]')
         if o.kind == 'value':
-            # last wins, but every occurrence is validated (ruled
-            # 2026-08-16): pass the converter tuple + the stashed
-            # overridden occurrences to convert_value
+            # convert every occurrence (all validated), last wins.
+            # `given` holds the occurrence list; the scoped overlay
+            # holds a single claimed value, so wrap it as one.
             convs = ', '.join(self.leaf_expr(c) for c in o.converters)
             comma = ',' if len(o.converters) == 1 else ''
-            return (f'convert_value(({convs}{comma}), {source}[{key!r}], '
-                    f'{source}.get(("overridden", {key!r}), ()), '
+            operand = (f'[{source}[{key!r}]]' if source == '_overlay'
+                       else f'{source}[{key!r}]')
+            return (f'convert_value(({convs}{comma}), {operand}, '
                     f'{o.name!r}, {self.usage_const})')
         if o.kind in ('fold', 'fold1'):
             cls_name = self.leaf_expr(o.converters[0])

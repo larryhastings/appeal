@@ -129,15 +129,15 @@ def scan_sync(argv):
     source = multisplit(operands[0], (':',))                    # split(':')
     verbose = given.get('verbose', 0)                           # counter(): count
     tag = tuple(str(v) for v in given.get('tag', ()))           # accumulator[str]
-    # validate(...): last wins, but EVERY --mode oparg is validated
-    # (ruled 2026-08-16) -- the overridden occurrences too
+    # validate(...): convert EVERY --mode oparg (ruled 2026-08-16),
+    # the last wins
     mode = 'safe'
-    for m in (list(given.get(('overridden', 'mode'), ()))
-              + ([given['mode']] if 'mode' in given else [])):
+    for m in given.get('mode', ()):
         if m not in ('fast', 'safe'):
             raise UsageError(f"invalid <MODE> {m!r}")
         mode = m
-    only = multisplit(given['only'], (',',)) if 'only' in given else ()   # split(',')
+    only = (multisplit(given['only'][-1], (',',))                # split(','):
+            if 'only' in given else ())                          # last wins
     define = ({str(k): int(v) for k, v in given['define']}      # mapping[str,int]
               if 'define' in given else None)
     return 'sync', (source,), {'verbose': verbose, 'tag': tag, 'mode': mode,

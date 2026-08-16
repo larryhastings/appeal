@@ -148,11 +148,9 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None,
         elif o.kind == 'nullary':
             kwargs[o.name] = o.converters[0]()
         elif o.kind == 'value':
-            # last wins, but every occurrence is validated (ruled
-            # 2026-08-16): the overridden ones were stashed
-            kwargs[o.name] = convert_value(
-                o.converters, given[key],
-                given.get(('overridden', key), ()), o.name, usage)
+            # convert every occurrence (all validated), last wins
+            kwargs[o.name] = convert_value(o.converters, given[key],
+                                           o.name, usage)
         elif o.kind == 'accumulate':
             kwargs[o.name] = accumulate(o.converters[0], given[key],
                                         o.name, usage)

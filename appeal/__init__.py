@@ -228,16 +228,18 @@ def _config_inject(vetted, config, given, usage, scoped_keys=frozenset()):
                 given[key] = (value,)
                 injected[name] = key
             return
+        # a value option's `given` entry is the list of occurrences
+        # (last wins, all validated); config supplies one occurrence
         if kind == 'value' and len(rule.converters) > 1:
             if not isinstance(value, (list, tuple)):
                 raise AppealDataError(
                     f"config: {name!r} takes "
                     f"{len(rule.converters) - 1} values; give it a "
                     f"sequence", usage)
-            given[key] = list(value)
+            given[key] = [tuple(value)]
             injected[name] = key
             return
-        given[key] = value
+        given[key] = [value]
         injected[name] = key
 
     for name, rule in vetted.items():

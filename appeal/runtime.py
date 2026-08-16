@@ -242,19 +242,18 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                     f"option {key} specified more than once", usage)
             given[key] = value
         elif kind == 'value':
-            # last one wins (RULED by Larry 2026-07-18, review
-            # item 6: a shell alias baking in `--mode fast` is
-            # overridden by a later `--mode safe`), BUT every oparg
-            # is still validated (ruled 2026-08-16: "it's not
-            # called validate for nothing"--an invalid value can't
-            # slip through by being overridden).  The overridden
-            # occurrences are stashed under a tuple key (invisible
-            # to the plain-string-key scans) so the conversion pass
-            # converts them too.
-            if key in given:
-                given.setdefault(('overridden', key), []).append(given[key])
-                del given[key]
-            given[key] = value
+            # collect every occurrence, in command-line order:
+            # convert_value converts them all (ruled 2026-08-16:
+            # every oparg is validated--"it's not called validate
+            # for nothing") and the LAST wins for the value (ruled
+            # 2026-07-18: a shell alias baking `--mode fast` is
+            # overridden by a later `--mode safe`).  Re-add at the
+            # end so `given` stays in last-occurrence order, which
+            # is how a parameter shared by several option strings
+            # picks the one that spoke last.
+            occurrences = given.pop(key, [])
+            occurrences.append(value)
+            given[key] = occurrences
         elif kind in ('flag', 'nullary', 'group'):
             # last one wins.  A bare flag idempotently stores `not
             # default` (its entry's presence value): -v -v is -v.
@@ -760,7 +759,15 @@ def window_options(occurrences, first, sizes, name, usage=None,
                     raise UsageError(
                         f"option {key} specified more than once", usage)
                 given[key] = value
-            elif kind in ('flag', 'nullary', 'value', 'group'):
+            elif kind == 'value':
+                # collect every occurrence in this instance's window;
+                # convert_value validates them all and the last wins,
+                # exactly as at the top level.  Re-add at the end to
+                # keep last-occurrence order.
+                occ = given.pop(key, [])
+                occ.append(value)
+                given[key] = occ
+            elif kind in ('flag', 'nullary', 'group'):
                 if key in given:
                     del given[key]      # last one wins, per instance
                 given[key] = value
@@ -792,23 +799,25 @@ def call_converter(fn, converters, values, name, usage=None):
             f"(not a valid {fn_name})", usage, param=name) from None
 
 
-def convert_value(converters, winner, overridden, name, usage=None):
+def convert_value(converters, occurrences, name, usage=None):
     """
-    A value option's final value.  The LAST occurrence won and is
-    `winner`; `overridden` is every earlier occurrence.  Convert
-    the winner AND validate each overridden one (ruled 2026-08-16:
-    every oparg must pass its converter, so an invalid value can't
-    slip through by being overridden).  A length-1 converter tuple
-    is a simple leaf; longer is a multi-parameter converter.
+    A value option's value: convert EVERY occurrence, in
+    command-line order, and return the last.  Last wins (ruled
+    2026-07-18), but every oparg is converted, so an invalid one
+    is caught even when a later occurrence overrides it (ruled
+    2026-08-16: "it's not called validate for nothing").
+    occurrences is the option's list of opargs--one raw string per
+    occurrence, or a tuple of strings for a multi-parameter
+    converter.  A length-1 converter tuple is a simple leaf.
     """
-    def one(text):
+    result = None
+    for text in occurrences:
         if len(converters) == 1:
-            return convert(converters[0], text, name, usage)
-        return call_converter(converters[0], converters[1:], text,
-                              name, usage)
-    for extra in overridden:
-        one(extra)                  # validate; the result is discarded
-    return one(winner)
+            result = convert(converters[0], text, name, usage)
+        else:
+            result = call_converter(converters[0], converters[1:],
+                                    text, name, usage)
+    return result
 # --8<-- end appeal call converter --8<--
 
 
