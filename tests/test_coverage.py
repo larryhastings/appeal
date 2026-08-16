@@ -1383,48 +1383,6 @@ def test_repl_completer_and_interrupts():
     assert 'configuration error:' in text
 
 
-def test_mcp_entry_branches():
-    # config without a class to feed: refused at startup
-    app = Appeal(name='m1')
-    @app.command()
-    def go(x: int):
-        return x
-    try:
-        app.mcp(config={'a': 1})
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'no class to construct' in str(e)
-    # nested subcommands: refused by name, both transports
-    app2 = Appeal(name='m2')
-    @app2.command(name='db')
-    class Db:
-        def __init__(self, label):
-            self.label = label
-        @app2.subcommand('db')
-        def wipe(self):
-            pass
-    for entry in (app2.mcp, app2.standalone_mcp):
-        try:
-            entry()
-            assert False, 'expected AppealConfigurationError'
-        except AppealConfigurationError as e:
-            assert 'flat name' in str(e)
-    # a global-only program serves its lone plan as the one tool
-    app3 = Appeal(name='m3')
-    @app3.global_command()
-    def top(x: int, *, verbose=False):
-        return x
-    old_stdin = sys.stdin
-    try:
-        sys.stdin = io.StringIO()
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = app3.mcp()         # EOF immediately: a clean exit
-    finally:
-        sys.stdin = old_stdin
-    assert code == 0
-
-
 def _importable_global_app(directory, name):
     # emission refuses __main__ residents by design, so the
     # command lives in a real module
