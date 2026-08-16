@@ -22,7 +22,6 @@ from .runtime import (
     )
 
 
-# --8<-- start appeal build --8<--
 # terminal converters: called with one operand string, never introspected
 _blessed_leaves = {str, int, float, bool}
 
@@ -1533,4 +1532,3 @@ def _reanalyze(plan):
         if isinstance(slot.child, Plan):
             _reanalyze(slot.child)
     _analyze(plan)
-# --8<-- end appeal build --8<--

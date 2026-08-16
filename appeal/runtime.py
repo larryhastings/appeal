@@ -35,7 +35,6 @@ from big.text import (OverflowStrategy, _iterate_over_bytes,
                       wrap_words)
 
 
-# --8<-- start appeal exceptions --8<--
 def did_you_mean(word, candidates):
     """
     The suggestion tail for an unknown-name error: " (did you
@@ -149,11 +148,8 @@ def foreign_appeal_error(e):
         if c.__name__ == 'AppealError':
             return 'error'
     return None
-# --8<-- end appeal exceptions --8<--
 
 
-# --8<-- start appeal convert --8<--
-# --8<-- requires appeal exceptions --8<--
 def convert(converter, text, name, usage=None):
     """
     Run a terminal converter over one operand.  A ValueError or
@@ -168,11 +164,8 @@ def convert(converter, text, name, usage=None):
         raise UsageError(
             f"invalid value for {name!r}: {text!r} ({detail})",
             usage, param=name) from None
-# --8<-- end appeal convert --8<--
 
 
-# --8<-- start appeal parse tokens --8<--
-# --8<-- requires appeal exceptions --8<--
 def parse_tokens(argv, options, usage=None, command_split=None,
                  positions=None):
     """
@@ -447,11 +440,8 @@ def parse_tokens(argv, options, usage=None, command_split=None,
     if command_split is not None:
         return operands, given, []
     return operands, given
-# --8<-- end appeal parse tokens --8<--
 
 
-# --8<-- start appeal command set --8<--
-# --8<-- requires appeal exceptions --8<--
 def scan_command_set(argv, parse_globals, commands, usage=None,
                      default=None, repeat=False, words=None):
     """
@@ -597,12 +587,8 @@ def run_command_set(argv, parse_globals, commands, usage=None,
             return tail[2](tail[3])
         return default([])
     return result
-# --8<-- end appeal command set --8<--
 
 
-# --8<-- start appeal option protocol --8<--
-# --8<-- requires appeal convert --8<--
-# --8<-- requires appeal exceptions --8<--
 class Option:
     """
     Subclass to define an option with custom behavior.  The
@@ -690,11 +676,8 @@ def fold(cls, converters, occurrences, default, name, usage=None):
             raise UsageError(f"{name}: {e}", usage,
                              param=name) from None
     return instance.render()
-# --8<-- end appeal option protocol --8<--
 
 
-# --8<-- start appeal windows --8<--
-# --8<-- requires appeal exceptions --8<--
 def greedy_sizes(take, minimum, maximum, name, usage=None):
     """
     Split `take` operands into per-instance sizes for a *args
@@ -774,12 +757,8 @@ def window_options(occurrences, first, sizes, name, usage=None,
             else:
                 given.setdefault(key, []).append(value)
     return givens
-# --8<-- end appeal windows --8<--
 
 
-# --8<-- start appeal call converter --8<--
-# --8<-- requires appeal convert --8<--
-# --8<-- requires appeal exceptions --8<--
 def call_converter(fn, converters, values, name, usage=None):
     """
     A multi-operand option converter: convert each operand per
@@ -818,23 +797,16 @@ def convert_value(converters, occurrences, name, usage=None):
             result = call_converter(converters[0], converters[1:],
                                     text, name, usage)
     return result
-# --8<-- end appeal call converter --8<--
 
 
-# --8<-- start appeal collect list --8<--
-# --8<-- requires appeal convert --8<--
 def accumulate(converter, values, name, usage=None):
     """
     The collector behind list[T] options: convert each collected
     occurrence, in order.
     """
     return [convert(converter, value, name, usage) for value in values]
-# --8<-- end appeal collect list --8<--
 
 
-# --8<-- start appeal collect mapping --8<--
-# --8<-- requires appeal convert --8<--
-# --8<-- requires appeal exceptions --8<--
 def collect_mapping(key_converter, value_converter, values, name, usage=None):
     """
     The collector behind dict[K, V] options: each occurrence is
@@ -853,11 +825,8 @@ def collect_mapping(key_converter, value_converter, values, name, usage=None):
                 f"{name}: key {key_text!r} defined more than once", usage)
         result[key] = convert(value_converter, value_text, name, usage)
     return result
-# --8<-- end appeal collect mapping --8<--
 
 
-# --8<-- start appeal check count --8<--
-# --8<-- requires appeal exceptions --8<--
 def absorb_take(remaining, suffix_counts, suffix_minimum, floor,
                 skippable):
     """
@@ -1177,14 +1146,8 @@ def check_count(n, minimum, maximum, valid_counts, usage=None, what=None,
             f"wrong number of arguments{where}: got {n}, "
             f"expected at least {minimum}",
             usage, param=param)
-# --8<-- end appeal check count --8<--
 
 
-# --8<-- start appeal run main --8<--
-# --8<-- requires appeal theme --8<--
-# --8<-- requires appeal complete --8<--
-# --8<-- requires appeal exceptions --8<--
-# --8<-- requires appeal help --8<--
 def run_main(parse, args=None, stylesheet=None, completion=None,
              errors=None, version=None, margin=79):
     """
@@ -1307,10 +1270,8 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
     if isinstance(result, int):
         return result
     return 0
-# --8<-- end appeal run main --8<--
 
 
-# --8<-- start appeal fingerprint --8<--
 ##
 ## Fingerprints (Larry's design, 2026-08-09): a compiled
 ## standalone module identifies--and polices--the functions
@@ -1515,13 +1476,8 @@ def resolve_fingerprint_path(fn, path, option_overrides=None):
             raise AppealConfigurationError(
                 f"unknown fingerprint path step {kind!r}")
     return obj
-# --8<-- end appeal fingerprint --8<--
 
 
-# --8<-- start appeal standalone shim --8<--
-# --8<-- requires appeal exceptions --8<--
-# --8<-- requires appeal fingerprint --8<--
-# --8<-- requires appeal run main --8<--
 
 ##
 ## The standalone shim (Larry's design, 2026-08-09): a compiled
@@ -1566,7 +1522,6 @@ _KNOB_UNSET = object()        # constructor knob omitted marker
 
 
 
-# --8<-- end appeal standalone shim --8<--
 
 
 ##
@@ -1582,16 +1537,13 @@ _KNOB_UNSET = object()        # constructor knob omitted marker
 ## their home modules.
 ##
 
-# --8<-- start appeal stylesheet preamble --8<--
 import os
 import sys
 
 style_delimiters = '⦃⦙⦄'
 
-# --8<-- end appeal stylesheet preamble --8<--
 
 
-# --8<-- start appeal stylesheet alias --8<--
 # the home-module spellings big/markdown.py's regions expect.
 # Deferring wrappers, not assignments: snippets emit in source
 # order and this appeal-side glue precedes big's regions in the
@@ -1603,9 +1555,7 @@ def _StyleSheet(*args, **kwargs):
 def _style_span(*args, **kwargs):
     return style(*args, **kwargs)
 
-# --8<-- end appeal stylesheet alias --8<--
 
-# --8<-- start appeal markdown defaults --8<--
 # Appeal owns the WIDTH-AWARE structure (ruled 2026-08-08: big
 # stays width-agnostic by design--its markdown_defaults are the
 # neutral look: headings unruled, the thematic break a short
@@ -1631,7 +1581,6 @@ appeal_markdown_defaults = {
     'heading_warning':   ('T', '⦃orange⦙T⦄'),
     'heading_caution':   ('T', '⦃red⦙T⦄'),
 }
-# --8<-- end appeal markdown defaults --8<--
 
 
 ##
@@ -1642,8 +1591,6 @@ appeal_markdown_defaults = {
 ##
 
 
-# --8<-- start appeal complete --8<--
-# --8<-- requires appeal exceptions --8<--
 
 ##
 ## Shell completion (the completion rulings): the engine answers
@@ -2078,11 +2025,8 @@ def completion_reentry(completer, prog):
     for candidate in completer(before, prefix):
         print(candidate)
     return 0
-# --8<-- end appeal complete --8<--
 
 
-# --8<-- start appeal mcp --8<--
-# --8<-- requires appeal exceptions --8<--
 def run_mcp(tools, name, version='0'):
     """
     Serve this program's commands as MCP tools: JSON-RPC 2.0 over
@@ -2156,18 +2100,8 @@ def run_mcp(tools, name, version='0'):
             reply(id, error={'code': -32601,
                              'message': f'unknown method {method!r}'})
     return 0
-# --8<-- end appeal mcp --8<--
 
 
-# --8<-- start appeal theme --8<--
-# --8<-- requires appeal stylesheet preamble --8<--
-# --8<-- requires appeal stylesheet alias --8<--
-# --8<-- requires appeal markdown defaults --8<--
-# --8<-- requires big stylesheet render core --8<--
-# --8<-- requires big stylesheet transforms --8<--
-# --8<-- requires big ansi stylesheets --8<--
-# --8<-- requires big terminal color --8<--
-# --8<-- requires big markdown defaults --8<--
 
 ##
 ## Themes (Larry's design, 2026-08-06): a theme is DATA--a dict
@@ -2397,27 +2331,13 @@ def usage_markup(usage):
         append(escape_styles(c))
         i += 1
     return ''.join(out)
-# --8<-- end appeal theme --8<--
 
 
-# --8<-- start appeal help --8<--
-# --8<-- requires appeal theme --8<--
-# --8<-- requires big word wrap trio --8<--
 # (big format_definition_list requires removed 2026-08-15: the
 # runtime deflist path is wrap_words' own render_deflist; nothing
 # in a generated script calls format_definition_list, so the
 # ~10KB region no longer rides along.  Appeal still imports it
 # in-process for the borrowed-trio tests.)
-# --8<-- requires appeal stylesheet preamble --8<--
-# --8<-- requires big terminal color --8<--
-# --8<-- requires big stylesheet render core --8<--
-# --8<-- requires appeal stylesheet alias --8<--
-# --8<-- requires big ansi stylesheets --8<--
-# --8<-- requires big markdown defaults --8<--
-# --8<-- requires big glyphs from stylesheet --8<--
-# --8<-- requires big gently_title --8<--
-# --8<-- requires big stylesheet transforms --8<--
-# --8<-- requires appeal markdown defaults --8<--
 def usage_units(usage):
     """
     Split a usage line into its unbreakable top-level units: the
@@ -2554,7 +2474,6 @@ def render_baked_help(pieces, margin=79, file=None,
     while '\n\n\n' in text:
         text = text.replace('\n\n\n', '\n\n')
     return text.lstrip('\n').rstrip() + '\n'
-# --8<-- end appeal help --8<--
 
 
 ##
@@ -2830,8 +2749,6 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
 ##
 
 
-# --8<-- start appeal split --8<--
-# --8<-- requires appeal exceptions --8<--
 def _toy_multisplit_as_pairs(segments, empty):
     # segments alternates non-separator and separator strings,
     # always starting and ending with a (possibly empty)
@@ -2947,11 +2864,8 @@ def split(*separators, strip=False):
     split_converter.__appeal_snippet__ = 'appeal split'
     return split_converter
 split.__appeal_factory__ = "split(':')"
-# --8<-- end appeal split --8<--
 
 
-# --8<-- start appeal validate --8<--
-# --8<-- requires appeal exceptions --8<--
 def validate(*values, type=None):
     """
     Creates a converter that only accepts the given values.  The
@@ -2980,10 +2894,8 @@ def validate(*values, type=None):
     validate_converter.__appeal_snippet__ = 'appeal validate'
     return validate_converter
 validate.__appeal_factory__ = "validate('red', 'green')"
-# --8<-- end appeal validate --8<--
 
 
-# --8<-- start appeal validate range --8<--
 def validate_range(start, stop=None, *, type=None, clamp=False):
     """
     Creates a converter that checks start <= value <= stop.  With
@@ -3015,11 +2927,8 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
     validate_range_converter.__appeal_snippet__ = 'appeal validate range'
     return validate_range_converter
 validate_range.__appeal_factory__ = "validate_range(0, 10)"
-# --8<-- end appeal validate range --8<--
 
 
-# --8<-- start appeal counter --8<--
-# --8<-- requires appeal option protocol --8<--
 def counter(*, max=None, step=1):
     """
     Creates a repeatable flag-like option that counts occurrences:
@@ -3045,10 +2954,8 @@ def counter(*, max=None, step=1):
     Counter.__name__ = 'counter'
     return Counter
 counter.__appeal_factory__ = "counter()"
-# --8<-- end appeal counter --8<--
 
 
-# --8<-- start appeal file --8<--
 class _ProcessStream:
     """
     The safe wrapper file() puts around a process-standard stream
@@ -3149,11 +3056,8 @@ def file(mode='r', *, buffering=-1, encoding=None, errors=None,
         file_converter.__appeal_snippet__ = 'appeal file'
     return file_converter
 file.__appeal_factory__ = "file()"
-# --8<-- end appeal file --8<--
 
 
-# --8<-- start appeal optional --8<--
-# --8<-- requires appeal exceptions --8<--
 class _OptionalMeta(type):
     "optional[T] parameterizes via metaclass __getitem__ (3.6-safe)."
     def __getitem__(cls, T):
@@ -3202,11 +3106,8 @@ class optional(metaclass=_OptionalMeta):
             'subscript', 'optional', (T,), {})
         option_value.__appeal_snippet__ = 'appeal optional'
         return option_value
-# --8<-- end appeal optional --8<--
 
 
-# --8<-- start appeal folds --8<--
-# --8<-- requires appeal option protocol --8<--
 class _Subscriptable(type):
     """
     v1's crazy science magic, restored for Python 3.6:
@@ -3292,5 +3193,4 @@ class mapping(MultiOption, metaclass=_Subscriptable):
         sub.__appeal_recipe__ = ('subscript', 'mapping',
                                  tuple(types), {})
         return sub
-# --8<-- end appeal folds --8<--
 

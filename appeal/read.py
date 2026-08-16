@@ -29,7 +29,6 @@ from .runtime import (
     AppealConfigurationError, AppealDataError, is_multioption, is_option,
     )
 
-# --8<-- start appeal read --8<--
 
 
 _TRUTHY = frozenset(('true', 'yes', 'on', '1'))
@@ -410,4 +409,3 @@ def read_csv(callable, reader, *, first_row_map=None):
             f"read_csv: heading {e.args[0]!r} isn't in first_row_map")
     return [_read_group(plan, dict(zip(names, row)), '')
             for row in rows if row]
-# --8<-- end appeal read --8<--

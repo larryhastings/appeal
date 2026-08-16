@@ -24,7 +24,6 @@ def _validate_arg_format(fmt):
             f"interpolations are {{name}} and {{name.upper()}}")
 
 
-# --8<-- start appeal plan classes --8<--
 DEFAULT_ARG_FORMAT = '<{name.upper()}>'   # full clap (ruled 2026-08-04)
 
 
@@ -468,7 +467,6 @@ class Plan:
             else:
                 n += s.child.count_terminals()
         return n
-# --8<-- end appeal plan classes --8<--
 
 
 def command_set_usage(prog, global_plan):
