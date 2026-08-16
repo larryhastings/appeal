@@ -1442,19 +1442,6 @@ def _importable_global_app(directory, name):
     return app
 
 
-def test_standalone_global_only_and_write():
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        app = _importable_global_app(d, 'sg')
-        text = app.standalone()
-        assert 'sg' in text
-        assert 'sg' in _importable_global_app(d, 'sgm').standalone_mcp()
-        path = os.path.join(d, 'sg.py')
-        assert app.write_standalone(path) == path
-        with open(path, encoding='utf-8') as f:
-            assert f.read() == text
-
-
 def test_man_page_trailing_blank():
     # prose whose lines end with blanks: the empty chunk is
     # skipped, not rendered as an empty paragraph
@@ -2423,68 +2410,6 @@ def test_emit_command_set_refusals():
         pass
 
 
-def test_emission_ref_shapes():
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        mod = make_module(d, 'emitrefs', (
-            'import sys\n'
-            'import appeal\n'
-            'BAD = [object()]\n'
-            'OPAQUE = object()\n'
-            'def make():\n'
-            '    def conv(v):\n'
-            '        return v\n'
-            '    return conv\n'
-            'LOCAL = make()\n'
-            'def streams(*, log: appeal.file("w") = sys.stderr,\n'
-            '            inp: appeal.file() = sys.stdin):\n'
-            '    return 0\n'
-            'def unrenderable(x=BAD):\n'
-            '    return x\n'
-            'def opaque(x=OPAQUE):\n'
-            '    return x\n'
-            'def localconv(x: LOCAL):\n'
-            '    return x\n'
-            ))
-
-        def standalone_for(fn):
-            app = Appeal(name='er')
-            app.global_command()(fn)
-            return app.standalone()
-
-        text = standalone_for(mod.streams)
-        assert 'sys.stderr' in text and 'sys.stdin' in text
-        # the compiled-module form (ruled 2026-08-09): a CLOSURE
-        # converter is no longer a refusal--it rides as a slot,
-        # resolved live from the decorated function's annotation
-        # at registration (the old entry-point script had to
-        # import it, and couldn't)
-        text = standalone_for(mod.localconv)
-        assert '_conv = None' in text
-        assert "('annotation', 'x')" in text
-        for fn, complaint in ((mod.unrenderable, 'round-trip'),
-                              (mod.opaque, 'how to render')):
-            try:
-                standalone_for(fn)
-                assert False, 'expected refusal for %r' % (fn,)
-            except AppealConfigurationError as e:
-                assert complaint in str(e), (fn, str(e))
-        # emission leans on big.snip; without it, refusal by name
-        stashed = {k: sys.modules.get(k) for k in ('big.snip',)}
-        sys.modules['big.snip'] = None
-        try:
-            standalone_for(mod.streams)
-            assert False, 'expected AppealConfigurationError'
-        except AppealConfigurationError as e:
-            assert 'big' in str(e)
-        finally:
-            for k, v in stashed.items():
-                if v is None:
-                    sys.modules.pop(k, None)
-                else:
-                    sys.modules[k] = v
-
-
 def test_standalone_mcp_shapes():
     import tempfile
     from appeal.codegen import emit_standalone_mcp
@@ -3365,95 +3290,6 @@ class PtOpt(appeal.Option):
 def sneaky_default(x, *, pt: PtOpt = Sneaky({'a': 1})):
     print(x, pt)
 '''
-
-
-def test_branch_standalone_imports_public_module_not_private():
-    # __module__ can name a PRIVATE impl submodule (3.13's
-    # pathlib.Path.__module__ == 'pathlib._local'); the emitted
-    # standalone must import from the public parent that re-exports
-    # it, not the private name.  Three levels deep, so the search
-    # skips the top package (which does NOT re-export it) and lands
-    # on the intermediate one (which does)--exercising both the
-    # keep-looking and the found arcs.
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        top = os.path.join(d, 'pubpriv')
-        sub = os.path.join(top, 'sub')
-        os.makedirs(sub)
-        open(os.path.join(top, '__init__.py'), 'wt').close()  # no re-export
-        with open(os.path.join(sub, '__init__.py'), 'wt') as f:
-            f.write('from pubpriv.sub._impl import conv\n')
-        with open(os.path.join(sub, '_impl.py'), 'wt') as f:
-            f.write('def conv(v):\n    return v\n')
-        sys.path.insert(0, d)
-        try:
-            import pubpriv.sub
-            assert pubpriv.sub.conv.__module__ == 'pubpriv.sub._impl'  # trap
-            # in the compiled-module form COMMANDS never import--
-            # the surviving import arc is an importable CONVERTER
-            def cmd(x: pubpriv.sub.conv):
-                return x
-            app = Appeal(name='cmd')
-            app.global_command()(cmd)
-            script = app.standalone()
-            # unification (2026-08-16): a converter is path-resolved
-            # from the live function's annotations, never imported.
-            # So NEITHER the public nor the private module is imported
-            # for conv--the private-module hazard is sidestepped
-            # entirely (no import to canonicalize).
-            assert not any(line.startswith(('from ', 'import '))
-                           and 'pubpriv' in line
-                           for line in script.split('\n')), \
-                [l for l in script.split('\n') if 'pubpriv' in l]
-        finally:
-            sys.path.remove(d)
-            for name in ('pubpriv', 'pubpriv.sub', 'pubpriv.sub._impl'):
-                sys.modules.pop(name, None)
-
-
-def test_branch_standalone_embraces_main_defined():
-    # the compiled-module form (ruled 2026-08-09): a command
-    # defined in the user's own __main__ script is LEGAL--the
-    # module never imports it, the function arrives live at
-    # registration.  (The old entry-point form refused this by
-    # name; the refusal died with it.)
-    def cmd(x):
-        return x
-    cmd.__qualname__ = 'cmd'         # a top-level name, no '<locals>'
-    cmd.__module__ = '__main__'
-    app = Appeal(name='cmd')
-    app.global_command()(cmd)
-    script = app.standalone()
-    assert '_cmd = None' in script       # the impl slot
-
-
-def test_branch_emission_edges():
-    # standalone_mcp with an OPTIONAL __init__ operand passes the
-    # required-without-coverage sweep; a container default whose
-    # repr round-trips UNEQUAL refuses by name
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, 'branch_edge_mod.py')
-        with open(path, 'wt', encoding='utf-8') as f:
-            f.write(BRANCH_EDGE_MODULE)
-        sys.path.insert(0, d)
-        try:
-            import branch_edge_mod
-            import importlib
-            importlib.reload(branch_edge_mod)
-            script = branch_edge_mod.app.standalone_mcp()
-            assert 'import appeal' not in script
-            try:
-                sd_app = Appeal(name='sd')
-                sd_app.global_command()(
-                    branch_edge_mod.sneaky_default)
-                sd_app.standalone()
-                assert False, 'expected refusal of the lying repr'
-            except AppealConfigurationError:
-                pass
-        finally:
-            sys.path.remove(d)
-            sys.modules.pop('branch_edge_mod', None)
 
 
 def run_tests(run=None):

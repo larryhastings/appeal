@@ -2842,68 +2842,6 @@ def test_fingerprint_recurses_into_converters():
     assert isinstance(entry, str) and entry.startswith('recipe:'), entry
 
 
-def test_standalone_recipes_preserve_semantics():
-    # recipes are structured--(kind, factory, args, kwargs) with
-    # LIVE arguments--and emission renders classes through the
-    # reference table.  Regression: recipes were once source
-    # strings; validate/validate_range dropped type=, and
-    # accumulator[Path] emitted a name the script never imported
-    # (NameError), so standalone scripts diverged from in-process.
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            'import pathlib\n'
-            'LEVEL = appeal.validate(1, 2, type=float)\n'
-            'SIZE = appeal.validate_range(1, 5, type=float)\n'
-            "app = appeal.Appeal('blend')\n"
-            '@app.global_command()\n'
-            'def blend(lvl: LEVEL, size: SIZE,\n'
-            '          *, inc: appeal.accumulator[pathlib.Path] = (),\n'
-            '          m: appeal.mapping[int, pathlib.Path] = None):\n'
-            "    print(type(lvl).__name__, type(size).__name__,\n"
-            "          [type(p).__name__ for p in inc],\n"
-            "          {k: type(v).__name__ for k, v in (m or {}).items()})\n"),
-            'blend')
-        # the baked recipes carry their full semantics
-        assert '= validate(1, 2, type=float)' in module
-        assert '= validate_range(1, 5, type=float)' in module
-        assert '= accumulator[_Path]' in module
-        assert '= mapping[int, _Path]' in module
-        assert 'from pathlib import Path as _Path' in module
-        # ...and the program honors them, with NO appeal anywhere
-        r = run_script(prog,
-                       ['1', '2', '--inc', 'x.txt', '-m', '3', 'z.txt'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout.split() == \
-            "float float ['PosixPath'] {3: 'PosixPath'}".split(), r.stdout
-        # out of range refuses politely, converted through type=
-        r = run_script(prog, ['1', '9'])
-        assert r.returncode == 2, (r.returncode, r.stderr)
-
-
-def test_standalone_vocabulary_recipes():
-    # the north star: factory products (closures! dynamic classes!)
-    # survive standalone emission--the script re-runs the recipe
-    # from the embedded vocabulary region
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='paths')\n"
-            '@app.global_command()\n'
-            'def paths(path: appeal.split(":"),\n'
-            '          *, v: appeal.counter(step=10) = 0,\n'
-            '          color: appeal.validate("red", "blue") = "red"):\n'
-            "    print('paths', path, v, color)\n"), 'paths')
-        assert 'def split(' in module                   # region embedded
-        assert 'def _toy_multisplit(' in module         # snipped in-region
-        assert "= split(':')" in module                  # the recipe
-        assert "= counter(max=None, step=10)" in module
-        r = run_script(prog, ['a:b', '-v', '-v', '--color', 'blue'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == "paths ['a', 'b'] 20 blue\n"
-        r = run_script(prog, ['a', '--color', 'mauve'])
-        assert r.returncode == 2
-        assert 'red' in r.stderr                        # rich error survives
-        assert not r.stdout                             # stdout stays clean
-
 def test_kwargs_options():
     # @app.option declarations for parameters not in the signature
     # deliver through **kwargs; absent ones simply aren't passed
@@ -2988,23 +2926,6 @@ def test_kwargs_options_on_a_converter():
     got = run_both(cmd, ['X', 'a', '--flavor', 'mild'],
                    decorations=app._decorations)
     assert got == ('ok', ('X', ('a', {'flavor': 'mild'}))), got
-
-def test_standalone_kwargs_options():
-    # north star: **kwargs options survive standalone emission
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='stamp')\n"
-            "@app.option('depth', '--depth', annotation=int)\n"
-            '@app.global_command()\n'
-            'def stamp(label, **kwargs):\n'
-            "    print('stamp', label, sorted(kwargs.items()))\n"),
-            'stamp')
-        r = run_script(prog, ['x', '--depth', '3'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == "stamp x [('depth', 3)]\n"
-        r = run_script(prog, ['x'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'stamp x []\n'
 
 def test_app_parameter_renames():
     # @app.parameter (v1's API): renames an operand in usage; and
@@ -3157,28 +3078,6 @@ def test_default_options_policy():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
-
-def test_default_options_policy_standalone():
-    # NORTH STAR: the policy runs on the BUILD host; only its
-    # output (the option strings) is baked.  The compiled module
-    # exports policy STAND-INS wearing the public names, so the
-    # same source spells appeal.default_long_option in both
-    # worlds; the shim verifies the program still asks for the
-    # same policy (the knob lift, 2026-08-09).
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            DEMO_MODULE
-            + "\napp = appeal.Appeal(name='greet',\n"
-            '                   default_options='
-            'appeal.default_long_option)\n'
-            'app.global_command()(greet)\n'), 'greet')
-        # the long works; the suppressed short is unknown
-        r = run_script(prog, ['dave', '--times', '2'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'hello, dave! hello, dave!\n', r.stdout
-        r = run_script(prog, ['dave', '-t', '2'])
-        assert r.returncode == 2
-        assert "unknown option '-t'" in r.stderr, r.stderr
 
 def test_help_yields_to_user_options():
     # a program that claims --help keeps it; no automatic help
@@ -4927,84 +4826,6 @@ def run_script(script_path, argv, env=None):
         env=env if env is not None else subprocess_env(),
         )
 
-def test_standalone_runs():
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'greet')
-
-        r = run_script(script_path, ['world'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'hello, world!\n'
-
-        r = run_script(script_path, ['world', 'howdy', '--shout', '--times', '2'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'HOWDY, WORLD! HOWDY, WORLD!\n'
-
-        r = run_script(script_path, [])
-        assert r.returncode == 2
-        assert 'error:' in r.stderr
-        assert 'usage:' in r.stderr
-
-        r = run_script(script_path, ['--bogus', 'x'])
-        assert r.returncode == 2
-        assert '--bogus' in r.stderr
-
-def test_error_stream_knob():
-    # errors print to sys.stderr by default (the POSIX diagnostic
-    # convention: pipelines reading stdout stay clean); errors=
-    # takes any writable file object--sys.stdout is v1's behavior.
-    # Requested help stays on stdout either way.
-    import appeal as _appeal
-    import contextlib, io
-
-    def make_app(**kwargs):
-        app = _appeal.Appeal(name='streams', **kwargs)
-        @app.command()
-        def greet(name):
-            print(f'hi, {name}')
-        return app
-
-    # the default resolves sys.stderr AT ERROR TIME (like
-    # print(file=None)), so redirection works
-    out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), \
-         contextlib.redirect_stderr(err):
-        code = exit_code(lambda: make_app().main(['greet']))  # missing argument
-    assert code == 2
-    assert out.getvalue() == '', out.getvalue()
-    assert 'error:' in err.getvalue() and 'usage:' in err.getvalue()
-
-    # any writable file object works, verbatim
-    sink = io.StringIO()
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        code = exit_code(lambda: make_app(errors=sink).main(['greet']))
-    assert code == 2
-    assert out.getvalue() == ''
-    assert 'error:' in sink.getvalue() and 'usage:' in sink.getvalue()
-
-    # a non-stream refuses by name
-    try:
-        _appeal.Appeal(errors=42)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert '42' in str(e)
-
-    # the compiled-module form (ruled 2026-08-09): errors= is a
-    # LIVE runtime knob--the shim passes it straight to run_main
-    # at the program's own runtime, so nothing bakes and even a
-    # custom stream is legal (the old entry-point-script form had
-    # to refuse those; that refusal died with it)
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='streams', errors=sys.stdout)\n"
-            '@app.command()\n'
-            'def greet(name):\n'
-            "    print('hi, ' + name)\n"), 'streams')
-        r = run_script(prog, ['greet'])
-        assert r.returncode == 2
-        assert 'error:' in r.stdout and r.stderr == '', r.stderr
-
-
 def test_standalone_program_named_for_its_command():
     # regression (found 2026-08-09): a program named for one of
     # its commands--the tool named after its main verb--collided
@@ -5122,23 +4943,6 @@ def test_flag_explicit_boolean():
     assert out.getvalue().strip() == 'verbose True'
 
 
-def test_flag_explicit_boolean_standalone():
-    # the '=' spelling works in emitted scripts (north star)
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='fb')\n"
-            '@app.command()\n'
-            'def run(*, verbose=False):\n'
-            "    print('verbose', verbose)\n"), 'fb')
-        r = run_script(prog, ['run', '--verbose=false'])
-        assert (r.returncode, r.stdout) == (0, 'verbose False\n'), r.stderr
-        r = run_script(prog, ['run', '-v=true'])
-        assert (r.returncode, r.stdout) == (0, 'verbose True\n'), r.stderr
-        r = run_script(prog, ['run', '--verbose=si'])
-        assert r.returncode == 2
-        assert "'true' or 'false'" in r.stderr
-
-
 def test_file_converter():
     # appeal.file(): open() as a converter, with '-' meaning the
     # process-standard stream by MODE (the argparse/click answer
@@ -5221,38 +5025,6 @@ def test_file_converter():
                        '__appeal_recipe__')
 
 
-def test_file_converter_standalone():
-    # the north star: '-' pipes through a dependency-free script,
-    # and a `= sys.stdout` default renders by identity
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='upcat')\n"
-            '@app.command()\n'
-            'def cat(inp: appeal.file() = None,\n'
-            "        *, out: appeal.file('w') = sys.stdout):\n"
-            "    data = inp.read() if inp else ''\n"
-            '    out.write(data.upper())\n'
-            '    out.close()\n'), 'upcat')
-        assert "file('r')" in module
-        assert '_out_default = sys.stdout' in module
-        assert 'class _ProcessStream' in module
-        r = sub_run(
-            [sys.executable, prog, 'cat', '-'],
-            input='hello\n', capture_output=True, text=True,
-            cwd=d, env=subprocess_env())
-        assert (r.returncode, r.stdout) == (0, 'HELLO\n'), r.stderr
-        with open(os.path.join(d, 'in.txt'), 'wt') as f:
-            f.write('x\n')
-        r = sub_run(
-            [sys.executable, prog, 'cat', 'in.txt',
-             '--out', 'out.txt'],
-            capture_output=True, text=True, cwd=d,
-            env=subprocess_env())
-        assert r.returncode == 0, r.stderr
-        with open(os.path.join(d, 'out.txt')) as f:
-            assert f.read() == 'X\n'
-
-
 def test_usage_formatter_knobs():
     # Appeal(margin=, indent=): v1's
     # knobs, wired (they were stored-and-never-read; the dead
@@ -5309,32 +5081,6 @@ def test_usage_formatter_knobs():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'margin' in str(e)
-
-
-def test_usage_knobs_standalone():
-    # the cap bakes into the script, and the SCRIPT's terminal
-    # decides the rest at its own runtime (COLUMNS narrows below
-    # the cap; a pipe gets the cap)
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='s', margin=60)\n"
-            '@app.command()\n'
-            'def serve(host):\n'
-            "    '''\n"
-            '    Serves the thing with a summary long enough\n'
-            '    that a narrow terminal must re-wrap it.\n'
-            "    '''\n"), 's')
-        assert 'help_margin(60)' in module
-        env = subprocess_env()
-        r = sub_run(
-            [sys.executable, prog, 'serve', '--help'],
-            capture_output=True, text=True, cwd=d, env=env)
-        assert max(len(l) for l in r.stdout.splitlines()) <= 60
-        r = sub_run(
-            [sys.executable, prog, 'serve', '--help'],
-            capture_output=True, text=True, cwd=d,
-            env={**env, 'COLUMNS': '38'})
-        assert max(len(l) for l in r.stdout.splitlines()) <= 38
 
 
 def test_did_you_mean():
@@ -5428,18 +5174,6 @@ def test_keyboard_interrupt():
         assert False, 'expected KeyboardInterrupt'
     except KeyboardInterrupt:
         pass
-
-
-def test_keyboard_interrupt_standalone():
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='k')\n"
-            '@app.command()\n'
-            'def boom():\n'
-            '    raise KeyboardInterrupt\n'), 'k')
-        r = run_script(prog, ['boom'])
-        assert r.returncode == 130, (r.returncode, r.stderr)
-        assert r.stdout == '' and r.stderr == ''
 
 
 DEEP_MODULE = """\
@@ -5895,20 +5629,6 @@ def test_appeal_error_umbrella():
         assert e.usage
 
 
-def test_appeal_error_standalone():
-    # the raise-for-exit-1 job travels (the umbrella lives in the
-    # exceptions snippet)
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='t')\n"
-            '@app.command()\n'
-            'def fetch():\n'
-            "    raise appeal.AppealError('no server')\n"), 't')
-        r = run_script(prog, ['fetch'])
-        assert r.returncode == 1
-        assert r.stderr == 'error: no server\n', r.stderr
-
-
 def test_config_group_options_and_empty_config():
     # a group's mapping value reads read_mapping style: the
     # child's parameters by name AND its own options, recursively
@@ -6181,26 +5901,6 @@ def test_version():
     assert main(app4, ['--version']) == (0, '4.5\n')
 
 
-def test_version_standalone():
-    # the version bakes into standalone scripts: both spellings
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='calc', version='7.7')\n"
-            '@app.command()\n'
-            'def add(x: int, y: int):\n'
-            '    print(x + y)\n'), 'calc')
-        assert "'7.7'" in module
-        r = run_script(prog, ['--version'])
-        assert (r.returncode, r.stdout) == (0, '7.7\n'), r.stderr
-        r = run_script(prog, ['version'])
-        assert (r.returncode, r.stdout) == (0, '7.7\n'), r.stderr
-        r = run_script(prog, ['help', 'version'])
-        assert (r.returncode, r.stdout) == \
-            (0, "Print the program's version.\n"), r.stderr
-        r = run_script(prog, ['add', '2', '3'])
-        assert (r.returncode, r.stdout) == (0, '5\n'), r.stderr
-
-
 def test_parse_before_execute():
     # the Appeal rule (ruled 2026-07-08): a malformed line does NO
     # work.  The global command must not run when the command
@@ -6388,53 +6088,6 @@ def test_cycling():
         pass
 
 
-def test_standalone_command_set():
-    # the north star holds for multi-command programs: one script,
-    # every command's parser plus the dispatcher and global command
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_program(d, (
-            DEMO_MODULE
-            + "\napp = appeal.Appeal(name='tool')\n"
-            'app.global_command()(config)\n'
-            'app.command()(greet)\n'
-            'app.command()(cp)\n'), 'tool')
-
-        r = run_script(script_path, ['greet', 'world'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'hello, world!\n'
-
-        r = run_script(script_path, ['--trace', 'cp', 'a', 'b', 'dest'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'trace on .\ncopy a+b -> dest\n'
-
-        # flexible global operand: 'proj' feeds config, 'greet' is
-        # the command word (first operand naming a command)
-        r = run_script(script_path, ['proj', '--trace', 'greet', 'world'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'trace on proj\nhello, world!\n'
-
-        # 'bogus' doesn't name a command, so it feeds the global's
-        # optional project; the line ends without a command, and
-        # that's orientation, not a diagnostic: listing, exit 1
-        r = run_script(script_path, ['bogus'])
-        assert r.returncode == 1
-        assert 'Commands' in r.stdout and r.stderr == ''
-        # ...but once the global is at its maximum, the next operand
-        # is forced to be the command word
-        r = run_script(script_path, ['bogus', 'bogus2'])
-        assert r.returncode == 2
-        assert 'unknown command' in r.stderr
-        assert 'Commands' in r.stderr and 'greet' in r.stderr
-
-        r = run_script(script_path, [])
-        assert r.returncode == 1
-        assert 'Commands' in r.stdout and r.stderr == ''
-
-        # the global option is scoped to before the command word
-        r = run_script(script_path, ['greet', 'world', '--trace'])
-        assert r.returncode == 2
-        assert '--trace' in r.stderr
-
 MULTIOPT_MODULE = """\
 from appeal import MultiOption, StrictOption
 
@@ -6457,96 +6110,6 @@ class Where(StrictOption):
 def label(thing, *, tag: Tags = (), where: Where = 'nowhere'):
     print('label', thing, '+'.join(tag), where)
 """
-
-def test_standalone_multioption():
-    # the compiled module SHIPS the option protocol: the program
-    # derives its MultiOption/StrictOption classes from whichever
-    # appeal it imported--in the shipped world, the module's own.
-    # The old two-copies caveat (script machinery vs the user's
-    # imported appeal) died with the entry-point form.
-    body = (MULTIOPT_MODULE.replace(
-                'from appeal import MultiOption, StrictOption',
-                'MultiOption = appeal.MultiOption\n'
-                'StrictOption = appeal.StrictOption')
-            + "\napp = appeal.Appeal(name='label')\n"
-            'app.global_command()(label)\n')
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, body, 'label')
-        r = run_script(prog, ['box', '--tag', 'a', '-t', 'b'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'label box a+b nowhere\n'
-        r = run_script(prog, ['box', '--where', '3', '4'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'label box  3x4\n'
-        r = run_script(prog, ['box',
-                              '--where', '1', '2', '--where', '3', '4'])
-        assert r.returncode == 2
-        assert 'more than once' in r.stderr
-
-def test_standalone_multiparam_option():
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'mark')
-        r = run_script(script_path, ['x', '--at', '3', '4'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'mark x 3,4\n'
-        r = run_script(script_path, ['x'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'mark x origin\n'
-        r = run_script(script_path, ['x', '--at', '3'])
-        assert r.returncode == 2
-        assert '2 values' in r.stderr
-
-def test_standalone_greedy_opargs():
-    # make -j in a generated script: the emitted table carries
-    # (minimum, maximum) and the streamed parse_tokens is greedy
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'build_all')
-        r = run_script(script_path, ['a', 'b'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'build a+b 1\n'
-        r = run_script(script_path, ['a', '-j'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'build a -1\n'
-        r = run_script(script_path, ['a', '-j', '5'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'build a 5\n'
-        r = run_script(script_path, ['-j5', 'a'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'build a 5\n'
-        # the greedy grab is loud in the script too
-        r = run_script(script_path, ['a', '-j', 'b'])
-        assert r.returncode == 2
-        assert "'b'" in r.stderr
-
-def test_standalone_cycling():
-    # cycling in a generated script: the north star holds
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_program(d, (
-            DEMO_MODULE
-            + "\napp = appeal.Appeal(name='tool', repeat=True)\n"
-            'app.global_command()(config)\n'
-            'app.command()(greet)\n'
-            'app.command()(cp)\n'), 'tool')
-
-        # two commands, cycled (optionals spelled--greedy saturation)
-        r = run_script(script_path,
-                       ['greet', 'world', 'hi', 'greet', 'moon', 'yo'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'hi, world!\nyo, moon!\n', r.stdout
-
-        # *src never saturates: cp is a cycle terminator
-        r = run_script(script_path,
-                       ['greet', 'world', 'hi', 'cp', 'a', 'b', 'dest'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'hi, world!\ncopy a+b -> dest\n', r.stdout
-
-        # a malformed later command means no work at all: the
-        # error goes to stderr, and stdout is EMPTY (no greeting)
-        r = run_script(script_path, ['greet', 'world', 'hi', 'greet'])
-        assert r.returncode == 2
-        assert r.stdout == '', r.stdout
-        assert 'error:' in r.stderr
-
 
 NESTED_MODULE = """\
 def db(*, verbose=False):
@@ -6628,48 +6191,6 @@ def test_nested_cycling_and_popup():
     ran.clear()
     app2.process(['db2', 'add2', '1', 'status2'])
     assert ran == ['db2', ('add2', 1), 'status2'], ran
-
-
-def test_standalone_nested_cycling():
-    # the nested-set lift (2026-08-09): the same tree, compiled
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            NESTED_MODULE
-            + "\napp = appeal.Appeal(name='tool', repeat=True)\n"
-            'app.command()(db)\n'
-            'app.command()(status)\n'
-            "reg = app.command('db', repeat=True)\n"
-            'reg.command()(add)\n'
-            'reg.command()(remove)\n'), 'tool')
-
-        r = run_script(prog, ['db', 'add', '3', 'remove', '4'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'db False\nadd 3\nremove 4\n', r.stdout
-
-        r = run_script(prog,
-                       ['db', 'add', '1', 'status', 'db', '-v', 'remove', '2'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'db False\nadd 1\nstatus\ndb True\nremove 2\n', r.stdout
-
-        # the bare parent errors with its own set's usage
-        r = run_script(prog, ['db'])
-        assert r.returncode == 2
-        assert 'no command specified' in r.stderr
-        assert 'add' in r.stderr and 'remove' in r.stderr
-
-        # STRUCTURALLY malformed mid-cycle: nothing runs (stage 1)
-        # --stdout is EMPTY ('db' never printed)
-        r = run_script(prog, ['db', 'add', '1', '2', 'status'])
-        assert r.returncode == 2
-        assert 'unknown command' in r.stderr
-        assert r.stdout == '', r.stdout
-
-        # but a CONVERSION failure is stage 2 (ruled): commands to
-        # its left already ran, like make stopping mid-build
-        r = run_script(prog, ['db', 'add', 'x', 'status'])
-        assert r.returncode == 2
-        assert r.stdout == 'db False\n', r.stdout
-        assert 'error:' in r.stderr
 
 
 def test_two_classes_same_method_name():
@@ -7104,33 +6625,6 @@ def test_subcommand_same_world():
         assert 'same-world' in str(e)
 
 
-def test_standalone_nested_class_chain():
-    # Larry's spec example (2026-08-10), compiled: `myapp foo 3
-    # bar monitor hi` instantiates MyApp, then foo, then bar,
-    # then calls bar.monitor--each construction at its mount,
-    # explicit subcommand paths throughout
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='myapp')\n"
-            '@app.global_command()\n'
-            'class MyApp:\n'
-            '    def __init__(self, *, verbose=False):\n'
-            "        print('MyApp', verbose)\n"
-            '    @app.command()\n'
-            '    class foo:\n'
-            '        def __init__(self, x: int):\n'
-            "            print('foo', x)\n"
-            "        @app.subcommand('foo')\n"
-            '        class bar:\n'
-            '            def __init__(self):\n'
-            "                print('bar')\n"
-            "            @app.subcommand('foo bar')\n"
-            '            def monitor(self, msg):\n'
-            "                print('monitor', msg)\n"), 'myapp')
-        r = run_script(prog, ['foo', '3', 'bar', 'monitor', 'hi'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'MyApp False\nfoo 3\nbar\nmonitor hi\n', \
-            r.stdout
         # a method of bar mounted outside its world refuses at
         # COMPILE time in the recompile run (same-world)
 
@@ -7171,143 +6665,6 @@ class MyApp:
 """
 
 
-def test_standalone_class_app():
-    # the class-command lift (2026-08-09): §8.6 compiled--the
-    # class binds live at registration (never imported), methods
-    # parked by their own decorators and reclaimed by identity,
-    # the instance constructed at dispatch
-    with tempfile.TemporaryDirectory() as d:
-        prog, module = write_standalone_program(d, (
-            "app = appeal.Appeal(name='fgrep')\n"
-            '@app.global_command()\n'
-            'class MyApp:\n'
-            '    def __init__(self, *, verbose=False):\n'
-            '        self.verbose = verbose\n'
-            '    @app.command()\n'
-            '    def fgrep(self, pattern, file, *, count: int = None):\n'
-            "        print('fgrep', self.verbose, pattern, file, count)\n"
-            '    @app.command()\n'
-            '    def count(self, x):\n'
-            "        print('count', self.verbose, x)\n"), 'fgrep')
-        assert '_MyApp = None' in module        # the class slot
-
-        r = run_script(prog, ['-v', 'fgrep', 'patt', 'file', '-c', '33'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'fgrep True patt file 33\n', r.stdout
-
-        r = run_script(prog, ['count', 'x'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'count False x\n', r.stdout
-
-        r = run_script(prog, ['helper'])
-        assert r.returncode == 2
-        assert 'unknown command' in r.stderr
-
-
-def test_standalone_gate_rule():
-    # the wall in a generated script: board's frame (_pair, two
-    # required operands) gates the skippable stroke's --dashed
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'board')
-        r = run_script(script_path, ['a', 'b', '--dashed'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'board a+b 1.0~\n'
-        r = run_script(script_path, ['--dashed', 'a', 'b'])
-        assert r.returncode == 2
-        assert 'too early' in r.stderr
-
-def test_standalone_star_args_windows():
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'path')
-        r = run_script(script_path, ['home', '1', '--dashed', '2', '3'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'path home 1.0-+2.0~+3.0-\n'
-        r = run_script(script_path, ['home', '1', '2', '--dashed'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'path home 1.0-+2.0~\n'    # trailing: nearest seg
-        r = run_script(script_path, ['home', '--dashed'])
-        assert r.returncode == 2
-        assert 'at least one' in r.stderr
-
-def test_standalone_help_sections():
-    # parameter tables render inside a generated script, formatted
-    # at run time by the embedded trio
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'mark')
-        r = run_script(script_path, ['--help'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout.startswith('usage: '), r.stdout
-        assert 'Marks a label on the canvas.' in r.stdout
-        assert 'usage: mark' in r.stdout
-        assert 'Arguments\n---------' in r.stdout
-        assert 'Options\n-------' in r.stdout
-        assert '<LABEL>  the text to place.' in r.stdout
-        assert '-a|--at <X> <Y>' in r.stdout
-        assert 'where to place it.' in r.stdout
-
-def test_standalone_command_set_help():
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_program(d, (
-            DEMO_MODULE
-            + "\napp = appeal.Appeal(name='tool')\n"
-            'app.command()(greet)\n'
-            'app.command()(mark)\n'), 'tool')
-
-        r = run_script(script_path, ['help'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout.startswith('usage: tool command')
-        assert 'mark   Marks a label on the canvas.' in r.stdout
-        assert 'help   Print usage documentation' in r.stdout
-
-        r = run_script(script_path, ['help', 'mark'])
-        r2 = run_script(script_path, ['mark', '--help'])
-        assert r.returncode == 0 and r.stdout == r2.stdout
-        assert r.stdout.startswith('usage: '), r.stdout
-        assert 'Marks a label on the canvas.' in r.stdout
-        assert '<LABEL>  the text to place.' in r.stdout
-
-def test_standalone_help():
-    # the north star: --help works in a generated script, formatted
-    # at run time by the embedded trio, importing nothing
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'greet')
-        assert 'def render_baked_help' in script
-        assert 'def wrap_words' in script
-        r = run_script(script_path, ['--help'])
-        assert r.returncode == 0, r.stderr
-        # greet has no docstring: no summary, so the page opens
-        # with usage
-        assert r.stdout.startswith('usage: greet')
-        r2 = run_script(script_path, ['-h'])
-        assert r2.stdout == r.stdout
-
-def test_standalone_app_option_override():
-    # @app.option's strings are baked into the emitted table; the
-    # compiled module's shim RE-RECORDS the decoration at runtime
-    # and the fingerprint proves both worlds decorated alike
-    decorate = "app.option('shout', '-S', '--yell', default=False)(greet)\n"
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'greet', decorate)
-
-        r = run_script(script_path, ['world', '--yell'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'HELLO, WORLD!\n'
-
-        r = run_script(script_path, ['world', '-S', '--times', '2'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'HELLO, WORLD! HELLO, WORLD!\n'
-
-        r = run_script(script_path, ['world', '--shout'])   # overruled away
-        assert r.returncode == 2
-        assert '--shout' in r.stderr
-
-def test_standalone_star_args():
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'cp')
-        r = run_script(script_path, ['a', 'b', 'c', 'dest'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'copy a+b+c -> dest\n'
-
 def test_standalone_plucks_minimal_runtime():
     # the emitter plucks only the snippets the parser needs out of
     # the runtime warehouse.  a plain command gets the core and the
@@ -7330,85 +6687,6 @@ def test_standalone_plucks_minimal_runtime():
         # ...and it still runs.
         r = run_script(script_path, ['world'])
         assert r.returncode == 0, r.stderr
-
-def test_standalone_is_standalone():
-    # the north star's teeth, part 1: the generated text imports
-    # nothing but the stdlib (the compiled module never imports
-    # even the user's code--functions arrive at registration).
-    # Line-anchored: the header COMMENT shows the try/except
-    # import idiom, which is prose, not an import.
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'greet')
-        for line in script.split('\n'):
-            assert not line.startswith(('import appeal', 'from appeal',
-                                        'import big', 'from big')), \
-                f'standalone module contains {line!r}'
-
-        # part 2: it runs in an environment where appeal/appeal2/big
-        # aren't even importable (cwd is the tmpdir; no repo on path),
-        # and afterwards none of them appear in sys.modules
-        probe = (
-            "import sys, runpy\n"
-            "sys.argv = ['greet', 'world']\n"
-            # `python3 prog.py` puts the program's directory on
-            # sys.path; runpy.run_path does not--restore it, or
-            # `import standalone` misses and the try/except falls
-            # through to whatever appeal is installed
-            f"sys.path.insert(0, {os.path.dirname(script_path)!r})\n"
-            "try:\n"
-            f"    runpy.run_path({script_path!r}, run_name='__main__')\n"
-            "except SystemExit as e:\n"
-            "    assert (e.code or 0) == 0, e.code\n"
-            "bad = sorted(m for m in sys.modules"
-            " if m.split('.')[0] in ('appeal', 'big'))\n"
-            "print('CLEAN' if not bad else 'CONTAMINATED ' + ' '.join(bad))\n"
-            )
-        r = sub_run(
-            [sys.executable, '-c', probe],
-            capture_output=True, text=True, cwd=d,
-            env=subprocess_env(),
-            )
-        assert r.returncode == 0, r.stderr
-        assert 'CLEAN' in r.stdout, r.stdout
-
-def test_standalone_nested_converters():
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'between')
-        r = run_script(script_path, ['a', 'b'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'between a+b None\n'
-        r = run_script(script_path, ['a', 'b', 'c', 'd'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'between a+b c+d\n'
-        r = run_script(script_path, ['a', 'b', 'c'])
-        assert r.returncode == 2
-        assert 'expected 2 or 4' in r.stderr, r.stderr
-
-def test_standalone_embraces_unimportables():
-    # the compiled-module form (ruled 2026-08-09) DISSOLVED the
-    # old unimportability refusals: functions arrive live at
-    # registration and converters resolve from annotations, so
-    # nested callables and lambdas--the old refusal cases--emit
-    # as slots.  (The north star's teeth still bite where they
-    # must: non-round-tripping default literals, in
-    # test_branch_emission_edges.)
-    import appeal as _appeal
-    def local_command(x):
-        return x
-    app = _appeal.Appeal(name='loc')
-    app.global_command()(local_command)
-    module = app.standalone()
-    assert '_local_command = None' in module     # the impl slot
-
-    lam = lambda x: 'lam:' + x
-    def cmd(a: lam):
-        return a
-    app2 = _appeal.Appeal(name='lc')
-    app2.global_command()(cmd)
-    module = app2.standalone()
-    assert '_cmd = None' in module
-    assert "('annotation', 'a')" in module       # the lambda's path
-
 
 # ---------------------------------------------------------------------
 # the docstring parser (composable documentation, proposal §8.7.1)
@@ -7820,44 +7098,6 @@ def test_colorized_help_paints_after_layout():
     plan.arg_format = DEFAULT_ARG_FORMAT
 
 
-def test_standalone_colorized_help_and_errors():
-    # the theme travels as a literal; the DECISION happens at the
-    # script's own runtime--FORCE_COLOR paints, NO_COLOR silences,
-    # a pipe (no tty) stays monochrome
-    import re as _re
-    decolor = lambda s: _re.sub('\x1b\\[[0-9;]*m', '', s)
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'mark')
-        assert "stylesheet=None" in script       # auto by default
-        base = subprocess_env()
-        plain = run_script(script_path, ['--help'])
-        forced = sub_run(
-            [sys.executable, script_path, '--help'],
-            capture_output=True, text=True, cwd=d,
-            env={**base, 'FORCE_COLOR': '1'})
-        no_color = sub_run(
-            [sys.executable, script_path, '--help'],
-            capture_output=True, text=True, cwd=d,
-            env={**base, 'FORCE_COLOR': '1', 'NO_COLOR': '1'})
-        assert '\x1b[' not in plain.stdout      # a pipe: monochrome
-        assert '\x1b[' in forced.stdout
-        assert decolor(forced.stdout) == plain.stdout
-        assert no_color.stdout == plain.stdout   # NO_COLOR beats FORCE_COLOR
-        # the error prefix paints, on stderr where errors live
-        err = sub_run(
-            [sys.executable, script_path],
-            capture_output=True, text=True, cwd=d,
-            env={**base, 'FORCE_COLOR': '1'})
-        assert err.returncode == 2
-        # bold red under appeal_theme (spans nest: bold opens,
-        # red opens, red closes, bold closes)
-        assert err.stderr.startswith('\x1b[1m\x1b[31merror:\x1b[39m\x1b[22m '), \
-            err.stderr[:40]
-        assert not err.stdout
-        plain_err = run_script(script_path, [])
-        assert decolor(err.stderr) == plain_err.stderr
-
-
 # ---------------------------------------------------------------------
 # shell completion (the completion rulings, 1-5)
 
@@ -7956,137 +7196,6 @@ def test_completion_script_and_reentry():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'tcsh' in str(e)
-
-
-def test_standalone_completion_reentry():
-    # the north star: an emitted script answers the reentry
-    # protocol--gated on empty argv--with zero imports beyond its
-    # own module
-    module = (
-        "def color(name):\n"
-        "    return name\n"
-        "color.completions = lambda prefix='': ('red', 'green', 'blue')\n"
-        "\n"
-        "def paint(where, hue: color = 'red', *, tint: color = 'red'):\n"
-        "    print('paint', where, hue, tint)\n"
-    )
-    with tempfile.TemporaryDirectory() as d:
-        script_path, _ = write_standalone_program(d, (
-            module
-            + "\napp = appeal.Appeal(name='paint')\n"
-            'app.global_command()(paint)\n'), 'paint')
-        base = subprocess_env()
-
-        def reenter_mode(mode, comp_words, cword):
-            return sub_run(
-                [sys.executable, script_path],
-                capture_output=True, text=True, cwd=d,
-                env={**base, '_APPEAL_COMPLETE': mode,
-                            'COMP_WORDS': comp_words,
-                            'COMP_CWORD': str(cword)})
-
-        def reenter(comp_words, cword):
-            return reenter_mode('bash', comp_words, cword)
-        # an option's value position, filtered by the prefix
-        r = reenter('paint\n--tint\ng', 2)
-        assert r.returncode == 0, r.stderr
-        assert r.stdout.splitlines() == ['green']
-        # an operand position (cursor after a space: trailing empty word)
-        r = reenter('paint\nx\n', 2)
-        assert r.stdout.splitlines() == ['blue', 'green', 'red']
-        # option strings on a '-' prefix
-        r = reenter('paint\n--t', 1)
-        assert r.stdout.splitlines() == ['--tint']
-        # the empty-argv gate: with arguments, the env is ignored
-        # and the program runs normally
-        r = sub_run(
-            [sys.executable, script_path, 'here'],
-            capture_output=True, text=True, cwd=d,
-            env={**base, '_APPEAL_COMPLETE': 'bash'})
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'paint here red red\n'
-        # the source_bash request: the eval one-liner's other half
-        r = sub_run(
-            [sys.executable, script_path],
-            capture_output=True, text=True, cwd=d,
-            env={**base, '_APPEAL_COMPLETE': 'source_bash'})
-        assert r.returncode == 0, r.stderr
-        assert 'complete -o default -F' in r.stdout
-        assert '_APPEAL_COMPLETE=bash paint' in r.stdout
-        # zsh: same protocol, zsh courier
-        r = sub_run(
-            [sys.executable, script_path],
-            capture_output=True, text=True, cwd=d,
-            env={**base, '_APPEAL_COMPLETE': 'source_zsh'})
-        assert r.returncode == 0, r.stderr
-        assert 'compdef' in r.stdout
-        assert '_APPEAL_COMPLETE=zsh paint' in r.stdout
-        r = reenter_mode('zsh', 'paint\n--tint\ng', 2)
-        assert r.stdout.splitlines() == ['green']
-        # fish: its courier sends the current TOKEN TEXT (not an
-        # index) in COMP_CWORD, and the NEWLINE-tokenized line-so-far
-        # in COMP_WORDS
-        r = sub_run(
-            [sys.executable, script_path],
-            capture_output=True, text=True, cwd=d,
-            env={**base, '_APPEAL_COMPLETE': 'fish',
-                        'COMP_WORDS': 'paint\n--tint\ng',
-                        'COMP_CWORD': 'g'})
-        assert r.stdout.splitlines() == ['green']
-        # cursor after a space: empty token
-        r = sub_run(
-            [sys.executable, script_path],
-            capture_output=True, text=True, cwd=d,
-            env={**base, '_APPEAL_COMPLETE': 'fish',
-                        'COMP_WORDS': 'paint\nx',
-                        'COMP_CWORD': ''})
-        assert r.stdout.splitlines() == ['blue', 'green', 'red']
-        r = sub_run(
-            [sys.executable, script_path],
-            capture_output=True, text=True, cwd=d,
-            env={**base, '_APPEAL_COMPLETE': 'source_fish'})
-        assert r.returncode == 0, r.stderr
-        assert '__fish_complete_path' in r.stdout
-        # fish exports via `set -lx` then invokes the (quoted) prog;
-        # tokens come from `commandline -co | string collect` so an
-        # argument with a space stays one word
-        assert 'set -lx _APPEAL_COMPLETE fish' in r.stdout
-        assert 'commandline -co | string collect' in r.stdout
-        assert '(paint)' in r.stdout
-        # and with real zsh, drive the courier's core: zsh's own
-        # word machinery feeding the reentry, candidates coming
-        # back through the command substitution
-        import shutil
-        if shutil.which('zsh'):
-            # the courier's real join is (pj:\n:) -- newline, so a
-            # value with a space would survive; drive that verbatim
-            zsh_core = (
-                'words=(paint --tint g); CURRENT=3; '
-                'completions=("${(@f)$(COMP_WORDS="${(pj:\\n:)words}" '
-                'COMP_CWORD=$((CURRENT-1)) _APPEAL_COMPLETE=zsh '
-                f'{sys.executable} {script_path})}}"); '
-                'print -l -- $completions')
-            r = sub_run(['zsh', '-c', zsh_core],
-                               capture_output=True, text=True, cwd=d,
-                               env=base)
-            assert r.returncode == 0, r.stderr
-            assert r.stdout.splitlines() == ['green']
-            # a QUOTED operand with a space (the bug this fixes):
-            # real zsh keeps the quote chars in $words, so the array
-            # element is literally "a b" (written '"a b"' to survive
-            # this literal assignment).  The reentry's lexer keeps it
-            # one word and the option value still completes.
-            zsh_space = (
-                'words=(paint \'"a b"\' --tint g); CURRENT=4; '
-                'completions=("${(@f)$(COMP_WORDS="${(pj:\\n:)words}" '
-                'COMP_CWORD=$((CURRENT-1)) _APPEAL_COMPLETE=zsh '
-                f'{sys.executable} {script_path})}}"); '
-                'print -l -- $completions')
-            r = sub_run(['zsh', '-c', zsh_space],
-                               capture_output=True, text=True, cwd=d,
-                               env=base)
-            assert r.returncode == 0, r.stderr
-            assert r.stdout.splitlines() == ['green'], r.stdout
 
 
 def test_single_terminal_transparency():

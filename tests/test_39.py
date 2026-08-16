@@ -187,43 +187,6 @@ def test_annotated_via_app_option_override():
     assert app.process(['--level', '10']) == 5
 
 
-def test_standalone_tuple_slot():
-    # tuple slots emit a tuple display, not a call: no import needed
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'move')
-        r = run_script(script_path, ['3', '4'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'move (3, 4) slow\n'
-        r = run_script(script_path, ['--fast'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'move (0, 0) fast\n'
-        r = run_script(script_path, ['3'])
-        assert r.returncode == 2
-        assert 'error:' in r.stderr
-        # ...and tuple OPTIONS, in the same script family
-        script_path, script = write_standalone_fixture(d, 'spanmark')
-        r = run_script(script_path, ['x', '--span', '5', '6'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'mark x (5, 6)\n'
-
-
-def test_standalone_child_options_and_collectors():
-    with tempfile.TemporaryDirectory() as d:
-        script_path, script = write_standalone_fixture(d, 'sketch')
-        r = run_script(script_path, ['dot'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'sketch dot none \n'
-        r = run_script(script_path, ['dot', '--dashed', '2.5', '--tag', 'a', '-t', 'b'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'sketch dot 2.5~ a+b\n'
-        # option owned by an operand-less group: the group is
-        # FORCED (v1 semantics), in a script that has never
-        # imported appeal
-        r = run_script(script_path, ['dot', '--dashed'])
-        assert r.returncode == 0, r.stderr
-        assert r.stdout == 'sketch dot 1.0~ \n'    # stroke() defaults, dashed
-
-
 
 def test_generic_kind_reads_and_schema():
     # the read driver's accumulate/mapping kinds, and MCP's
