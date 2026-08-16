@@ -2963,14 +2963,19 @@ def test_branch_schema_and_read_edges():
     from appeal.schema import mcp_input_schema
     from appeal.read import read_mapping
 
-    # a repeat operand whose converter has no JSON type maps to a
-    # bare array (no items)
+    # a *args converter with parameters is a per-instance GROUP,
+    # exactly as the non-*args path treats it (single-parameter
+    # included--a lone int-typed param must still convert its
+    # operand; differential-caught 2026-08-16).  Its items schema is
+    # the group's, so a one-str-param converter reads as the group's
+    # anyOf (string, or the by-name object).
     def conv(s):
         return s
     def f(*tags: conv):
         return tags
     s = mcp_input_schema(build(f))
-    assert s['properties']['tags'] == {'type': 'array'}, s
+    assert s['properties']['tags']['type'] == 'array', s
+    assert 'items' in s['properties']['tags'], s
 
     # a flag config value that's neither str, bool, nor 0/1 refuses
     def g(*, dry=False):

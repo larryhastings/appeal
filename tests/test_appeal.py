@@ -588,6 +588,24 @@ def test_star_args_two_operand_windows():
     got = run_both(draw2, ['a', '1', '2', '3'])                  # odd leftover
     assert got[0] == 'usage' and 'left over' in got[1], got
 
+def test_star_args_single_param_group_converts():
+    # a SINGLE-parameter converter group off *args must convert its
+    # operand per the parameter's annotation, exactly as the
+    # non-*args path does (differential-caught 2026-08-16: the old
+    # `> 1` threshold in _is_repeat_group treated a one-param group
+    # as a raw-string leaf, so g(p:int) returned '3' not 3--masked
+    # because every *args test used str params where it's invisible)
+    def g(p: int):
+        return (p,)
+    def f(*rest: g):
+        return rest
+    assert run_both(f, ['3', '4']) == ('ok', ((3,), (4,)))
+    assert run_both(f, ['3'])[1] == ((3,),)
+    # non-*args single-param group agrees (the reference behavior)
+    def h(x: g):
+        return x
+    assert run_both(h, ['5']) == ('ok', (5,))
+
 def test_star_args_group_value_option():
     def seg(length: float, *, label=''):
         return (length, label)

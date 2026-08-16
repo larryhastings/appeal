@@ -552,6 +552,12 @@ def _is_repeat_group(annotation):
         return False
     if annotation in _blessed_leaves:
         return False
+    if (hasattr(annotation, '__appeal_recipe__')
+            and not isinstance(annotation, type)):
+        # a vocabulary product (split/validate/...): a terminal,
+        # exactly as _child_for treats it off *args (the old param
+        # count kept these leaves only by accident)
+        return False
     if getattr(annotation, '__origin__', None) is not None:
         return False
     try:
@@ -561,14 +567,17 @@ def _is_repeat_group(annotation):
     kinds = [p.kind for p in signature.parameters.values()]
     if inspect.Parameter.KEYWORD_ONLY in kinds:
         return True
-    # TOTAL positional count, optional included: pair(a, b='B')
-    # is a two-operand group whose second operand fills greedily
-    # (v1's semantics, ruled 2026-08-05)--counting only required
-    # parameters was G2's silent misbind
+    # ANY positional parameter makes it a converter GROUP, whose
+    # operand(s) are converted per its own annotations--matching the
+    # non-*args path (_child_for) and 0.6.4.  The old `> 1` threshold
+    # treated a single-parameter group as a raw-string leaf, so
+    # g0(p0: int) off *args skipped its int() and returned the
+    # string (differential-caught 2026-08-16).  pair(a, b='B') is
+    # still a two-operand group whose second fills greedily.
     return sum(
         1 for p in signature.parameters.values()
         if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
-                      inspect.Parameter.POSITIONAL_OR_KEYWORD)) > 1
+                      inspect.Parameter.POSITIONAL_OR_KEYWORD)) >= 1
 
 
 def _repeat_group_plan(annotation, context, memo, stack):
