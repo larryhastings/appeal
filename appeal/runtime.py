@@ -241,18 +241,27 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                 raise UsageError(
                     f"option {key} specified more than once", usage)
             given[key] = value
-        elif kind in ('flag', 'nullary', 'value', 'group'):
+        elif kind == 'value':
             # last one wins (RULED by Larry 2026-07-18, review
-            # item 6: repetition is for overriding defaults--a
-            # shell alias baking in `--north` is harmlessly
-            # overridden by a later `--south`).  A bare flag
-            # idempotently stores `not default` (its entry's
-            # presence value): -v -v is -v.  The explicit
-            # spellings (--verbose=false) are absolute; a bare
-            # occurrence after one simply stores not-default
-            # again.  Reinsertion keeps `given` in last-occurrence
-            # order, which is how a parameter shared by several
-            # option strings knows which string spoke last.
+            # item 6: a shell alias baking in `--mode fast` is
+            # overridden by a later `--mode safe`), BUT every oparg
+            # is still validated (ruled 2026-08-16: "it's not
+            # called validate for nothing"--an invalid value can't
+            # slip through by being overridden).  The overridden
+            # occurrences are stashed under a tuple key (invisible
+            # to the plain-string-key scans) so the conversion pass
+            # converts them too.
+            if key in given:
+                given.setdefault(('overridden', key), []).append(given[key])
+                del given[key]
+            given[key] = value
+        elif kind in ('flag', 'nullary', 'group'):
+            # last one wins.  A bare flag idempotently stores `not
+            # default` (its entry's presence value): -v -v is -v.
+            # The explicit spellings (--verbose=false) are absolute.
+            # Reinsertion keeps `given` in last-occurrence order,
+            # which is how a parameter shared by several option
+            # strings knows which string spoke last.
             if key in given:
                 del given[key]
             given[key] = value
@@ -781,6 +790,25 @@ def call_converter(fn, converters, values, name, usage=None):
         raise UsageError(
             f"invalid value for {name!r}: {values!r} "
             f"(not a valid {fn_name})", usage, param=name) from None
+
+
+def convert_value(converters, winner, overridden, name, usage=None):
+    """
+    A value option's final value.  The LAST occurrence won and is
+    `winner`; `overridden` is every earlier occurrence.  Convert
+    the winner AND validate each overridden one (ruled 2026-08-16:
+    every oparg must pass its converter, so an invalid value can't
+    slip through by being overridden).  A length-1 converter tuple
+    is a simple leaf; longer is a multi-parameter converter.
+    """
+    def one(text):
+        if len(converters) == 1:
+            return convert(converters[0], text, name, usage)
+        return call_converter(converters[0], converters[1:], text,
+                              name, usage)
+    for extra in overridden:
+        one(extra)                  # validate; the result is discarded
+    return one(winner)
 # --8<-- end appeal call converter --8<--
 
 

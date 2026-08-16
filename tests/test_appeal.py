@@ -1644,19 +1644,26 @@ def test_repeated_options_match_the_ecosystem():
     assert run_both(f, ['--mode', 'a', '--mode', 'b']) == ('ok', 'b')
     assert run_both(f, ['-m', 'a', '--mode', 'b', '-m', 'c']) == ('ok', 'c')
 
-    # 2) validate() -- last wins, AND only the surviving value is
-    # converted: an overridden invalid value is harmless (exactly
-    # the shell-alias-override point), while a trailing invalid
-    # one still errors
+    # 2) validate() -- last wins for the VALUE, but EVERY oparg is
+    # validated (ruled 2026-08-16: "it's not called validate for
+    # nothing").  Both valid -> last wins; an invalid value is
+    # rejected even when it's later overridden.
     def v(*, mode: _appeal.validate('fast', 'safe') = 'safe'):
         return mode
     assert run_both(v, ['--mode', 'fast', '--mode', 'safe']) == ('ok', 'safe')
     assert run_both(v, ['--mode', 'safe', '--mode', 'fast']) == ('ok', 'fast')
-    # 'bogus' is overridden before conversion -> never validated
-    assert run_both(v, ['--mode', 'bogus', '--mode', 'safe']) == ('ok', 'safe')
-    # ...but a trailing invalid value is the survivor -> rejected
+    # an invalid value errors even though a later one overrides it
+    got = run_both(v, ['--mode', 'bogus', '--mode', 'safe'])
+    assert got[0] == 'usage' and 'bogus' in got[1], got
+    # ...and of course when it's the survivor
     got = run_both(v, ['--mode', 'safe', '--mode', 'bogus'])
     assert got[0] == 'usage' and 'bogus' in got[1], got
+    # the same holds for a plain int converter: 'x' never converts
+    def n(*, num: int = 0):
+        return num
+    got = run_both(n, ['--num', 'x', '--num', '5'])
+    assert got[0] == 'usage', got
+    assert run_both(n, ['--num', '1', '--num', '5']) == ('ok', 5)
 
     # 3) a boolean flag -- -v and --verbose, idempotent across
     # spellings and repetition

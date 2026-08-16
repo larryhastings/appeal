@@ -16,8 +16,8 @@ from .help import merge_docs
 from .plan import Terminal, NO_DEFAULT
 from .runtime import (
     UsageError, absorb_take, accumulate, call_converter,
-    collect_mapping, convert, fold, greedy_sizes, parse_tokens,
-    check_count,
+    collect_mapping, convert, convert_value, fold, greedy_sizes,
+    parse_tokens, check_count,
     default_template, did_you_mean, help_margin, listing_pieces,
     render_baked_help, render_help_page,
     scoped_forces, scoped_next, scoped_resolve, scoped_rewind,
@@ -148,13 +148,11 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None,
         elif o.kind == 'nullary':
             kwargs[o.name] = o.converters[0]()
         elif o.kind == 'value':
-            if len(o.converters) == 1:
-                kwargs[o.name] = convert(o.converters[0], given[key],
-                                         o.name, usage)
-            else:
-                kwargs[o.name] = call_converter(
-                    o.converters[0], o.converters[1:], given[key],
-                    o.name, usage)
+            # last wins, but every occurrence is validated (ruled
+            # 2026-08-16): the overridden ones were stashed
+            kwargs[o.name] = convert_value(
+                o.converters, given[key],
+                given.get(('overridden', key), ()), o.name, usage)
         elif o.kind == 'accumulate':
             kwargs[o.name] = accumulate(o.converters[0], given[key],
                                         o.name, usage)

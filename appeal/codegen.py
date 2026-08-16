@@ -34,7 +34,8 @@ from .help import command_set_corpus, merge_docs, summary
 from .plan import Terminal, NO_DEFAULT, command_set_usage
 from .runtime import (
     AppealConfigurationError, UsageError, absorb_take,
-    accumulate, call_converter, collect_mapping, convert, fold,
+    accumulate, call_converter, collect_mapping, convert,
+    convert_value, fold,
     parse_tokens, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
     sibling_scopes,
@@ -83,7 +84,7 @@ _builtin_converters = {str: 'str', int: 'int', float: 'float', bool: 'bool',
 _RESERVED = frozenset((
     'argv', 'given', 'operands', 'i', 'n', 'remaining', 'gate',
     'positions', 'rest', 'parse_tokens', 'convert', 'accumulate',
-    'mapping', 'fold', 'call_converter', 'check_count', 'window_options',
+    'mapping', 'fold', 'call_converter', 'convert_value', 'check_count', 'window_options',
     'greedy_sizes', 'UsageError',
     ))
 
@@ -640,14 +641,14 @@ class _Emitter:
                    else '')
             return (f'{fill}(list({source}[{key!r}]), 0, '
                     f'len({source}[{key!r}]), given{extra}{sib})[0]')
-        if o.kind == 'value' and len(o.converters) == 1:
-            conv = self.leaf_expr(o.converters[0])
-            return (f'convert({conv}, {source}[{key!r}], '
-                    f'{o.name!r}, {self.usage_const})')
         if o.kind == 'value':
-            fn_name = self.leaf_expr(o.converters[0])
-            convs = ', '.join(self.leaf_expr(c) for c in o.converters[1:])
-            return (f'call_converter({fn_name}, ({convs}), {source}[{key!r}], '
+            # last wins, but every occurrence is validated (ruled
+            # 2026-08-16): pass the converter tuple + the stashed
+            # overridden occurrences to convert_value
+            convs = ', '.join(self.leaf_expr(c) for c in o.converters)
+            comma = ',' if len(o.converters) == 1 else ''
+            return (f'convert_value(({convs}{comma}), {source}[{key!r}], '
+                    f'{source}.get(("overridden", {key!r}), ()), '
                     f'{o.name!r}, {self.usage_const})')
         if o.kind in ('fold', 'fold1'):
             cls_name = self.leaf_expr(o.converters[0])
@@ -1157,6 +1158,7 @@ def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
         'collect_mapping': collect_mapping,
         'fold': fold,
         'call_converter': call_converter,
+        'convert_value': convert_value,
         'window_options': window_options,
         'greedy_sizes': greedy_sizes,
         'render_help_page': render_help_page,
@@ -1492,6 +1494,7 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, s
         'collect_mapping': collect_mapping,
         'fold': fold,
         'call_converter': call_converter,
+        'convert_value': convert_value,
         'window_options': window_options,
         'greedy_sizes': greedy_sizes,
         'render_help_page': render_help_page,
@@ -1698,6 +1701,7 @@ _BASE_SNIPPETS = (
 _SOURCE_SNIPPETS = (
     ('convert', 'appeal convert'),
     ('call_converter', 'appeal call converter'),
+    ('convert_value', 'appeal call converter'),
     ('accumulate', 'appeal collect list'),
     ('collect_mapping', 'appeal collect mapping'),
     ('fold', 'appeal option protocol'),
