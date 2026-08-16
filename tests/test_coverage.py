@@ -44,7 +44,7 @@ def both(fn, argv, decorations=None):
 # script, so their edge branches get behavior pins here
 
 def test_merge_columns_strategies():
-    from appeal.runtime import merge_columns, OverflowStrategy as OS
+    from appeal.render import merge_columns, OverflowStrategy as OS
 
     # a mid-column overflow distinguishes the strategies: INTRUDE
     # resumes the neighbors immediately after the wide line;
@@ -92,7 +92,7 @@ def test_merge_columns_strategies():
 
 
 def test_wrap_words_edges():
-    from appeal.runtime import wrap_words
+    from appeal.render import wrap_words
 
     # no words at all refuses
     try:
@@ -117,7 +117,7 @@ def test_wrap_words_edges():
 
 
 def test_normalize_indents_validation():
-    from appeal.runtime import wrap_words
+    from appeal.render import wrap_words
 
     # indents: single str, tuple of str, and refusals by type
     assert wrap_words(['a', 'b'], margin=20, indent='  ').startswith('  a')
@@ -147,7 +147,7 @@ def test_normalize_indents_validation():
 
 
 def test_split_text_with_code_edges():
-    from appeal.runtime import split_text_with_code
+    from appeal.render import split_text_with_code
 
     # code blocks survive; blank-heavy input; trailing code
     text = 'Prose here.\n\n    code line one\n    code line two\n\nMore.'
@@ -162,7 +162,7 @@ def test_split_text_with_code_edges():
 
 
 def test_format_definition_list_edges():
-    from appeal.runtime import format_definition_list
+    from appeal.render import format_definition_list
 
     # empty pairs; a definition with its own paragraphs; a term
     # wider than its column (hang rule)
@@ -278,8 +278,7 @@ def test_completion_word_boundaries_and_prog_quoting():
     # quotes come off.  The program name is shell-quoted in the
     # emitted courier (no breakage/injection).
     import shlex
-    from appeal.runtime import (completion_reentry, completion_script,
-                                _split_arg_string)
+    from appeal.runtime import completion_reentry, completion_script, _split_arg_string
 
     # the lexer strips quotes, keeps a word with a space whole, and
     # tolerates the half-typed current word's unterminated quote
@@ -1913,14 +1912,15 @@ def test_toy_multisplit_and_bytes_iter():
     # _toy_multisplit is snipped into appeal.runtime (stdlib-only, so
     # the core imports nothing from big); _iterate_over_bytes still
     # rides in for the render side
-    from appeal.runtime import _toy_multisplit, _iterate_over_bytes
+    from appeal.runtime import _toy_multisplit
+    from appeal.render import _iterate_over_bytes
     assert list(_iterate_over_bytes('ab')) == ['a', 'b']
     assert _toy_multisplit('a,b', ',') == [('a', ','), ('b', '')]
     assert _toy_multisplit(b'a,b', [b',']) == [(b'a', b','), (b'b', b'')]
 
 
 def test_expand_tabs_pins():
-    from appeal.runtime import expand_tabs
+    from appeal.render import expand_tabs
     assert expand_tabs('a\tb') == 'a       b'
     assert expand_tabs('nope') == 'nope'
     assert expand_tabs(b'a\tb') == b'a       b'
@@ -1935,7 +1935,7 @@ def test_expand_tabs_pins():
 
 
 def test_wrap_words_tabs_and_code():
-    from appeal.runtime import split_text_with_code, wrap_words
+    from appeal.render import split_text_with_code, wrap_words
     # tabs inside code lines expand at render time, on the page's
     # tab stops; prose tabs are word breaks that die on wrap
     s = 'first para\n\n    code\tline\n    x\ty\n\nlast para'
@@ -1959,7 +1959,7 @@ def test_wrap_words_tabs_and_code():
 
 
 def test_merge_columns_more():
-    from appeal.runtime import merge_columns, OverflowStrategy
+    from appeal.render import merge_columns, OverflowStrategy
     # a plain string column splits itself; tabs expand in place
     got = merge_columns(('ab\tc\nx', 6, 10), ('p\nq', 3, 5))
     assert got == 'ab      c  p\nx          q', repr(got)
@@ -1975,7 +1975,7 @@ def test_merge_columns_more():
 
 
 def test_format_definition_list_more():
-    from appeal.runtime import format_definition_list
+    from appeal.render import format_definition_list
     got = format_definition_list([(b'term', b'def')], margin=40)
     assert b'term' in got and b'def' in got
     got = format_definition_list([('t', 'a\tb')], margin=40)
@@ -2003,9 +2003,7 @@ def test_format_definition_list_more():
 
 
 def test_theme_resolution_and_markup():
-    from appeal.runtime import (
-        can_colorize, resolve_stylesheet, usage_markup,
-        )
+    from appeal.render import can_colorize, resolve_stylesheet, usage_markup
     from big.stylesheet import strip_styles
     assert can_colorize(file=object()) is False
     class FakeTTY(io.StringIO):
@@ -2040,7 +2038,7 @@ def test_section_template_validation():
     # the single-template model (ruled 2026-08-01; {summary}
     # split out 2026-08-05): six sections, each exactly once,
     # nothing else in braces
-    from appeal.runtime import parse_help_template
+    from appeal.render import parse_help_template
     cases = (
         'no placeholders at all',
         '{usage}\n{summary}\n{doc}\n{options}\n{arguments}',  # missing commands
@@ -2478,7 +2476,7 @@ def test_run_main_themed_and_set_completion():
 
 
 def test_wrap_words_variants():
-    from appeal.runtime import split_text_with_code, wrap_words
+    from appeal.render import split_text_with_code, wrap_words
     w = split_text_with_code('p one\n\n    c\td\n    e', code_indent=4)
     got = wrap_words(w, margin=24, code_indent='   ', indent='  ',
                      left_column=3)
@@ -2499,7 +2497,7 @@ def test_wrap_words_variants():
 
 
 def test_merge_columns_overflow_shapes():
-    from appeal.runtime import merge_columns, OverflowStrategy
+    from appeal.render import merge_columns, OverflowStrategy
     # adjacent overflows merge into one region
     c1 = ['loooooooooooong1', 'x', 'loooooooooooong2']
     got = merge_columns((c1, 4, 6), (['r1', 'r2', 'r3'], 4, 6),
@@ -2515,7 +2513,7 @@ def test_merge_columns_overflow_shapes():
 
 
 def test_format_definition_list_tab_definition():
-    from appeal.runtime import format_definition_list
+    from appeal.render import format_definition_list
     got = format_definition_list(
         [('t', 'alpha\tbeta gamma delta epsilon zeta')], margin=30)
     assert got == ('  t  alpha   beta gamma delta\n'
@@ -2576,7 +2574,7 @@ def test_run_mcp_ping():
 def test_section_template_more_fails():
     # a custom template reorders the page; suppression still
     # holds (no commands -> no Cmds: section)
-    from appeal.runtime import render_help_page
+    from appeal.render import render_help_page
     template = ('usage: {usage}\n\nOpts:\n  {options}\n\n'
                 '{summary}\n\n{doc}\n\nArgs:\n  {arguments}\n\n'
                 'Cmds:\n  {commands}')
@@ -2658,7 +2656,7 @@ def test_completion_internals_direct():
 
 
 def test_wrap_words_final_pins():
-    from appeal.runtime import split_text_with_code, wrap_words
+    from appeal.render import split_text_with_code, wrap_words
     # empty words are skipped; a prose tab wraps and dies
     assert wrap_words(['a', '', 'b'], margin=10) == 'a b'
     assert wrap_words(['aaaaaaa', '\t', 'bbbb'], margin=10) == \
@@ -2676,7 +2674,7 @@ def test_wrap_words_final_pins():
 
 
 def test_definition_list_fussy_tab():
-    from appeal.runtime import format_definition_list
+    from appeal.render import format_definition_list
     got = format_definition_list(
         [('t', 'aa\tbb cc dd ee ff gg')], margin=24,
         definition_left_column=8)
@@ -2690,7 +2688,7 @@ def test_definition_list_fussy_tab():
 def test_wrap_words_leading_tab_stream():
     # tabs at the start of a line: only a hand-built stream gets
     # here--the stop advances from the line's start, no wrap check
-    from appeal.runtime import wrap_words
+    from appeal.render import wrap_words
     got = wrap_words(['\t', 'x'], margin=20)
     assert got == '        x', repr(got)
 
@@ -3028,11 +3026,7 @@ def test_branch_scoped_forced_claim_skips_taken():
 
 
 def test_branch_text_formatter_edges():
-    from appeal.runtime import (wrap_words, split_text_with_code,
-                                usage_units, format_definition_list,
-                                merge_columns, OverflowStrategy,
-                                render_help_page, default_template,
-                                appeal_theme)
+    from appeal.render import wrap_words, split_text_with_code, usage_units, format_definition_list, merge_columns, OverflowStrategy, render_help_page, default_template, appeal_theme
 
     # code_indent=0 turns code detection off entirely
     split_text_with_code('para one\n\n    indented, not code\n',

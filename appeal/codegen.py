@@ -39,11 +39,13 @@ from .runtime import (
     parse_tokens, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
     sibling_scopes,
-    default_template, help_page_pieces, render_baked_help,
-    listing_pieces, render_help_page,
-    did_you_mean, help_margin,
+    did_you_mean,
     greedy_sizes, run_command_set, run_main,
     window_options,
+    )
+from .render import (
+    default_template, help_page_pieces, render_baked_help,
+    listing_pieces, render_help_page, help_margin,
     )
 
 

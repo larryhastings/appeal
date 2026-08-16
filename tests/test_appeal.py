@@ -1244,7 +1244,7 @@ def test_renderer_injects_line():
     # clip/fill.  The RENDERER injects it (only the renderer
     # knows the margin), underneath the sheet so a sheet's own
     # `line` wins (the stylesheet= verbatim rule).
-    from appeal.runtime import render_baked_help
+    from appeal.render import render_baked_help
     from big.markdown import markdown_defaults
     from big.stylesheet import StyleSheet, plain_stylesheet, transforms
     layout = ('⦃heading3⦙Deeds⦄',)
@@ -1279,8 +1279,7 @@ def test_wrapped_heading_fuses():
     # span_linebreaks=True), so the structural entry fires once:
     # rules above and below the BLOCK, sized by clip-to-line,
     # not a sandwich per line.
-    from appeal.runtime import (default_template, help_page_pieces,
-                                render_baked_help)
+    from appeal.render import default_template, help_page_pieces, render_baked_help
     corpus = {'summary': [], 'documentation':
               ["# Heading One which by the way is super duper long "
                "almost excessively so and it's kind of pointless "
@@ -1305,8 +1304,7 @@ def test_heading_with_inline_formatting():
     # --nested content included (big's fix, 2026-08-08)--so the
     # structural entry fires ONCE.  Before the fix this garbled:
     # three rule sandwiches sharing lines.
-    from appeal.runtime import (default_template, help_page_pieces,
-                                render_baked_help)
+    from appeal.render import default_template, help_page_pieces, render_baked_help
     corpus = {'summary': [], 'documentation':
               ['# Heading with `code` inside'],
               'arguments': [], 'options': [], 'commands': []}
@@ -6361,9 +6359,7 @@ def test_theme():
     # resolve_stylesheet: None auto, False never, a composed
     # sheet verbatim
     import io
-    from appeal.runtime import (appeal_theme, plain_theme,
-                                resolve_stylesheet, uncolored_theme,
-                                usage_markup)
+    from appeal.render import appeal_theme, plain_theme, resolve_stylesheet, uncolored_theme, usage_markup
 
     # every theme speaks the same vocabulary
     for theme in (plain_theme, uncolored_theme, appeal_theme):
@@ -6405,7 +6401,7 @@ def test_theme():
 
 def test_can_colorize_precedence():
     import io
-    from appeal.runtime import can_colorize
+    from appeal.render import can_colorize
 
     class Tty(io.StringIO):
         def isatty(self):
@@ -6462,8 +6458,7 @@ def test_colorized_help_paints_after_layout():
     import io, contextlib
     from appeal.build import build
     from appeal.help import merge_docs
-    from appeal.runtime import (appeal_theme, default_template,
-                                render_help_page)
+    from appeal.render import appeal_theme, default_template, render_help_page
     from big.markdown import markdown_defaults
     from big.stylesheet import (StyleSheet, ansi_16_color_palette,
                                 transforms)

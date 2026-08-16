@@ -18,10 +18,13 @@ from .runtime import (
     UsageError, absorb_take, accumulate, call_converter,
     collect_mapping, convert, convert_value, fold, greedy_sizes,
     parse_tokens, check_count,
-    default_template, did_you_mean, help_margin, listing_pieces,
-    render_baked_help, render_help_page,
+    did_you_mean,
     scoped_forces, scoped_next, scoped_resolve, scoped_rewind,
     scoped_window, scopes_for, sibling_scopes, window_options,
+    )
+from .render import (
+    default_template, help_margin, listing_pieces,
+    render_baked_help, render_help_page,
     )
 
 

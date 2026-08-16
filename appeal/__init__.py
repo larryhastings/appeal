@@ -46,7 +46,7 @@ from .runtime import (
 # StyleSheet entries, palette-independent; resolve_stylesheet
 # composes theme-over-palette; Appeal(stylesheet=) takes a
 # complete composition and uses it verbatim
-from .runtime import (
+from .render import (
     appeal_markdown_defaults, appeal_theme, dark_cool_theme,
     dark_warm_theme, help_stylesheet, light_cool_theme,
     light_warm_theme, plain_theme, resolve_stylesheet,
@@ -388,7 +388,7 @@ class Processor:
 
     def _print_listing(self):
         "The set listing: baked pieces, rendered at the real margin."
-        from .runtime import help_margin, render_baked_help
+        from .render import help_margin, render_baked_help
         app = self.app
         print(render_baked_help(app._pieces[3],
                                 margin=help_margin(app.margin)),
@@ -777,7 +777,7 @@ class Appeal:
         # the help template: ONE string, six {sections}, its
         # headings Markdown, yours to replace (see
         # runtime.default_template; the pivot, ruled 2026-08-05)
-        from .runtime import default_template
+        from .render import default_template
         self.templates = default_template
         # concurrency (ruled 2026-07-11): compilation runs LOCK-
         # FREE (it inspects user code, and we never hold a lock
@@ -969,7 +969,7 @@ class Appeal:
         # a knob is off: render the page directly, same corpus
         # and template the compiled path bakes
         from .help import merge_docs
-        from .runtime import help_margin, render_help_page
+        from .render import help_margin, render_help_page
         plan = root.plan_for(topic)
         text = render_help_page(
             plan.usage(), merge_docs(plan), root.templates,
@@ -1413,12 +1413,12 @@ class Appeal:
         if table:
             from .plan import command_set_usage
             from .help import summary, command_set_corpus
-            from .runtime import render_help_page
+            from .render import render_help_page
             entries = [(w, summary(c)) for w, c in table.items()]
             corpus = command_set_corpus(
                 self.global_plan, entries, False, auto_version=False,
                 doc=self._program_doc_override())
-            from .runtime import help_margin
+            from .render import help_margin
             text = render_help_page(
                 command_set_usage(self._prog(), self._display_global()),
                 corpus, self.templates,
@@ -1427,7 +1427,7 @@ class Appeal:
                 suppress=suppress).rstrip('\n')
         else:
             from .help import merge_docs, parse_docstring
-            from .runtime import help_margin, render_help_page
+            from .render import help_margin, render_help_page
             plan = self.plan
             corpus = merge_docs(plan)
             override = self.root.doc
@@ -1793,7 +1793,7 @@ class Appeal:
             return entry
         from .plan import command_set_usage
         from .help import summary, command_set_corpus
-        from .runtime import listing_pieces
+        from .render import listing_pieces
         parent_plan = self._plan_for_node(node, word)
         parent = compile_plan(parent_plan, templates=self.templates,
                               stylesheet=self.stylesheet, boundary='flexible',
@@ -1879,7 +1879,7 @@ class Appeal:
         else:
             parse_globals = None
         from .help import summary, command_set_corpus
-        from .runtime import listing_pieces
+        from .render import listing_pieces
         entries = [(word, summary(callable))
                    for word, callable in table.items()]
         corpus = command_set_corpus(
