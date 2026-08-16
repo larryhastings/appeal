@@ -2181,6 +2181,99 @@ class Appeal:
             return self._build(getattr(instance, plan.name), name=plan.name)
         return self._build(plan.callable.__get__(instance), name=plan.name)
 
+    def precompile(self, path=None, *, argv0=None):
+        """
+        The text of a compiled parser MODULE implementing this
+        program: an importable file WEARING THE APPEAL API (ruled
+        2026-08-09), so the program that imports it--
+
+            try:
+                import compiled as appeal
+            except ImportError:
+                import appeal
+
+        --runs unchanged, decorators and all.  The module does
+        `import appeal` for the runtime (the stdlib-only core; no
+        inspect/build/render on the fast path), bakes its parser
+        tables and fingerprints, and its Appeal() matches the live
+        functions to the precompiled bits by fingerprint.  Any
+        drift (an edited signature, docstring, decoration, or
+        converter, on ANY registered function) raises a loud
+        regenerate error at main().  path, if given, also writes
+        the text there.  Necessarily eager: the module is a
+        whole-program artifact, so every command is built and every
+        ref rendered (refusals included--the north star's teeth
+        bite here).
+        """
+        from .runtime import _stable_repr
+        from .codegen import emit_precompiled_module
+        self._finalize()
+        table = self._table()
+        # the stock help/version commands are covered by the
+        # emitter's auto commands; those words step aside here
+        cls = Appeal
+        defaults = {w for w, fn in table.items()
+                    if getattr(fn, '__func__', None) in
+                    (cls.help, cls.print_version)}
+        words = [w for w in table if w not in defaults]
+        def sub_plan(name, fn):
+            # nested parents are fine: self._subs is flat (every
+            # parent maps its own children), and the emitter
+            # reassembles the tree, deepest first.  argv0 matches
+            # _plan_for_node's: error usage says `tool add <X>`
+            plan = self._build(fn, name=name,
+                               method_of=self._method_owner.get(id(fn)))
+            plan.argv0 = self._prog()
+            return plan
+        subs = {parent: {name: sub_plan(name, fn)
+                         for name, fn in entries}
+                for parent, entries in self._subs.items()}
+        # the baked-knob blob the module's shim compares its
+        # constructor arguments against (drift = regenerate)
+        config = {
+            'name': _stable_repr(self.name),
+            'version': _stable_repr(self.version),
+            'repeat': _stable_repr(self.repeat),
+            'margin': _stable_repr(self.margin),
+            'margin_value': self.margin,
+            'positional_argument_usage_format':
+                _stable_repr(self.positional_argument_usage_format),
+            'doc': _stable_repr(self.doc),
+            'templates': _stable_repr(self.templates),
+        }
+        if self.version is not None:
+            config['version_value'] = str(self.version)
+        if words:
+            text = emit_precompiled_module(
+                {w: self.plan_for(w) for w in words},
+                self.global_plan,
+                argv0=argv0 or self._prog(),
+                templates=self.templates, repeat=self.repeat,
+                subs=subs or None,
+                sub_repeat=dict(self._sub_repeat) or None,
+                version=self.version, max_columns=self.margin,
+                help=self._help_enabled,
+                doc=self._program_doc_override(),
+                default=(self._build(self._default)
+                         if self._default is not None else None),
+                sub_defaults={w: self._build(fn)
+                              for w, fn in self._sub_defaults.items()}
+                             or None,
+                config=config, decorations=self._decorations,
+                global_is_user=(self._impl is not None))
+        else:
+            text = emit_precompiled_module(
+                {}, self.global_plan,
+                argv0=argv0 or self._prog(),
+                templates=self.templates,
+                version=self.version, max_columns=self.margin,
+                config=config, decorations=self._decorations,
+                global_is_user=True)
+        if path is not None:
+            with open(path, 'wt', encoding='utf-8') as f:
+                f.write(text)
+        return text
+
     def mcp(self, *, config=None, version=None):
         """
         Serve this program's commands as MCP tools--the Model

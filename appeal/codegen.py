@@ -1543,6 +1543,103 @@ def _recipe_arg(value, refs):
     return refs.add(preferred, value)
 
 
+def render_ref(name, obj, refs=None):
+    recipe = getattr(obj, '__appeal_recipe__', None)
+    if recipe:
+        # a vocabulary product (split(':'), counter(), ...): the
+        # compiled module re-runs the factory--the vocabulary
+        # travels with appeal.runtime--with each argument rendered
+        # from the structured recipe (kind, factory, args, kwargs);
+        # class arguments add refs of their own
+        kind, factory, args, kwargs = recipe
+        bits = [_recipe_arg(a, refs) for a in args]
+        bits.extend(f'{k}={_recipe_arg(v, refs)}'
+                    for k, v in kwargs.items())
+        if kind == 'subscript':
+            return f'{name} = {factory}[{", ".join(bits)}]'
+        return f'{name} = {factory}({", ".join(bits)})'
+    return _render_ref(name, obj)
+
+
+def _render_ref(name, obj):
+    """
+    Compiled-module mode: render one ref as Python source--an
+    import line or a literal assignment.  Raises
+    AppealConfigurationError, naming the offender, for anything
+    unrenderable.  This refusal is the north star's teeth.
+
+    Note the compiled module imports NONE of the user's grammar:
+    every converter reachable from a command function arrives LIVE
+    at registration (see _classify_refs).  This renders only the
+    leftovers--constants, recipes' class arguments, the process
+    streams, and the stock help shim.
+    """
+    # the STOCK default_help rides into a compiled module as a
+    # shim over its generated parse_help (an overridden
+    # default_help refuses below, by name--the north star)
+    func = getattr(obj, '__func__', None)
+    if (func is not None
+            and getattr(func, '__qualname__', '')
+            in ('Appeal.default_help', 'Appeal.help')):
+        return (f'def {name}(topic):\n'
+                f'    parse_help([topic] if topic else [])')
+    # the three process streams render by identity: `sys` is in
+    # every compiled module's import footprint (the canonical
+    # appeal.file() usage has `= sys.stdout` as a default)
+    if obj is sys.stdin:
+        return f'{name} = sys.stdin'
+    if obj is sys.stdout:
+        return f'{name} = sys.stdout'
+    if obj is sys.stderr:
+        return f'{name} = sys.stderr'
+    # literals round-trip through repr
+    if obj is None or isinstance(obj, (bool, int, float, str, bytes)):
+        return f'{name} = {obj!r}'
+    if isinstance(obj, (tuple, list, dict, set, frozenset)):
+        try:
+            from ast import literal_eval
+            if literal_eval(repr(obj)) == obj:
+                return f'{name} = {obj!r}'
+        except (ValueError, SyntaxError):
+            pass
+        raise AppealConfigurationError(
+            f"can't emit a compiled module: default value {obj!r} "
+            f"doesn't round-trip through repr()")
+
+    # callables import from the user's module
+    module = getattr(obj, '__module__', None)
+    qualname = getattr(obj, '__qualname__', None)
+    if callable(obj) and module and qualname:
+        if module == '__main__':
+            raise AppealConfigurationError(
+                f"can't emit a compiled module: {qualname!r} is "
+                f"defined in __main__, so the generated module "
+                f"can't import it; move it into an importable "
+                f"module")
+        if '<' in qualname:
+            raise AppealConfigurationError(
+                f"can't emit a compiled module: {module}.{qualname} "
+                f"isn't importable by name (lambdas, closures, and "
+                f"nested callables can't be imported)")
+        # past the refusals, `head` IS importable from `module`, so
+        # canonicalize away a private-submodule __module__
+        module = _public_module(module, qualname.split('.')[0])
+        if '.' in qualname:
+            # a class's method (or a nested class): import the
+            # outermost class, reach the rest by attribute
+            head = qualname.split('.')[0]
+            return (f'from {module} import {head}\n'
+                    f'{name} = {qualname}')
+        real_name = qualname
+        if real_name == name:
+            return f'from {module} import {real_name}'
+        return f'from {module} import {real_name} as {name}'
+
+    raise AppealConfigurationError(
+        f"can't emit a compiled module: don't know how to render "
+        f"{name} = {obj!r}")
+
+
 def render_refs(refs):
     """
     Render every ref, sorted into (imports, constants) for the
@@ -1597,9 +1694,354 @@ def _public_module(module, head):
     return module
 
 
-# every standalone script gets these; everything else is plucked
-# only if the generated parser actually uses it.  help (and so
-# big's word-wrap trio, via requires) is a permanent fixture:
-# every Appeal parser supports --help.
-# plumbing the generated source calls by name, and the snippet
-# that delivers each.
+# ------------------------------------------------------------------
+# Precompiled modules (Larry's design, 2026-08-09; speed rework
+# 2026-08-16).  An importable file WEARING THE APPEAL API that does
+# `import appeal` for the runtime and bakes its parser tables and
+# fingerprints.  The program that uses it is unchanged:
+#
+#     try:
+#         import compiled as appeal
+#     except ImportError:
+#         import appeal
+#
+# The module imports NONE of the user's grammar: every converter
+# reachable from a command function arrives LIVE at registration,
+# walked off the decorated function's annotations (ruled 2026-08-16,
+# the relationship runs the other way--see _harvest_paths).  Only
+# appeal.runtime (the stdlib-only core) is imported eagerly; render
+# rides behind lazy wrappers, so importing the compiled module and
+# parsing a line never touch big/inspect/build.
+# ------------------------------------------------------------------
+
+# the runtime functions a generated parser calls by name, PLUS the
+# converter vocabulary a recipe re-runs by factory name (optional[T],
+# split(':'), counter(), ...); all live in appeal.runtime (the cheap
+# core), so the import is fast and stdlib-only.  A superset--unused
+# names cost nothing.
+_RUNTIME_IMPORTS = (
+    'parse_tokens', 'convert', 'accumulate', 'collect_mapping',
+    'fold', 'call_converter', 'convert_value', 'window_options',
+    'greedy_sizes', 'did_you_mean', 'check_count', 'absorb_take',
+    'scopes_for', 'sibling_scopes', 'scoped_forces', 'scoped_window',
+    'scoped_resolve', 'scoped_rewind', 'scoped_next',
+    'run_command_set', 'UsageError',
+    # the converter vocabulary (recipe factories, rendered bare)
+    'optional', 'split', 'validate', 'validate_range', 'counter',
+    'file', 'accumulator', 'mapping',
+    )
+
+# render stays OFF the fast path: help/errors import it only when
+# they actually fire, through these thin wrappers baked into the
+# compiled module.
+_RENDER_LAZY = ('render_help_page', 'render_baked_help', 'help_margin')
+
+
+def _harvest_paths(fn, decorations=None):
+    """
+    {id(callable): (obj, path)} for every callable reachable from
+    fn the way build reaches converters: parameter annotations
+    (Annotated dereferenced), @option override annotations (from
+    the app's decorations registry--never function attributes,
+    ruled 2026-08-09), and type-of-default inference,
+    recursively.  The paths are the recipes a compiled module's
+    shim walks at registration time
+    (runtime.resolve_fingerprint_path is the exact mirror), so a
+    converter arrives LIVE from the decorated function--never by
+    import.
+    """
+    from .runtime import (_deref_annotated, _parameter_default,
+                          _params_host)
+    out = {}
+
+    def note(child, path, depth):
+        if callable(child) and id(child) not in out:
+            out[id(child)] = (child, path)
+            walk(child, path, depth + 1)
+
+    def walk(obj, path, depth):
+        if depth > 8:
+            return
+        host = _params_host(obj)
+        if host is None or not hasattr(host, '__code__'):
+            return
+        code = host.__code__
+        varargs = bool(code.co_flags & 0x04)
+        varkw = bool(code.co_flags & 0x08)
+        named = code.co_argcount + code.co_kwonlyargcount
+        annotations = getattr(host, '__annotations__', None) or {}
+        kwdefaults = getattr(host, '__kwdefaults__', None) or {}
+        defaults = getattr(host, '__defaults__', None) or ()
+        positional = code.co_varnames[:code.co_argcount]
+        # named params, PLUS *args/**kwargs--their annotations
+        # carry converters too (path(start, *segs: seg))
+        for pname in code.co_varnames[:named + varargs + varkw]:
+            annotation = annotations.get(pname)
+            if annotation is not None:
+                note(_deref_annotated(annotation),
+                     path + (('annotation', pname),), depth)
+                continue
+            has_default = (pname in kwdefaults
+                           or (pname in positional
+                               and positional.index(pname)
+                               >= code.co_argcount - len(defaults)))
+            if has_default:
+                note(type(_parameter_default(host, pname)),
+                     path + (('default_type', pname),), depth)
+        import inspect
+        empty = inspect.Parameter.empty
+        overrides = (decorations.option_overrides.get(obj)
+                     if decorations is not None else None) or {}
+        for pname, declarations in overrides.items():
+            for index, declaration in enumerate(declarations):
+                annotation = declaration['annotation']
+                if (annotation is not None and annotation is not empty
+                        and callable(annotation)):
+                    note(_deref_annotated(annotation),
+                         path + (('override', (pname, index)),),
+                         depth)
+
+    walk(fn, (), 0)
+    return out
+
+
+def _classify_refs(refs, impls, harvests, decorations):
+    """
+    Render the refs of a compiled MODULE.  Three fates: an impl
+    callable (a command function) becomes a SLOT, bound live by the
+    shim at registration; a vocabulary product re-runs its recipe,
+    as ever; ANY converter reachable from its command's live
+    function becomes a slot with a resolution PATH--importable or
+    not, the compiled module imports NONE of the user's grammar (it
+    walks the live function's annotations, ruled 2026-08-16, the
+    relationship runs the other way).  Everything else (constants,
+    non-converter refs) renders as today.  A converter's SIGNATURE
+    drift is caught by its command's recursive fingerprint; the
+    per-converter decoration fingerprint stays (@option/@parameter
+    on a converter isn't in the signature).
+    Returns (imports, constants, slots, impl_names, ref_specs).
+    """
+    from .runtime import (decoration_fingerprint, fingerprint,
+                          _params_host)
+    imports, constants, slots = [], [], []
+    impl_names = {}
+    ref_specs = {key: [] for key, _ in harvests}
+    option_overrides = decorations.option_overrides
+    parameter_usage = decorations.parameter_usage
+    done = set()
+
+    while True:
+        pending = [(n, o) for n, o in refs.objects.items()
+                   if n not in done]
+        if not pending:
+            return imports, constants, slots, impl_names, ref_specs
+        for name, obj in pending:
+            done.add(name)
+            if id(obj) in impls:
+                for key in impls[id(obj)]:
+                    impl_names[key] = name
+                slots.append(name)
+                continue
+            if not getattr(obj, '__appeal_recipe__', None) and callable(obj):
+                owner = None
+                for key, table in harvests:
+                    hit = table.get(id(obj))
+                    if hit is not None:
+                        owner = (key, hit[1])
+                        break
+                if owner is not None:
+                    key, path = owner
+                    fingerprintable = _params_host(obj) is not None
+                    ref_specs[key].append(
+                        (name, path,
+                         fingerprint(obj) if fingerprintable
+                         else None,
+                         decoration_fingerprint(
+                             obj, option_overrides,
+                             parameter_usage)))
+                    slots.append(name)
+                    continue
+            rendered = render_ref(name, obj, refs)
+            if rendered.startswith('from ') and '\n' in rendered:
+                line, _, assignment = rendered.partition('\n')
+                if line not in imports:
+                    imports.append(line)
+                constants.append(assignment)
+            elif rendered.startswith('from '):
+                if rendered not in imports:
+                    imports.append(rendered)
+            else:
+                constants.append(rendered)
+
+
+def _runtime_import_block():
+    "The `from appeal.runtime import (...)` line, wrapped."
+    names = ',\n    '.join(_RUNTIME_IMPORTS)
+    return f'from appeal.runtime import (\n    {names},\n    )\n'
+
+
+def _render_lazy_block():
+    "Thin wrappers that keep render off the compiled fast path."
+    parts = []
+    for name in _RENDER_LAZY:
+        parts.append(
+            f'def {name}(*args, **kwargs):\n'
+            f'    from appeal.render import {name} as _f\n'
+            f'    return _f(*args, **kwargs)\n')
+    return '\n'.join(parts)
+
+
+def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
+                            templates=None, repeat=False, subs=None,
+                            sub_repeat=None, default=None,
+                            sub_defaults=None, version=None,
+                            max_columns=79, help=True, doc=None,
+                            config=None, global_is_user=False,
+                            decorations=None):
+    """
+    The text of a compiled parser MODULE implementing this program:
+    an importable file wearing the Appeal API (see precompile.py).
+    Appeal() and the decorators in the module don't build anything:
+    they match the live functions to the precompiled bits by
+    fingerprint (all-or-nothing verification at main(); any drift
+    is a loud regenerate error naming every offender).  commands
+    maps user command words to their plans; global_plan is the
+    set's global (spec-visible only when a user registered it--the
+    synthesized dispatcher and stock precommand carry no function
+    to match).  config is the baked-knob blob the shim compares its
+    constructor arguments against.
+    """
+    from .build import Decorations
+    from .runtime import (decoration_fingerprint, fingerprint)
+    if decorations is None:
+        decorations = Decorations()
+    prog = argv0 or 'program'
+    # the facade says whether a USER registered the global command
+    # (the synthesized dispatcher and the stock precommand carry
+    # no function for the shim to match)
+    user_global = global_is_user and global_plan is not None
+    subs = subs or {}
+    sub_repeat = sub_repeat or {}
+    sub_defaults = sub_defaults or {}
+    if commands:
+        source, refs = emit_command_set(
+            commands, global_plan, prog, templates, None,
+            repeat, subs or None, sub_repeat or None,
+            version=version, max_columns=max_columns, help=help,
+            default=default, sub_defaults=sub_defaults or None,
+            doc=doc)
+        entry = 'parse_command_set'
+        complete = '_COMPLETE_command_set'
+        description = f'command-line parsing ({", ".join(commands)})'
+    else:
+        source, refs = emit(global_plan, templates=templates,
+                            max_columns=max_columns)
+        symbol = _ident(global_plan.name)
+        entry = f'parse_{symbol}'
+        complete = f'_COMPLETE_{symbol}'
+        description = f'command-line parsing for {global_plan.name!r}'
+
+    impls = {}
+    harvests = []
+    fingerprints = {}
+    decor_fingerprints = {}
+    def note_fn(key, fn):
+        # one function may serve several nodes: every key maps to
+        # the one slot the refs dedupe to
+        impls.setdefault(id(fn), []).append(key)
+        harvests.append((key, _harvest_paths(fn, decorations)))
+        fingerprints[key] = fingerprint(fn)
+        decor_fingerprints[key] = decoration_fingerprint(
+            fn, decorations.option_overrides,
+            decorations.parameter_usage)
+    for word, plan in commands.items():
+        note_fn(('command', word), plan.callable)
+    for parent, table in subs.items():
+        for sub, plan in table.items():
+            note_fn(('sub', parent, sub), plan.callable)
+    if default is not None:
+        note_fn(('default',), default.callable)
+    for parent, plan in sub_defaults.items():
+        note_fn(('subdefault', parent), plan.callable)
+    if user_global:
+        note_fn(('global',), global_plan.callable)
+
+    imports, constants, slots, impl_names, ref_specs = _classify_refs(
+        refs, impls, harvests, decorations)
+
+    def entry_literal(key):
+        # an owned nested class constructs through the parent
+        # instance's attribute: no reference to bake, no slot--
+        # the entry is verify-only (impl None)
+        return {'impl': impl_names.get(key),
+                'fingerprint': fingerprints[key],
+                'decorations': decor_fingerprints[key],
+                'refs': tuple(sorted(ref_specs[key]))}
+
+    def node_entry(word, key):
+        # the spec is the command TREE: a parent's entry carries
+        # its children (and its default), each a full entry--the
+        # shim's child nodes walk this shape
+        entry_ = entry_literal(key)
+        if sub_repeat.get(word):
+            entry_['repeat'] = True
+        table = subs.get(word)
+        if table:
+            entry_['commands'] = {
+                sub: node_entry(sub, ('sub', word, sub))
+                for sub in table}
+        if word in sub_defaults:
+            entry_['default'] = entry_literal(('subdefault', word))
+        return entry_
+
+    spec = {
+        'program': prog,
+        'entry': entry,
+        'complete': complete,
+        'templates': templates,
+        'config': dict(config or {}),
+        'global': entry_literal(('global',)) if user_global else None,
+        'default': (entry_literal(('default',))
+                    if default is not None else None),
+        'commands': {word: node_entry(word, ('command', word))
+                     for word in commands},
+    }
+
+    header = (
+        f'#\n'
+        f'# {prog} -- {description}\n'
+        f'# Generated by Appeal: a compiled parser MODULE, wearing '
+        f'the Appeal API.\n'
+        f'# Import it AS appeal and your program is unchanged:\n'
+        f'#\n'
+        f'#     try:\n'
+        f'#         import compiled as appeal\n'
+        f'#     except ImportError:\n'
+        f'#         import appeal\n'
+        f'#\n'
+        f'# Imports appeal.runtime (the stdlib-only core); render '
+        f'stays lazy.\n'
+        f'# Regenerate rather than edit.\n'
+        )
+
+    parts = [header]
+    parts.append('\n# ---- the appeal runtime (stdlib-only core) ----\n')
+    parts.append('import sys\n')
+    parts.append(_runtime_import_block())
+    parts.append('from appeal.precompile import compiled_appeal\n')
+    parts.append('\n# ---- render, kept off the fast path ----\n')
+    parts.append(_render_lazy_block())
+    parts.append('\n# ---- your program (bound live at registration) ----\n')
+    if imports:
+        parts.append('\n'.join(imports) + '\n')
+    if constants:
+        parts.append('\n'.join(constants) + '\n')
+    if slots:
+        parts.append('\n'.join(f'{name} = None' for name in slots)
+                     + '\n')
+    parts.append('\n# ---- generated parser ----\n')
+    parts.append(source)
+    parts.append(f'\n# ---- the Appeal your program imports ----\n'
+                 f'_SPEC = {spec!r}\n\n'
+                 f'Appeal = compiled_appeal(_SPEC, globals())\n')
+    return '\n'.join(parts)

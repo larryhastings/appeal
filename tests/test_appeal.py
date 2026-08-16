@@ -4315,6 +4315,126 @@ def _drive_mcp(script_path, requests):
     return [json.loads(line) for line in r.stdout.strip().split('\n')]
 
 
+# the shared program: build(appeal) returns the same app whether
+# `appeal` is the real package or a compiled module wearing its API.
+# `coord` is a multi-operand converter reached ONLY by walking the
+# annotation--the compiled module never imports it (ruled
+# 2026-08-16), so a drifted `coord` must trip the recursive
+# fingerprint at main().
+_PRECOMPILE_DEFS = (
+    'def coord(x, y):\n'
+    '    return (int(x), int(y))\n'
+    'def build(appeal):\n'
+    "    app = appeal.Appeal(name='plot')\n"
+    '    @app.global_command()\n'
+    '    def plot(where: coord, *, loud=False):\n'
+    "        msg = 'plot at ' + str(where)\n"
+    '        print(msg.upper() if loud else msg)\n'
+    '    return app\n')
+
+# the drift: coord grows a third parameter.  Nothing in plot's OWN
+# signature changed--only the converter it reaches.
+_PRECOMPILE_DEFS_DRIFT = (
+    'def coord(x, y, z):\n'
+    '    return (int(x), int(y), int(z))\n'
+    'def build(appeal):\n'
+    "    app = appeal.Appeal(name='plot')\n"
+    '    @app.global_command()\n'
+    '    def plot(where: coord, *, loud=False):\n'
+    "        msg = 'plot at ' + str(where)\n"
+    '        print(msg.upper() if loud else msg)\n'
+    '    return app\n')
+
+_PRECOMPILE_RUNNER = (
+    'import sys\n'
+    'try:\n'
+    '    import compiled as appeal\n'
+    'except ImportError:\n'
+    '    import appeal\n'
+    'import {defs} as defs\n'
+    'app = defs.build(appeal)\n'
+    "if '--check-imports' in sys.argv:\n"
+    "    app._verify_and_bind()\n"
+    "    heavy = [m for m in ('appeal.build', 'appeal.render',\n"
+    "                         'inspect') if m in sys.modules]\n"
+    "    heavy += ['big' if any(m == 'big' or m.startswith('big.')\n"
+    "                           for m in sys.modules) else '']\n"
+    "    print('HEAVY:' + ','.join(h for h in heavy if h))\n"
+    'else:\n'
+    '    app.main()\n')
+
+
+def test_precompile_roundtrip_and_drift():
+    # app.precompile() emits an importable module wearing the Appeal
+    # API: `import compiled as appeal` and the program is unchanged.
+    # It imports appeal.runtime (the stdlib-only core), binds the
+    # live functions by fingerprint, and never touches build/render/
+    # inspect/big on the parse path.  Any drift--here a converter the
+    # compiled module resolves LIVE off the annotation--trips the
+    # recursive fingerprint at main().
+    with tempfile.TemporaryDirectory() as d:
+        defs_path = os.path.join(d, 'plotdefs.py')
+        with open(defs_path, 'wt', encoding='utf-8') as f:
+            f.write(_PRECOMPILE_DEFS)
+        run_path = os.path.join(d, 'run.py')
+        with open(run_path, 'wt', encoding='utf-8') as f:
+            f.write(_PRECOMPILE_RUNNER.format(defs='plotdefs'))
+        env = dict(os.environ)
+        # THIS repo's appeal (site-packages may hold shipping v1),
+        # plus the tempdir for the compiled module and the defs
+        env['PYTHONPATH'] = os.pathsep.join((os.getcwd(), d))
+
+        # emit the compiled module next to the program
+        compiled_path = os.path.join(d, 'compiled.py')
+        gen_path = os.path.join(d, 'gen.py')
+        with open(gen_path, 'wt', encoding='utf-8') as f:
+            f.write('import appeal, plotdefs\n'
+                    'plotdefs.build(appeal).precompile('
+                    'path=%r)\n' % compiled_path)
+        r = sub_run([sys.executable, gen_path], env=env)
+        assert r.returncode == 0, r.stderr
+        text = open(compiled_path, encoding='utf-8').read()
+        # it IMPORTS the runtime, it does not EMBED it, and it wears
+        # the shim
+        assert 'from appeal.runtime import' in text, text[:400]
+        assert 'compiled_appeal(_SPEC' in text
+        assert 'def parse_tokens' not in text     # imported, not baked
+
+        # run it: the compiled parser drives the live functions
+        r = sub_run([sys.executable, run_path, '3', '4'], env=env)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == 'plot at (3, 4)', r.stdout
+        r = sub_run([sys.executable, run_path, '3', '4', '--loud'],
+                    env=env)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == 'PLOT AT (3, 4)', r.stdout
+
+        # the speed guarantee: registering + binding pulls the core
+        # only--no build/render/inspect/big on the fast path
+        r = sub_run([sys.executable, run_path, '--check-imports'],
+                    env=env)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == 'HEAVY:', r.stdout
+
+        # DRIFT: swap in defs whose converter grew a parameter; the
+        # compiled parser is now stale and says so, by name
+        with open(defs_path, 'wt', encoding='utf-8') as f:
+            f.write(_PRECOMPILE_DEFS_DRIFT)
+        # bust any cached bytecode of plotdefs
+        import shutil
+        shutil.rmtree(os.path.join(d, '__pycache__'),
+                      ignore_errors=True)
+        r = sub_run([sys.executable, run_path, '3', '4'], env=env)
+        assert r.returncode != 0
+        assert 'stale compiled parser' in r.stderr, r.stderr
+        # the fingerprint is RECURSIVE: a reached converter's drift
+        # rolls up into plot's own fingerprint, so main() names the
+        # command (its annotations changed), catching the drift
+        # without importing coord (ruled 2026-08-16)
+        assert 'the global command has changed' in r.stderr, r.stderr
+        assert 'annotations' in r.stderr, r.stderr
+
+
 def test_repl():
     # §8.9: read a line, parse it like a command line, loop
     with tempfile.TemporaryDirectory() as d:
