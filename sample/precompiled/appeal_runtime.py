@@ -13,7 +13,8 @@ stdlib-only, so importing it is essentially free (measure below).
 
 import sys
 
-__all__ = ['UsageError', 'parse_tokens', 'check_count', 'run_main']
+__all__ = ['UsageError', 'parse_tokens', 'check_count', 'multisplit',
+           'run_main']
 
 
 class UsageError(Exception):
@@ -26,10 +27,14 @@ class UsageError(Exception):
 def parse_tokens(argv, options):
     """
     Split argv into (operands, given).  `options` maps each option
-    string to (name, kind), kind in {'flag', 'value'}.  '--' ends
-    option parsing; '-'  is a bare operand (stdin convention).
-    This is the whole recognizer -- the real Appeal has a counting
-    automaton here, but the shape is the same.
+    string to (name, kind):
+        'flag'   present -> True
+        'value'  takes one oparg (last wins)
+        'count'  repeatable, no oparg -> number of occurrences  (counter)
+        'multi'  repeatable, one oparg -> list of opargs        (accumulator/mapping)
+    '--' ends option parsing; '-' is a bare operand.  This is the
+    whole recognizer -- real Appeal has a counting automaton here,
+    but the shape (and the flag/value/count/multi kinds) is the same.
     """
     operands = []
     given = {}
@@ -46,21 +51,43 @@ def parse_tokens(argv, options):
             if entry is None:
                 raise UsageError(f"unknown option {key!r}")
             name, kind = entry
-            if kind == 'flag':
+            if kind in ('flag', 'count'):
                 if eq:
                     raise UsageError(f"option {key!r} takes no value")
-                given[name] = True
+                if kind == 'flag':
+                    given[name] = True
+                else:
+                    given[name] = given.get(name, 0) + 1
             else:
                 if not eq:
                     i += 1
                     if i >= n:
                         raise UsageError(f"option {key!r} needs a value")
                     val = argv[i]
-                given[name] = val
+                if kind == 'multi':
+                    given.setdefault(name, []).append(val)
+                else:
+                    given[name] = val
         else:
             operands.append(tok)
         i += 1
     return operands, given
+
+
+def multisplit(text, separators):
+    """
+    Split `text` on any of `separators` -- the minimal stand-in for
+    big.text.toy_multisplit that appeal.split() uses.  This is
+    'bucket 2': a converter whose logic is small enough to live in
+    the runtime, so the fast path needs it without importing big.
+    """
+    result = [text]
+    for sep in separators:
+        pieces = []
+        for chunk in result:
+            pieces.extend(chunk.split(sep))
+        result = pieces
+    return result
 
 
 def check_count(count, minimum, maximum, usage):

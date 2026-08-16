@@ -68,5 +68,32 @@ def forecast(city, days: int = 3):
         print(f'{city} day {day}: sunny, probably')
 
 
+@app.command()
+def sync(source: appeal.split(':'), *,
+         verbose: appeal.counter(step=2) = 0,
+         tag: appeal.accumulator[str] = (),
+         mode: appeal.validate('fast', 'safe') = 'safe'):
+    """
+    Sync weather stations, exercising the special converters.
+
+    ## Arguments
+
+    source
+    : A `:`-separated list of station ids (appeal.split).
+
+    ## Options
+
+    verbose
+    : Repeatable; each -v adds 2 (appeal.counter).
+
+    tag
+    : Repeatable; collects labels (appeal.accumulator).
+
+    mode
+    : One of `fast` or `safe` (appeal.validate).
+    """
+    print(f'sync {source} verbose={verbose} tags={list(tag)} mode={mode}')
+
+
 if __name__ == '__main__':
     sys.exit(app.main())

@@ -23,7 +23,57 @@ Everything above the divider is what codegen would emit.
 
 import sys
 
-from appeal_runtime import UsageError, parse_tokens, check_count
+from appeal_runtime import UsageError, parse_tokens, check_count, multisplit
+
+
+# =====================================================================
+# ---- the converter VOCABULARY, as stand-ins -------------------------
+# =====================================================================
+#
+# A program writes `def paths(p: appeal.split(':'))`.  With the
+# toggle, `appeal` is THIS module -- so `split`, `counter`, etc. must
+# exist here, or the annotation won't even evaluate at import.
+#
+# These stand-ins are inert: they record the recipe and are NEVER
+# called on the fast path (scan_* bakes the conversion inline).  They
+# exist so signatures evaluate cheaply (no real Appeal), and they
+# carry the recipe so the fallback can rebuild the real converter.
+
+class _Recipe:
+    def __init__(self, factory, args=(), kwargs=None, subscript=False):
+        self.factory = factory
+        self.args = args
+        self.kwargs = kwargs or {}
+        self.subscript = subscript
+        self.__appeal_recipe__ = (
+            ('subscript' if subscript else 'call'), factory, args, self.kwargs)
+
+    def __call__(self, *a, **k):
+        raise RuntimeError(
+            "compiled stand-in used as a converter: the fast path bakes "
+            "conversion, the fallback rebuilds the real one")
+
+
+def split(*separators, **kw):        return _Recipe('split', separators, kw)
+def validate(*values, **kw):         return _Recipe('validate', values, kw)
+def validate_range(*args, **kw):     return _Recipe('validate_range', args, kw)
+def counter(**kw):                   return _Recipe('counter', (), kw)
+def file(*args, **kw):               return _Recipe('file', args, kw)
+
+
+class _Subscriptable:
+    "accumulator[str], mapping[str,int], optional[int] -- and callable too."
+    def __init__(self, name):
+        self._name = name
+    def __getitem__(self, T):
+        args = T if isinstance(T, tuple) else (T,)
+        return _Recipe(self._name, args, subscript=True)
+    def __call__(self, T):
+        return _Recipe(self._name, (T,))
+
+accumulator = _Subscriptable('accumulator')
+mapping = _Subscriptable('mapping')
+optional = _Subscriptable('optional')
 
 
 # =====================================================================
@@ -55,7 +105,34 @@ def scan_forecast(argv):
     return 'forecast', (operands[0], days), {}
 
 
-_COMMANDS = {'report': scan_report, 'forecast': scan_forecast}
+# sync <SOURCE:split> [-v|--verbose:counter] [--tag:accumulator]... [--mode:validate]
+#
+# Every special converter is baked -- the fold/logic is inline, no
+# class ships, and appeal is not imported:
+#   source : split(':')          -> multisplit() from the runtime  (bucket 2)
+#   verbose: counter(step=2)     -> default + step*count           (bucket 1)
+#   tag    : accumulator[str]    -> [str(v) for v in occurrences]  (bucket 1)
+#   mode   : validate('fast','safe') -> baked membership check     (bucket 1)
+# the auto-short options (-v -t -m) match what real Appeal derives,
+# so the fast path and the fallback help agree
+_SYNC_OPTS = {'-v': ('verbose', 'count'), '--verbose': ('verbose', 'count'),
+              '-t': ('tag', 'multi'), '--tag': ('tag', 'multi'),
+              '-m': ('mode', 'value'), '--mode': ('mode', 'value')}
+
+def scan_sync(argv):
+    operands, given = parse_tokens(argv, _SYNC_OPTS)
+    check_count(len(operands), 1, 1, None)
+    source = multisplit(operands[0], (':',))                    # split(':')
+    verbose = 0 + 2 * given.get('verbose', 0)                   # counter(step=2)
+    tag = tuple(str(v) for v in given.get('tag', ()))           # accumulator[str]
+    mode = given.get('mode', 'safe')                            # validate(...)
+    if mode not in ('fast', 'safe'):
+        raise UsageError(f"invalid <MODE> {mode!r}")
+    return 'sync', (source,), {'verbose': verbose, 'tag': tag, 'mode': mode}
+
+
+_COMMANDS = {'report': scan_report, 'forecast': scan_forecast,
+             'sync': scan_sync}
 
 
 def _scan(argv):
@@ -127,5 +204,27 @@ class Appeal:
         import appeal
         real = appeal.Appeal(self.name)
         for word, fn in self._registered:
+            _rehydrate(fn, appeal)          # stand-in recipes -> real converters
             real.command(name=word)(fn)
         return real.main(list(args))
+
+
+def _rehydrate(fn, appeal):
+    """
+    Swap the stand-in converters in fn's annotations for the real
+    Appeal ones, so the fallback builds a faithful plan (right usage,
+    right grammar) for help and errors.  (Prototype: mutates
+    __annotations__ on the fallback path -- rare; production would
+    hand real Appeal the recipes directly.)
+    """
+    anns = getattr(fn, '__annotations__', None)
+    if not anns:
+        return
+    for pname, val in list(anns.items()):
+        if isinstance(val, _Recipe):
+            real = getattr(appeal, val.factory)
+            if val.subscript:
+                key = val.args[0] if len(val.args) == 1 else tuple(val.args)
+                anns[pname] = real[key]
+            else:
+                anns[pname] = real(*val.args, **val.kwargs)

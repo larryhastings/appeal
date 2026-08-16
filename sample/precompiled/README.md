@@ -58,6 +58,35 @@ Cold start (`report portland -v` vs `report --help`):
     fast path (dispatch) ..... 11.2 ms   (bare python: 12.2)
     fallback (--help) ........ 44.2 ms
 
+## Special converters -- split, counter, accumulator, validate, ...
+
+The `sync` command exercises them.  Every one splits into
+*recognition* (arity/flag-ness, always baked into `scan_*`) and
+*conversion* (string -> value), and conversion lands in one of
+three buckets -- none of which imports appeal:
+
+1. **Baked inline** -- codegen knows what they do, so it emits plain
+   Python.  `counter(step=2)` becomes `2 * count`; `accumulator[str]`
+   becomes a list comprehension; `validate('fast','safe')` becomes a
+   membership check; `int`/`float` become `int(x)`.  The MultiOption
+   *classes* never ship -- they're a build-time abstraction; the
+   runtime just does the fold.
+2. **A tiny runtime helper** -- `split` uses `multisplit()` (a
+   ~10-line stand-in for big's `toy_multisplit`); `file` would use
+   `open()`.  Small logic, no big/appeal.
+3. **Imported from your module** -- a custom converter function or
+   `MultiOption` subclass is *your* code; the parser imports it just
+   like it imports the command functions.
+
+The vocabulary NAMES (`appeal.split`, `appeal.counter`, ...) exist
+here as inert **stand-ins** so a signature like
+`def sync(source: appeal.split(':'))` evaluates at import without
+pulling real appeal.  They're never called on the fast path (the
+conversion is baked); they carry the recipe so the fallback can
+rehydrate the real converter for help.  Measured: `sync` with all
+four special converters parses at bare-Python speed, zero appeal
+modules loaded.
+
 ## What's faked (this is a prototype)
 
 * The baked parsers are hand-written; codegen would emit them.
