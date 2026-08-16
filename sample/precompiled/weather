@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+#
+# weather -- a PRE-COMPILED parser (prototype, hand-written to
+# show the shape codegen would emit).  It imports the minimal
+# runtime and the user's command functions, then IS the parser:
+# per-command scan/convert/dispatch, no build, no signatures.
+#
+# The whole point: `from appeal_runtime import *` costs almost
+# nothing (stdlib-only), so this goes from python-start to
+# dispatch about as fast as Python can start.
+
+import sys
+
+from appeal_runtime import *
+from weather_commands import report, forecast
+
+
+# ---- report: report [-u|--units UNITS] [-v|--verbose] <CITY> ----
+_REPORT_OPTS = {'-u': ('units', 'value'), '--units': ('units', 'value'),
+                '-v': ('verbose', 'flag'), '--verbose': ('verbose', 'flag')}
+_REPORT_USAGE = 'weather report [-u|--units <UNITS>] [-v|--verbose] <CITY>'
+
+def parse_report(argv):
+    operands, given = parse_tokens(argv, _REPORT_OPTS)
+    check_count(len(operands), 1, 1, _REPORT_USAGE)
+    return report(operands[0],
+                  units=given.get('units', 'C'),
+                  verbose=given.get('verbose', False))
+
+
+# ---- forecast: forecast <CITY> [<DAYS>] ----
+_FORECAST_USAGE = 'weather forecast <CITY> [<DAYS>]'
+
+def parse_forecast(argv):
+    operands, given = parse_tokens(argv, {})
+    check_count(len(operands), 1, 2, _FORECAST_USAGE)
+    # the converter (int) is emitted inline -- codegen bakes the
+    # conversion, the runtime never introspects
+    if len(operands) == 2:
+        try:
+            days = int(operands[1])
+        except ValueError:
+            raise UsageError(f"invalid <DAYS> {operands[1]!r}",
+                             _FORECAST_USAGE)
+    else:
+        days = 3
+    return forecast(operands[0], days)
+
+
+# ---- the dispatcher ----
+_COMMANDS = {'report': parse_report, 'forecast': parse_forecast}
+_USAGE = 'weather {report|forecast} ...'
+
+def dispatch(argv):
+    if not argv:
+        raise UsageError('no command given', _USAGE)
+    parse = _COMMANDS.get(argv[0])
+    if parse is None:
+        raise UsageError(f"unknown command {argv[0]!r}", _USAGE)
+    return parse(argv[1:])
+
+
+if __name__ == '__main__':
+    sys.exit(run_main(dispatch))
