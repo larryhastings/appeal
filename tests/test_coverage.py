@@ -415,7 +415,7 @@ def test_completion_table_repeat_group_completions():
         return hues
     table = completion_table(build_plan(paint))
     assert table['repeat'] is color
-    assert appeal.complete(build_plan(paint), [], '') == ['green', 'red']
+    assert appeal.completions(build_plan(paint), [], '') == ['green', 'red']
     # ...and the tuple-of-str contract refuses lists by name
     def loud(hue):
         return hue
@@ -423,7 +423,7 @@ def test_completion_table_repeat_group_completions():
     def paint2(*hues: loud):
         return hues
     try:
-        appeal.complete(build_plan(paint2), [], '')
+        appeal.completions(build_plan(paint2), [], '')
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'tuple of str' in str(e)
@@ -465,8 +465,8 @@ def test_schema_branches():
         : A boolean.
         """
         return plain
-    schema = mcp_input_schema(build_plan(cmd))
-    p = schema['properties']
+    describe = mcp_input_schema(build_plan(cmd))
+    p = describe['properties']
     assert p['plain']['type'] == 'string'
     assert p['plain']['description'] == 'An untyped operand.'
     assert p['rest']['type'] == 'array'
@@ -604,7 +604,7 @@ def test_interpreter_help_paths():
 
 # ---------------------------------------------------------------------
 # batch 3: the read driver's shapes and errors, and the last
-# interpreter/help/schema/plan stragglers
+# interpreter/help/describe/plan stragglers
 
 
 def test_read_bool_flag_nullary():
@@ -1019,15 +1019,15 @@ def test_schema_leaf_fallbacks():
         return (a, b)
     def cmd(p: pathlib.Path, *, spot: pairfn = None):
         return (p, spot)
-    schema = mcp_input_schema(build_plan(cmd))
-    props = schema['properties']
-    # Path builds as a scalar-acceptable *args group: the schema
+    describe = mcp_input_schema(build_plan(cmd))
+    props = describe['properties']
+    # Path builds as a scalar-acceptable *args group: the describe
     # offers the string AND the object, like the reader
     assert props['p']['anyOf'][0] == {'type': 'string'}
     assert props['spot']['type'] == 'array'
     # an option metavar rename rides along as 'usage'
     from appeal.build import Decorations
-    from appeal.schema import schema as describe
+    from appeal.schema import describe as describe
     def q(*, level: int = 0):
         return level
     d = Decorations()
@@ -1235,7 +1235,7 @@ def test_registration_errors():
 
 
 def test_plan_and_schema_properties():
-    # .plan refuses a subcommand app; a global-only app's schema
+    # .plan refuses a subcommand app; a global-only app's describe
     # describes the lone plan
     app = Appeal(name='props')
     @app.global_command()
@@ -2172,7 +2172,7 @@ def test_completion_bad_candidates_and_fish():
     def paint(*hues: color):
         return hues
     try:
-        appeal.complete(build_plan(paint), [], '')
+        appeal.completions(build_plan(paint), [], '')
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'str' in str(e)
@@ -2808,7 +2808,7 @@ def test_branch_schema_and_read_edges():
     # a *args converter with parameters is a per-instance GROUP,
     # exactly as the non-*args path treats it (single-parameter
     # included--a lone int-typed param must still convert its
-    # operand; differential-caught 2026-08-16).  Its items schema is
+    # operand; differential-caught 2026-08-16).  Its items describe is
     # the group's, so a one-str-param converter reads as the group's
     # anyOf (string, or the by-name object).
     def conv(s):
@@ -2964,13 +2964,13 @@ def test_branch_negative_number_global_operand():
 
 
 def test_branch_completion_edges():
-    from appeal.complete import complete_set
+    from appeal.complete import completions_set
     from appeal.runtime import completion_reentry
 
     # a repeatable option already on the line still completes
     def f(*, tag: appeal.accumulator[str] = ()):
         return tag
-    assert '--tag' in appeal.complete(build_plan(f), ['--tag', 'x'], '--')
+    assert '--tag' in appeal.completions(build_plan(f), ['--tag', 'x'], '--')
 
     # fish reentry with an EMPTY current token (cursor after a space)
     seen = []
@@ -2994,7 +2994,7 @@ def test_branch_completion_edges():
         pass
     commands = {'db': build_plan(db_global), 'top': build_plan(top)}
     sets = {'db': {'commands': {'mig': build_plan(mig)}, 'repeat': False}}
-    assert complete_set(commands, None, ['help', 'db'], '', sets=sets) == []
+    assert completions_set(commands, None, ['help', 'db'], '', sets=sets) == []
 
     # cycling resolution: an entered, non-repeat inner set is
     # ineligible--the word resolves to the repeat root instead
@@ -3002,7 +3002,7 @@ def test_branch_completion_edges():
         pass
     commands2 = {'db': build_plan(db_global), 'rootcmd': build_plan(rootcmd)}
     sets2 = {'db': {'commands': {'mig': build_plan(mig)}, 'repeat': False}}
-    complete_set(commands2, None, ['db', 'mig', 'X', 'rootcmd'], '',
+    completions_set(commands2, None, ['db', 'mig', 'X', 'rootcmd'], '',
                  repeat=True, sets=sets2)
 
 

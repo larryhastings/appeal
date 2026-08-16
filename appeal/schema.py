@@ -108,7 +108,7 @@ def _plan_schema(plan):
     return entry
 
 
-def schema(callable):
+def describe(callable):
     """
     Describe a command as plain JSON-safe data: its usage line,
     operands (groups recursing), options, arities, and any
@@ -120,7 +120,7 @@ def schema(callable):
     return _plan_schema(plan)
 
 
-def schema_set(commands, global_plan=None, prog=None):
+def describe_set(commands, global_plan=None, prog=None):
     "The schema of a multi-command program."
     entry = {
         'name': prog or 'program',
@@ -252,4 +252,4 @@ def mcp_input_schema(plan):
     where they're knowable; everything else is a string (the
     read driver converts anyway).
     """
-    return _mcp_object_schema(schema(plan))
+    return _mcp_object_schema(describe(plan))

@@ -27,9 +27,6 @@ __version__ = '1.0'
 # or render (Larry's ruling 2026-08-16).
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
 from .plan import _validate_arg_format
-from .complete import complete, complete_set
-from .read import read_csv, read_iterable, read_mapping
-from .schema import schema, schema_set
 from .runtime import (
     AppealConfigurationError, AppealDataError, AppealError,
     CommandError, MultiOption, Option, StrictOption,
@@ -74,6 +71,9 @@ _LAZY_REEXPORTS = {
     'dark_cool_theme': 'render', 'dark_warm_theme': 'render',
     'light_cool_theme': 'render', 'light_warm_theme': 'render',
     'resolve_stylesheet': 'render', 'help_stylesheet': 'render',
+    'completions': 'complete', 'completions_set': 'complete',
+    'read_csv': 'read', 'read_iterable': 'read', 'read_mapping': 'read',
+    'describe': 'schema', 'describe_set': 'schema',
     'interpreter_dispatch': ('interpreter', 'dispatch'),
     'interpreter_parse': ('interpreter', 'parse'),
 }
@@ -1395,9 +1395,10 @@ class Appeal:
         this; an empty list means "no opinion" (operand values are
         the shell's business).
         """
+        from .complete import completions, completions_set
         table = self._table()
         if not table:
-            return complete(self.plan, words, prefix)
+            return completions(self.plan, words, prefix)
         sets = {}
         for parent, entries in self._subs.items():
             sets[parent] = {
@@ -1409,7 +1410,7 @@ class Appeal:
             }
         # the real help/version commands ride the table; no
         # legacy synthesis (banishment must banish)
-        return complete_set(self.plans, self.global_plan, words, prefix,
+        return completions_set(self.plans, self.global_plan, words, prefix,
                             auto_version=False,
                             repeat=self.repeat, sets=sets or None,
                             help=False)
@@ -1551,23 +1552,27 @@ class Appeal:
         readable twin of --help.  Pairs with read_mapping() to run
         a command from a JSON object.
         """
+        from .schema import describe, describe_set
         table = self._table()
         if not table:
-            return schema(self.plan)
-        return schema_set(self.plans, self.global_plan, self._prog())
+            return describe(self.plan)
+        return describe_set(self.plans, self.global_plan, self._prog())
 
     def read_mapping(self, callable, mapping):
         "v1's API: call `callable` with values pulled from `mapping`."
+        from .read import read_mapping
         self._finalize()
         return read_mapping(callable, mapping)
 
     def read_iterable(self, callable, iterable):
         "v1's API: call `callable` once per row; returns the results."
+        from .read import read_iterable
         self._finalize()
         return read_iterable(callable, iterable)
 
     def read_csv(self, callable, reader, *, first_row_map=None):
         "v1's API: read_iterable for csv.reader input (see read_csv)."
+        from .read import read_csv
         self._finalize()
         return read_csv(callable, reader, first_row_map=first_row_map)
 
@@ -2119,6 +2124,7 @@ class Appeal:
         no coverage (config supplies only options), so it refuses
         here--at startup, not mid-call.
         """
+        from .read import read_mapping
         table = self._table()
         global_plan = self.global_plan
         if not (table and global_plan is not None
@@ -2167,6 +2173,7 @@ class Appeal:
         (the layering rules), and method tools dispatch bound.
         Runs until stdin closes.
         """
+        from .read import read_mapping
         from .runtime import run_mcp
         from .schema import mcp_input_schema
         from .help import summary

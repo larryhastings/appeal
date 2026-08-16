@@ -143,7 +143,7 @@ def completion_set_table(commands, global_plan, repeat=False,
     }
 
 
-def complete(plan, words, prefix=''):
+def completions(plan, words, prefix=''):
     """
     Candidate completions for `prefix`, given the `words` already
     typed.  Options complete on a '-' prefix; value positions ask
@@ -153,7 +153,7 @@ def complete(plan, words, prefix=''):
     return complete_command(completion_table(plan), words, prefix)
 
 
-def complete_set(commands, global_plan, words, prefix='',
+def completions_set(commands, global_plan, words, prefix='',
                  repeat=False, sets=None, auto_version=False, help=True):
     """
     Completion for a multi-command program: the global command's

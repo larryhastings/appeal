@@ -2638,27 +2638,27 @@ def test_set_level_help_flag():
     assert 'add_item2' in out.getvalue()
 
 def test_completion():
-    from appeal import complete, complete_set
+    from appeal import completions, completions_set
     def size(width: float, *, bold=False):
         return (width, bold)
     def draw(shape, s: size = None, *, verbose=False, retries: int = 1):
         return None
     plan = build_plan(draw)
     # option-prefix completion, whole tree
-    got = complete(plan, [], '--')
+    got = completions(plan, [], '--')
     assert got == ['--bold', '--help', '--retries', '--verbose'], got
-    got = complete(plan, [], '--v')
+    got = completions(plan, [], '--v')
     assert got == ['--verbose'], got
     # used single-occurrence options drop out
-    got = complete(plan, ['--verbose'], '--')
+    got = completions(plan, ['--verbose'], '--')
     assert '--verbose' not in got and '--retries' in got, got
     # the cursor in a value position: no opinion
-    assert complete(plan, ['--retries'], '') == []
-    assert complete(plan, ['--retries'], '3') == []
+    assert completions(plan, ['--retries'], '') == []
+    assert completions(plan, ['--retries'], '3') == []
     # after '--': no options ever
-    assert complete(plan, ['--'], '--') == []
+    assert completions(plan, ['--'], '--') == []
     # operand position: shell's business
-    assert complete(plan, [], 'sha') == []
+    assert completions(plan, [], 'sha') == []
 
     # command sets: command words at the command position
     def run(target):
@@ -2666,24 +2666,24 @@ def test_completion():
     def deploy(target):
         return None
     commands = {'run': build_plan(run), 'deploy': build_plan(deploy)}
-    got = complete_set(commands, None, [], '')
+    got = completions_set(commands, None, [], '')
     assert got == ['deploy', 'help', 'run'], got
-    got = complete_set(commands, None, [], 'de')
+    got = completions_set(commands, None, [], 'de')
     assert got == ['deploy'], got
-    got = complete_set(commands, None, ['help'], '')
+    got = completions_set(commands, None, ['help'], '')
     assert got == ['deploy', 'help', 'run'], got     # help topics
     # after the command word: that command's options
-    got = complete_set(commands, None, ['run'], '--')
+    got = completions_set(commands, None, ['run'], '--')
     assert '--help' in got, got
     # with a global command: its options first, command words once
     # the minimum is fed
     def g(project, *, verbose=False):
         return None
-    got = complete_set(commands, build_plan(g), [], '--')
+    got = completions_set(commands, build_plan(g), [], '--')
     assert got == ['--verbose'], got
-    got = complete_set(commands, build_plan(g), [], '')
+    got = completions_set(commands, build_plan(g), [], '')
     assert got == [], got                             # minimum unmet
-    got = complete_set(commands, build_plan(g), ['proj'], '')
+    got = completions_set(commands, build_plan(g), ['proj'], '')
     assert got == ['deploy', 'help', 'run'], got
 
     # facade
@@ -3200,7 +3200,7 @@ def test_generated_code_name_collisions():
 def test_mcp_schema_agrees_with_read_mapping():
     # the natural round trip: whatever the MCP inputSchema
     # advertises, read_mapping() accepts.  Regression: operand
-    # properties used the presentation-only usage rename (schema
+    # properties used the presentation-only usage rename (describe
     # required COUNT, reader wanted count), and converter groups
     # were advertised as opaque strings.
     from appeal.schema import mcp_input_schema
@@ -3218,10 +3218,10 @@ def test_mcp_schema_agrees_with_read_mapping():
     plan = build_plan(go, decorations=d)
     s = mcp_input_schema(plan)
     # properties are keyed by PARAMETER name (identity), never the
-    # usage rename; the rename rides in schema() as 'usage'
+    # usage rename; the rename rides in describe() as 'usage'
     assert set(s['properties']) == {'count', 'spot', 'where'}
     assert s['required'] == ['count', 'spot']
-    from appeal.schema import schema as describe
+    from appeal.schema import describe as describe
     op = describe(plan)['operands'][0]
     assert (op['name'], op['usage']) == ('count', 'COUNT')
     # a strict group (min 2) advertises its real structure...
@@ -3246,7 +3246,7 @@ def test_schema():
     # the machine-readable twin of --help; pairs with read_mapping
     # to run a command from a JSON object
     import json
-    from appeal import schema
+    from appeal import describe
     def size(width: float, *, bold=False):
         return (width, bold)
     def draw(shape, width: size = None, *, verbose=False, times: int = 1):
@@ -3262,7 +3262,7 @@ def test_schema():
         : how many times.
         """
         return None
-    got = schema(draw)
+    got = describe(draw)
     json.dumps(got)                                      # JSON-safe throughout
     assert got['summary'] == 'Draws a shape.'
     assert got['usage'].startswith('draw ')
@@ -3287,7 +3287,7 @@ def test_schema():
     json.dumps(got)
     assert got['name'] == 'tool'
     assert got['commands']['run']['summary'] == 'Runs the target.'
-    # the round trip: schema out, JSON blob in, command runs
+    # the round trip: describe out, JSON blob in, command runs
     from appeal import read_mapping
     blob = json.loads('{"shape": "dot", "times": 3}')
     assert read_mapping(draw, blob) is None
@@ -4268,7 +4268,7 @@ def test_cycling_completion():
 
 
 def test_nested_completion():
-    # nested sets complete per the resolution chain, pop-up and all
+    # nested sets completions per the resolution chain, pop-up and all
     import appeal as _appeal
     app = _appeal.Appeal(name='tool', repeat=True)
     @app.command()
@@ -6498,7 +6498,7 @@ def test_colorized_help_paints_after_layout():
 
 def test_value_completion():
     from appeal import interpreter_parse
-    from appeal.complete import complete
+    from appeal.complete import completions
 
     def color(name):
         return name
@@ -6511,18 +6511,18 @@ def test_value_completion():
     plan = build_plan(paint)
     # an option's value position asks the expecting converter,
     # and the engine re-filters by prefix (the belt)
-    assert complete(plan, ['--tint'], '') == ['blue', 'green', 'red']
-    assert complete(plan, ['--tint'], 'g') == ['green']
+    assert completions(plan, ['--tint'], '') == ['blue', 'green', 'red']
+    assert completions(plan, ['--tint'], 'g') == ['green']
     # a value position whose converter has no opinion: filenames
-    assert complete(plan, ['--times'], '') == []
+    assert completions(plan, ['--times'], '') == []
     # an operand position asks its converter too (ruling 4)
-    assert complete(plan, ['x'], '') == ['blue', 'green', 'red']
+    assert completions(plan, ['x'], '') == ['blue', 'green', 'red']
     # ...but the first operand (where: str) has no opinion
-    assert complete(plan, [], '') == []
+    assert completions(plan, [], '') == []
     # option-string completion still works, used singles excluded
-    got = complete(plan, [], '-')
+    got = completions(plan, [], '-')
     assert '--tint' in got and '--times' in got
-    assert '--tint' not in complete(plan, ['--tint', 'red'], '-')
+    assert '--tint' not in completions(plan, ['--tint', 'red'], '-')
 
 
 def test_completions_validation():
@@ -6557,10 +6557,10 @@ def test_completions_validation():
     c3.completions = lambda prefix='': ['red']      # list, not tuple
     def f3(x: c3):
         return x
-    from appeal.complete import complete
+    from appeal.complete import completions
     plan = build_plan(f3)
     try:
-        complete(plan, [], '')
+        completions(plan, [], '')
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'tuple' in str(e)
