@@ -371,6 +371,11 @@ def build(callable, name=None, method_of=None,
         plan.constructs = callable.__qualname__
     if method_of is not None:
         plan.binds = method_of
+    # v1's optionality promotion: a defaulted operand followed by a
+    # required one (across group nesting) can never be skipped, so
+    # it becomes required.  Re-analyze if anything moved.
+    if _promote_optionality(plan):
+        _reanalyze(plan)
     _validate_completions(plan)
     return plan
 
@@ -1406,4 +1411,117 @@ def _analyze(plan):
         shifted = {c + plan.tree_trailing for c in whole_counts}
         plan.maximum = max(shifted)
         plan.valid_counts = shifted
+
+
+def _shallow_slots(obj):
+    "copy.copy for a __slots__ object (no copy module in standalone)."
+    new = obj.__class__.__new__(obj.__class__)
+    for klass in type(obj).__mro__:
+        for name in getattr(klass, '__slots__', ()):
+            if hasattr(obj, name):
+                setattr(new, name, getattr(obj, name))
+    return new
+
+
+def _clone_tree(plan):
+    """
+    A shallow copy of a Plan whose slot/child spine is deep-copied
+    (options, Terminals, converters shared).  Used to un-share a
+    Plan the build memo handed to more than one slot, so optionality
+    promotion--which is context-specific--can't cross-contaminate.
+    """
+    clone = _shallow_slots(plan)
+    slots = []
+    for s in plan.slots:
+        ns = _shallow_slots(s)
+        if isinstance(ns.child, Plan):
+            ns.child = _clone_tree(ns.child)
+        slots.append(ns)
+    clone.slots = slots
+    return clone
+
+
+def _unshare(plan, seen):
+    "Give every group slot its own subtree (the memo may share Plans)."
+    for s in plan.slots:
+        if isinstance(s.child, Plan):
+            if id(s.child) in seen:
+                s.child = _clone_tree(s.child)
+            seen.add(id(s.child))
+            _unshare(s.child, seen)
+
+
+_PROMOTE_INF = 1 << 29
+
+
+def _promote_walk(plan, parent_opt, lowest_required, mutate, flag):
+    """
+    v1's optionality promotion (argument_grouping.py's first_pass/
+    second_pass), folded into one right-to-left pass.
+
+    optionality is how deeply optional a slot is: the parent's plus
+    one for each default level.  Walking right to left,
+    lowest_required tracks the shallowest optionality at which a
+    required slot sits to the RIGHT; a slot deeper than that can't
+    be skipped (a required operand follows it, across group
+    nesting), so it's promoted to required.  Because Python forces a
+    signature's defaults to its tail, this only fires on a converter
+    GROUP in a non-final required slot: `f(first: opt2, x, y)`
+    promotes opt2's trailing default, so f demands four operands
+    (matching 0.6.4).
+
+    TRAILING slots (keyword-only, filled from the end) don't
+    participate--reservation isn't promotion, and the oracle
+    likewise ignores keyword-only parameters.  When mutate is False
+    the walk only reports (via flag[0]) whether anything WOULD be
+    promoted, so the caller can skip un-sharing when nothing moves.
+    Returns this level's lowest_required.
+    """
+    optionality = [None if slot.trailing
+                   else parent_opt + (0 if slot.required else 1)
+                   for slot in plan.slots]
+    lr = lowest_required
+    for i in range(len(plan.slots) - 1, -1, -1):
+        slot = plan.slots[i]
+        if slot.trailing:
+            continue
+        opt = optionality[i]
+        if isinstance(slot.child, Plan):
+            returned = _promote_walk(slot.child, opt, lr, mutate, flag)
+            if returned == parent_opt:
+                lr = returned
+        if opt > lr:
+            if not slot.required:
+                flag[0] = True
+                if mutate:
+                    slot.required = True
+        elif slot.required:
+            lr = min(lr, opt)
+    return lr
+
+
+def _promote_optionality(plan):
+    """
+    Promote defaulted operands that a required operand follows.
+    Mutates slot.required in place; returns True if anything moved
+    (the caller then re-analyzes the counts).  The tree is un-shared
+    first, but only when a promotion is actually needed, so the
+    common case (and deliberate converter dedup) is untouched.
+    """
+    flag = [False]
+    _promote_walk(plan, 0, _PROMOTE_INF, False, flag)   # detect
+    if not flag[0]:
+        return False
+    _unshare(plan, set())
+    flag = [False]
+    _promote_walk(plan, 0, _PROMOTE_INF, True, flag)    # apply
+    return flag[0]
+
+
+def _reanalyze(plan):
+    "Re-run the counting automaton bottom-up after promotion."
+    for slot in plan.slots:
+        if isinstance(slot.child, Plan):
+            _reanalyze(slot.child)
+    _analyze(plan)
 # --8<-- end appeal build --8<--

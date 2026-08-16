@@ -1929,6 +1929,65 @@ def test_plan_trailing_does_not_promote():
     assert named['z'].trailing
     assert plan.valid_counts == {2, 3}
 
+def test_plan_promotes_group_before_required():
+    # a converter group's trailing default is promoted to required
+    # when required operands FOLLOW it (0.6.4: "requires 4 arguments
+    # in this argument group").  There's no reservation here--b sits
+    # in the stream before x, y--so the group must take all its
+    # operands: f wants exactly four, never three.
+    def opt2(a: int, b: int = 0):
+        return (a, b)
+    def f(first: opt2, x: int, y: int):
+        return (first, x, y)
+    plan = build(f)
+    assert plan.valid_counts == {4}
+    assert plan.minimum == 4
+    assert run_both(f, ['1', '2', '3', '4']) == ('ok', ((1, 2), 3, 4))
+    assert run_both(f, ['1', '2', '3'])[0] == 'usage'
+
+def test_plan_promotes_nested_group():
+    # promotion reaches across nesting: inner's q is promoted because
+    # r (and z) follow the whole outer group
+    def inner(p: int, q: int = 0):
+        return (p, q)
+    def outer(g: inner, r: int):
+        return (g, r)
+    def f(o: outer, z: int):
+        return (o, z)
+    plan = build(f)
+    assert plan.valid_counts == {4}
+    assert run_both(f, ['1', '2', '3', '4']) == ('ok', (((1, 2), 3), 4))
+    assert run_both(f, ['1', '2', '3'])[0] == 'usage'
+
+def test_plan_args_group_internal_default_not_promoted():
+    # inside *args, nothing required follows the group, so an internal
+    # default stays optional--instances are variable width, matching
+    # 0.6.4 exactly (greedy: fill to 2, a lone trailing operand is 1)
+    def opt2(a: int, b: int = 0):
+        return (a, b)
+    def f(*items: opt2):
+        return items
+    assert run_both(f, ['1']) == ('ok', ((1, 0),))
+    assert run_both(f, ['1', '2']) == ('ok', ((1, 2),))
+    assert run_both(f, ['1', '2', '3']) == ('ok', ((1, 2), (3, 0)))
+
+def test_plan_promotion_unshares_shared_converter():
+    # the SAME converter used both before a required operand (promote)
+    # and as a trailing optional (don't) must not cross-contaminate:
+    # the build memo shares one Plan, so promotion un-shares it
+    def opt2(a: int, b: int = 0):
+        return (a, b)
+    def f(first: opt2, x: int, last: opt2 = None):
+        return (first, x, last)
+    plan = build(f)
+    named = {s.name: s for s in plan.slots}
+    assert named['first'].child is not named['last'].child
+    assert named['first'].child.minimum == 2   # promoted
+    assert named['last'].child.minimum == 1     # left optional
+    assert plan.valid_counts == {3, 4, 5}
+    assert run_both(f, ['1', '2', '3']) == ('ok', ((1, 2), 3, None))
+    assert run_both(f, ['1', '2', '3', '4']) == ('ok', ((1, 2), 3, (4, 0)))
+
 def test_plan_configuration_errors():
     def bad_order(*, opt='x', z):
         pass
