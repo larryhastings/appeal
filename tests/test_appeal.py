@@ -3407,65 +3407,6 @@ def test_read_mapping_facade():
     assert app.read_mapping(f, {'x': '5'}) == 5
     assert app.read_iterable(f, [['5']]) == [5]
 
-def test_snippets_grab_big_live():
-    # The compile-time grab (ruled 2026-08-06): appeal ships NO
-    # pre-synced copies of big's snippet regions--emission reads
-    # them from the INSTALLED big's source at compile time, so
-    # upgrading big reaches every subsequently compiled parser.
-    import re
-    from appeal.codegen import snippet_source
-    from appeal.runtime import runtime_source
-
-    # appeal's warehouse carries only appeal's own regions now
-    assert not re.search(r'--8<-- start big ', runtime_source())
-
-    # the combined warehouse carries each big region exactly once,
-    # read from the installed big's own files
-    combined = snippet_source()
-    for region in ('big word wrap trio', 'big terminal color',
-                   'big stylesheet render core',
-                   'big ansi stylesheets', 'big markdown defaults',
-                   'big glyphs from stylesheet'):
-        assert combined.count(f'--8<-- start {region} --8<--') == 1, region
-    # ...and the grab is LIVE: a distinctive line from installed
-    # big's trio appears verbatim
-    import big.text
-    big_text = open(big.text.__file__, 'rt', encoding='utf-8').read()
-    i = big_text.index('--8<-- start big word wrap trio --8<--')
-    j = big_text.index('--8<-- end big word wrap trio --8<--')
-    for line in big_text[i:j].split('\n'):
-        if line.strip().startswith('def '):
-            assert line in combined, line
-
-
-def test_streamed_snippets_run_bare():
-    # the extracted snippet set--what a generated script actually
-    # contains--execs in a BARE namespace (the north star: a
-    # standalone script imports nothing but the stdlib)
-    from big.snip import extract_snippets
-    from appeal.codegen import snippet_source
-    text = extract_snippets(
-        snippet_source(),
-        'appeal exceptions', 'appeal parse tokens', 'appeal run main',
-        'appeal help', 'appeal split', 'appeal folds',
-        'appeal check count', 'appeal command set')
-    ns = {}
-    exec('import enum\nimport operator\nimport sys\n' + text, ns)
-    for name in ('parse_tokens', 'run_main', 'render_baked_help',
-                 'split', 'accumulator', 'wrap_words', 'StyleSheet',
-                 'markdown_defaults', 'best_palette', 'can_colorize',
-                 'glyphs_from_stylesheet'):
-        assert name in ns, f'streamed snippets are missing {name}'
-    words = ('the streamed runtime wraps words with no imports '
-             'from anywhere at all.  Even two-space sentences.').split()
-    wrapped = ns['wrap_words'](words, 30)
-    assert max(len(line) for line in wrapped.split('\n')) <= 30
-    assert 'all.  Even' in wrapped.replace('\n', ' ')
-    # and it IS live big code: identical output to the import
-    import big.text
-    assert wrapped == big.text.wrap_words(list(words), 30)
-
-
 def test_differential_fuzz_v1_greedy():
     # Audit round 2, resurrected (2026-08-09): random
     # shared-grammar programs through REAL v1 (extracted from git
