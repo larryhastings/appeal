@@ -1625,6 +1625,75 @@ def test_options_repeat_semantics():
     got = run_both(go, ['--north=false'], decorations=d)
     assert got[0] == 'usage' and "doesn't take a value" in got[1], got
 
+
+def test_repeated_options_match_the_ecosystem():
+    # LAST-WINS, the way argparse/click/getopt/fire all behave
+    # (verified 2026-08-16) and the way Larry ruled (2026-07-18,
+    # review item 6): a repeated option takes the last occurrence;
+    # 0.6.4's "specified more than once" error is gone for plain
+    # options (StrictOption keeps it, tested elsewhere).  The
+    # motivating case is a shell alias baking in a value that the
+    # user overrides on the command line.
+    import appeal as _appeal
+
+    # 1) a plain str value option -- last wins
+    def f(*, mode='safe'):
+        return mode
+    assert run_both(f, []) == ('ok', 'safe')                 # default
+    assert run_both(f, ['--mode', 'a']) == ('ok', 'a')
+    assert run_both(f, ['--mode', 'a', '--mode', 'b']) == ('ok', 'b')
+    assert run_both(f, ['-m', 'a', '--mode', 'b', '-m', 'c']) == ('ok', 'c')
+
+    # 2) validate() -- last wins, AND only the surviving value is
+    # converted: an overridden invalid value is harmless (exactly
+    # the shell-alias-override point), while a trailing invalid
+    # one still errors
+    def v(*, mode: _appeal.validate('fast', 'safe') = 'safe'):
+        return mode
+    assert run_both(v, ['--mode', 'fast', '--mode', 'safe']) == ('ok', 'safe')
+    assert run_both(v, ['--mode', 'safe', '--mode', 'fast']) == ('ok', 'fast')
+    # 'bogus' is overridden before conversion -> never validated
+    assert run_both(v, ['--mode', 'bogus', '--mode', 'safe']) == ('ok', 'safe')
+    # ...but a trailing invalid value is the survivor -> rejected
+    got = run_both(v, ['--mode', 'safe', '--mode', 'bogus'])
+    assert got[0] == 'usage' and 'bogus' in got[1], got
+
+    # 3) a boolean flag -- -v and --verbose, idempotent across
+    # spellings and repetition
+    def b(*, verbose=False):
+        return verbose
+    assert run_both(b, []) == ('ok', False)
+    assert run_both(b, ['-v']) == ('ok', True)
+    assert run_both(b, ['-v', '-v']) == ('ok', True)
+    assert run_both(b, ['-v', '--verbose']) == ('ok', True)
+    assert run_both(b, ['--verbose', '-v', '--verbose']) == ('ok', True)
+
+    # 4) the north/south/east/west idiom: one parameter, four
+    # zero-arg converters via four @app.option declarations.
+    # 0.6.4 allowed exactly one and errored on any repeat (same or
+    # different); 1.0 relaxed to last-wins, like a shared dest.
+    from appeal import Decorations
+    def compass(*, direction='here'):
+        return direction
+    d = Decorations()
+    for word in ('north', 'south', 'east', 'west'):
+        d.add_option(compass, 'direction', ('--' + word,),
+                     annotation=(lambda w=word: (lambda: w))())
+    assert run_both(compass, [], decorations=d) == ('ok', 'here')
+    assert run_both(compass, ['--east'], decorations=d) == ('ok', 'east')
+    # two different -> last wins (0.6.4 errored here)
+    assert run_both(compass, ['--north', '--south'],
+                    decorations=d) == ('ok', 'south')
+    # the same one twice -> also fine, still that one (0.6.4 errored)
+    assert run_both(compass, ['--west', '--west'],
+                    decorations=d) == ('ok', 'west')
+    # all four, in order -> the last spoken wins
+    assert run_both(compass, ['--north', '--south', '--east', '--west'],
+                    decorations=d) == ('ok', 'west')
+    assert run_both(compass, ['--west', '--east', '--south', '--north'],
+                    decorations=d) == ('ok', 'north')
+
+
 def test_one_char_option_names_get_no_long_option():
     # v1, probed: parameter 'n' has only '-n'; '--n' is unknown
     def f(*, n: int = 0):
@@ -2126,6 +2195,33 @@ def test_appeal_facade_dispatch():
     # time (errors and orientation ride the pipeline, ruled
     # 2026-08-06): template-dressed heading, compact rows
     assert 'Commands\n--------' in out.getvalue()
+
+def test_command_sys_exit_message():
+    import contextlib, io
+    # a command's sys.exit("msg") must reproduce Python's own
+    # SystemExit contract: print the message to stderr, exit 1.
+    # run_main used to catch the SystemExit and drop the string,
+    # returning 1 silently (fixed 2026-08-09).
+    app = Appeal(name='boom')
+    @app.command()
+    def boom():
+        import sys
+        sys.exit("this string must reach stderr")
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        assert exit_code(lambda: app.main(['boom'])) == 1
+    assert err.getvalue() == "this string must reach stderr\n"
+    assert out.getvalue() == ''
+    # an integer code is still returned verbatim, with nothing printed
+    app2 = Appeal(name='bang')
+    @app2.command()
+    def bang():
+        import sys
+        sys.exit(3)
+    err2 = io.StringIO()
+    with contextlib.redirect_stderr(err2):
+        assert exit_code(lambda: app2.main(['bang'])) == 3
+    assert err2.getvalue() == ''
 
 def run_both_stdout(command, argv, decorations=None):
     "run_both for parses that print (--help): compare text too."
