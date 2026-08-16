@@ -48,7 +48,6 @@ from .runtime import (
     )
 
 
-import inspect as _inspect   # TODO(speed): defer (line ~1330 default)
 import os as _os
 import sys as _sys
 import threading as _threading
@@ -95,6 +94,23 @@ def __getattr__(name):
 # from an explicit None (which means "no default options at all"),
 # and lets the signature default stay lazy (no build import at load)
 _DEFAULT_OPTIONS = object()
+
+# @app.option(default=...) "not supplied" sentinel--stands in for
+# inspect.Parameter.empty in the SIGNATURE default, so `import appeal`
+# needn't import inspect (~7ms); option() converts it back at call
+# time (build's convention is inspect.Parameter.empty).
+_UNSET = object()
+
+
+class _LazyInspect:
+    "inspect, imported on first attribute access--keeps it off `import appeal`."
+    def __getattr__(self, name):
+        import inspect
+        globals()['_inspect'] = inspect     # replace the proxy: real from now on
+        return getattr(inspect, name)
+
+
+_inspect = _LazyInspect()
 
 
 def _config_vet(plan, table_words, config, command_plan_for=None):
@@ -1329,7 +1345,7 @@ class Appeal:
             claim(self)
 
     def option(self, name, *options, annotation=None,
-               default=_inspect.Parameter.empty):
+               default=_UNSET):
         """
         Additional decorator for @command functions: maps only the
         strings you specify for one keyword-only parameter,
@@ -1342,6 +1358,11 @@ class Appeal:
         parameter.  Stack several to accumulate strings; each call
         is its own rule.
         """
+        # build's "not specified" marker is inspect.Parameter.empty;
+        # convert here (call time), so the signature default stayed
+        # inspect-free at import
+        if default is _UNSET:
+            default = _inspect.Parameter.empty
         if annotation is None:
             annotation = _inspect.Parameter.empty
         def decorator(callable):
