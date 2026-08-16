@@ -2975,7 +2975,9 @@ def test_branch_schema_and_read_edges():
         return tags
     s = mcp_input_schema(build(f))
     assert s['properties']['tags']['type'] == 'array', s
-    assert 'items' in s['properties']['tags'], s
+    # a one-str-param converter is a DEGENERATE single-operand group:
+    # transparent, so items is the leaf type (string), not the object
+    assert s['properties']['tags']['items'] == {'type': 'string'}, s
 
     # a flag config value that's neither str, bool, nor 0/1 refuses
     def g(*, dry=False):
@@ -3006,6 +3008,30 @@ def test_branch_schema_and_read_edges():
     got = read_mapping(build(h2, decorations=d),
                        {'a': 'x', 'where': [5]})
     assert got == ('x', (5, 1, {})), got
+
+
+def test_schema_degenerate_group_transparent():
+    from appeal.schema import mcp_input_schema
+    # a single-operand chain collapses to the innermost leaf (0.6.4's
+    # degenerate annotation tree; ruled 2026-08-16): a: mything ->
+    # otherthing -> int schemas as a plain integer, not an object
+    def otherthing(i: int):
+        return i
+    def mything(o: otherthing):
+        return o
+    def cmd(a: mything, name: str):
+        return (a, name)
+    props = mcp_input_schema(build(cmd))['properties']
+    assert props['a'] == {'type': 'integer'}, props
+    assert props['name'] == {'type': 'string'}, props
+    # a group that takes MORE than one operand is not degenerate: it
+    # keeps its structure (anyOf scalar-or-object)
+    def point(x: int, y: int = 0):
+        return (x, y)
+    def c2(p: point):
+        return p
+    entry = mcp_input_schema(build(c2))['properties']['p']
+    assert 'anyOf' in entry, entry
 
 
 def test_branch_interpreter_edges():

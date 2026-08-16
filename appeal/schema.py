@@ -136,6 +136,33 @@ _JSON_TYPES = {'str': 'string', 'int': 'integer', 'float': 'number',
                'bool': 'boolean'}
 
 
+def _degenerate_leaf_type(group):
+    """
+    A DEGENERATE converter group consumes exactly one operand
+    through a single chain (no options, no repeat)--the command line
+    passes it one value and the group just wraps it.  0.6.4 collapsed
+    such chains to the innermost leaf (its `collapse_degenerate`); we
+    do the same for the schema, so `temp: celsius` with
+    `celsius(degrees: int)` reads TRANSPARENTLY as an integer, not an
+    object {degrees}.  Returns the leaf's JSON type, or None if the
+    group isn't degenerate.  (Ruled by Larry 2026-08-16.)
+    """
+    if group.get('options'):
+        return None
+    counts = group.get('operand_counts') or {}
+    if counts.get('minimum') != 1 or counts.get('maximum') != 1:
+        return None
+    operands = group.get('operands') or ()
+    if len(operands) != 1:
+        return None
+    op = operands[0]
+    if op.get('repeat'):
+        return None
+    if 'group' in op:
+        return _degenerate_leaf_type(op['group'])
+    return _JSON_TYPES.get(op.get('converter')) or 'string'
+
+
 def _mcp_object_schema(described):
     """
     One plan description as a JSON-Schema object--recursive, so a
@@ -146,11 +173,15 @@ def _mcp_object_schema(described):
     shape, the roomiest to generate against.)
     """
     def group_entry(group):
-        # mirror read_mapping's shapes exactly: a group always
-        # reads a mapping; a group that can take exactly one
-        # operand (minimum <= 1, maximum allows 1) also reads a
-        # bare scalar in place--Path('/tmp/x')--so the schema
-        # offers both
+        # a degenerate single-operand group is TRANSPARENT: schema it
+        # as the leaf type it collapses to (0.6.4's degenerate tree)
+        leaf = _degenerate_leaf_type(group)
+        if leaf is not None:
+            return {'type': leaf}
+        # otherwise mirror read_mapping's shapes: a group always
+        # reads a mapping; a group that can take exactly one operand
+        # (minimum <= 1, maximum allows 1) also reads a bare scalar
+        # in place--Path('/tmp/x')--so the schema offers both
         obj = _mcp_object_schema(group)
         counts = group.get('operand_counts') or {}
         minimum = counts.get('minimum') or 0
