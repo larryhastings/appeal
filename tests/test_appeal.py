@@ -29,7 +29,7 @@ import appeal
 from appeal import (
     Appeal, AppealConfigurationError, AppealDataError, AppealError,
     UsageError,
-    build, compile_plan, interpreter_parse,
+    build_plan, compile_plan, interpreter_parse,
     )
 
 
@@ -98,7 +98,7 @@ def exit_code(fn):
         return e.code if isinstance(e.code, int) else 0
 
 def test_plan_basics():
-    plan = build(hello)
+    plan = build_plan(hello)
     assert plan.name == 'hello'
     assert len(plan.slots) == 2
     assert plan.slots[0].required
@@ -108,7 +108,7 @@ def test_plan_basics():
     assert plan.valid_counts == {1, 2}
 
 def test_plan_star_args():
-    plan = build(cp)
+    plan = build_plan(cp)
     assert plan.minimum == 1          # dst
     assert plan.maximum is None
     assert plan.valid_counts is None
@@ -116,7 +116,7 @@ def test_plan_star_args():
     assert plan.slots[1].trailing
 
 def test_plan_options():
-    plan = build(serve)
+    plan = build_plan(serve)
     strings = sorted(s for o in plan.options for s in o.strings)
     # every option gets an auto-short: its first letter, if free
     assert strings == ['--config', '--retries', '--verbose', '-c', '-r', '-v']
@@ -126,7 +126,7 @@ def test_plan_options():
 def test_short_options_first_declared_wins():
     def f(*, verbose=False, value=3):
         return (verbose, value)
-    plan = build(f)
+    plan = build_plan(f)
     strings = {o.name: o.strings for o in plan.options}
     assert strings['verbose'] == ('-v', '--verbose')
     assert strings['value'] == ('--value',)      # -v was taken
@@ -143,7 +143,7 @@ def test_option_string_collision_rules():
         return (x, verbose)
     def f(a: sub=None, *, verbose=False):
         return (a, verbose)
-    plan = build(f)
+    plan = build_plan(f)
     assert '--verbose' in plan.scoped_keys
     assert '-v' in plan.scoped_keys      # the short rides the long
 
@@ -156,7 +156,7 @@ def test_option_string_collision_rules():
     def dish(first: sweet, second: savory):
         return (first, second)
     try:
-        build(dish)
+        build_plan(dish)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'different grammars' in str(e), e
@@ -619,7 +619,7 @@ def test_star_args_group_refusals_are_named():
         return (width, bold)
     def draw(shape, *sizes: loose):
         pass
-    build(draw)                     # G1's refusal is gone
+    build_plan(draw)                     # G1's refusal is gone
     def pair(x, y):
         return (x, y)
     def nested(where: pair, *, bold=False):
@@ -627,7 +627,7 @@ def test_star_args_group_refusals_are_named():
     def draw2(shape, *sizes: nested):
         pass
     try:
-        build(draw2)
+        build_plan(draw2)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'streaming driver' in str(e)
@@ -1714,7 +1714,7 @@ def test_one_char_option_names_get_no_long_option():
     # v1, probed: parameter 'n' has only '-n'; '--n' is unknown
     def f(*, n: int = 0):
         return n
-    plan = build(f)
+    plan = build_plan(f)
     (option,) = plan.options
     assert option.strings == ('-n',), option.strings
     got = run_both(f, ['-n', '5'])
@@ -1726,7 +1726,7 @@ def test_one_char_option_names_get_no_long_option():
     def g(*, nope=False, n: int = 0):
         return (nope, n)
     try:
-        build(g)
+        build_plan(g)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert "'n'" in str(e), e
@@ -1748,7 +1748,7 @@ def test_multioption_refusals_are_named():
             return tuple(self.values)
     def positional(t: Collect):
         return t
-    build(positional)
+    build_plan(positional)
     from appeal import read_mapping
     assert read_mapping(positional, {'t': ['a', 'b']}) == ('a', 'b')
     # multi-arity ones build too--for the mapping readers, which
@@ -1763,7 +1763,7 @@ def test_multioption_refusals_are_named():
             return tuple(self.values)
     def positional2(p: Pairs):
         return p
-    build(positional2)
+    build_plan(positional2)
     from appeal import read_mapping
     assert read_mapping(positional2,
                         {'p': [[1, 2], [3, 4]]}) == ((1, 2), (3, 4))
@@ -1778,11 +1778,11 @@ def test_multioption_refusals_are_named():
     # an optional option() parameter is legal as an option--its
     # operand consumes greedily (v1)--but stays refused as a
     # positional fold
-    build(f)
+    build_plan(f)
     def positional3(p: Fancy):
         pass
     try:
-        build(positional3)
+        build_plan(positional3)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'Fancy' in str(e) and 'default' in str(e)
@@ -1932,7 +1932,7 @@ def test_plan_trailing_does_not_promote():
     # two operands mean (a, z), skipping b--unambiguous
     def f(a, b='B', *, z):
         return (a, b, z)
-    plan = build(f)
+    plan = build_plan(f)
     named = {s.name: s for s in plan.slots}
     assert not named['b'].required
     assert named['z'].trailing
@@ -1948,7 +1948,7 @@ def test_plan_promotes_group_before_required():
         return (a, b)
     def f(first: opt2, x: int, y: int):
         return (first, x, y)
-    plan = build(f)
+    plan = build_plan(f)
     assert plan.valid_counts == {4}
     assert plan.minimum == 4
     assert run_both(f, ['1', '2', '3', '4']) == ('ok', ((1, 2), 3, 4))
@@ -1963,7 +1963,7 @@ def test_plan_promotes_nested_group():
         return (g, r)
     def f(o: outer, z: int):
         return (o, z)
-    plan = build(f)
+    plan = build_plan(f)
     assert plan.valid_counts == {4}
     assert run_both(f, ['1', '2', '3', '4']) == ('ok', (((1, 2), 3), 4))
     assert run_both(f, ['1', '2', '3'])[0] == 'usage'
@@ -1988,7 +1988,7 @@ def test_plan_promotion_unshares_shared_converter():
         return (a, b)
     def f(first: opt2, x: int, last: opt2 = None):
         return (first, x, last)
-    plan = build(f)
+    plan = build_plan(f)
     named = {s.name: s for s in plan.slots}
     assert named['first'].child is not named['last'].child
     assert named['first'].child.minimum == 2   # promoted
@@ -2001,7 +2001,7 @@ def test_plan_configuration_errors():
     def bad_order(*, opt='x', z):
         pass
     try:
-        build(bad_order)
+        build_plan(bad_order)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'z' in str(e)
@@ -2011,14 +2011,14 @@ def test_plan_configuration_errors():
     # stores `not default`
     def true_flag(*, verbose=True):
         pass
-    (option,) = build(true_flag).options
+    (option,) = build_plan(true_flag).options
     assert option.kind == 'flag' and option.present is False, option
 
     # **kwargs is legal now (it receives @app.option declarations);
     # bare, it just gets nothing
     def fine_kwargs(x, **kw):
         return (x, kw)
-    assert build(fine_kwargs).minimum == 1
+    assert build_plan(fine_kwargs).minimum == 1
 
 
 # ---------------------------------------------------------------------
@@ -2050,7 +2050,7 @@ def run_both(command, argv, decorations=None):
     (the app-side registry; ruled 2026-08-09, nothing rides the
     functions).
     """
-    plan = build(command, decorations=decorations)
+    plan = build_plan(command, decorations=decorations)
     parse = compile_plan(plan)
 
     def run(fn):
@@ -2070,8 +2070,8 @@ def run_both_set(commands, global_command, argv):
     the generated dispatcher must agree exactly.
     """
     from appeal import compile_command_set, interpreter_dispatch
-    plans = {c.__name__: build(c) for c in commands}
-    global_plan = build(global_command) if global_command else None
+    plans = {c.__name__: build_plan(c) for c in commands}
+    global_plan = build_plan(global_command) if global_command else None
     parse = compile_command_set(plans, global_plan, prog='prog')
 
     def run(fn):
@@ -2301,7 +2301,7 @@ def test_command_sys_exit_message():
 def run_both_stdout(command, argv, decorations=None):
     "run_both for parses that print (--help): compare text too."
     import contextlib, io
-    plan = build(command, decorations=decorations)
+    plan = build_plan(command, decorations=decorations)
     parse = compile_plan(plan)
     results = []
     for fn in (lambda: interpreter_parse(plan, list(argv)),
@@ -2356,7 +2356,7 @@ def test_usage_metavars_and_wrapping():
                 certificate='', verbose=False, compression='gzip'):
         "Connects somewhere."
         pass
-    plan = build(connect)
+    plan = build_plan(connect)
     usage = plan.usage()
     assert '[-t|--times <TIMES>]' in usage, usage
     assert '[--timeout <TIMEOUT>]' in usage, usage
@@ -2527,7 +2527,7 @@ def test_command_set_help():
         "Removes an item."
         return ('remove', name)
 
-    plans = {'add_item': build(add_item), 'remove': build(remove)}
+    plans = {'add_item': build_plan(add_item), 'remove': build_plan(remove)}
     parse = compile_command_set(plans, None, prog='pile')
 
     def grab(fn):
@@ -2570,7 +2570,7 @@ def test_command_set_help():
     # a user-defined help command wins: no automatic anything
     def help(topic=''):
         return ('user help', topic)
-    plans2 = {'add_item': build(add_item), 'help': build(help)}
+    plans2 = {'add_item': build_plan(add_item), 'help': build_plan(help)}
     parse2 = compile_command_set(plans2, None, prog='pile')
     assert parse2(['help', 'x']) == ('user help', 'x')
     out = io.StringIO()
@@ -2606,7 +2606,7 @@ def test_set_level_help_flag():
     def add_item(name):
         "Adds an item."
         return ('add', name)
-    plans = {'add_item': build(add_item)}
+    plans = {'add_item': build_plan(add_item)}
     parse = compile_command_set(plans, None, prog='pile')
     def grab(fn):
         out = io.StringIO()
@@ -2643,7 +2643,7 @@ def test_completion():
         return (width, bold)
     def draw(shape, s: size = None, *, verbose=False, retries: int = 1):
         return None
-    plan = build(draw)
+    plan = build_plan(draw)
     # option-prefix completion, whole tree
     got = complete(plan, [], '--')
     assert got == ['--bold', '--help', '--retries', '--verbose'], got
@@ -2665,7 +2665,7 @@ def test_completion():
         return None
     def deploy(target):
         return None
-    commands = {'run': build(run), 'deploy': build(deploy)}
+    commands = {'run': build_plan(run), 'deploy': build_plan(deploy)}
     got = complete_set(commands, None, [], '')
     assert got == ['deploy', 'help', 'run'], got
     got = complete_set(commands, None, [], 'de')
@@ -2679,11 +2679,11 @@ def test_completion():
     # the minimum is fed
     def g(project, *, verbose=False):
         return None
-    got = complete_set(commands, build(g), [], '--')
+    got = complete_set(commands, build_plan(g), [], '--')
     assert got == ['--verbose'], got
-    got = complete_set(commands, build(g), [], '')
+    got = complete_set(commands, build_plan(g), [], '')
     assert got == [], got                             # minimum unmet
-    got = complete_set(commands, build(g), ['proj'], '')
+    got = complete_set(commands, build_plan(g), ['proj'], '')
     assert got == ['deploy', 'help', 'run'], got
 
     # facade
@@ -2783,14 +2783,14 @@ def test_converter_vocabulary():
     def bare(a: appeal.split):
         pass
     try:
-        build(bare)
+        build_plan(bare)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'call it first' in str(e), e
     def bare2(*, v: appeal.counter = 0):
         pass
     try:
-        build(bare2)
+        build_plan(bare2)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'call it first' in str(e), e
@@ -2951,7 +2951,7 @@ def test_app_parameter_renames():
     app_c.parameter('x', usage='X')(pair)
     def draw(p: pair):
         return p
-    plan_c = build(draw, decorations=app_c._decorations)
+    plan_c = build_plan(draw, decorations=app_c._decorations)
     assert 'X' in plan_c.usage(), plan_c.usage()
     # naming a parameter the function doesn't have: config error
     app2 = Appeal()
@@ -3000,7 +3000,7 @@ def test_positional_argument_usage_format():
     def plot(*, at: point = None):
         "Plot."
         return at
-    assert build(plot).usage('plot') == 'plot [-a|--at <X> <Y>]'
+    assert build_plan(plot).usage('plot') == 'plot [-a|--at <X> <Y>]'
 
     # an explicit @app.parameter usage= is literal and wins outright,
     # unadorned by the format
@@ -3151,7 +3151,7 @@ def test_help_disabled_parity():
     def neg(x: int):
         "Negate."
         return -x
-    plans = {'add': build(add), 'neg': build(neg)}
+    plans = {'add': build_plan(add), 'neg': build_plan(neg)}
 
     def grab(fn):
         import io, contextlib
@@ -3215,7 +3215,7 @@ def test_mcp_schema_agrees_with_read_mapping():
     d = Decorations()
     d.add_usage(go, 'count', 'COUNT')
 
-    plan = build(go, decorations=d)
+    plan = build_plan(go, decorations=d)
     s = mcp_input_schema(plan)
     # properties are keyed by PARAMETER name (identity), never the
     # usage rename; the rename rides in schema() as 'usage'
@@ -3803,7 +3803,7 @@ def test_fuzz_parity():
         source = '\n\n'.join(defs)
         try:
             exec(source, namespace)
-            plan = build(namespace[top])
+            plan = build_plan(namespace[top])
         except AppealConfigurationError:
             continue     # generator made something illegal; fine
         for _ in range(4):
@@ -3825,7 +3825,7 @@ def test_double_dash_state_never_leaks():
     assert app.process(['--upper', 'hello', 'there']) == 'HELLO THERE'
 
 def test_plan_recursion():
-    plan = build(draw)
+    plan = build_plan(draw)
     named = {s.name: s for s in plan.slots}
     # where: required nonterminal, consumes exactly 4
     assert named['where'].count_options == (4,)
@@ -3836,7 +3836,7 @@ def test_plan_recursion():
 def test_plan_nested_optional_counts():
     def f(a, s: sized='S'):
         return (a, s)
-    plan = build(f)
+    plan = build_plan(f)
     assert plan.valid_counts == {1, 2, 3}
     got = run_both(f, ['q', '5'])
     assert got == ('ok', ('q', (5, 10))), got
@@ -3848,7 +3848,7 @@ def test_converter_cycle_detected():
         return x
     selfy.__annotations__['x'] = selfy
     try:
-        build(selfy)
+        build_plan(selfy)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'cycle' in str(e)
@@ -3860,7 +3860,7 @@ def test_converter_restrictions_named():
         return (x, rest)
     def cmd(a: has_star, b):
         return (a, b)
-    plan = build(cmd)
+    plan = build_plan(cmd)
     # a *args converter is an absorbing nonterminal (v1, probed:
     # it fed the whole remaining line--the old "degrades to a
     # terminal" reading was a mis-pin), unbounded above its floor
@@ -3921,7 +3921,7 @@ def test_converter_depth_grammar():
     def bad(x='X', *, g: opt_group = None):
         return (x, g)
     try:
-        build(bad)
+        build_plan(bad)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'no end to reserve from' in str(e), e
@@ -3933,7 +3933,7 @@ def test_converter_depth_grammar():
     def cmd3(d: deep):
         return d
     try:
-        build(cmd3)
+        build_plan(cmd3)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'windowed' in str(e), e
@@ -4016,7 +4016,7 @@ def test_scoped_help_presentation():
         return (p, q, flag)
     def mg(a, b: child = None, c: child = None, *, gronk=''):
         return (a, b, c)
-    corpus = merge_docs(build(mg))
+    corpus = merge_docs(build_plan(mg))
     options = dict(corpus['options'])
     assert '-g|--gronk <GRONK>' in options            # unqualified
     assert '-f|--flag (after <A>, before <C>)' in options
@@ -4042,7 +4042,7 @@ def test_scoped_help_presentation():
         return (kind, flavor)
     def dish(first: sweet, second: savory):
         return (first, second)
-    corpus = merge_docs(build(dish))
+    corpus = merge_docs(build_plan(dish))
     rows = corpus['options']
     texts = [lines for display, lines in rows]
     assert ['The sweet one.'] in texts and ['The savory one.'] in texts
@@ -4059,7 +4059,7 @@ def test_scoped_help_presentation():
         """
         return (first, second)
     try:
-        merge_docs(build(dish2))
+        merge_docs(build_plan(dish2))
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'ambiguous' in str(e), e
@@ -4071,7 +4071,7 @@ def test_scoped_help_presentation():
         return (width, dotted)
     def draw(shape, *, stroke: fancy = None):
         return (shape, stroke)
-    corpus = merge_docs(build(draw))
+    corpus = merge_docs(build_plan(draw))
     displays = [display for display, lines in corpus['options']]
     assert '-s|--stroke [-d|--dotted] [width]' in displays[0] or True
     indented = [d for d in displays if d.startswith('  ')]
@@ -4372,7 +4372,7 @@ def test_bundled_flags():
     assert got[0] == 'usage', got
 
 def test_generated_source_is_readable():
-    plan = build(serve)
+    plan = build_plan(serve)
     parse = compile_plan(plan)
     # the generated source is the disassembly
     assert 'def parse_serve(argv):' in parse.source
@@ -4474,13 +4474,13 @@ def test_file_converter():
     # nor click (misnamed wrapper) actually delivers.
     import appeal as _appeal
     import contextlib, io
-    from appeal import build, compile_plan, interpreter_parse
+    from appeal import build_plan, compile_plan, interpreter_parse
 
     def cat(inp: _appeal.file()):
         data = inp.read()
         inp.close()
         return (type(inp).__name__, data)
-    plan = build(cat)
+    plan = build_plan(cat)
 
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, 'x.txt')
@@ -4509,7 +4509,7 @@ def test_file_converter():
             f.write('written')
         dest.close()                     # double-close: also fine
         return dest.closed
-    eplan = build(emit)
+    eplan = build_plan(emit)
     for drive in (lambda: interpreter_parse(eplan, ['-']),
                   lambda: compile_plan(eplan)(['-'])):
         old = sys.stdout
@@ -4662,8 +4662,8 @@ def test_did_you_mean():
     def beta():
         return 'b'
     from appeal import compile_command_set
-    parse = compile_command_set({'alpha': build(alpha),
-                                 'beta': build(beta)}, prog='t')
+    parse = compile_command_set({'alpha': build_plan(alpha),
+                                 'beta': build_plan(beta)}, prog='t')
     try:
         parse(['alhpa'])
         assert False, 'expected UsageError'
@@ -6243,7 +6243,7 @@ def test_merge_docs():
         : Overridden, how many knocks.
         """
 
-    c = merge_docs(build(recurse2))
+    c = merge_docs(build_plan(recurse2))
     # prose and summaries stay home: only the command's own
     assert c['summary'] == ['The showpiece.']
     assert c['documentation'] == []
@@ -6266,7 +6266,7 @@ def test_merge_docs():
         required_kw
         : a trailing operand.
         """
-    c = merge_docs(build(trailing_ok))
+    c = merge_docs(build_plan(trailing_ok))
     assert c['arguments'] == [('<A>', []),
                               ('<REQUIRED_KW>', ['a trailing operand.'])]
 
@@ -6279,7 +6279,7 @@ def test_merge_docs():
         serve
         : Serves the thing.
         """
-    c = merge_docs(build(dispatcher), command_names=('serve', 'help'))
+    c = merge_docs(build_plan(dispatcher), command_names=('serve', 'help'))
     assert c['commands'] == [('serve', ['Serves the thing.']), ('help', [])]
 
 
@@ -6288,7 +6288,7 @@ def test_merge_docs_errors():
 
     def refuses(f, *needles, command_names=None):
         try:
-            merge_docs(build(f), command_names=command_names)
+            merge_docs(build_plan(f), command_names=command_names)
         except AppealConfigurationError as e:
             for needle in needles:
                 assert needle in str(e), f'{needle!r} not in {e}'
@@ -6456,7 +6456,7 @@ def test_colorized_help_paints_after_layout():
         : how many times.
         """
     import io, contextlib
-    from appeal.build import build
+    from appeal.build import build_plan
     from appeal.help import merge_docs
     from appeal.render import appeal_theme, default_template, render_help_page
     from big.markdown import markdown_defaults
@@ -6465,7 +6465,7 @@ def test_colorized_help_paints_after_layout():
 
     sheet = (markdown_defaults | transforms | ansi_16_color_palette
              | StyleSheet(appeal_theme))
-    plan = build(draw)
+    plan = build_plan(draw)
     corpus = merge_docs(plan)
     plain = render_help_page(plan.usage(), corpus, default_template)
     painted = render_help_page(plan.usage(), corpus, default_template,
@@ -6508,7 +6508,7 @@ def test_value_completion():
               times: int = 1):
         return (where, hue, tint)
 
-    plan = build(paint)
+    plan = build_plan(paint)
     # an option's value position asks the expecting converter,
     # and the engine re-filters by prefix (the belt)
     assert complete(plan, ['--tint'], '') == ['blue', 'green', 'red']
@@ -6528,7 +6528,7 @@ def test_value_completion():
 def test_completions_validation():
     def refuses(f, *needles):
         try:
-            build(f)
+            build_plan(f)
         except AppealConfigurationError as e:
             for needle in needles:
                 assert needle in str(e), f'{needle!r} not in {e}'
@@ -6558,7 +6558,7 @@ def test_completions_validation():
     def f3(x: c3):
         return x
     from appeal.complete import complete
-    plan = build(f3)
+    plan = build_plan(f3)
     try:
         complete(plan, [], '')
         assert False, 'expected AppealConfigurationError'
@@ -6619,7 +6619,7 @@ def test_single_terminal_transparency():
         : which flavor to serve.
         """
 
-    plan = build(scoop)
+    plan = build_plan(scoop)
     assert '[<TASTE>]' in plan.usage(), plan.usage()
     corpus = merge_docs(plan)
     # the row wears the outer name; the outer entry documents it,
@@ -6631,7 +6631,7 @@ def test_single_terminal_transparency():
     # the same row
     def scoop2(cone, taste: flavor = 'vanilla'):
         "Serves."
-    corpus = merge_docs(build(scoop2))
+    corpus = merge_docs(build_plan(scoop2))
     assert ('<TASTE>', ["the flavor, in flavor's own vocabulary."]) \
         in corpus['arguments']
 
@@ -6644,7 +6644,7 @@ def test_single_terminal_transparency():
     d.add_usage(hue, 'name', 'HUE')
     def tint(x, shade: hue = 'red'):
         "Tints."
-    plan = build(tint, decorations=d)
+    plan = build_plan(tint, decorations=d)
     assert '[HUE]' in plan.usage(), plan.usage()
 
     # multi-operand converters are NOT transparent: the invisible-
@@ -6654,7 +6654,7 @@ def test_single_terminal_transparency():
         return (x, y)
     def place(label, at: pair = None):
         "Places."
-    u = build(place).usage()
+    u = build_plan(place).usage()
     assert '[<X> <Y>]' in u or '<X> <Y>' in u, u
 
 

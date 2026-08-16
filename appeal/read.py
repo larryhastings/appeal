@@ -23,7 +23,7 @@
 
 from collections.abc import Mapping, Sequence
 
-from .build import build
+from .build import build_plan
 from .plan import Terminal, NO_DEFAULT, Plan
 from .runtime import (
     AppealConfigurationError, AppealDataError, is_multioption, is_option,
@@ -307,7 +307,7 @@ def _read_fold(cls, data):
     a sequence of occurrences; a StrictOption reads exactly one),
     render() produces the value.
     """
-    plan = build(cls.option, name=cls.__name__, method_of=cls.__name__)
+    plan = build_plan(cls.option, name=cls.__name__, method_of=cls.__name__)
     if is_multioption(cls):
         if not _is_sequence(data):
             raise AppealDataError(
@@ -344,7 +344,7 @@ def read_mapping(callable, mapping):
     """
     if is_option(callable):
         return _read_fold(callable, mapping)
-    plan = callable if isinstance(callable, Plan) else build(callable)
+    plan = callable if isinstance(callable, Plan) else build_plan(callable)
     if not isinstance(mapping, Mapping):
         raise AppealDataError(
             f"read_mapping needs a mapping, got {type(mapping).__name__}")
@@ -375,7 +375,7 @@ def read_iterable(callable, iterable):
     rows are skipped.  Keyword-only parameters (and **kwargs) can't
     be position-fed and are configuration errors (v1's corpus).
     """
-    plan = callable if isinstance(callable, Plan) else build(callable)
+    plan = callable if isinstance(callable, Plan) else build_plan(callable)
     _reject_unfeedable(plan)
     results = []
     for row in iterable:
@@ -392,7 +392,7 @@ def read_csv(callable, reader, *, first_row_map=None):
     rows feed positionally; with it, each heading maps to a
     parameter name and rows feed read_mapping-style.
     """
-    plan = callable if isinstance(callable, Plan) else build(callable)
+    plan = callable if isinstance(callable, Plan) else build_plan(callable)
     rows = iter(reader)
     try:
         headings = next(rows)

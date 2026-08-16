@@ -20,14 +20,14 @@ import sys
 import appeal
 from appeal import (
     Appeal, AppealConfigurationError, AppealDataError, AppealError,
-    UsageError, build, compile_plan, interpreter_parse,
+    UsageError, build_plan, compile_plan, interpreter_parse,
     )
 from appeal import runtime
 
 
 def both(fn, argv, decorations=None):
     "rung parity, returning outcome; errors compare by text."
-    plan = build(fn, decorations=decorations)
+    plan = build_plan(fn, decorations=decorations)
     results = []
     for drive in (lambda: interpreter_parse(plan, list(argv)),
                   lambda: compile_plan(plan)(list(argv))):
@@ -392,7 +392,7 @@ def test_plan_reprs_and_walkers():
         return (x, y)
     def cmd(a, spot: pt = None, *, verbose=False):
         return (a, spot, verbose)
-    plan = build(cmd)
+    plan = build_plan(cmd)
     # every record class reprs
     assert 'Plan' in repr(plan)
     assert 'Slot' in repr(plan.slots[0])
@@ -413,9 +413,9 @@ def test_completion_table_repeat_group_completions():
     color.completions = lambda prefix: ('red', 'green')
     def paint(*hues: color):
         return hues
-    table = completion_table(build(paint))
+    table = completion_table(build_plan(paint))
     assert table['repeat'] is color
-    assert appeal.complete(build(paint), [], '') == ['green', 'red']
+    assert appeal.complete(build_plan(paint), [], '') == ['green', 'red']
     # ...and the tuple-of-str contract refuses lists by name
     def loud(hue):
         return hue
@@ -423,7 +423,7 @@ def test_completion_table_repeat_group_completions():
     def paint2(*hues: loud):
         return hues
     try:
-        appeal.complete(build(paint2), [], '')
+        appeal.complete(build_plan(paint2), [], '')
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'tuple of str' in str(e)
@@ -465,7 +465,7 @@ def test_schema_branches():
         : A boolean.
         """
         return plain
-    schema = mcp_input_schema(build(cmd))
+    schema = mcp_input_schema(build_plan(cmd))
     p = schema['properties']
     assert p['plain']['type'] == 'string'
     assert p['plain']['description'] == 'An untyped operand.'
@@ -536,8 +536,8 @@ def test_interpreter_class_dispatch():
             out.append(('db', label))
         def add(self, x: int):
             out.append(('add', self.label, x))
-    db_plan = build(Db, name='db')
-    add_plan = build(Db.add, name='add', method_of=db_plan.constructs)
+    db_plan = build_plan(Db, name='db')
+    add_plan = build_plan(Db.add, name='add', method_of=db_plan.constructs)
     got = interpreter_dispatch({'db': db_plan, 'add': add_plan},
                                None, ['db', 'main', 'add', '3'],
                                prog='t', repeat=True)
@@ -590,7 +590,7 @@ def test_interpreter_help_paths():
     from appeal import interpreter_dispatch
     def go(x: int):
         return x
-    plans = {'go': build(go)}
+    plans = {'go': build_plan(go)}
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         interpreter_dispatch(plans, None, ['help', 'help'], prog='t')
@@ -851,15 +851,15 @@ def test_interpreter_nested_class_run():
             def go(self, word):
                 return (word, self.n)
     env = {}
-    outer_plan = build(Outer, name='Outer')
+    outer_plan = build_plan(Outer, name='Outer')
     operands, given, rest, positions = scan(outer_plan, ['T'])
     run(outer_plan, operands, given, positions, env=env)
-    inner_plan = build(Outer.Inner, name='Inner',
+    inner_plan = build_plan(Outer.Inner, name='Inner',
                        method_of=outer_plan.constructs)
     operands, given, rest, positions = scan(inner_plan, ['5'])
     inst = run(inner_plan, operands, given, positions, env=env)
     assert isinstance(inst, Outer.Inner) and inst.n == 5
-    go_plan = build(Outer.Inner.go, name='go',
+    go_plan = build_plan(Outer.Inner.go, name='go',
                     method_of=inner_plan.constructs)
     operands, given, rest, positions = scan(go_plan, ['w'])
     assert run(go_plan, operands, given, positions, env=env) == ('w', 5)
@@ -897,7 +897,7 @@ def test_interpreter_parse_command_split():
     # the fused parse in command mode returns (result, rest)
     def g(x):
         return x
-    plan = build(g)
+    plan = build_plan(g)
     result, rest = interpreter_parse(plan, ['A', 'sub', 'more'],
                                      command_split=(1, 1, frozenset(('sub',))))
     assert result == 'A' and rest == ['sub', 'more'], (result, rest)
@@ -987,7 +987,7 @@ def test_help_ambiguous_three_ways():
     def cmd(a: red, b: green, c: blue):
         return (a, b, c)
     from appeal.help import merge_docs
-    merged = merge_docs(build(cmd))
+    merged = merge_docs(build_plan(cmd))
     assert merged is not None
 
 
@@ -1019,7 +1019,7 @@ def test_schema_leaf_fallbacks():
         return (a, b)
     def cmd(p: pathlib.Path, *, spot: pairfn = None):
         return (p, spot)
-    schema = mcp_input_schema(build(cmd))
+    schema = mcp_input_schema(build_plan(cmd))
     props = schema['properties']
     # Path builds as a scalar-acceptable *args group: the schema
     # offers the string AND the object, like the reader
@@ -1032,14 +1032,14 @@ def test_schema_leaf_fallbacks():
         return level
     d = Decorations()
     d.add_usage(q, 'level', 'LVL')
-    opt = describe(build(q, decorations=d))['options'][0]
+    opt = describe(build_plan(q, decorations=d))['options'][0]
     assert (opt['name'], opt['usage']) == ('level', 'LVL')
     # a repeat slot with a strict group child: array of objects
     def pt2(x: int, y: int):
         return (x, y)
     def paint(*spots: pt2):
         return spots
-    spots = mcp_input_schema(build(paint))['properties']['spots']
+    spots = mcp_input_schema(build_plan(paint))['properties']['spots']
     assert spots['type'] == 'array'
     assert set(spots['items']['properties']) == {'x', 'y'}
 
@@ -1049,7 +1049,7 @@ def test_plan_body_valid_counts_none():
     # None right along with valid_counts
     def infinite(*args):
         return args
-    plan = build(infinite)
+    plan = build_plan(infinite)
     assert plan.valid_counts is None
     assert plan.body_valid_counts is None
 
@@ -1073,7 +1073,7 @@ def test_completion_repeat_group_carries_completions():
     color.completions = lambda prefix: ('red', 'green')
     def paint(*hues: color):
         return hues
-    table = completion_table(build(paint))
+    table = completion_table(build_plan(paint))
     assert table['repeat'] is color
 
 
@@ -1419,7 +1419,7 @@ def test_interpreter_defense_branches():
     def cmd(a, *, where: wh = None):
         return (a, where)
     try:
-        run(build(cmd), ['a'], {'--deep': True}, {})
+        run(build_plan(cmd), ['a'], {'--deep': True}, {})
         assert False, 'expected UsageError'
     except UsageError as e:
         assert 'requires' in str(e)
@@ -1430,7 +1430,7 @@ def test_interpreter_defense_branches():
     def gated(g: pairfn, s: sub = None):
         return (g, s)
     try:
-        run(build(gated), ['1', '2', '5'], {'--verbose': True},
+        run(build_plan(gated), ['1', '2', '5'], {'--verbose': True},
             {'--verbose': 0})
         assert False, 'expected UsageError'
     except UsageError as e:
@@ -1476,15 +1476,15 @@ def test_build_uninspectable_converters():
     # C callables without signatures: terminals, everywhere
     def f(x: getattr):
         return x
-    plan = build(f)
+    plan = build_plan(f)
     from appeal.plan import Terminal
     assert isinstance(plan.slots[0].child, Terminal)
     def g(*a: getattr):
         return a
-    build(g)
+    build_plan(g)
     def h(*, o: getattr = None):
         return o
-    build(h)
+    build_plan(h)
 
 
 def test_build_kwargs_converter_is_group():
@@ -1495,11 +1495,11 @@ def test_build_kwargs_converter_is_group():
     from appeal.plan import Terminal
     def kw(a, **kws):
         return (a, kws)
-    child = build(lambda x: x, name='outer')  # sanity: a plain leaf
+    child = build_plan(lambda x: x, name='outer')  # sanity: a plain leaf
     assert isinstance(child.slots[0].child, Terminal)
     def f(x: kw):
         return x
-    plan = build(f)
+    plan = build_plan(f)
     group = plan.slots[0].child
     assert not isinstance(group, Terminal)
     assert group.var_keyword == 'kws'
@@ -1509,7 +1509,7 @@ def test_build_option_annotation_refusals():
     def f(*, o: 42 = None):
         return o
     try:
-        build(f)
+        build_plan(f)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'callable' in str(e)
@@ -1519,7 +1519,7 @@ def test_build_option_annotation_refusals():
     def g(*, o: widen = None):
         return o
     try:
-        build(g)
+        build_plan(g)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'positional' in str(e)
@@ -1534,7 +1534,7 @@ def test_build_option_group_via_inner_converter():
         return spot
     def f(*, o: conv = None):
         return o
-    plan = build(f)
+    plan = build_plan(f)
     assert plan.options[0].kind == 'group'
 
 
@@ -1589,7 +1589,7 @@ def test_build_fold_element_multiparam_refused():
     def f(*, w: W = None):
         return w
     try:
-        build(f)
+        build_plan(f)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -1603,7 +1603,7 @@ def test_build_completions_and_probe_fallback():
     def f(x: wide):
         return x
     try:
-        build(f)
+        build_plan(f)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'wide' in str(e)
@@ -1621,7 +1621,7 @@ def test_build_completions_and_probe_fallback():
     wrapper = Wrapper()
     wrapper.__name__ = 'Inner'
     wrapper.__qualname__ = 'Wrapper.Inner'
-    plan = build(wrapper, name='Inner', method_of='Outer')
+    plan = build_plan(wrapper, name='Inner', method_of='Outer')
     assert plan.binds == 'Outer'
 
 
@@ -1635,7 +1635,7 @@ def test_build_repeat_group_refusals():
     def f(*occ: hollow):
         return occ
     try:
-        build(f)
+        build_plan(f)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -1643,7 +1643,7 @@ def test_build_repeat_group_refusals():
         return (a, deep)
     def f2(*occ: lenient):
         return occ
-    build(f2)                       # G1's refusal is gone
+    build_plan(f2)                       # G1's refusal is gone
     # a windowed group's option string clashing with the top
     # level's: position can't tell them apart--refused
     def rep(x, *, v=False):
@@ -1651,7 +1651,7 @@ def test_build_repeat_group_refusals():
     def g(*occ: rep, v=False):
         return occ
     try:
-        build(g)
+        build_plan(g)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -1672,7 +1672,7 @@ def test_build_override_validation_and_names():
     except AppealConfigurationError:
         pass
     try:
-        build(functools.partial(lambda x: x))
+        build_plan(functools.partial(lambda x: x))
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'name' in str(e)
@@ -1689,7 +1689,7 @@ def test_build_var_positional_option_class_refused():
     def f(*occ: Bump):
         return occ
     try:
-        build(f)
+        build_plan(f)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -1702,7 +1702,7 @@ def test_build_shared_converter_rule_dedupe():
         return (p, o)
     def f(a: child, b: child):
         return (a, b)
-    plan = build(f)
+    plan = build_plan(f)
     assert plan.slots[0].child is plan.slots[1].child
 
 
@@ -1836,8 +1836,8 @@ def test_run_main_completion_param():
     from appeal.complete import completion_table
     def go(x: int):
         return 0
-    table = completion_table(build(go))
-    parse = compile_plan(build(go))
+    table = completion_table(build_plan(go))
+    parse = compile_plan(build_plan(go))
     old_env = dict(os.environ)
     os.environ.update({'_APPEAL_COMPLETE': 'bash',
                        'COMP_WORDS': 'go\n-', 'COMP_CWORD': '1'})
@@ -2127,7 +2127,7 @@ def test_parse_tokens_edges():
     got = both(neg, ['-2'])
     assert got == ('ok', '-2'), got
     # ...and at a saturated command boundary it belongs to the rest
-    result, rest = interpreter_parse(build(neg), ['a', '-2'],
+    result, rest = interpreter_parse(build_plan(neg), ['a', '-2'],
                                      command_split=(1, 1, frozenset()))
     assert result == 'a' and rest == ['-2'], (result, rest)
     # a nullary option refuses '=' by name
@@ -2172,7 +2172,7 @@ def test_completion_bad_candidates_and_fish():
     def paint(*hues: color):
         return hues
     try:
-        appeal.complete(build(paint), [], '')
+        appeal.complete(build_plan(paint), [], '')
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'str' in str(e)
@@ -2271,7 +2271,7 @@ def test_build_more_refusals():
     def f(*occ: hollow2):
         return occ
     try:
-        build(f)
+        build_plan(f)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'at least one argument' in str(e)
@@ -2280,14 +2280,14 @@ def test_build_more_refusals():
     def g(*occ: rep, verbose=False):
         return occ
     try:
-        build(g)
+        build_plan(g)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'declared both' in str(e)
     def h(*a: 42):
         return a
     try:
-        build(h)
+        build_plan(h)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -2347,20 +2347,20 @@ def test_emit_command_set_refusals():
         return y
     # two plans sharing a NAME emit fine: symbols are per plan
     # object, numbered on collision (this used to refuse)
-    source, _ = emit_command_set({'a': build(fa, name='dup'),
-                                  'b': build(fb, name='dup')})
+    source, _ = emit_command_set({'a': build_plan(fa, name='dup'),
+                                  'b': build_plan(fb, name='dup')})
     assert 'def run_dup(' in source and 'def run_dup2(' in source
     # ...and the SAME plan under two words emits once, referenced
     # twice (aliases for free)
-    shared = build(fa, name='go')
+    shared = build_plan(fa, name='go')
     source, _ = emit_command_set({'go': shared, 'run': shared})
     assert source.count('def run_go(') == 1
     assert source.count('(scan_go, run_go)') == 2
     try:
-        emit_command_set({'a': build(fa, name='a'),
-                          'b': build(fb, name='b')},
-                         subs={'a': {'b': build(fb, name='b')},
-                               'b': {'a': build(fa, name='a')}})
+        emit_command_set({'a': build_plan(fa, name='a'),
+                          'b': build_plan(fb, name='b')},
+                         subs={'a': {'b': build_plan(fb, name='b')},
+                               'b': {'a': build_plan(fa, name='a')}})
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -2459,7 +2459,7 @@ def test_run_main_themed_and_set_completion():
     # a command SET completion table through run_main
     def go(x: int):
         return 0
-    table = completion_set_table({'go': build(go)}, None)
+    table = completion_set_table({'go': build_plan(go)}, None)
     assert 'commands' in table
     old_env = dict(os.environ)
     os.environ.update({'_APPEAL_COMPLETE': 'bash',
@@ -2640,18 +2640,18 @@ def test_completion_internals_direct():
     from appeal.complete import completion_table, completion_set_table
     def go(x, *, level: int = 0):
         return x
-    t = completion_table(build(go))
+    t = completion_table(build_plan(go))
     assert complete_command(t, ['a'], '') == []      # saturated
-    st = completion_set_table({'go': build(go)}, None)
+    st = completion_set_table({'go': build_plan(go)}, None)
     assert complete_command_set(st, ['go'], 'x') == []
     assert complete_command_set(st, [], '-') == []
     def gtop(g1, *, trace=False):
         return g1
-    st2 = completion_set_table({'go': build(go)}, build(gtop))
+    st2 = completion_set_table({'go': build_plan(go)}, build_plan(gtop))
     assert complete_command_set(st2, ['op', 'go'], 'x') == []
     assert complete_command_set(st2, ['op', 'go', 'a'], '') == []
     # cycling: a saturated command's tail offers the next word
-    st3 = completion_set_table({'go': build(go)}, None, repeat=True)
+    st3 = completion_set_table({'go': build_plan(go)}, None, repeat=True)
     assert complete_command_set(st3, ['go', 'a'], 'g') == ['go']
 
 
@@ -2704,7 +2704,7 @@ def test_build_origin_carrying_instance():
     def f(*, o: FakeGeneric() = None):
         return o
     try:
-        build(f)
+        build_plan(f)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'generic' in str(e), e
@@ -2730,11 +2730,11 @@ def test_completion_boundary_and_help():
         return (g1, g2)
     # the global's minimum met, next word names a command: the
     # boundary splits the scan there
-    st = completion_set_table({'go': build(go)}, build(gtop2))
+    st = completion_set_table({'go': build_plan(go)}, build_plan(gtop2))
     got = complete_command_set(st, ['op', 'go'], '-')
     assert '--level' in got, got
     # `help CMD` completes through CMD; unknown topics get nothing
-    st2 = completion_set_table({'go': build(go)}, None)
+    st2 = completion_set_table({'go': build_plan(go)}, None)
     assert complete_command_set(st2, ['help', 'go'], '-') != []
     assert complete_command_set(st2, ['help', 'zzz'], 'x') == []
     assert 'go' in complete_command_set(st2, ['help'], 'g')
@@ -2815,7 +2815,7 @@ def test_branch_schema_and_read_edges():
         return s
     def f(*tags: conv):
         return tags
-    s = mcp_input_schema(build(f))
+    s = mcp_input_schema(build_plan(f))
     assert s['properties']['tags']['type'] == 'array', s
     # a one-str-param converter is a DEGENERATE single-operand group:
     # transparent, so items is the leaf type (string), not the object
@@ -2825,7 +2825,7 @@ def test_branch_schema_and_read_edges():
     def g(*, dry=False):
         return dry
     try:
-        read_mapping(build(g), {'dry': 3.5})
+        read_mapping(build_plan(g), {'dry': 3.5})
         assert False, 'expected AppealDataError'
     except AppealDataError:
         pass
@@ -2838,7 +2838,7 @@ def test_branch_schema_and_read_edges():
     d = appeal.Decorations()
     d.add_option(h, 'extra', ('--extra',),
                  annotation=str, default=None)
-    assert read_mapping(build(h, decorations=d),
+    assert read_mapping(build_plan(h, decorations=d),
                         {'a': 'x'}) == ('x', 1, {})
 
     def gconv(u: int = 0, *, gopt: int = 1, **gkw):
@@ -2847,7 +2847,7 @@ def test_branch_schema_and_read_edges():
                  annotation=str, default=None)
     def h2(a, *, where: gconv = None):
         return (a, where)
-    got = read_mapping(build(h2, decorations=d),
+    got = read_mapping(build_plan(h2, decorations=d),
                        {'a': 'x', 'where': [5]})
     assert got == ('x', (5, 1, {})), got
 
@@ -2863,7 +2863,7 @@ def test_schema_degenerate_group_transparent():
         return o
     def cmd(a: mything, name: str):
         return (a, name)
-    props = mcp_input_schema(build(cmd))['properties']
+    props = mcp_input_schema(build_plan(cmd))['properties']
     assert props['a'] == {'type': 'integer'}, props
     assert props['name'] == {'type': 'string'}, props
     # a group that takes MORE than one operand is not degenerate: it
@@ -2872,7 +2872,7 @@ def test_schema_degenerate_group_transparent():
         return (x, y)
     def c2(p: point):
         return p
-    entry = mcp_input_schema(build(c2))['properties']['p']
+    entry = mcp_input_schema(build_plan(c2))['properties']['p']
     assert 'anyOf' in entry, entry
 
 
@@ -2888,7 +2888,7 @@ def test_branch_interpreter_edges():
                  annotation=str, default='n')
     d.add_option(f, 'direction', ('--south',),
                  annotation=str, default='s')
-    got = iparse(build(f, decorations=d),
+    got = iparse(build_plan(f, decorations=d),
                  ['--verbose', '--north', 'up', 'Z'])
     assert got == ('Z', 'up', True), got
 
@@ -2898,14 +2898,14 @@ def test_branch_interpreter_edges():
         return (v, alpha, beta)
     def g(x, *, opts: grp = None):
         return (x, opts)
-    assert iparse(build(g), ['X']) == ('X', None)
+    assert iparse(build_plan(g), ['X']) == ('X', None)
 
     # a class command through the bare interpreter (no execution
     # environment): the instance is returned, not stashed
     class K:
         def __init__(self, x):
             self.x = x
-    got = iparse(build(K), ['5'])
+    got = iparse(build_plan(K), ['5'])
     assert isinstance(got, K) and got.x == '5'
 
 
@@ -2970,7 +2970,7 @@ def test_branch_completion_edges():
     # a repeatable option already on the line still completes
     def f(*, tag: appeal.accumulator[str] = ()):
         return tag
-    assert '--tag' in appeal.complete(build(f), ['--tag', 'x'], '--')
+    assert '--tag' in appeal.complete(build_plan(f), ['--tag', 'x'], '--')
 
     # fish reentry with an EMPTY current token (cursor after a space)
     seen = []
@@ -2992,16 +2992,16 @@ def test_branch_completion_edges():
         pass
     def top():
         pass
-    commands = {'db': build(db_global), 'top': build(top)}
-    sets = {'db': {'commands': {'mig': build(mig)}, 'repeat': False}}
+    commands = {'db': build_plan(db_global), 'top': build_plan(top)}
+    sets = {'db': {'commands': {'mig': build_plan(mig)}, 'repeat': False}}
     assert complete_set(commands, None, ['help', 'db'], '', sets=sets) == []
 
     # cycling resolution: an entered, non-repeat inner set is
     # ineligible--the word resolves to the repeat root instead
     def rootcmd():
         pass
-    commands2 = {'db': build(db_global), 'rootcmd': build(rootcmd)}
-    sets2 = {'db': {'commands': {'mig': build(mig)}, 'repeat': False}}
+    commands2 = {'db': build_plan(db_global), 'rootcmd': build_plan(rootcmd)}
+    sets2 = {'db': {'commands': {'mig': build_plan(mig)}, 'repeat': False}}
     complete_set(commands2, None, ['db', 'mig', 'X', 'rootcmd'], '',
                  repeat=True, sets=sets2)
 
@@ -3065,7 +3065,7 @@ def test_branch_text_formatter_edges():
               the table column because it keeps going artisanally.
           times: short.
         """
-    plan = build(draw)
+    plan = build_plan(draw)
     from big.markdown import markdown_defaults
     from big.stylesheet import (StyleSheet, ansi_16_color_palette,
                                 transforms)

@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from test_appeal import (
     Appeal, AppealConfigurationError, UsageError, appeal, test,
-    build, run_both, repo_dir,
+    build_plan, run_both, repo_dir,
     )
 import subprocess
 import tempfile
@@ -88,14 +88,14 @@ def test_tuple_refusals_are_named():
     def variadic(t: tuple[int, ...]):
         pass
     try:
-        build(variadic)
+        build_plan(variadic)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'variable-length' in str(e) and '*args' in str(e)
     def variadic_option(*, t: tuple[int, ...] = ()):
         pass
     try:
-        build(variadic_option)
+        build_plan(variadic_option)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'list[T]' in str(e)
@@ -127,14 +127,14 @@ def test_nested_generics_are_refused_by_name():
     def f(t: tuple[list[dict[str, str]], int]):
         pass
     try:
-        build(f)
+        build_plan(f)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'option' in str(e)
     def g(*, inc: list[list[int]] = ()):
         pass
     try:
-        build(g)
+        build_plan(g)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'generic' in str(e)
@@ -204,7 +204,7 @@ def test_generic_kind_reads_and_schema():
             assert False, 'expected AppealDataError for %r' % (bad,)
         except appeal.AppealDataError as e:
             assert complaint in str(e), (bad, str(e))
-    props = mcp_input_schema(build(cmd))['properties']
+    props = mcp_input_schema(build_plan(cmd))['properties']
     assert props['env']['type'] == 'object'
     assert props['tags']['type'] == 'array'
 
@@ -259,7 +259,7 @@ def test_generic_refusals():
         return t
     for fn in (f, g, h, i):
         try:
-            build(fn)
+            build_plan(fn)
             assert False, 'expected refusal for %r' % (fn,)
         except AppealConfigurationError:
             pass

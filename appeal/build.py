@@ -6,7 +6,7 @@
 #
 # The compiler front half that CPython already wrote for us:
 # inspect.signature hands over the grammar as structured data,
-# and we do semantic analysis on it.  build() produces a Plan.
+# and we do semantic analysis on it.  build_plan() produces a Plan.
 #
 # Recursion: a positional parameter annotated with a non-blessed
 # callable becomes a *nonterminal*--its converter's own signature
@@ -294,7 +294,7 @@ class _PolicyRegistrar:
     records into THIS build (nothing persists onto callables, so
     shared converters can't poison other apps and rebuilds can't
     double-register); every other attribute forwards to the real
-    app (None for appless build() calls).
+    app (None for appless build_plan() calls).
     """
     def __init__(self, app):
         self._app = app
@@ -325,7 +325,7 @@ class _PolicyRegistrar:
         return getattr(self._app, attr)
 
 
-def build(callable, name=None, method_of=None,
+def build_plan(callable, name=None, method_of=None,
           default_options=default_options, app=None,
           extra_overrides=None, decorations=None):
     """

@@ -16,7 +16,7 @@
 
 import inspect as _inspect
 
-from .build import build
+from .build import build_plan
 from .help import parse_docstring
 from .plan import Terminal, NO_DEFAULT, Plan
 
@@ -116,7 +116,7 @@ def schema(callable):
     twin of --help; pairs with read_mapping() to run the command
     from a JSON object.
     """
-    plan = callable if isinstance(callable, Plan) else build(callable)
+    plan = callable if isinstance(callable, Plan) else build_plan(callable)
     return _plan_schema(plan)
 
 

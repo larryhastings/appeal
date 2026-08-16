@@ -19,16 +19,12 @@ interface--in process, or as a generated standalone script.
 
 __version__ = '1.0'
 
-from .build import (
-    Decorations, build,
-    default_options, default_long_option, default_short_option,
-    strip_first_argument_from_signature, strip_self_from_signature,
-    )
-from .codegen import (
-    compile_command_set, compile_plan, emit, emit_command_set,
-    )
-from .interpreter import dispatch as interpreter_dispatch
-from .interpreter import parse as interpreter_parse
+# build / codegen / interpreter / render are imported LAZILY (see the
+# module __getattr__ below and the local imports in the methods that
+# use them): `import appeal` pulls in only the stdlib-only runtime
+# core, so a precompiled program's `import appeal` is near bare-Python
+# speed; big and inspect load only when you actually build, compile,
+# or render (Larry's ruling 2026-08-16).
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
 from .plan import _validate_arg_format
 from .complete import complete, complete_set
@@ -42,16 +38,10 @@ from .runtime import (
     validate, validate_range,
     )
 
-# theming (Larry's design, 2026-08-06): themes are DATA--dicts of
-# StyleSheet entries, palette-independent; resolve_stylesheet
-# composes theme-over-palette; Appeal(stylesheet=) takes a
-# complete composition and uses it verbatim
-from .render import (
-    appeal_markdown_defaults, appeal_theme, dark_cool_theme,
-    dark_warm_theme, help_stylesheet, light_cool_theme,
-    light_warm_theme, plain_theme, resolve_stylesheet,
-    uncolored_theme,
-    )
+# theming (themes are DATA--resolve_stylesheet composes them) and
+# the build/codegen surface are re-exported LAZILY via __getattr__
+# below, so accessing appeal.appeal_theme / appeal.build / etc. still
+# works but doesn't cost anything until you touch it.
 
 # every exception, both spellings (the prefixed forms are the
 # real names--they're what tracebacks show, v1's rendering kept)
@@ -61,10 +51,50 @@ from .runtime import (
     )
 
 
-import inspect as _inspect
+import inspect as _inspect   # TODO(speed): defer (line ~1330 default)
 import os as _os
 import sys as _sys
 import threading as _threading
+
+
+# LAZY RE-EXPORTS: appeal.build / appeal.compile_plan / appeal.appeal_theme
+# / ... still work, but import their (heavy) home module only on first
+# access, so plain `import appeal` stays stdlib-only.  (Internal uses
+# take a local import at the call site.)
+_LAZY_REEXPORTS = {
+    'Decorations': 'build', 'build_plan': 'build',
+    'default_options': 'build', 'default_long_option': 'build',
+    'default_short_option': 'build',
+    'strip_first_argument_from_signature': 'build',
+    'strip_self_from_signature': 'build',
+    'compile_command_set': 'codegen', 'compile_plan': 'codegen',
+    'emit': 'codegen', 'emit_command_set': 'codegen',
+    'appeal_markdown_defaults': 'render', 'appeal_theme': 'render',
+    'uncolored_theme': 'render', 'plain_theme': 'render',
+    'dark_cool_theme': 'render', 'dark_warm_theme': 'render',
+    'light_cool_theme': 'render', 'light_warm_theme': 'render',
+    'resolve_stylesheet': 'render', 'help_stylesheet': 'render',
+    'interpreter_dispatch': ('interpreter', 'dispatch'),
+    'interpreter_parse': ('interpreter', 'parse'),
+}
+
+
+def __getattr__(name):
+    spec = _LAZY_REEXPORTS.get(name)
+    if spec is None:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+    modname, attr = spec if isinstance(spec, tuple) else (spec, name)
+    value = getattr(importlib.import_module('.' + modname, __name__), attr)
+    globals()[name] = value    # cache: future access is a plain global
+    return value
+
+
+# "not supplied" sentinel for Appeal(default_options=...)--distinct
+# from an explicit None (which means "no default options at all"),
+# and lets the signature default stay lazy (no build import at load)
+_DEFAULT_OPTIONS = object()
 
 
 def _config_vet(plan, table_words, config, command_plan_for=None):
@@ -638,8 +668,9 @@ class Appeal:
                  errors=None, script=_sys.argv[0],
                  margin=79,
                  positional_argument_usage_format='<{name.upper()}>',
-                 default_options=default_options,
+                 default_options=_DEFAULT_OPTIONS,
                  default_mappings=default_mappings(), doc=None):
+        from .build import Decorations
         self.name = name
         # the command tree (v1's model, restored 2026-07-18 by
         # Larry's ruling): a tree of Appeal instances, one per
@@ -693,6 +724,10 @@ class Appeal:
         # drops the long, or supply your own.  Its output--the
         # strings--is baked into the compiled parser, so a custom
         # policy never needs to ride into a standalone script.
+        if default_options is _DEFAULT_OPTIONS:
+            # not supplied -> the stock policy (lazy: importing build
+            # is deferred until an Appeal is actually constructed)
+            from .build import default_options as default_options
         if default_options is not None and not callable(default_options):
             raise AppealConfigurationError(
                 f"default_options must be callable or None, "
@@ -1610,15 +1645,16 @@ class Appeal:
 
     def _build(self, callable, **kwargs):
         """
-        build() a top plan and stamp it with the app's operand
+        build_plan() a top plan and stamp it with the app's operand
         usage format (positional_argument_usage_format).  Every
         top plan the app renders funnels through here; child plans
         read the format off their root at render time.
         """
+        from .build import build_plan
         # the policy registers via the registrar-proxy's
         # app.option() (arglet style, Larry's design 2026-07-22);
         # build constructs the proxy around the real app
-        plan = build(callable,
+        plan = build_plan(callable,
                      default_options=self.root.default_options,
                      app=self.root,
                      decorations=self.root._decorations, **kwargs)
@@ -1683,6 +1719,7 @@ class Appeal:
         return self._plan_for_node(node, word)
 
     def _parse_for(self, word):
+        from .codegen import compile_command_set, compile_plan
         self.root._finalize()   # drain the subcommand ledger
         node = self._node_for(word)
         if node is None:
@@ -1785,6 +1822,7 @@ class Appeal:
         words may repeat at different depths--`A X X` runs X's
         own subcommand X).
         """
+        from .codegen import compile_plan
         if node is None:
             node = self._children.get(word)
         with self._lock:
@@ -1842,6 +1880,7 @@ class Appeal:
         return entry
 
     def _compile(self):
+        from .codegen import compile_plan
         with self._lock:
             if self._parse is not None:
                 return self._parse
