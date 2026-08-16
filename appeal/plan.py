@@ -43,6 +43,18 @@ def _oparg_names(o):
     parameters' names; a tuple option falls back to element type
     names (no natural names to borrow).
     """
+    if o.kind in ('fold', 'fold1'):
+        # a fold's per-occurrence opargs are converters[1:]: a
+        # counter has NONE (a counting flag -- no metavar), an
+        # accumulator one, a mapping two.  (The bug this fixes:
+        # keying off len(converters) showed counter a spurious
+        # metavar and hid accumulator's real one.)  One oparg is
+        # named after the option; several after their converter
+        # types.
+        opargs = o.converters[1:]
+        if len(opargs) == 1:
+            return [o.name]
+        return [getattr(c, '__name__', o.name) for c in opargs]
     if len(o.converters) <= 1:
         return [o.name]
     if o.converters[0] is tuple:
