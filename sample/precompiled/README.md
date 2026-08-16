@@ -72,8 +72,11 @@ three buckets -- none of which imports appeal:
    *classes* never ship -- they're a build-time abstraction; the
    runtime just does the fold.
 2. **A tiny runtime helper** -- `split` uses `multisplit()` (a
-   ~10-line stand-in for big's `toy_multisplit`); `file` would use
-   `open()`.  Small logic, no big/appeal.
+   ~10-line stand-in for big's `toy_multisplit`), on an operand
+   (`source`) or an option value (`only`); `file` would use
+   `open()`.  Small logic, no big/appeal.  `mapping[str,int]`
+   (`--define KEY VALUE`, two tokens per occurrence) folds inline
+   to a dict.
 3. **Imported from your module** -- a custom converter function or
    `MultiOption` subclass is *your* code; the parser imports it just
    like it imports the command functions.

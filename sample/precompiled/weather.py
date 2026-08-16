@@ -72,7 +72,9 @@ def forecast(city, days: int = 3):
 def sync(source: appeal.split(':'), *,
          verbose: appeal.counter() = 0,
          tag: appeal.accumulator[str] = (),
-         mode: appeal.validate('fast', 'safe') = 'safe'):
+         mode: appeal.validate('fast', 'safe') = 'safe',
+         only: appeal.split(',') = (),
+         define: appeal.mapping[str, int] = None):
     """
     Sync weather stations, exercising the special converters.
 
@@ -91,8 +93,15 @@ def sync(source: appeal.split(':'), *,
 
     mode
     : One of `fast` or `safe` (appeal.validate).
+
+    only
+    : A `,`-separated list, split into one value (appeal.split).
+
+    define
+    : `--define KEY VALUE`, repeatable, builds a dict (appeal.mapping).
     """
-    print(f'sync {source} verbose={verbose} tags={list(tag)} mode={mode}')
+    print(f'sync {source} verbose={verbose} tags={list(tag)} mode={mode} '
+          f'only={list(only)} define={define}')
 
 
 if __name__ == '__main__':

@@ -31,7 +31,8 @@ def parse_tokens(argv, options):
         'flag'   present -> True
         'value'  takes one oparg (last wins)
         'count'  repeatable, no oparg -> number of occurrences  (counter)
-        'multi'  repeatable, one oparg -> list of opargs        (accumulator/mapping)
+        'multi'  repeatable, one oparg -> list of opargs        (accumulator)
+        'map'    repeatable, TWO opargs -> list of (k, v) pairs (mapping)
     '--' ends option parsing; '-' is a bare operand.  This is the
     whole recognizer -- real Appeal has a counting automaton here,
     but the shape (and the flag/value/count/multi kinds) is the same.
@@ -58,6 +59,13 @@ def parse_tokens(argv, options):
                     given[name] = True
                 else:
                     given[name] = given.get(name, 0) + 1
+            elif kind == 'map':
+                if eq:
+                    raise UsageError(f"option {key!r} takes two values")
+                if i + 2 >= n:
+                    raise UsageError(f"option {key!r} needs two values")
+                given.setdefault(name, []).append((argv[i + 1], argv[i + 2]))
+                i += 2
             else:
                 if not eq:
                     i += 1

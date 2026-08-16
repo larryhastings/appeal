@@ -113,11 +113,15 @@ def scan_forecast(argv):
 #   verbose: counter()           -> count of occurrences (step 1)  (bucket 1)
 #   tag    : accumulator[str]    -> [str(v) for v in occurrences]  (bucket 1)
 #   mode   : validate('fast','safe') -> baked membership check     (bucket 1)
-# the auto-short options (-v -t -m) match what real Appeal derives,
-# so the fast path and the fallback help agree
+#   only   : split(',')          -> multisplit() on one oparg      (bucket 2)
+#   define : mapping[str,int]    -> {k: int(v) for k,v in pairs}   (bucket 1)
+# the auto-short options match what real Appeal derives, so the
+# fast path and the fallback help agree
 _SYNC_OPTS = {'-v': ('verbose', 'count'), '--verbose': ('verbose', 'count'),
               '-t': ('tag', 'multi'), '--tag': ('tag', 'multi'),
-              '-m': ('mode', 'value'), '--mode': ('mode', 'value')}
+              '-m': ('mode', 'value'), '--mode': ('mode', 'value'),
+              '-o': ('only', 'value'), '--only': ('only', 'value'),
+              '-d': ('define', 'map'), '--define': ('define', 'map')}
 
 def scan_sync(argv):
     operands, given = parse_tokens(argv, _SYNC_OPTS)
@@ -128,7 +132,11 @@ def scan_sync(argv):
     mode = given.get('mode', 'safe')                            # validate(...)
     if mode not in ('fast', 'safe'):
         raise UsageError(f"invalid <MODE> {mode!r}")
-    return 'sync', (source,), {'verbose': verbose, 'tag': tag, 'mode': mode}
+    only = multisplit(given['only'], (',',)) if 'only' in given else ()   # split(',')
+    define = ({str(k): int(v) for k, v in given['define']}      # mapping[str,int]
+              if 'define' in given else None)
+    return 'sync', (source,), {'verbose': verbose, 'tag': tag, 'mode': mode,
+                               'only': tuple(only), 'define': define}
 
 
 _COMMANDS = {'report': scan_report, 'forecast': scan_forecast,
