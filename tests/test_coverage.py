@@ -1965,10 +1965,13 @@ def test_absorb_take_edges():
 
 
 def test_toy_multisplit_and_bytes_iter():
-    from appeal.runtime import toy_multisplit, _iterate_over_bytes
+    # _toy_multisplit is snipped into appeal.runtime (stdlib-only, so
+    # the core imports nothing from big); _iterate_over_bytes still
+    # rides in for the render side
+    from appeal.runtime import _toy_multisplit, _iterate_over_bytes
     assert list(_iterate_over_bytes('ab')) == ['a', 'b']
-    assert toy_multisplit('a,b', ',') == [('a', ','), ('b', '')]
-    assert toy_multisplit(b'a,b', [b',']) == [(b'a', b','), (b'b', b'')]
+    assert _toy_multisplit('a,b', ',') == [('a', ','), ('b', '')]
+    assert _toy_multisplit(b'a,b', [b',']) == [(b'a', b','), (b'b', b'')]
 
 
 def test_expand_tabs_pins():

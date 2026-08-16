@@ -2893,7 +2893,7 @@ def test_standalone_vocabulary_recipes():
             '          color: appeal.validate("red", "blue") = "red"):\n'
             "    print('paths', path, v, color)\n"), 'paths')
         assert 'def split(' in module                   # region embedded
-        assert 'def toy_multisplit(' in module          # ...and its requires
+        assert 'def _toy_multisplit(' in module         # snipped in-region
         assert "= split(':')" in module                  # the recipe
         assert "= counter(max=None, step=10)" in module
         r = run_script(prog, ['a:b', '-v', '-v', '--color', 'blue'])

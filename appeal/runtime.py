@@ -32,7 +32,7 @@ from big.stylesheet import (StyleSheet, ansi_16_color_palette,
 from big.text import (OverflowStrategy, _iterate_over_bytes,
                       expand_tabs, format_definition_list,
                       merge_columns, split_text_with_code,
-                      toy_multisplit, wrap_words)
+                      wrap_words)
 
 
 # --8<-- start appeal exceptions --8<--
@@ -3274,7 +3274,77 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
 
 # --8<-- start appeal split --8<--
 # --8<-- requires appeal exceptions --8<--
-# --8<-- requires big toy_multisplit --8<--
+def _toy_multisplit_as_pairs(segments, empty):
+    # segments alternates non-separator and separator strings,
+    # always starting and ending with a (possibly empty)
+    # non-separator string.  pair each non-separator string with its
+    # subsequent separator--appending the always-empty trailing
+    # separator--to make the keep=True 2-tuple form.
+    segments.append(empty)
+    return list(zip(segments[::2], segments[1::2]))
+
+
+def _toy_multisplit(s, separators):
+    """
+    A stdlib-only copy of big.text.toy_multisplit (snipped in so
+    appeal.runtime imports nothing from big--big.text alone costs
+    ~14ms to import).  All separators split in one pass, longest
+    match wins; returns (text, separator) pairs, keep=True form.
+    """
+    if not isinstance(separators, (list, tuple)):
+        separators = [separators[i:i + 1] for i in range(len(separators))]
+    empty = b'' if isinstance(s, bytes) else ''
+    if len(separators) == 1:
+        segments = []
+        sep = separators[0]
+        length = len(sep)
+        while s:
+            index = s.find(sep)
+            if index == -1:
+                segments.append(s)
+                s = None
+                break
+            segments.append(s[:index])
+            segments.append(sep)
+            s = s[index + length:]
+        if s is not None:
+            segments.append(s)
+        return _toy_multisplit_as_pairs(segments, empty)
+
+    longest_separator = max(len(sep) for sep in separators)
+    separators_by_length = []
+    for i in range(longest_separator, -1, -1):
+        separators_by_length.append((i, set()))
+    for sep in separators:
+        separators_by_length[longest_separator - len(sep)][1].add(sep)
+    separators_by_length = [t for t in separators_by_length if t[1]]
+
+    segments = []
+    word = []
+
+    def flush_word():
+        if not word:
+            segments.append(empty)
+            return
+        segments.append(empty.join(word))
+        word.clear()
+
+    while s:
+        substring = s
+        for length, separators_set in separators_by_length:
+            substring = substring[:length]
+            if substring in separators_set:
+                flush_word()
+                segments.append(substring)
+                s = s[length:]
+                break
+        else:
+            word.append(s[:1])
+            s = s[1:]
+    flush_word()
+    return _toy_multisplit_as_pairs(segments, empty)
+
+
 def split(*separators, strip=False):
     """
     Creates a converter that splits a string on the separators,
@@ -3302,7 +3372,7 @@ def split(*separators, strip=False):
         # strip, drop the boundary empties too (leading and
         # trailing separators).
         texts = [text for text, _ in
-                 toy_multisplit(value, list(separators))]
+                 _toy_multisplit(value, list(separators))]
         last = len(texts) - 1
         values = [text for i, text in enumerate(texts)
                   if text or i == 0 or i == last]
