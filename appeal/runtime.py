@@ -1392,13 +1392,37 @@ def _params_host(obj):
     return None
 
 
-def fingerprint(fn):
+def _converter_fingerprint(value, owner_module, seen):
+    """
+    An annotation's entry in a fingerprint: a NON-LEAF converter
+    recurses into its own fingerprint (so a converter's signature
+    change surfaces in its command's fingerprint), while leaves
+    (builtins) and vocabulary products stay flat tokens.  Reached
+    the same way resolve_fingerprint_path walks, so drift is caught
+    everywhere the grammar reaches a converter.
+    """
+    value = _deref_annotated(value)
+    if getattr(value, '__appeal_recipe__', None):
+        return _annotation_token(value, owner_module)   # recipe: structural
+    if getattr(value, '__module__', None) == 'builtins':
+        return _annotation_token(value, owner_module)   # int/str/... : leaf
+    if _params_host(value) is None or id(value) in seen:
+        # uninspectable, a generic alias, or a cycle (build forbids
+        # converter cycles, but guard anyway)
+        return _annotation_token(value, owner_module)
+    return fingerprint(value, seen)                     # RECURSE
+
+
+def fingerprint(fn, seen=frozenset()):
     """
     The identity a compiled parser was baked from: a nested tuple
     of plain data, equal iff nothing the grammar or the help
     depends on has changed.  reprs into a script as a literal.
-    A class converter's parameters live on __init__ (the host);
-    its docstring and decorations stay its own.
+    Mirrors inspect.Signature--the function's NAME is not identity
+    (rename freely; only the shape matters).  A converter parameter
+    nests its OWN fingerprint, recursively.  A class converter's
+    parameters live on __init__ (the host); its docstring stays its
+    own.
     """
     host = _params_host(fn)
     if host is None:
@@ -1414,12 +1438,12 @@ def fingerprint(fn):
     if doc is not None:
         # the help was baked from it, so it's identity--but the
         # spec doesn't need a second copy of the text (Larry's
-        # ruling: hash it)
+        # ruling: hash it, as bytes)
         import hashlib
         doc = hashlib.blake2b(doc.encode('utf-8'),
-                              digest_size=16).hexdigest()
+                              digest_size=16).digest()
+    inner = seen | {id(fn)}
     return (
-        fn.__name__,
         code.co_argcount,
         getattr(code, 'co_posonlyargcount', 0),
         code.co_kwonlyargcount,
@@ -1427,7 +1451,7 @@ def fingerprint(fn):
         code.co_varnames[:named + varargs + varkw],
         _stable_repr(getattr(host, '__defaults__', None)),
         _stable_repr(getattr(host, '__kwdefaults__', None)),
-        tuple(sorted((name, _annotation_token(value, owner_module))
+        tuple(sorted((name, _converter_fingerprint(value, owner_module, inner))
                      for name, value in annotations.items())),
         doc,
     )
