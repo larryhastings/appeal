@@ -70,7 +70,7 @@ def forecast(city, days: int = 3):
 
 @app.command()
 def sync(source: appeal.split(':'), *,
-         verbose: appeal.counter(step=2) = 0,
+         verbose: appeal.counter() = 0,
          tag: appeal.accumulator[str] = (),
          mode: appeal.validate('fast', 'safe') = 'safe'):
     """
@@ -84,7 +84,7 @@ def sync(source: appeal.split(':'), *,
     ## Options
 
     verbose
-    : Repeatable; each -v adds 2 (appeal.counter).
+    : Repeatable; counts how many times it's given (appeal.counter).
 
     tag
     : Repeatable; collects labels (appeal.accumulator).

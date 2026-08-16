@@ -110,7 +110,7 @@ def scan_forecast(argv):
 # Every special converter is baked -- the fold/logic is inline, no
 # class ships, and appeal is not imported:
 #   source : split(':')          -> multisplit() from the runtime  (bucket 2)
-#   verbose: counter(step=2)     -> default + step*count           (bucket 1)
+#   verbose: counter()           -> count of occurrences (step 1)  (bucket 1)
 #   tag    : accumulator[str]    -> [str(v) for v in occurrences]  (bucket 1)
 #   mode   : validate('fast','safe') -> baked membership check     (bucket 1)
 # the auto-short options (-v -t -m) match what real Appeal derives,
@@ -123,7 +123,7 @@ def scan_sync(argv):
     operands, given = parse_tokens(argv, _SYNC_OPTS)
     check_count(len(operands), 1, 1, None)
     source = multisplit(operands[0], (':',))                    # split(':')
-    verbose = 0 + 2 * given.get('verbose', 0)                   # counter(step=2)
+    verbose = given.get('verbose', 0)                           # counter(): count
     tag = tuple(str(v) for v in given.get('tag', ()))           # accumulator[str]
     mode = given.get('mode', 'safe')                            # validate(...)
     if mode not in ('fast', 'safe'):
