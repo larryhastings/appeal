@@ -289,7 +289,9 @@ def compiled_appeal(spec, namespace):
                         continue
                     namespace[ref_name] = obj
                 if entry['impl'] is not None:
-                    namespace[entry['impl']] = fn
+                    # bind the live function onto its Command object
+                    # (the shared dispatch record)
+                    namespace[entry['impl']].callable = fn
             # a decoration aimed at something this parser never
             # resolves is drift too--yell, don't ignore
             for registry in (self._option_overrides,
@@ -410,7 +412,8 @@ def compiled_appeal(spec, namespace):
 
         def on_help(self, signal):
             real = self._rebuild()
-            real.help(self._topic_for(signal.callable))
+            cmd = signal.command
+            real.help(self._topic_for(cmd.callable if cmd else None))
             # 0 for requested help; 1 for a bare set line's listing
             return signal.code
 
@@ -457,8 +460,10 @@ def compiled_appeal(spec, namespace):
 
         def on_usage(self, e):
             real = self._rebuild()
-            usage = self._command_usage(real, e.callable,
-                                        getattr(e, 'want_listing', False))
+            cmd = e.command
+            usage = self._command_usage(
+                real, cmd.callable if cmd else None,
+                getattr(e, 'want_listing', False))
             if usage is None:
                 table = real._table()
                 if not table:

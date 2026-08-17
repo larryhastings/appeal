@@ -33,7 +33,7 @@ from .build import (
 from .help import command_set_corpus, merge_docs, summary
 from .plan import Terminal, NO_DEFAULT, command_set_usage
 from .runtime import (
-    AppealConfigurationError, UsageError, absorb_take,
+    AppealConfigurationError, UsageError, Command, absorb_take,
     accumulate, call_converter, collect_mapping, convert,
     convert_value, fold,
     parse_tokens, check_count, scoped_forces, scoped_next,
@@ -62,6 +62,7 @@ class Refs:
     """
     def __init__(self):
         self.objects = {}      # name -> object
+        self.command_names = {}  # id(command callable) -> _CMD_X global
 
     def add(self, preferred, obj, dedupe=True):
         import re
@@ -789,18 +790,35 @@ class _Emitter:
             self.constant(self.usage_const, repr(plan.usage()))
         self.constant(options_const, '{%s}' % ', '.join(table_items))
 
+        # every emitted command gets a Command object (the shared
+        # dispatch record): _CMD_X.  It is the single stable
+        # indirection for the live function--in-process its callable
+        # is bound at construction (a ref); in a compiled module the
+        # shim fills _CMD_X.callable at registration, and everything
+        # (the run body, the error wrappers, the dispatch table) that
+        # holds _CMD_X sees it with no re-lookup.
+        cmd_obj = f'_CMD_{self.symbol}'
+        self.cmd_obj = cmd_obj
         if plan.binds is not None and plan.constructs is not None:
             # a nested class constructs via the parent instance's
-            # attribute: no direct reference to bake
+            # attribute: no direct callable
             command_name = None
+            self.cmd_callable_ref = None
         elif getattr(plan.callable, 'appeal_stock', False):
-            # the stock precommand hosting the global plan (no
-            # global command): its behavior bakes as literals, no
-            # reference to carry
+            # the stock precommand hosting the global plan: its
+            # behavior bakes as literals, no callable to carry
             command_name = None
+            self.cmd_callable_ref = None
         else:
-            command_name = self.refs.add('_' + plan.name.lstrip('_'),
-                                         plan.callable)
+            # calls go THROUGH the Command's callable (live)
+            command_name = f'{cmd_obj}.callable'
+            self.cmd_callable_ref = (
+                None if self.compiled
+                else self.refs.add('_' + plan.name.lstrip('_'),
+                                   plan.callable))
+        # remember the Command's global name for this plan, so a
+        # compiled module's spec can point the shim's binding at it
+        self.refs.command_names[id(plan.callable)] = cmd_obj
         trailing = [s for s in plan.slots if s.trailing]
 
         # stage 1: the structural parse--no user code.  A malformed
@@ -959,11 +977,11 @@ class _Emitter:
                   f'env=None):')
         if help_keys and self.compiled:
             # a precompiled module bakes no page: -h raises the help
-            # signal tagged with THIS command; full Appeal renders it
-            # live (command_name reads the impl slot, bound by the
-            # shim--None for a command with no function to bind)
+            # signal tagged with THIS command's Command object (its
+            # callable filled live by the shim); full Appeal renders
+            # the page
             self.line(f"    if given.pop('--help', False):")
-            self.line(f'        raise _CompiledHelp({command_name or None})')
+            self.line(f'        raise _CompiledHelp({cmd_obj})')
         elif help_keys:
             # compiled means the documentation too: the whole
             # Markdown pipeline runs at BUILD time (parse, style,
@@ -1092,17 +1110,24 @@ class _Emitter:
             self.line(f'    return run_{self.symbol}(operands, given, positions), rest')
         self.line()
 
-        if self.compiled and command_name:
-            # tag any help-rendering error from either stage with
-            # this command--the deepest command wins.  The lambda
-            # reads the impl slot live (bound after module exec);
-            # the dispatcher table, emitted later, captures the
-            # wrapped names.
+        # the Command object: the shared dispatch record.  In-process
+        # its callable is the bound ref; compiled, the shim fills it.
+        callable_kw = ('' if self.cmd_callable_ref is None
+                       else f', callable={self.cmd_callable_ref}')
+        self.line(f'{cmd_obj} = Command({plan.name!r}{callable_kw}, '
+                  f'scan=scan_{self.symbol}, run=run_{self.symbol})')
+        if self.compiled:
+            # tag any help-rendering error from either stage with this
+            # Command--the deepest command wins.  Rebind the module
+            # globals too, so the fused parse_X (which calls them by
+            # name) tags as well; the Command holds the wrapped pair.
             self.line(f'scan_{self.symbol} = _tag_errors('
-                      f'scan_{self.symbol}, lambda: {command_name})')
+                      f'scan_{self.symbol}, {cmd_obj})')
             self.line(f'run_{self.symbol} = _tag_errors('
-                      f'run_{self.symbol}, lambda: {command_name})')
-            self.line()
+                      f'run_{self.symbol}, {cmd_obj})')
+            self.line(f'{cmd_obj}.scan = scan_{self.symbol}')
+            self.line(f'{cmd_obj}.run = run_{self.symbol}')
+        self.line()
 
     def emit_completion_table(self):
         """
@@ -1211,6 +1236,7 @@ def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
         'scoped_rewind': scoped_rewind,
         'scoped_next': scoped_next,
         'UsageError': UsageError,
+        'Command': Command,
         }
     namespace.update(refs.objects)
     code = compile(source, filename, 'exec')
@@ -1334,38 +1360,27 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             sub_usage = listing_pieces(
                 command_set_usage(parent_word, parent_plan), sub_corpus,
                 templates or default_template)
-        sub_table = ', '.join(
-            (f'{w!r}: _SET_{sym(p)}' if w in subs
-             else f'{w!r}: (scan_{sym(p)}, run_{sym(p)})')
-            for w, p in sub_plans.items())
+        # a nested set is just its parent's Command with its children
+        # hung on it (word -> child Command, leaf or deeper set).  The
+        # Command is the tag target too, so a "no command"/"unknown
+        # command" error under it renders that parent's listing live--
+        # no lambda, no separate _SET dict.
+        sub_table = ', '.join(f'{w!r}: _CMD_{sym(p)}'
+                              for w, p in sub_plans.items())
         sub_words = ', '.join(repr(w) for w in sorted(sub_plans))
         d_plan = sub_defaults.get(parent_word)
         if d_plan is not None:
             emit_one(d_plan)
-            d_literal = f"(scan_{sym(d_plan)}, run_{sym(d_plan)})"
+            d_literal = f'_CMD_{sym(d_plan)}'
         else:
             d_literal = 'None'
-        # compiled sets bake no usage; instead each nested set names
-        # its PARENT callable, so a "no command"/"unknown command"
-        # error under it renders that parent's listing live
-        callable_item = ''
-        if compiled:
-            slot = next((name for name, obj in refs.objects.items()
-                         if obj is parent_plan.callable), None)
-            if slot is not None:
-                # a getter, not the value: the slot is bound live by
-                # the shim after module exec
-                callable_item = f"'get_callable': (lambda: {slot}), "
+        p = sym(parent_plan)
         sub_lines.append(
-            f"_SET_{sym(parent_plan)} = "
-            f"{{'scan': scan_{sym(parent_plan)}, "
-            f"'run': run_{sym(parent_plan)}, "
-            f"'commands': {{{sub_table}}}, "
-            f"'repeat': {sub_repeat.get(parent_word, False)!r}, "
-            f"'words': frozenset(({sub_words},)), "
-            f"'usage': {sub_usage!r}, "
-            f"{callable_item}"
-            f"'default': {d_literal}}}")
+            f"_CMD_{p}.subcommands = {{{sub_table}}}\n"
+            f"_CMD_{p}.words = frozenset(({sub_words},))\n"
+            f"_CMD_{p}.repeat = {sub_repeat.get(parent_word, False)!r}\n"
+            f"_CMD_{p}.usage = {sub_usage!r}\n"
+            f"_CMD_{p}.default = {d_literal}")
 
     if compiled:
         # a precompiled module bakes no set page/listing/usage
@@ -1388,10 +1403,9 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         sheet_name = refs.add('_SHEET_command_set', stylesheet, dedupe=False)
     globals_name = (f'(scan_{sym(global_plan)}, run_{sym(global_plan)})'
                     if global_plan is not None else 'None')
-    table = ', '.join(
-        (f'{word!r}: _SET_{sym(plan)}' if word in subs
-         else f'{word!r}: (scan_{sym(plan)}, run_{sym(plan)})')
-        for word, plan in commands.items())
+    # every entry is a Command now--leaf or nested set alike
+    table = ', '.join(f'{word!r}: _CMD_{sym(plan)}'
+                      for word, plan in commands.items())
     def complete_entry(word, plan):
         # recursive: a child that is itself a parent nests its own
         # {'parent', 'commands', 'repeat'} entry (the completion
@@ -1450,7 +1464,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
                       f"file=sys.stdout, "
                       f"stylesheet={sheet_name}), end='')")
     if auto_version:
-        table += ", 'version': parse_version"
+        table += ", 'version': Command('version', fused=parse_version)"
         lines.extend([
             f'_VERSION = {str(version)!r}',
             'def parse_version(argv):',
@@ -1461,7 +1475,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             '',
             ])
     if auto_help:
-        table += ", 'help': parse_help"
+        table += ", 'help': Command('help', fused=parse_help)"
         version_topic = ([
             "    if argv[0] == 'version':",
             '        print("Print the program\'s version.")',
@@ -1484,22 +1498,21 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             '        raise UsageError(f"unknown command {argv[0]!r}"',
             '                         f"{did_you_mean(argv[0], _COMMANDS)}",',
             f'                         {set_usage})',
-            '    if isinstance(entry, dict):',
+            '    if entry.subcommands:',
             ] + ([
             '        # a nested set: drive its parent -h, which raises',
             '        # the help signal tagged with the parent command',
-            "        operands, given, rest, positions = entry['scan'](['--help'])",
-            "        return entry['run'](operands, given, positions)",
+            "        operands, given, rest, positions = entry.scan(['--help'])",
+            "        return entry.run(operands, given, positions)",
             ] if compiled else [
             '        # a nested set: its listing, baked pieces,',
             '        # finished at the real margin',
-            f"        print(render_baked_help(entry['usage'], "
+            f"        print(render_baked_help(entry.usage, "
             f"margin=help_margin({max_columns!r})), end='')",
             '        return',
             ]) + [
-            '    scan, run = entry',
-            "    operands, given, rest, positions = scan(['--help'])",
-            '    return run(operands, given, positions)',
+            "    operands, given, rest, positions = entry.scan(['--help'])",
+            '    return entry.run(operands, given, positions)',
             '',
             ])
     lines.extend([
@@ -1594,6 +1607,7 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, s
         'scoped_window': scoped_window,
         'sibling_scopes': sibling_scopes,
         'absorb_take': absorb_take,
+        'Command': Command,
         }
     namespace.update(refs.objects)
     code = compile(source, filename, 'exec')
@@ -1803,7 +1817,7 @@ _RUNTIME_IMPORTS = (
     'greedy_sizes', 'did_you_mean', 'check_count', 'absorb_take',
     'scopes_for', 'sibling_scopes', 'scoped_forces', 'scoped_window',
     'scoped_resolve', 'scoped_rewind', 'scoped_next',
-    'run_command_set', 'UsageError',
+    'run_command_set', 'UsageError', 'Command',
     # compiled modules bake no help/usage: -h and the DataError
     # family route to full Appeal through these
     '_CompiledHelp', '_tag_errors',
@@ -2009,10 +2023,12 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
     harvests = []
     fingerprints = {}
     decor_fingerprints = {}
+    key_fn = {}
     def note_fn(key, fn):
-        # one function may serve several nodes: every key maps to
-        # the one slot the refs dedupe to
+        # one function may serve several nodes; each key maps to the
+        # Command object the shim fills at registration
         impls.setdefault(id(fn), []).append(key)
+        key_fn[key] = fn
         harvests.append((key, _harvest_paths(fn, decorations)))
         fingerprints[key] = fingerprint(fn)
         decor_fingerprints[key] = decoration_fingerprint(
@@ -2034,10 +2050,9 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
         refs, impls, harvests, decorations)
 
     def entry_literal(key):
-        # an owned nested class constructs through the parent
-        # instance's attribute: no reference to bake, no slot--
-        # the entry is verify-only (impl None)
-        return {'impl': impl_names.get(key),
+        # 'impl' is the Command object's global name: the shim sets
+        # its .callable to the live function at registration
+        return {'impl': refs.command_names.get(id(key_fn[key])),
                 'fingerprint': fingerprints[key],
                 'decorations': decor_fingerprints[key],
                 'refs': tuple(sorted(ref_specs[key]))}

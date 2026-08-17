@@ -46,6 +46,7 @@ from .runtime import (
     AppealBaseException, AppealCommandError, AppealUsageError,
     ConfigurationError, DataError,
     )
+from .runtime import Command as _Command
 
 
 import os as _os
@@ -580,11 +581,13 @@ class _CompileOnDispatch:
             return app._set_entry_for(word, node)
         parse = self.app._parse_for(word)
         if hasattr(parse, 'scan'):
-            # two-stage dispatch (parse-before-execute)
-            return (parse.scan, parse.run)
+            # two-stage dispatch (parse-before-execute): the shared
+            # Command record (in-process, its callable is unused--the
+            # dispatcher reads scan/run, errors render baked usage)
+            return _Command(word, scan=parse.scan, run=parse.run)
         # fused: _parse_for compiles every registered word two-stage
         # and nested parents are intercepted above; belt and braces
-        return parse   # pragma: no cover
+        return _Command(word, fused=parse)   # pragma: no cover
 
 
 # the default_mappings menu, importable (spell your subset with
@@ -1878,7 +1881,7 @@ class Appeal:
             sub = compile_plan(self._plan_for_node(child, w),
                                templates=self.templates, stylesheet=self.stylesheet,
                                max_columns=self.margin)
-            subs[w] = (sub.scan, sub.run)
+            subs[w] = _Command(w, callable=fn, scan=sub.scan, run=sub.run)
         entries = listed
         corpus = command_set_corpus(parent_plan, entries, False)
         sub_usage = listing_pieces(
@@ -1890,15 +1893,14 @@ class Appeal:
                                     templates=self.templates,
                                     stylesheet=self.stylesheet,
                                     max_columns=self.margin)
-            sub_default = (compiled.scan, compiled.run)
+            sub_default = _Command(scan=compiled.scan, run=compiled.run)
         else:
             sub_default = None
-        entry = {'scan': parent.scan, 'run': parent.run,
-                 'commands': subs,
-                 'repeat': node._node_repeat,
-                 'words': frozenset(subs),
-                 'usage': sub_usage,
-                 'default': sub_default}
+        entry = _Command(word, callable=node._command_callable(),
+                         scan=parent.scan, run=parent.run,
+                         subcommands=subs, words=frozenset(subs),
+                         repeat=node._node_repeat, usage=sub_usage,
+                         default=sub_default)
         with self._lock:
             if self._set_entries is None:
                 self._set_entries = {}

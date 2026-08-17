@@ -58,15 +58,16 @@ class AppealError(Exception):
     """
     # A precompiled module bakes no help/usage text: when an error
     # that renders help (the DataError family) crosses a command's
-    # parse/convert body, that body tags this with the live command
-    # function, so the compiled shim can hand it to full Appeal for
-    # rendering (precompile.py; ruled 2026-08-17).  None everywhere
-    # else--the in-process paths ignore it.
-    callable = None
+    # parse/convert body, that body tags this with the Command it
+    # belongs to (whose .callable the shim filled live), so the
+    # compiled shim can hand it to full Appeal for rendering
+    # (precompile.py; ruled 2026-08-17).  None everywhere else--the
+    # in-process paths ignore it.
+    command = None
     # set by the set dispatcher's "no command"/"unknown command"
     # errors: render the tagged command's set LISTING, not its own
     # usage line (a class command can be both a constructor and a
-    # parent, so the callable alone can't disambiguate).
+    # parent, so the Command alone can't disambiguate).
     want_listing = False
 
 
@@ -74,38 +75,39 @@ class _CompiledHelp(Exception):
     """
     Not an error--a control-flow signal a COMPILED parser raises
     when the line asks for help (-h/--help, or a bare set line
-    wanting the listing).  It carries the command function whose
-    page to show (None = the program root: a bare app's page or a
-    set's listing).  The compiled shim catches it and renders live
-    through full Appeal; it never escapes run_main.  In-process
-    parsers never raise it.
+    wanting the listing).  It carries the Command whose page to show
+    (None = the program root: a bare app's page or a set's listing).
+    The compiled shim catches it and renders live through full
+    Appeal; it never escapes run_main.  In-process parsers never
+    raise it.
 
     code is the exit status to return after rendering: 0 for
     requested help (-h/--help/help), 1 for the listing a BARE set
     line falls through to (orientation, not a diagnostic--v1's
     nonzero exit for "no command ran").
     """
-    def __init__(self, callable=None, code=0):
+    def __init__(self, command=None, code=0):
         super().__init__()
-        self.callable = callable
+        self.command = command
         self.code = code
 
 
-def _tag_errors(fn, get_callable):
+def _tag_errors(fn, command):
     """
     Wrap a compiled parser's scan/run so any help-rendering error
-    (the DataError family) crossing it gets tagged with the command
-    it belongs to--the deepest command wins (`if e.callable is
-    None`).  get_callable reads the impl SLOT live: the shim binds
-    it after module exec, so a closure over the value would capture
-    the None placeholder.  Other exceptions pass through untouched.
+    (the DataError family) crossing it gets tagged with the Command
+    it belongs to--the deepest command wins (`if e.command is
+    None`).  `command` is the Command OBJECT itself (stable): the
+    shim fills its .callable after module exec, so nothing here needs
+    a getter--reading e.command.callable later sees the live value.
+    Other exceptions pass through untouched.
     """
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except DataError as e:
-            if e.callable is None:
-                e.callable = get_callable()
+            if e.command is None:
+                e.command = command
             raise
     return wrapper
 
@@ -488,6 +490,50 @@ def parse_tokens(argv, options, usage=None, command_split=None,
     return operands, given
 
 
+class Command:
+    """
+    One node of a program's command tree--the single dispatch record
+    shared by the in-process and compiled parsers (0.6.4 had this;
+    the facade's tree-of-Appeals and the grammar's Plan are heavier
+    layers above it).  A leaf has no subcommands; a parent (a set)
+    carries its children in `subcommands` (word -> Command).
+
+    `callable` is the live command function.  In-process it's bound
+    at construction; in a COMPILED module it starts None and the
+    shim fills it at registration--and because everything (the run
+    body, the error wrappers, the dispatch frames) holds the SAME
+    Command object, filling `callable` once is seen everywhere, with
+    no re-lookup.  That is the whole point of the object: it is the
+    stable indirection a bare module global can't be.
+
+    `scan`/`run` are the two generated stages.  `fused` is set
+    instead for the auto commands (version, help) that scan and run
+    in one call.  `usage` is the baked listing pieces in-process, or
+    None in a compiled module (which renders live).
+    """
+    __slots__ = ('name', 'callable', 'scan', 'run', 'subcommands',
+                 'words', 'repeat', 'usage', 'default', 'fused')
+
+    def __init__(self, name=None, *, callable=None, scan=None, run=None,
+                 subcommands=None, words=None, repeat=False,
+                 usage=None, default=None, fused=None):
+        self.name = name
+        self.callable = callable
+        self.scan = scan
+        self.run = run
+        self.subcommands = subcommands if subcommands is not None else {}
+        self.words = words
+        self.repeat = repeat
+        self.usage = usage
+        self.default = default
+        self.fused = fused
+
+    def __repr__(self):
+        kind = ('fused' if self.fused else
+                'set' if self.subcommands else 'command')
+        return f'<Command {self.name!r} ({kind})>'
+
+
 def scan_command_set(argv, parse_globals, commands, usage=None,
                      default=None, repeat=False, words=None):
     """
@@ -495,18 +541,17 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
     portion, command word, command portion--with no user code.  A
     malformed line dies here, before anything runs (Appeal rule).
 
-    parse_globals and each commands value are (scan, run) pairs.
-    With repeat (Appeal's cycling), a command's arguments--all of
-    them, optional included--may be followed by another command
-    word, resolved against `words`; scanning loops until the line
-    runs out.  Returns (invocations, tail): invocations is a list of
-    (word, run, operands, given, positions)--word None for the
-    global command--and tail is the odd trailing job, if any:
-    ('fused', word, callable, tokens) for a commands value that is
-    a plain callable (a nested dispatcher, or the generated help
-    command--scanned and executed together, stage separation inside
-    is its own business), or ('default',) for an empty line with a
-    default command (v1's default_command).
+    parse_globals is a (scan, run) pair; each commands value is a
+    Command (leaf, nested set, or fused auto command).  With repeat
+    (Appeal's cycling), a command's arguments--all of them, optional
+    included--may be followed by another command word, resolved
+    against `words`; scanning loops until the line runs out.  Returns
+    (invocations, tail): invocations is a list of (word, run,
+    operands, given, positions)--word None for the global
+    command--and tail is the odd trailing job, if any: ('fused',
+    word, callable, tokens) for a fused Command (a nested dispatcher,
+    or the generated help command--scanned and executed together), or
+    ('default',) for an empty line with a default command.
     """
     invocations = []
     if parse_globals is not None:
@@ -523,94 +568,82 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
         # caller shows the listing and exits 1; nothing runs
         return invocations, ('bare',)
 
-    # the resolution stack, deepest set on top.  Consulting a set
-    # for its FIRST command is free--that's descent, how the line
-    # got here; re-entering a set for a second command is what
-    # repetition means, and needs that set's own repeat.  A set
-    # without repeat doesn't block resolution in its ancestors.
-    stack = [{'commands': commands, 'repeat': repeat, 'words': words,
-              'usage': usage, 'entered': False}]
+    # the resolution stack, deepest set on top.  Each frame's Command
+    # is the set whose subcommands are in scope (a synthetic root
+    # Command for the top level, callable None).  Consulting a set
+    # for its FIRST command is free--that's descent, how the line got
+    # here; re-entering it is repetition, gated on that set's repeat.
+    root = Command(subcommands=commands, words=words, repeat=repeat,
+                   usage=usage)
+    stack = [{'command': root, 'entered': False}]
 
     def frames_in_order():
         for depth, frame in enumerate(reversed(stack)):
             if depth == 0 and not frame['entered']:
                 yield frame          # descent: first consult free
-            elif frame['repeat']:
+            elif frame['command'].repeat:
                 yield frame          # re-entry: gated on repeat
 
     def resolvable_words():
         out = set()
         for frame in frames_in_order():
-            out.update(frame['words'] or ())
+            out.update(frame['command'].words or ())
         return frozenset(out)
+
+    def tag(err, frame):
+        # a compiled set bakes no usage; the frame's Command (its
+        # callable filled live by the shim) tells the shim which
+        # LISTING to render.  In-process the baked usage is used and
+        # this is ignored.  The root frame's command has no callable,
+        # so it renders the program root.
+        err.command = frame['command']
+        err.want_listing = True
+        return err
 
     while rest:
         word = rest[0]
         entry = target = None
         for frame in frames_in_order():
-            entry = frame['commands'].get(word)
+            entry = frame['command'].subcommands.get(word)
             if entry is not None:
                 target = frame
                 break
         if entry is None:
             tail = did_you_mean(word, resolvable_words())
-            err = UsageError(f"unknown command {word!r}{tail}",
-                             stack[-1]['usage'])
-            # compiled sets bake no usage: the frame carries a getter
-            # for its parent's (live-bound) callable, so the shim
-            # renders that set's LISTING (want_listing), not the
-            # parent command's own usage line
-            get = stack[-1].get('get_callable')
-            if get is not None:
-                err.callable = get()
-                err.want_listing = True
-            raise err
+            raise tag(UsageError(f"unknown command {word!r}{tail}",
+                                 stack[-1]['command'].usage), stack[-1])
         while stack[-1] is not target:
             stack.pop()              # re-base at the resolved set
         target['entered'] = True
-        if isinstance(entry, dict):
+        if entry.subcommands:
             # a nested set: the parent runs first, like a global
             # command of its own little set
-            stack.append({'commands': entry['commands'],
-                          'repeat': entry['repeat'],
-                          'words': entry['words'],
-                          'usage': entry['usage'],
-                          'get_callable': entry.get('get_callable'),
-                          'default': entry.get('default'),
-                          'entered': False})
+            stack.append({'command': entry, 'entered': False})
             boundary = resolvable_words()
-            operands, given, rest, positions = entry['scan'](
+            operands, given, rest, positions = entry.scan(
                 rest[1:], boundary)
-            invocations.append((word, entry['run'], operands, given,
+            invocations.append((word, entry.run, operands, given,
                                 positions))
             continue
-        if not isinstance(entry, tuple):
+        if entry.fused is not None:
             # fused: scanned and executed together, last (stage
             # separation inside is its own business)
-            return invocations, ('fused', word, entry, rest[1:])
-        scan_command, run_command = entry
+            return invocations, ('fused', word, entry.fused, rest[1:])
         boundary = resolvable_words()
-        operands, given, rest, positions = scan_command(
+        operands, given, rest, positions = entry.scan(
             rest[1:], boundary or None)
-        invocations.append((word, run_command, operands, given,
+        invocations.append((word, entry.run, operands, given,
                             positions))
 
     if len(stack) > 1 and not stack[-1]['entered']:
         # a parent was named but its set never got a command: the
-        # set's default command (a (scan, run) pair) fills in, or
-        # the line is an error
-        d = stack[-1].get('default')
+        # set's default command (a Command) fills in, or it's an error
+        d = stack[-1]['command'].default
         if d is None:
-            err = UsageError("no command specified.",
-                             stack[-1]['usage'])
-            get = stack[-1].get('get_callable')
-            if get is not None:
-                err.callable = get()
-                err.want_listing = True
-            raise err
-        scan_d, run_d = d
-        operands, given, _, positions = scan_d([], None)
-        invocations.append((None, run_d, operands, given, positions))
+            raise tag(UsageError("no command specified.",
+                                 stack[-1]['command'].usage), stack[-1])
+        operands, given, _, positions = d.scan([], None)
+        invocations.append((None, d.run, operands, given, positions))
     return invocations, None
 
 

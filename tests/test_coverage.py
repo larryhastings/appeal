@@ -2355,7 +2355,10 @@ def test_emit_command_set_refusals():
     shared = build_plan(fa, name='go')
     source, _ = emit_command_set({'go': shared, 'run': shared})
     assert source.count('def run_go(') == 1
-    assert source.count('(scan_go, run_go)') == 2
+    # one Command object, referenced under both words (aliases free)
+    assert source.count('_CMD_go = Command(') == 1
+    assert source.count("'go': _CMD_go") == 1
+    assert source.count("'run': _CMD_go") == 1
     try:
         emit_command_set({'a': build_plan(fa, name='a'),
                           'b': build_plan(fb, name='b')},
