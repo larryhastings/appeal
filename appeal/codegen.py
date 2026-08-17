@@ -103,7 +103,8 @@ def _ident(name):
 
 class _Emitter:
     def __init__(self, plan, refs=None, fill_names=None, templates=None, stylesheet=None,
-                 boundary='saturation', max_columns=79, symbol=None):
+                 boundary='saturation', max_columns=79, symbol=None,
+                 compiled=False):
         # refs and fill_names may be shared across the emitters of
         # a command set, so converters common to several commands
         # keep one name (and one rendering) in the combined source.
@@ -141,7 +142,14 @@ class _Emitter:
         self.sibling = frozenset(getattr(plan, 'sibling_keys', ()) or ())
         self.sibling_parents = tuple(
             getattr(plan, 'sibling_parents', ()) or ())
-        self.usage_const = f'_USAGE_{self.symbol}'
+        # compiled (precompiled-module) mode bakes NO help/usage
+        # text: the usage handed to parse_tokens/check_count/convert
+        # is the literal None (the wrapped scan/run tag the error
+        # with its command; full Appeal renders it), and -h raises
+        # _CompiledHelp instead of printing a baked page.
+        self.compiled = compiled
+        self.usage_const = ('None' if compiled
+                            else f'_USAGE_{self.symbol}')
 
     def line(self, s=''):
         self.lines.append(s)
@@ -775,7 +783,10 @@ class _Emitter:
         help_keys = help_option_strings(plan) if command_split is None else ()
         for s in help_keys:
             table_items.append(f"{s!r}: ('--help', 'flag')")
-        self.constant(self.usage_const, repr(plan.usage()))
+        if not self.compiled:
+            # compiled mode: usage_const is the literal None (nothing
+            # baked); errors carry the command, not the usage text
+            self.constant(self.usage_const, repr(plan.usage()))
         self.constant(options_const, '{%s}' % ', '.join(table_items))
 
         if plan.binds is not None and plan.constructs is not None:
@@ -946,7 +957,14 @@ class _Emitter:
         # code) and the command itself
         self.line(f'def run_{self.symbol}(operands, given, positions=None, '
                   f'env=None):')
-        if help_keys:
+        if help_keys and self.compiled:
+            # a precompiled module bakes no page: -h raises the help
+            # signal tagged with THIS command; full Appeal renders it
+            # live (command_name reads the impl slot, bound by the
+            # shim--None for a command with no function to bind)
+            self.line(f"    if given.pop('--help', False):")
+            self.line(f'        raise _CompiledHelp({command_name or None})')
+        elif help_keys:
             # compiled means the documentation too: the whole
             # Markdown pipeline runs at BUILD time (parse, style,
             # layout--big's half), and the page bakes as pieces;
@@ -1074,6 +1092,18 @@ class _Emitter:
             self.line(f'    return run_{self.symbol}(operands, given, positions), rest')
         self.line()
 
+        if self.compiled and command_name:
+            # tag any help-rendering error from either stage with
+            # this command--the deepest command wins.  The lambda
+            # reads the impl slot live (bound after module exec);
+            # the dispatcher table, emitted later, captures the
+            # wrapped names.
+            self.line(f'scan_{self.symbol} = _tag_errors('
+                      f'scan_{self.symbol}, lambda: {command_name})')
+            self.line(f'run_{self.symbol} = _tag_errors('
+                      f'run_{self.symbol}, lambda: {command_name})')
+            self.line()
+
     def emit_completion_table(self):
         """
         The command's completion table, as a source literal: plain
@@ -1128,12 +1158,14 @@ class _Emitter:
         return source, self.refs
 
 
-def emit(plan, templates=None, stylesheet=None, max_columns=79):
+def emit(plan, templates=None, stylesheet=None, max_columns=79,
+         compiled=False):
     """
     Generate the parser source for a plan.  Returns (source, refs).
+    compiled=True mutes all baked help/usage (precompiled modules).
     """
     return _Emitter(plan, templates=templates, stylesheet=stylesheet,
-                    max_columns=max_columns).emit()
+                    max_columns=max_columns, compiled=compiled).emit()
 
 
 def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
@@ -1191,7 +1223,7 @@ def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
     return parse
 
 
-def emit_command_set(commands, global_plan=None, prog=None, templates=None, stylesheet=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None):
+def emit_command_set(commands, global_plan=None, prog=None, templates=None, stylesheet=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None, compiled=False):
     """
     Generate the source for a multi-command program: one parse
     function per command, an optional global-command parse function
@@ -1240,7 +1272,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         # the same-named command takes the number.
         emitter = _Emitter(global_plan, refs, fill_names,
                            max_columns=max_columns,
-                           symbol=sym(global_plan))
+                           symbol=sym(global_plan), compiled=compiled)
         split = (global_plan.minimum, global_plan.maximum, command_words)
         chunks.append(emitter.emit(command_split=split)[0])
     emitted = set()
@@ -1250,7 +1282,8 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         emitted.add(id(plan))
         emitter = _Emitter(plan, refs, fill_names, templates=templates,
                            stylesheet=stylesheet, boundary=boundary,
-                           max_columns=max_columns, symbol=sym(plan))
+                           max_columns=max_columns, symbol=sym(plan),
+                           compiled=compiled)
         chunks.append(emitter.emit()[0])
     for word, plan in commands.items():
         emit_one(plan, boundary='flexible' if word in subs
@@ -1286,15 +1319,21 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         for w, plan in sub_plans.items():
             emit_one(plan, boundary='flexible' if w in subs
                      else 'saturation')
-        sub_entries = [(w, summary(p.callable))
-                       for w, p in sub_plans.items()]
-        # auto_help=True: the facade's nested listing shows the
-        # help row (cycling pops `help` up to the root handler)
-        sub_corpus = command_set_corpus(parent_plan, sub_entries,
-                                        help)
-        sub_usage = listing_pieces(
-            command_set_usage(parent_word, parent_plan), sub_corpus,
-            templates or default_template)
+        if compiled:
+            # a precompiled module bakes no listing (docstrings and
+            # all): full Appeal renders it when the nested set is
+            # asked for help
+            sub_usage = None
+        else:
+            sub_entries = [(w, summary(p.callable))
+                           for w, p in sub_plans.items()]
+            # auto_help=True: the facade's nested listing shows the
+            # help row (cycling pops `help` up to the root handler)
+            sub_corpus = command_set_corpus(parent_plan, sub_entries,
+                                            help)
+            sub_usage = listing_pieces(
+                command_set_usage(parent_word, parent_plan), sub_corpus,
+                templates or default_template)
         sub_table = ', '.join(
             (f'{w!r}: _SET_{sym(p)}' if w in subs
              else f'{w!r}: (scan_{sym(p)}, run_{sym(p)})')
@@ -1306,6 +1345,17 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             d_literal = f"(scan_{sym(d_plan)}, run_{sym(d_plan)})"
         else:
             d_literal = 'None'
+        # compiled sets bake no usage; instead each nested set names
+        # its PARENT callable, so a "no command"/"unknown command"
+        # error under it renders that parent's listing live
+        callable_item = ''
+        if compiled:
+            slot = next((name for name, obj in refs.objects.items()
+                         if obj is parent_plan.callable), None)
+            if slot is not None:
+                # a getter, not the value: the slot is bound live by
+                # the shim after module exec
+                callable_item = f"'get_callable': (lambda: {slot}), "
         sub_lines.append(
             f"_SET_{sym(parent_plan)} = "
             f"{{'scan': scan_{sym(parent_plan)}, "
@@ -1314,21 +1364,28 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             f"'repeat': {sub_repeat.get(parent_word, False)!r}, "
             f"'words': frozenset(({sub_words},)), "
             f"'usage': {sub_usage!r}, "
+            f"{callable_item}"
             f"'default': {d_literal}}}")
 
-    entries = [(word, summary(plan.callable)) for word, plan in commands.items()]
-    display_global = (None if global_plan is not None
-                      and getattr(global_plan.callable,
-                                  'appeal_precommand', False)
-                      else global_plan)
-    usage_line = command_set_usage(prog or 'program', display_global)
-    corpus = command_set_corpus(global_plan, entries, auto_help, doc=doc,
-                                auto_version=auto_version)
-    usage = listing_pieces(usage_line, corpus, templates)
-    page_pieces = help_page_pieces(usage_line, corpus, templates)
-    pieces_name = refs.add('_HELP_command_set', page_pieces,
-                           dedupe=False)
-    sheet_name = refs.add('_SHEET_command_set', stylesheet, dedupe=False)
+    if compiled:
+        # a precompiled module bakes no set page/listing/usage
+        # (docstrings and all): full Appeal renders them live
+        usage = usage_line = None
+        pieces_name = sheet_name = None
+    else:
+        entries = [(word, summary(plan.callable)) for word, plan in commands.items()]
+        display_global = (None if global_plan is not None
+                          and getattr(global_plan.callable,
+                                      'appeal_precommand', False)
+                          else global_plan)
+        usage_line = command_set_usage(prog or 'program', display_global)
+        corpus = command_set_corpus(global_plan, entries, auto_help, doc=doc,
+                                    auto_version=auto_version)
+        usage = listing_pieces(usage_line, corpus, templates)
+        page_pieces = help_page_pieces(usage_line, corpus, templates)
+        pieces_name = refs.add('_HELP_command_set', page_pieces,
+                               dedupe=False)
+        sheet_name = refs.add('_SHEET_command_set', stylesheet, dedupe=False)
     globals_name = (f'(scan_{sym(global_plan)}, run_{sym(global_plan)})'
                     if global_plan is not None else 'None')
     table = ', '.join(
@@ -1362,22 +1419,36 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
              if global_plan is not None else 'None'),
             global_plan.minimum if global_plan is not None else 0,
             auto_help, repeat))
-    lines = sub_lines + [f'_USAGE_command_set = {usage!r}',
-             f'_USAGE_LINE_command_set = {usage_line!r}',
-             f'def _COMPLETE_command_set():\n'
-             f'    return {set_table}', '']
+    # the usage argument the dispatcher/errors carry: baked pieces
+    # in-process, the literal None in a compiled module (which bakes
+    # no usage--the tagged command drives full Appeal instead)
+    set_usage = 'None' if compiled else '_USAGE_command_set'
+    lines = list(sub_lines)
+    if not compiled:
+        lines += [f'_USAGE_command_set = {usage!r}',
+                  f'_USAGE_LINE_command_set = {usage_line!r}']
+    lines += [f'def _COMPLETE_command_set():\n'
+              f'    return {set_table}', '']
     # two listing surfaces (matching the in-process facade):
     # set-level --help and bare `help` print the FULL set page;
     # a bare command line prints the TERSE listing--usage and
-    # the Commands table, no prose (orientation, not a manual)
-    listing_stmt = (f"print(render_baked_help({pieces_name}, "
-                    f"margin=help_margin({max_columns!r}), "
-                    f"file=sys.stdout, "
-                    f"stylesheet={sheet_name}), end='')")
-    terse_stmt = (f"print(render_baked_help(_USAGE_command_set, "
-                  f"margin=help_margin({max_columns!r}), "
-                  f"file=sys.stdout, "
-                  f"stylesheet={sheet_name}), end='')")
+    # the Commands table, no prose (orientation, not a manual).
+    # compiled mode bakes neither: both raise the help signal
+    # (tagged root--None) and full Appeal renders the listing.
+    if compiled:
+        # requested help exits 0; the terse listing a bare line
+        # falls through to exits 1 (v1: no command ran)
+        listing_stmt = 'raise _CompiledHelp(None, 0)'
+        terse_stmt = 'raise _CompiledHelp(None, 1)'
+    else:
+        listing_stmt = (f"print(render_baked_help({pieces_name}, "
+                        f"margin=help_margin({max_columns!r}), "
+                        f"file=sys.stdout, "
+                        f"stylesheet={sheet_name}), end='')")
+        terse_stmt = (f"print(render_baked_help(_USAGE_command_set, "
+                      f"margin=help_margin({max_columns!r}), "
+                      f"file=sys.stdout, "
+                      f"stylesheet={sheet_name}), end='')")
     if auto_version:
         table += ", 'version': parse_version"
         lines.extend([
@@ -1385,7 +1456,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             'def parse_version(argv):',
             '    if argv:',
             '        raise UsageError("version takes no arguments", '
-            '_USAGE_command_set)',
+            f'{set_usage})',
             '    print(_VERSION)',
             '',
             ])
@@ -1412,13 +1483,20 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             '    if entry is None:',
             '        raise UsageError(f"unknown command {argv[0]!r}"',
             '                         f"{did_you_mean(argv[0], _COMMANDS)}",',
-            '                         _USAGE_command_set)',
+            f'                         {set_usage})',
             '    if isinstance(entry, dict):',
+            ] + ([
+            '        # a nested set: drive its parent -h, which raises',
+            '        # the help signal tagged with the parent command',
+            "        operands, given, rest, positions = entry['scan'](['--help'])",
+            "        return entry['run'](operands, given, positions)",
+            ] if compiled else [
             '        # a nested set: its listing, baked pieces,',
             '        # finished at the real margin',
             f"        print(render_baked_help(entry['usage'], "
             f"margin=help_margin({max_columns!r})), end='')",
             '        return',
+            ]) + [
             '    scan, run = entry',
             "    operands, given, rest, positions = scan(['--help'])",
             '    return run(operands, given, positions)',
@@ -1466,7 +1544,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
     else:
         default_arg = ''
     body.append(f'    return run_command_set(argv, {globals_name}, '
-                f'_COMMANDS, _USAGE_command_set, '
+                f'_COMMANDS, {set_usage}, '
                 f'{default_arg}'
                 f'repeat={repeat!r}, words=_COMMAND_WORDS, '
                 f'listing=_print_terse_listing)')
@@ -1726,16 +1804,13 @@ _RUNTIME_IMPORTS = (
     'scopes_for', 'sibling_scopes', 'scoped_forces', 'scoped_window',
     'scoped_resolve', 'scoped_rewind', 'scoped_next',
     'run_command_set', 'UsageError',
+    # compiled modules bake no help/usage: -h and the DataError
+    # family route to full Appeal through these
+    '_CompiledHelp', '_tag_errors',
     # the converter vocabulary (recipe factories, rendered bare)
     'optional', 'split', 'validate', 'validate_range', 'counter',
     'file', 'accumulator', 'mapping',
     )
-
-# render stays OFF the fast path: help/errors import it only when
-# they actually fire, through these thin wrappers baked into the
-# compiled module.
-_RENDER_LAZY = ('render_help_page', 'render_baked_help', 'help_margin')
-
 
 def _harvest_paths(fn, decorations=None):
     """
@@ -1880,17 +1955,6 @@ def _runtime_import_block():
     return f'from appeal.runtime import (\n    {names},\n    )\n'
 
 
-def _render_lazy_block():
-    "Thin wrappers that keep render off the compiled fast path."
-    parts = []
-    for name in _RENDER_LAZY:
-        parts.append(
-            f'def {name}(*args, **kwargs):\n'
-            f'    from appeal.render import {name} as _f\n'
-            f'    return _f(*args, **kwargs)\n')
-    return '\n'.join(parts)
-
-
 def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
                             templates=None, repeat=False, subs=None,
                             sub_repeat=None, default=None,
@@ -1929,13 +1993,13 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
             repeat, subs or None, sub_repeat or None,
             version=version, max_columns=max_columns, help=help,
             default=default, sub_defaults=sub_defaults or None,
-            doc=doc)
+            doc=doc, compiled=True)
         entry = 'parse_command_set'
         complete = '_COMPLETE_command_set'
         description = f'command-line parsing ({", ".join(commands)})'
     else:
         source, refs = emit(global_plan, templates=templates,
-                            max_columns=max_columns)
+                            max_columns=max_columns, compiled=True)
         symbol = _ident(global_plan.name)
         entry = f'parse_{symbol}'
         complete = f'_COMPLETE_{symbol}'
@@ -2019,8 +2083,11 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
         f'#     except ImportError:\n'
         f'#         import appeal\n'
         f'#\n'
-        f'# Imports appeal.runtime (the stdlib-only core); render '
-        f'stays lazy.\n'
+        f'# Imports appeal.runtime (the stdlib-only core) and bakes '
+        f'ONLY\n'
+        f'# parse+dispatch--no help or usage text.  Help and errors '
+        f'render\n'
+        f'# live through full Appeal (imported only when one fires).\n'
         f'# Regenerate rather than edit.\n'
         )
 
@@ -2029,8 +2096,9 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
     parts.append('import sys\n')
     parts.append(_runtime_import_block())
     parts.append('from appeal.precompile import compiled_appeal\n')
-    parts.append('\n# ---- render, kept off the fast path ----\n')
-    parts.append(_render_lazy_block())
+    # a compiled module bakes no display text: help AND errors render
+    # live through full Appeal, so render never appears on any path
+    # here (not even lazily).
     parts.append('\n# ---- your program (bound live at registration) ----\n')
     if imports:
         parts.append('\n'.join(imports) + '\n')

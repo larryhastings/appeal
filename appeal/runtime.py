@@ -56,6 +56,58 @@ class AppealError(Exception):
     (the command line was fine)--main() prints `error: ...` and
     exits 1.
     """
+    # A precompiled module bakes no help/usage text: when an error
+    # that renders help (the DataError family) crosses a command's
+    # parse/convert body, that body tags this with the live command
+    # function, so the compiled shim can hand it to full Appeal for
+    # rendering (precompile.py; ruled 2026-08-17).  None everywhere
+    # else--the in-process paths ignore it.
+    callable = None
+    # set by the set dispatcher's "no command"/"unknown command"
+    # errors: render the tagged command's set LISTING, not its own
+    # usage line (a class command can be both a constructor and a
+    # parent, so the callable alone can't disambiguate).
+    want_listing = False
+
+
+class _CompiledHelp(Exception):
+    """
+    Not an error--a control-flow signal a COMPILED parser raises
+    when the line asks for help (-h/--help, or a bare set line
+    wanting the listing).  It carries the command function whose
+    page to show (None = the program root: a bare app's page or a
+    set's listing).  The compiled shim catches it and renders live
+    through full Appeal; it never escapes run_main.  In-process
+    parsers never raise it.
+
+    code is the exit status to return after rendering: 0 for
+    requested help (-h/--help/help), 1 for the listing a BARE set
+    line falls through to (orientation, not a diagnostic--v1's
+    nonzero exit for "no command ran").
+    """
+    def __init__(self, callable=None, code=0):
+        super().__init__()
+        self.callable = callable
+        self.code = code
+
+
+def _tag_errors(fn, get_callable):
+    """
+    Wrap a compiled parser's scan/run so any help-rendering error
+    (the DataError family) crossing it gets tagged with the command
+    it belongs to--the deepest command wins (`if e.callable is
+    None`).  get_callable reads the impl SLOT live: the shim binds
+    it after module exec, so a closure over the value would capture
+    the None placeholder.  Other exceptions pass through untouched.
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except DataError as e:
+            if e.callable is None:
+                e.callable = get_callable()
+            raise
+    return wrapper
 
 
 class ConfigurationError(AppealError):
@@ -502,8 +554,17 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
                 break
         if entry is None:
             tail = did_you_mean(word, resolvable_words())
-            raise UsageError(f"unknown command {word!r}{tail}",
+            err = UsageError(f"unknown command {word!r}{tail}",
                              stack[-1]['usage'])
+            # compiled sets bake no usage: the frame carries a getter
+            # for its parent's (live-bound) callable, so the shim
+            # renders that set's LISTING (want_listing), not the
+            # parent command's own usage line
+            get = stack[-1].get('get_callable')
+            if get is not None:
+                err.callable = get()
+                err.want_listing = True
+            raise err
         while stack[-1] is not target:
             stack.pop()              # re-base at the resolved set
         target['entered'] = True
@@ -514,6 +575,7 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
                           'repeat': entry['repeat'],
                           'words': entry['words'],
                           'usage': entry['usage'],
+                          'get_callable': entry.get('get_callable'),
                           'default': entry.get('default'),
                           'entered': False})
             boundary = resolvable_words()
@@ -539,7 +601,13 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
         # the line is an error
         d = stack[-1].get('default')
         if d is None:
-            raise UsageError("no command specified.", stack[-1]['usage'])
+            err = UsageError("no command specified.",
+                             stack[-1]['usage'])
+            get = stack[-1].get('get_callable')
+            if get is not None:
+                err.callable = get()
+                err.want_listing = True
+            raise err
         scan_d, run_d = d
         operands, given, _, positions = scan_d([], None)
         invocations.append((None, run_d, operands, given, positions))
@@ -1143,7 +1211,7 @@ def check_count(n, minimum, maximum, valid_counts, usage=None, what=None,
 
 
 def run_main(parse, args=None, stylesheet=None, completion=None,
-             errors=None, version=None, margin=79):
+             errors=None, version=None, margin=79, fallback=None):
     """
     The main() driver for a generated parser: parse and execute,
     print errors the polite way, return the exit code.  stylesheet
@@ -1212,6 +1280,12 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
 
     try:
         result = parse(list(args))
+    except _CompiledHelp as h:
+        # a COMPILED parser asked for help (it bakes none): full
+        # Appeal renders it live, from the tagged command function
+        if fallback is None:
+            raise           # never raised in-process--a real bug
+        return fallback.on_help(h)
     except SystemExit as e:
         # the precommand exits (program metadata: -V, ...);
         # main()'s contract is to RETURN the exit code.  A non-int,
@@ -1232,6 +1306,12 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         # processor, not an environment
         return 130
     except AppealDataError as e:
+        if fallback is not None:
+            # a COMPILED parser: it baked no usage, and tagged the
+            # error with the command that owns it--full Appeal
+            # renders the message + usage live (never re-running the
+            # line: the command may already have had side effects)
+            return fallback.on_usage(e)
         print(f"{error_prefix()} {e}", file=error_stream())
         if e.usage:
             print_usage(e.usage)
@@ -1273,11 +1353,13 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
 
 ##
 ## Fingerprints (Larry's design, 2026-08-09): a compiled
-## standalone module identifies--and polices--the functions
-## handed to its decorators by fingerprint.  Everything the
-## grammar and the baked help were derived from is in here:
-## parameter shape, defaults, annotations, the docstring, and
-## the @option/@parameter attributes.  Hand-rolled from the
+## module identifies--and polices--the functions handed to its
+## decorators by fingerprint.  Everything the PARSING and
+## DISPATCH were derived from is in here: parameter shape,
+## defaults, annotations, and the @option/@parameter
+## attributes--but NOT the docstring (it feeds only help, which
+## a compiled module renders live; ruled 2026-08-17).
+## Hand-rolled from the
 ## function and code objects--inspect.signature knows nothing
 ## these don't, and it's slow.
 ##
@@ -1381,8 +1463,9 @@ def fingerprint(fn, seen=frozenset()):
     Mirrors inspect.Signature--the function's NAME is not identity
     (rename freely; only the shape matters).  A converter parameter
     nests its OWN fingerprint, recursively.  A class converter's
-    parameters live on __init__ (the host); its docstring stays its
-    own.
+    parameters live on __init__ (the host).  The docstring is NOT
+    part of identity (ruled 2026-08-17): it feeds help, not parse
+    or dispatch, and a compiled module bakes no help.
     """
     host = _params_host(fn)
     if host is None:
@@ -1394,14 +1477,11 @@ def fingerprint(fn, seen=frozenset()):
     named = code.co_argcount + code.co_kwonlyargcount
     annotations = getattr(host, '__annotations__', None) or {}
     owner_module = getattr(fn, '__module__', None)
-    doc = getattr(fn, '__doc__', None)
-    if doc is not None:
-        # the help was baked from it, so it's identity--but the
-        # spec doesn't need a second copy of the text (Larry's
-        # ruling: hash it, as bytes)
-        import hashlib
-        doc = hashlib.blake2b(doc.encode('utf-8'),
-                              digest_size=16).digest()
+    # the docstring is deliberately NOT here (ruled 2026-08-17): the
+    # fingerprint confirms the compiled PARSING and DISPATCH are
+    # current, and the docstring feeds neither--a compiled module
+    # bakes no help text, rendering it live through full Appeal.
+    # (Dropping it also keeps hashlib off the cold path.)
     inner = seen | {id(fn)}
     return (
         code.co_argcount,
@@ -1413,7 +1493,6 @@ def fingerprint(fn, seen=frozenset()):
         _stable_repr(getattr(host, '__kwdefaults__', None)),
         tuple(sorted((name, _converter_fingerprint(value, owner_module, inner))
                      for name, value in annotations.items())),
-        doc,
     )
 
 

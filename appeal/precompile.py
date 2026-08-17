@@ -28,8 +28,9 @@
 import sys
 
 from .runtime import (
-    AppealConfigurationError, fingerprint, decoration_fingerprint,
-    resolve_fingerprint_path, _stable_repr, run_main,
+    AppealConfigurationError, UsageError, fingerprint,
+    decoration_fingerprint, resolve_fingerprint_path, _stable_repr,
+    run_main,
     )
 
 _OPTION_UNSET = object()      # option(default=...) omitted marker
@@ -325,12 +326,169 @@ def compiled_appeal(spec, namespace):
             completion = ((namespace[complete](), spec['program'])
                           if complete and complete in namespace
                           else None)
+            # fallback=self: the compiled parser bakes no help/usage,
+            # so run_main routes help (_CompiledHelp) and the error
+            # family (tagged with their command) back here, and we
+            # render them LIVE through full Appeal
             sys.exit(run_main(parse, args,
                               stylesheet=self.stylesheet,
                               completion=completion,
                               errors=self.errors,
                               version=spec['config'].get('version_value'),
-                              margin=spec['config']['margin_value']))
+                              margin=spec['config']['margin_value'],
+                              fallback=self))
+
+        # -- rendering help and errors live, through full Appeal ---
+        # the compiled module holds no help text; on a help request
+        # or a help-rendering error, we reconstruct the real Appeal
+        # from the registrations we recorded and let IT render.  We
+        # never re-run the command line (a command may already have
+        # had side effects before a later one failed).
+
+        def _rebuild(self):
+            "A real appeal.Appeal, replayed from the recorded registrations."
+            import appeal
+            from inspect import Parameter
+            cfg = spec['config'].get('rebuild', {})
+            real = appeal.Appeal(
+                name=cfg.get('name'),
+                version=cfg.get('version'),
+                repeat=cfg.get('repeat', False),
+                margin=cfg.get('margin', 79),
+                positional_argument_usage_format=cfg.get(
+                    'positional_argument_usage_format'),
+                doc=cfg.get('doc'),
+                stylesheet=self.stylesheet)
+
+            def bound(entry):
+                b = self._bound.get(id(entry)) if entry else None
+                return b[2] if b else None
+
+            def replay_decorations(fn):
+                for param, decls in self._option_overrides.get(
+                        fn, {}).items():
+                    for decl in decls:
+                        kw = {}
+                        ann = decl['annotation']
+                        kw['annotation'] = (None if ann is Parameter.empty
+                                            else ann)
+                        if decl['default'] is not Parameter.empty:
+                            kw['default'] = decl['default']
+                        real.option(param, *decl['strings'], **kw)(fn)
+                for param, usage in self._parameter_usage.get(
+                        fn, {}).items():
+                    real.parameter(param, usage=usage)(fn)
+
+            def register(fn, decorator):
+                if fn is not None:
+                    decorator(fn)
+                    replay_decorations(fn)
+
+            register(bound(spec['global']), real.global_command())
+            register(bound(spec.get('default')), real.default_command())
+
+            def walk(node, table):
+                for word, entry in table.items():
+                    child = node.command(word)
+                    register(bound(entry), child)
+                    register(bound(entry.get('default')),
+                             child.default_command())
+                    if entry.get('commands'):
+                        walk(child, entry['commands'])
+            walk(real, spec['commands'])
+            return real
+
+        def _topic_for(self, fn):
+            "The help topic (word path) of a bound command function."
+            if fn is None:
+                return ''
+            for entry, label, bound in self._bound.values():
+                if bound is fn:
+                    # <global>/<default> are the program root
+                    return '' if label.startswith('<') else label
+            return ''
+
+        def on_help(self, signal):
+            real = self._rebuild()
+            real.help(self._topic_for(signal.callable))
+            # 0 for requested help; 1 for a bare set line's listing
+            return signal.code
+
+        def _command_usage(self, real, fn, want_listing):
+            "The usage of the reconstructed command whose callable is fn."
+            if fn is None:
+                return None
+            # match by IDENTITY (not word): finds the node even for a
+            # nested subcommand, and never trips bare-word ambiguity
+            def walk(node):
+                for word, child in node._children.items():
+                    if child._command_callable() is fn:
+                        return child, word
+                    hit = walk(child)
+                    if hit is not None:
+                        return hit
+                return None
+            found = walk(real)
+            if found is None:
+                return None
+            node, word = found
+            parent_plan = real._plan_for_node(node, word)
+            if not (node._children and want_listing):
+                # the command's OWN usage line--a plain command, or a
+                # parent that failed on its own operands/options (a
+                # class command is both a constructor and a parent)
+                return parent_plan.usage()
+            # a "no command"/"unknown command" error UNDER this set:
+            # its terse listing (usage line + the Commands table),
+            # exactly as emit_command_set bakes it
+            from .help import summary, command_set_corpus
+            from .plan import command_set_usage
+            from .render import listing_pieces
+            sub_entries = [(w, summary(c._command_callable()))
+                           for w, c in node._children.items()
+                           if c._command_callable() is not None]
+            # a nested set has no auto help/version row of its own
+            # (those live at the root)--auto_help=False
+            corpus = command_set_corpus(parent_plan, sub_entries,
+                                        False)
+            return listing_pieces(
+                command_set_usage(word, parent_plan), corpus,
+                real.templates)
+
+        def on_usage(self, e):
+            real = self._rebuild()
+            usage = self._command_usage(real, e.callable,
+                                        getattr(e, 'want_listing', False))
+            if usage is None:
+                table = real._table()
+                if not table:
+                    # a bare app: the global command's own usage
+                    usage = real.plan.usage()
+                else:
+                    # the program root of a set: the terse listing
+                    from .help import summary, command_set_corpus
+                    from .plan import command_set_usage
+                    from .render import listing_pieces
+                    entries = [(w, summary(c))
+                               for w, c in table.items()]
+                    corpus = command_set_corpus(
+                        real.global_plan, entries, False,
+                        auto_version=False)
+                    usage = listing_pieces(
+                        command_set_usage(real._prog(),
+                                          real._display_global()),
+                        corpus, real.templates)
+            # reuse run_main's error formatting (colorized prefix +
+            # usage) by handing it a stub that just re-raises--no
+            # re-parse, no re-dispatch
+            message = str(e)
+
+            def _reraise(_argv):
+                raise UsageError(message, usage, param=e.param)
+            return run_main(_reraise, [],
+                            stylesheet=self.stylesheet,
+                            errors=self.errors,
+                            margin=spec['config']['margin_value'])
 
         # -- the honest refusals ---------------------------------
 

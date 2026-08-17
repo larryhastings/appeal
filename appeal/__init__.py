@@ -2243,6 +2243,19 @@ class Appeal:
         }
         if self.version is not None:
             config['version_value'] = str(self.version)
+        # the ACTUAL knob values the shim replays when it
+        # reconstructs a real Appeal to render help/errors (the
+        # keys above are _stable_repr strings, for staleness
+        # comparison only)
+        config['rebuild'] = {
+            'name': self.name,
+            'version': self.version,
+            'repeat': self.repeat,
+            'margin': self.margin,
+            'positional_argument_usage_format':
+                self.positional_argument_usage_format,
+            'doc': self.doc,
+        }
         if words:
             text = emit_precompiled_module(
                 {w: self.plan_for(w) for w in words},

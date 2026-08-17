@@ -4435,6 +4435,156 @@ def test_precompile_roundtrip_and_drift():
         assert 'annotations' in r.stderr, r.stderr
 
 
+# a set with a nested subcommand and a class command, all with
+# docstrings--the compiled module bakes NONE of it; help and errors
+# render live through full Appeal (ruled 2026-08-17).
+_PRECOMPILE_SET_DEFS = (
+    'def build(appeal):\n'
+    "    app = appeal.Appeal(name='tool', version='9.9')\n"
+    '    @app.command()\n'
+    '    def add(a: int, b: int):\n'
+    '        "Add two integers."\n'
+    '        print("sum", a + b)\n'
+    '    @app.command()\n'
+    '    def db():\n'
+    '        "Database operations."\n'
+    '    @app.subcommand("db")\n'
+    '    def push(name, *, force=False):\n'
+    '        "Push a ref to the remote."\n'
+    '        print("push", name, force)\n'
+    '    return app\n')
+
+
+def test_precompile_bakes_no_display_and_renders_live():
+    # the compiled module holds ONLY parse+dispatch: no help pages,
+    # no summaries, no usage line, not even a render import.  Every
+    # help request and every error is rendered by importing full
+    # Appeal and using it live (never re-running the line), so the
+    # output is byte-identical to the un-compiled program.
+    with tempfile.TemporaryDirectory() as d:
+        defs_path = os.path.join(d, 'tooldefs.py')
+        with open(defs_path, 'wt', encoding='utf-8') as f:
+            f.write(_PRECOMPILE_SET_DEFS)
+        compiled_path = os.path.join(d, 'compiled.py')
+        live_path = os.path.join(d, 'live.py')
+        run_path = os.path.join(d, 'run.py')
+        with open(live_path, 'wt', encoding='utf-8') as f:
+            f.write('import appeal, tooldefs\n'
+                    'tooldefs.build(appeal).main()\n')
+        with open(run_path, 'wt', encoding='utf-8') as f:
+            f.write('try:\n'
+                    '    import compiled as appeal\n'
+                    'except ImportError:\n'
+                    '    import appeal\n'
+                    'import tooldefs\n'
+                    'tooldefs.build(appeal).main()\n')
+        env = dict(os.environ)
+        env['PYTHONPATH'] = os.pathsep.join((os.getcwd(), d))
+
+        gen_path = os.path.join(d, 'gen.py')
+        with open(gen_path, 'wt', encoding='utf-8') as f:
+            f.write('import appeal, tooldefs\n'
+                    'tooldefs.build(appeal).precompile(path=%r)\n'
+                    % compiled_path)
+        r = sub_run([sys.executable, gen_path], env=env)
+        assert r.returncode == 0, r.stderr
+
+        # nothing human-facing is baked: no docstrings, no usage or
+        # help constants, no render import anywhere
+        text = open(compiled_path, encoding='utf-8').read()
+        for needle in ('Add two integers', 'Database operations',
+                       'Push a ref', '_USAGE_', '_HELP_', '_SHEET_',
+                       'appeal.render', 'render_baked_help'):
+            assert needle not in text, (needle, 'leaked into compiled')
+
+        # byte-for-byte parity with the un-compiled program across
+        # help, the listing, nested help, and every error shape
+        cases = [
+            [],                       # bare set line: listing, exit 1
+            ['--help'],               # set help
+            ['add', '3', '4'],        # success
+            ['add', '3'],             # too few operands
+            ['add', 'x', 'y'],        # bad converter
+            ['add', '-h'],            # command help
+            ['db', 'push', 'origin'], # nested success
+            ['db', 'push'],           # nested error
+            ['db', '-h'],             # nested parent help
+            ['help', 'db'],           # help for a nested parent
+            ['nope'],                 # unknown command
+            ['--version'],            # program metadata
+        ]
+        for argv in cases:
+            live = sub_run([sys.executable, live_path, *argv], env=env)
+            comp = sub_run([sys.executable, run_path, *argv], env=env)
+            assert (live.stdout, live.stderr, live.returncode) == (
+                comp.stdout, comp.stderr, comp.returncode), (
+                    argv, 'LIVE', live.stdout, live.stderr,
+                    live.returncode, 'COMPILED', comp.stdout,
+                    comp.stderr, comp.returncode)
+
+
+# a class command is BOTH a constructor (its own operands) and a
+# parent (its subcommands): the compiled shim must tell a
+# constructor error (render the command's usage line) from a "no
+# command"/"unknown command" error (render its listing) even though
+# both are tagged with the same callable (ruled 2026-08-17).
+_PRECOMPILE_CLASS_DEFS = (
+    'def build(appeal):\n'
+    "    app = appeal.Appeal(name='cls')\n"
+    "    @app.command(name='db')\n"
+    '    class Db:\n'
+    '        "Database commands."\n'
+    '        def __init__(self, label):\n'
+    '            self.label = label\n'
+    "        @app.subcommand('db')\n"
+    '        def wipe(self):\n'
+    '            "Wipe the database."\n'
+    '            print("wipe", self.label)\n'
+    '    return app\n')
+
+
+def test_precompile_class_command_parity():
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, 'clsdefs.py'), 'wt',
+                  encoding='utf-8') as f:
+            f.write(_PRECOMPILE_CLASS_DEFS)
+        compiled_path = os.path.join(d, 'compiled.py')
+        live_path = os.path.join(d, 'live.py')
+        run_path = os.path.join(d, 'run.py')
+        with open(live_path, 'wt', encoding='utf-8') as f:
+            f.write('import appeal, clsdefs\n'
+                    'clsdefs.build(appeal).main()\n')
+        with open(run_path, 'wt', encoding='utf-8') as f:
+            f.write('try:\n    import compiled as appeal\n'
+                    'except ImportError:\n    import appeal\n'
+                    'import clsdefs\nclsdefs.build(appeal).main()\n')
+        env = dict(os.environ)
+        env['PYTHONPATH'] = os.pathsep.join((os.getcwd(), d))
+        with open(os.path.join(d, 'gen.py'), 'wt',
+                  encoding='utf-8') as f:
+            f.write('import appeal, clsdefs\n'
+                    'clsdefs.build(appeal).precompile(path=%r)\n'
+                    % compiled_path)
+        r = sub_run([sys.executable, os.path.join(d, 'gen.py')],
+                    env=env)
+        assert r.returncode == 0, r.stderr
+        cases = [
+            ['db', 'main', 'wipe'],   # construct + method dispatch
+            ['db'],                   # constructor error: usage LINE
+            ['db', 'main'],           # no subcommand: the LISTING
+            ['db', 'main', 'nope'],   # unknown subcommand: the LISTING
+            ['db', '-h'],             # the parent's help
+            ['--help'],               # the root
+        ]
+        for argv in cases:
+            live = sub_run([sys.executable, live_path, *argv], env=env)
+            comp = sub_run([sys.executable, run_path, *argv], env=env)
+            assert (live.stdout, live.stderr, live.returncode) == (
+                comp.stdout, comp.stderr, comp.returncode), (
+                    argv, live.stdout, live.stderr, live.returncode,
+                    '||', comp.stdout, comp.stderr, comp.returncode)
+
+
 def test_repl():
     # §8.9: read a line, parse it like a command line, loop
     with tempfile.TemporaryDirectory() as d:
