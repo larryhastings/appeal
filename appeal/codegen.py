@@ -798,10 +798,17 @@ class _Emitter:
         """
         if self.is_global:
             return False
-        if (self.gated or self.scoped or self.sibling
-                or self.sibling_parents or self.reserves
-                or getattr(self, 'need_dry', False)):
+        if (self.scoped or self.sibling or self.sibling_parents
+                or self.reserves):
             return False
+        # self.gated is FINE here: a required converter group is a
+        # barrier, but the gate rule only ever guards a group's inner
+        # options and windowed options--and this path admits neither
+        # (the per-slot subtree_option_keys check below rejects any
+        # group carrying options, windowed groups included).  So the
+        # gate is vacuous: emit_slots sets it, the option-free fills
+        # ignore it.  need_dry's remaining triggers (inner options,
+        # windowed) are caught there too, so it isn't consulted.
         if plan.pre_plan is not None:
             return False
         c = plan.callable
@@ -940,6 +947,12 @@ class _Emitter:
             # a converter-group operand: its fill takes a `given`, but
             # with no inner options it never reads it--an empty one does
             self.line(f'    given = {{}}')
+        if self.gated:
+            # a required group is a barrier; emit_slots stamps `gate` as
+            # it is fed.  Nothing checks it here (the gate only guards
+            # inner/windowed options, which this path excludes), but the
+            # option-free fills still take it, so it must exist.
+            self.line(f'    gate = 0')
         self.emit_slots(plan, 4)
 
         args = []
