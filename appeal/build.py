@@ -18,7 +18,8 @@ import inspect
 
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
 from .runtime import (
-    AppealConfigurationError, Option, is_multioption, is_option,
+    AppealConfigurationError, Option, accumulator, is_multioption,
+    is_option,
     )
 
 
@@ -677,6 +678,20 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
     if annotation is not inspect.Parameter.empty:
         annotation = dereference_annotated(annotation)
         _refuse_bare_factory(annotation, f"option {name!r}")
+        # list[T] is the modern sugar for the accumulator MultiOption
+        # (both are a repeatable option that appends to a list, one
+        # operand per occurrence--identical semantics).  The MultiOption
+        # works on every Python Appeal supports; the [T] subscript on
+        # builtin list is comparatively new.  Rewrite the sugar to the
+        # MultiOption so there is ONE list-accumulating mechanism (the
+        # fold path below), never two.
+        # (dict[K, V] is NOT rewritten to mapping: they have different
+        # command-line syntax--dict[K, V] is one KEY=VALUE token, the
+        # mapping MultiOption is space-separated KEY VALUE operands.)
+        _origin = _generic_origin(annotation)
+        if _origin is list:
+            (_t,) = annotation.__args__
+            annotation = accumulator[_t]
     context = f"option {name!r}"
 
     def finish(rule):
@@ -745,12 +760,9 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
                 strings, name, kind='value', converters=converters,
                 default=default))
 
-    if origin is list:
-        (t,) = annotation.__args__
-        return finish(OptionRule(
-            strings, name, kind='accumulate',
-            converters=(_leaf_callable(t, context),), default=default))
-
+    # list[T] was rewritten to accumulator up top, so it never reaches
+    # here as a bare generic--the fold path handled it.  dict[K, V]
+    # keeps its own KEY=VALUE collector (distinct syntax from mapping).
     if origin is dict:
         k, v = annotation.__args__
         return finish(OptionRule(
