@@ -490,6 +490,182 @@ def parse_tokens(argv, options, usage=None, command_split=None,
     return operands, given
 
 
+def tokenize(argv, options, usage=None, command_split=None):
+    """
+    STAGE 1 of the two-stage parser (Larry's design): recognize the
+    command line into a uniform, ordered IR--a list of tuples.  Each
+    tuple is `(marker, *raw_strings)`:
+
+      * marker '' is an operand RUN: ('', 'a', 'b')--consecutive
+        operands merge into one tuple, so the interleaving with
+        options is preserved (that ordering is what makes
+        last-wins and window-binding fall out in stage 2).
+      * marker is a canonical option KEY otherwise, followed by its
+        raw oparg strings: ('--units', 'C'), ('--span', '3', '4'),
+        or a bare ('--verbose',) for a flag.  Aliases normalize to
+        the key (the option table's entry[0]); `-abc` splits into
+        one tuple per flag; '=', attachment, and '--' are resolved
+        here.  Nothing is converted--stage 2 dispatches on the
+        marker and converts, knowing each key's kind.
+
+    options is the same table parse_tokens uses.  With command_split
+    = (minimum, maximum, command_words), returns (tokens, rest) for
+    a global command scanned ahead of a subcommand; otherwise returns
+    tokens.  This is stage 1 ONLY--no `given`, no occurrence lists,
+    no conversion; that tangle moves into the generated stage-2 walk.
+    """
+    tokens = []
+    it = iter(argv)
+    force_positional = False
+
+    def operand(text):
+        # merge into the current run, or start one
+        if tokens and tokens[-1][0] == '':
+            tokens[-1] = tokens[-1] + (text,)
+        else:
+            tokens.append(('', text))
+
+    def option(key, values):
+        tokens.append((key,) + tuple(values))
+
+    def n_operands():
+        # operands seen so far--the window position an option lands
+        # at (the interleaving carries what `positions` used to)
+        return sum(len(t) - 1 for t in tokens if t[0] == '')
+
+    def arity(entry, base):
+        if base in ('fold', 'fold1', 'group'):
+            return entry[2], (entry[3] if len(entry) > 3 else entry[2])
+        n = entry[2] if len(entry) > 2 else 1
+        return n, n
+
+    def flag_value(name, text):
+        if text == 'true':
+            return 'true'
+        if text == 'false':
+            return 'false'
+        raise UsageError(
+            f"option {name!r}: '=' value must be 'true' or "
+            f"'false', not {text!r}", usage)
+
+    def greedy(name, minimum, maximum):
+        nonlocal force_positional
+        values = []
+        for value in it:
+            if value == '--' and len(values) >= minimum:
+                force_positional = True
+                break
+            values.append(value)
+            if len(values) == maximum:
+                break
+        if len(values) < minimum:
+            raise UsageError(
+                f"option {name!r} requires "
+                f"{'a value' if minimum == 1 else f'{minimum} values'}",
+                usage)
+        return values
+
+    def split_here(token):
+        if command_split is None:
+            return None
+        minimum, maximum, command_words = command_split
+        n = n_operands()
+        if ((maximum is not None and n >= maximum)
+                or (n >= minimum and token in command_words)):
+            return [token] + list(it)
+        return None
+
+    for token in it:
+        if force_positional or (not token.startswith('-')) or (token == '-'):
+            rest = split_here(token)
+            if rest is not None:
+                return tokens, rest
+            operand(token)
+            continue
+
+        if token == '--':
+            force_positional = True
+            continue
+
+        if token.startswith('--'):
+            name_part, equals, value_part = token.partition('=')
+            entry = options.get(name_part)
+            if entry is None:
+                tail = did_you_mean(
+                    name_part,
+                    [s for s in options if s.startswith('--')])
+                raise UsageError(
+                    f"unknown option {name_part!r}{tail}", usage)
+            key, kind = entry[0], entry[1]
+            base = kind[2:] if kind[:2] in ('w:', 's:') else kind
+            minimum, maximum = arity(entry, base)
+            if base in ('flag', 'nullary') or maximum == 0:
+                if equals:
+                    if base != 'flag':
+                        raise UsageError(
+                            f"option {name_part!r} doesn't take a value",
+                            usage)
+                    option(key, (flag_value(name_part, value_part),))
+                    continue
+                option(key, ())
+                continue
+            if equals:
+                if maximum > 1:
+                    counts = (f'{maximum} values' if minimum == maximum
+                              else f'up to {maximum} values')
+                    raise UsageError(
+                        f"option {name_part!r} takes {counts} "
+                        f"and can't use '='", usage)
+                option(key, (value_part,))
+                continue
+            option(key, greedy(name_part, minimum, maximum))
+            continue
+
+        if token[1].isdigit() and ('-' + token[1]) not in options:
+            rest = split_here(token)
+            if rest is not None:
+                return tokens, rest
+            operand(token)
+            continue
+
+        chars = token[1:]
+        for index, c in enumerate(chars):
+            entry = options.get('-' + c)
+            if entry is None:
+                raise UsageError(f"unknown option {'-' + c!r}", usage)
+            key, kind = entry[0], entry[1]
+            base = kind[2:] if kind[:2] in ('w:', 's:') else kind
+            minimum, maximum = arity(entry, base)
+            if base in ('flag', 'nullary') or maximum == 0:
+                rest = chars[index + 1:]
+                if rest.startswith('='):
+                    if base != 'flag':
+                        raise UsageError(
+                            f"option {'-' + c!r} doesn't take a value",
+                            usage)
+                    option(key, (flag_value('-' + c, rest[1:]),))
+                    break
+                option(key, ())
+                continue
+            rest = chars[index + 1:]
+            if rest:
+                if maximum == 1:
+                    if rest.startswith('='):
+                        rest = rest[1:]
+                    option(key, (rest,))
+                    break
+                counts = (f'{maximum} values' if minimum == maximum
+                          else f'up to {maximum} values')
+                raise UsageError(
+                    f"option {'-' + c!r} takes {counts} and "
+                    f"must be last in a bundle", usage)
+            option(key, greedy('-' + c, minimum, maximum))
+
+    if command_split is not None:
+        return tokens, []
+    return tokens
+
+
 class Command:
     """
     One node of a program's command tree--the single dispatch record

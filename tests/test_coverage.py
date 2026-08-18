@@ -2418,6 +2418,38 @@ def test_runtime_token_and_set_edges():
     assert rc == 'ran-default'
 
 
+def test_tokenize_ir():
+    # stage 1 of the two-stage parser: argv -> the uniform token IR
+    # (marker '' is an operand run; else a canonical option key + raw
+    # opargs).  Aliases normalize, clusters split, '='/attached/'--'
+    # resolve, and the operand/option INTERLEAVING is preserved.
+    from appeal.runtime import tokenize
+    opts = {
+        '-a': ('--apple', 'flag', True), '--apple': ('--apple', 'flag', True),
+        '-b': ('--banana', 'flag', True), '--banana': ('--banana', 'flag', True),
+        '-v': ('--verbose', 'flag', True), '--verbose': ('--verbose', 'flag', True),
+        '-t': ('--tag', 'multi'), '--tag': ('--tag', 'multi'),
+        '-u': ('--units', 'value'), '--units': ('--units', 'value'),
+        '--span': ('--span', 'value', 2),
+    }
+    T = lambda argv: tokenize(argv, opts)
+    assert T(['-ab']) == [('--apple',), ('--banana',)]        # cluster
+    assert T(['a', '-v', 'b', 'c']) == [
+        ('', 'a'), ('--verbose',), ('', 'b', 'c')]            # interleave
+    assert T(['--units=C', 'f']) == [('--units', 'C'), ('', 'f')]
+    assert T(['-uC']) == [('--units', 'C')]                   # attached
+    assert T(['--span', '3', '4']) == [('--span', '3', '4')]  # multi-arg
+    assert T(['--', '-v']) == [('', '-v')]                    # terminator
+    assert T(['-5', 'a']) == [('', '-5', 'a')]                # negative
+    # repeats keep command-line ORDER (this is what makes last-wins
+    # fall out of the stage-2 walk--no occurrence lists)
+    assert T(['-t', 'x', '-t', 'y']) == [('--tag', 'x'), ('--tag', 'y')]
+    # command_split: the global's slice, then the rest from the word
+    toks, rest = tokenize(['1', 'go', 'z'], {},
+                          command_split=(1, 1, frozenset({'go'})))
+    assert toks == [('', '1')] and rest == ['go', 'z']
+
+
 def test_scoped_strict_repeats():
     # a scoped StrictOption: at most once per window, both rungs
     class At(appeal.StrictOption):
