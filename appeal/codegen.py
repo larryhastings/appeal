@@ -809,16 +809,18 @@ class _Emitter:
                 or getattr(c, 'appeal_stock', False)
                 or plan.binds is not None or plan.constructs is not None):
             return False
-        # operands: every slot a plain leaf or a bare *args (repeat
-        # Terminal)--no converter groups, no absorbing slots, no
-        # trailing
+        # operands: a plain leaf, a bare *args, or a converter GROUP
+        # whose whole subtree declares no options (its fill is then
+        # given-free--an empty given satisfies the signature).  No
+        # trailing, no absorbing (*args-containing) group.
         for slot in plan.slots:
             if slot.trailing:
                 return False
-            if not isinstance(slot.child, Terminal):
-                return False
             if not slot.repeat and slot.count_options is None:
-                return False
+                return False   # an absorbing slot (its converter has *args)
+            if not isinstance(slot.child, Terminal):
+                if subtree_option_keys(slot.child):
+                    return False   # a group with inner options: still mature
         # options: only the flat kinds, one rule per parameter, no
         # **kwargs delivery, value converters simple leaves
         seen = set()
@@ -934,6 +936,10 @@ class _Emitter:
         self.line(f'    n = len(operands)')
         self.line(f'    i = 0')
         self.line(f'    remaining = n')
+        if any(not isinstance(s.child, Terminal) for s in plan.slots):
+            # a converter-group operand: its fill takes a `given`, but
+            # with no inner options it never reads it--an empty one does
+            self.line(f'    given = {{}}')
         self.emit_slots(plan, 4)
 
         args = []
