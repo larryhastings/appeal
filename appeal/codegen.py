@@ -828,9 +828,6 @@ class _Emitter:
                 return False
             if not slot.repeat and slot.count_options is None:
                 return False   # an absorbing slot (its converter has *args)
-            if (slot.repeat and not isinstance(slot.child, Terminal)
-                    and subtree_option_keys(slot.child)):
-                return False   # windowed: a *args group with inner options
         # options: only the flat kinds, one rule per parameter, no
         # **kwargs delivery, value converters simple leaves
         seen = set()
