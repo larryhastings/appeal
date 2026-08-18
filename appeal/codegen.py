@@ -124,7 +124,7 @@ def _ident(name):
 class _Emitter:
     def __init__(self, plan, refs=None, fill_names=None, templates=None, stylesheet=None,
                  boundary='saturation', max_columns=79, symbol=None,
-                 compiled=False):
+                 compiled=False, command_meta=None):
         # refs and fill_names may be shared across the emitters of
         # a command set, so converters common to several commands
         # keep one name (and one rendering) in the combined source.
@@ -168,6 +168,9 @@ class _Emitter:
         # with its command; full Appeal renders it), and -h raises
         # _CompiledHelp instead of printing a baked page.
         self.compiled = compiled
+        # id(callable) -> (fingerprint, options, arguments), baked into
+        # the Command constructor in a compiled module (empty in-process)
+        self.command_meta = command_meta or {}
         self.usage_const = ('None' if compiled
                             else f'_USAGE_{self.symbol}')
 
@@ -1133,11 +1136,20 @@ class _Emitter:
         # the Command object: the shared dispatch record.  In-process
         # its callable is the bound ref; compiled, the shim fills it.
         # Error-tagging lives in the dispatcher now (it holds the
-        # Command), so there are no per-command wrappers.
+        # Command), so there are no per-command wrappers.  A compiled
+        # module bakes the drift fingerprints right into the
+        # constructor (converters fold on later--they need ref names).
         callable_kw = ('' if self.cmd_callable_ref is None
                        else f', callable={self.cmd_callable_ref}')
+        meta = self.command_meta.get(id(plan.callable))
+        meta_kw = ''
+        if meta is not None:
+            fp, opts, args_ = meta
+            meta_kw = (f', fingerprint={fp!r}, options={opts!r}'
+                       f', arguments={args_!r}')
         self.line(f'{cmd_obj} = Command({plan.name!r}{callable_kw}, '
-                  f'scan=scan_{self.symbol}, run=run_{self.symbol})')
+                  f'scan=scan_{self.symbol}, run=run_{self.symbol}'
+                  f'{meta_kw})')
 
         # both stages, glued: the fused convenience, handing run its
         # Command (the dispatcher does this for a set; this is the
@@ -1207,13 +1219,14 @@ class _Emitter:
 
 
 def emit(plan, templates=None, stylesheet=None, max_columns=79,
-         compiled=False):
+         compiled=False, command_meta=None):
     """
     Generate the parser source for a plan.  Returns (source, refs).
     compiled=True mutes all baked help/usage (precompiled modules).
     """
     return _Emitter(plan, templates=templates, stylesheet=stylesheet,
-                    max_columns=max_columns, compiled=compiled).emit()
+                    max_columns=max_columns, compiled=compiled,
+                    command_meta=command_meta).emit()
 
 
 def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
@@ -1272,7 +1285,7 @@ def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
     return parse
 
 
-def emit_command_set(commands, global_plan=None, prog=None, templates=None, stylesheet=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None, compiled=False):
+def emit_command_set(commands, global_plan=None, prog=None, templates=None, stylesheet=None, repeat=False, subs=None, sub_repeat=None, version=None, max_columns=79, help=True, default=None, sub_defaults=None, doc=None, compiled=False, command_meta=None):
     """
     Generate the source for a multi-command program: one parse
     function per command, an optional global-command parse function
@@ -1321,7 +1334,8 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         # the same-named command takes the number.
         emitter = _Emitter(global_plan, refs, fill_names,
                            max_columns=max_columns,
-                           symbol=sym(global_plan), compiled=compiled)
+                           symbol=sym(global_plan), compiled=compiled,
+                           command_meta=command_meta)
         split = (global_plan.minimum, global_plan.maximum, command_words)
         chunks.append(emitter.emit(command_split=split)[0])
     emitted = set()
@@ -1332,7 +1346,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         emitter = _Emitter(plan, refs, fill_names, templates=templates,
                            stylesheet=stylesheet, boundary=boundary,
                            max_columns=max_columns, symbol=sym(plan),
-                           compiled=compiled)
+                           compiled=compiled, command_meta=command_meta)
         chunks.append(emitter.emit()[0])
     for word, plan in commands.items():
         emit_one(plan, boundary='flexible' if word in subs
@@ -2019,24 +2033,10 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
     subs = subs or {}
     sub_repeat = sub_repeat or {}
     sub_defaults = sub_defaults or {}
-    if commands:
-        source, refs = emit_command_set(
-            commands, global_plan, prog, templates, None,
-            repeat, subs or None, sub_repeat or None,
-            version=version, max_columns=max_columns, help=help,
-            default=default, sub_defaults=sub_defaults or None,
-            doc=doc, compiled=True)
-        entry = 'parse_command_set'
-        complete = '_COMPLETE_command_set'
-        description = f'command-line parsing ({", ".join(commands)})'
-    else:
-        source, refs = emit(global_plan, templates=templates,
-                            max_columns=max_columns, compiled=True)
-        symbol = _ident(global_plan.name)
-        entry = f'parse_{symbol}'
-        complete = f'_COMPLETE_{symbol}'
-        description = f'command-line parsing for {global_plan.name!r}'
-
+    # the drift data, computed UP FRONT straight from the plans--so
+    # fingerprint/options/arguments go INTO each Command's constructor.
+    # (converters need the emitted ref names, so they're folded on
+    # afterward--the one field with a genuine ordering dependency.)
     impls = {}
     harvests = []
     fingerprints = {}
@@ -2064,25 +2064,48 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
     if user_global:
         note_fn(('global',), global_plan.callable)
 
+    # id(callable) -> (fingerprint, options, arguments), handed to the
+    # emitter so it bakes them into `Command(...)` (a fn shared by
+    # several words has one fingerprint)
+    command_meta = {}
+    for key, fn in key_fn.items():
+        opts, args_ = decor_fingerprints[key]
+        command_meta[id(fn)] = (fingerprints[key], opts, args_)
+
+    if commands:
+        source, refs = emit_command_set(
+            commands, global_plan, prog, templates, None,
+            repeat, subs or None, sub_repeat or None,
+            version=version, max_columns=max_columns, help=help,
+            default=default, sub_defaults=sub_defaults or None,
+            doc=doc, compiled=True, command_meta=command_meta)
+        entry = 'parse_command_set'
+        complete = '_COMPLETE_command_set'
+        description = f'command-line parsing ({", ".join(commands)})'
+    else:
+        source, refs = emit(global_plan, templates=templates,
+                            max_columns=max_columns, compiled=True,
+                            command_meta=command_meta)
+        symbol = _ident(global_plan.name)
+        entry = f'parse_{symbol}'
+        complete = f'_COMPLETE_{symbol}'
+        description = f'command-line parsing for {global_plan.name!r}'
+
     imports, constants, slots, impl_names, ref_specs = _classify_refs(
         refs, impls, harvests, decorations)
 
     # THE FOLD (ruled 2026-08-17): the verification data lives ON the
-    # Command objects, not in a parallel spec tree.  For each command
-    # we emit `_CMD_X.fingerprint = ... ; .options = ... ; .arguments
-    # = ... ; .converters = ...`, and the shim walks the runtime
-    # Command tree (skipping the fused version/help, which carry no
-    # fingerprint).  options/arguments are the @option and @argument
-    # decoration digests (decoration_fingerprint's two halves).
+    # Command objects, not in a parallel spec tree.  fingerprint /
+    # options / arguments are baked into the constructor (above, via
+    # command_meta); only .converters is folded on here, because it
+    # needs the ref names assigned during emission.  The shim walks
+    # the runtime Command tree (skipping the fused version/help, which
+    # carry no fingerprint).
     fold_lines = []
     for key, fn in key_fn.items():
         cn = refs.command_names.get(id(fn))
         if cn is None:
             continue        # a nested-class construct: no callable
-        opts, args_ = decor_fingerprints[key]
-        fold_lines.append(f'{cn}.fingerprint = {fingerprints[key]!r}')
-        fold_lines.append(f'{cn}.options = {opts!r}')
-        fold_lines.append(f'{cn}.arguments = {args_!r}')
         fold_lines.append(
             f'{cn}.converters = {tuple(sorted(ref_specs[key]))!r}')
 

@@ -87,7 +87,7 @@ def _fill_option_value(operands, i, remaining, given):
 def scan_weather(argv, command_words=None):
     # the global command: its arguments end at the first
     # operand naming a command (or at the maximum)
-    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'report', 'forecast', 'help', 'version', 'sync'})))
+    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'version', 'help', 'report', 'sync', 'forecast'})))
     if given.pop('-V', False) or given.pop('--version', False):
         print('1.0')
         raise SystemExit(0)
@@ -158,7 +158,7 @@ def run_report(operands, given, positions=None, env=None, command=None):
     verbose = given.get('--verbose', False)
     return command.callable(city, units=units, verbose=verbose)
 
-_CMD_report = Command('report', scan=scan_report, run=run_report)
+_CMD_report = Command('report', scan=scan_report, run=run_report, fingerprint=(1, 0, 2, False, False, ('city', 'units', 'verbose'), 'None', "{'units': 'C', 'verbose': False}", ()), options=(), arguments=())
 def parse_report(argv):
     operands, given, rest, positions = scan_report(argv)
     return run_report(operands, given, positions, command=_CMD_report)
@@ -202,7 +202,7 @@ def run_forecast(operands, given, positions=None, env=None, command=None):
         days = 3
     return command.callable(city, days)
 
-_CMD_forecast = Command('forecast', scan=scan_forecast, run=run_forecast)
+_CMD_forecast = Command('forecast', scan=scan_forecast, run=run_forecast, fingerprint=(2, 0, 0, False, False, ('city', 'days'), '(3,)', 'None', (('days', 'builtins.int'),)), options=(), arguments=())
 def parse_forecast(argv):
     operands, given, rest, positions = scan_forecast(argv)
     return run_forecast(operands, given, positions, command=_CMD_forecast)
@@ -248,7 +248,7 @@ def run_sync(operands, given, positions=None, env=None, command=None):
         mode = convert_value((_validate,), given['--mode'], 'mode', None)
     return command.callable(source, verbose=verbose, tag=tag, mode=mode)
 
-_CMD_sync = Command('sync', scan=scan_sync, run=run_sync)
+_CMD_sync = Command('sync', scan=scan_sync, run=run_sync, fingerprint=(1, 0, 3, False, False, ('source', 'verbose', 'tag', 'mode'), 'None', "{'verbose': 0, 'tag': (), 'mode': 'safe'}", (('mode', "recipe:call:validate:('fast', 'safe'):{'type': <class 'str'>}"), ('source', "recipe:call:split:(':',):{}"), ('tag', "recipe:subscript:accumulator:(<class 'str'>,):{}"), ('verbose', "recipe:call:counter:():{'max': None, 'step': 1}"))), options=(), arguments=())
 def parse_sync(argv):
     operands, given, rest, positions = scan_sync(argv)
     return run_sync(operands, given, positions, command=_CMD_sync)
@@ -305,17 +305,8 @@ def parse_command_set(argv):
 
 # ---- drift fingerprints, folded onto the Commands ----
 
-_CMD_report.fingerprint = (1, 0, 2, False, False, ('city', 'units', 'verbose'), 'None', "{'units': 'C', 'verbose': False}", ())
-_CMD_report.options = ()
-_CMD_report.arguments = ()
 _CMD_report.converters = ()
-_CMD_forecast.fingerprint = (2, 0, 0, False, False, ('city', 'days'), '(3,)', 'None', (('days', 'builtins.int'),))
-_CMD_forecast.options = ()
-_CMD_forecast.arguments = ()
 _CMD_forecast.converters = ()
-_CMD_sync.fingerprint = (1, 0, 3, False, False, ('source', 'verbose', 'tag', 'mode'), 'None', "{'verbose': 0, 'tag': (), 'mode': 'safe'}", (('mode', "recipe:call:validate:('fast', 'safe'):{'type': <class 'str'>}"), ('source', "recipe:call:split:(':',):{}"), ('tag', "recipe:subscript:accumulator:(<class 'str'>,):{}"), ('verbose', "recipe:call:counter:():{'max': None, 'step': 1}")))
-_CMD_sync.options = ()
-_CMD_sync.arguments = ()
 _CMD_sync.converters = ()
 
 
