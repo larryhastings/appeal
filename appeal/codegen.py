@@ -787,7 +787,7 @@ class _Emitter:
 
     # ---- the eager path (stage-2 walk) ----
 
-    _EAGER_KINDS = frozenset(('flag', 'nullary', 'value'))
+    _EAGER_KINDS = frozenset(('flag', 'nullary', 'value', 'fold', 'fold1'))
 
     def _eager_ok(self, plan, command_split):
         """
@@ -896,10 +896,16 @@ class _Emitter:
                       f"stylesheet={sheet_name}), end='')")
             self.line(f'        return')
 
-        # initialize each option's parameter to its default
+        # initialize each option's parameter to its default; a fold
+        # (a MultiOption--list[T]/dict[K,V]/StrictOption) also gets an
+        # occurrence list, gathered in stream order then reduced once
+        # the walk is done (absent -> the default, never an empty fold)
+        folds = [o for o in plan.options if o.kind in ('fold', 'fold1')]
         for o in plan.options:
             self.line(f'    {_local(o.name)} = '
                       f'{self.default_expr(o.name, o.default)}')
+        for o in folds:
+            self.line(f'    _occ_{_ident(o.name)} = []')
 
         if plan.options:
             self.line(f'    for _t in tokens:')
@@ -910,6 +916,19 @@ class _Emitter:
                 first = False
                 self.line(f'        {head} _k == {o.key!r}:')
                 self._emit_eager_option(o, usage)
+
+        # reduce each fold's gathered occurrences (init<default>,
+        # option() per occurrence in order, render)
+        for o in folds:
+            occ = f'_occ_{_ident(o.name)}'
+            self.line(f'    if {occ}:')
+            cls_name = self.leaf_expr(o.converters[0])
+            convs = ', '.join(self.leaf_expr(c) for c in o.converters[1:])
+            comma = ',' if len(o.converters) == 2 else ''
+            self.line(f'        {_local(o.name)} = fold({cls_name}, '
+                      f'({convs}{comma}), {occ}, '
+                      f'{self.default_expr(o.name, o.default)}, '
+                      f'{o.name!r}, {usage})')
 
         # ---- operands: gather done; size + convert (the automaton) ----
         self.line(f'    n = len(operands)')
@@ -963,11 +982,20 @@ class _Emitter:
         elif o.kind == 'nullary':
             conv = self.leaf_expr(o.converters[0])
             self.line(f'            {local} = {conv}()')
-        else:   # value
+        elif o.kind == 'value':
             conv = self.leaf_expr(o.converters[0])
             # every occurrence converts (validate-all); last wins
             self.line(f'            {local} = convert({conv}, _t[1], '
                       f'{o.name!r}, {usage})')
+        elif o.kind == 'fold1':
+            # a StrictOption: at most once, by declaration
+            occ = f'_occ_{_ident(o.name)}'
+            self.line(f'            if {occ}:')
+            self.line(f'                raise UsageError(f"option '
+                      f'{o.key} specified more than once", {usage})')
+            self.line(f'            {occ}.append(_t[1:])')
+        else:   # fold: gather this occurrence's operands, in order
+            self.line(f'            _occ_{_ident(o.name)}.append(_t[1:])')
 
     def emit_parse_function(self, command_split=None):
         plan = self.plan
