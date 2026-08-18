@@ -797,39 +797,32 @@ class _Emitter:
         Richer plans fall through to the mature two-pass emitter.
         """
         if self.is_global:
-            return False
-        if (self.scoped or self.sibling or self.sibling_parents
-                or self.reserves):
-            return False
-        # self.gated is FINE here: a required converter group is a
-        # barrier, but the gate rule only ever guards a group's inner
-        # options and windowed options--and this path admits neither
-        # (the per-slot subtree_option_keys check below rejects any
-        # group carrying options, windowed groups included).  So the
-        # gate is vacuous: emit_slots sets it, the option-free fills
-        # ignore it.  need_dry's remaining triggers (inner options,
-        # windowed) are caught there too, so it isn't consulted.
+            return False        # config layering injects into `given`
+        if self.reserves:
+            return False        # trailing operands: the reserve iterator
         if plan.pre_plan is not None:
-            return False
+            return False        # a precommand acts at scan (version/help)
         c = plan.callable
         if (getattr(c, 'appeal_precommand', False)
                 or getattr(c, 'appeal_stock', False)
                 or plan.binds is not None or plan.constructs is not None):
-            return False
-        # operands: a plain leaf, a bare *args, or a FIXED/OPTIONAL
-        # converter group.  A group's inner options are folded back
-        # into `given` (fold_ir) for its fill.  Excluded: trailing, an
-        # absorbing (*args-containing) group, and a WINDOWED group (a
-        # *args group binding options per instance--position-entangled,
-        # still mature).  Scoped/sibling inner options are refused up
-        # top (self.scoped / self.sibling).
+            return False        # class/method commands, stock precommand
+        # operands: a plain leaf, a bare *args, or a converter group.
+        # No trailing, no absorbing (*args-containing) group.
         for slot in plan.slots:
             if slot.trailing:
                 return False
             if not slot.repeat and slot.count_options is None:
                 return False   # an absorbing slot (its converter has *args)
-        # options: only the flat kinds, one rule per parameter, no
-        # **kwargs delivery, value converters simple leaves
+        # scoped/sibling options bind by stream-order/announcement--
+        # inherently gather-then-place.  Those plans reconstruct `given`
+        # (fold_ir) and resolve through the full emit_options + scopes
+        # machinery, which handles every option shape (group options,
+        # shared parameters, **kwargs); no per-option gate needed.
+        if self.scoped or self.sibling or self.sibling_parents:
+            return True
+        # the on-sight path is stricter: flat kinds only, one rule per
+        # parameter, no **kwargs, no converter-group options
         seen = set()
         for o in plan.options:
             if o.kwargs_delivered or o.child is not None:
@@ -849,12 +842,12 @@ class _Emitter:
         group_slots = [s for s in plan.slots
                        if not isinstance(s.child, Terminal)]
         has_inner = any(subtree_option_keys(s.child) for s in group_slots)
-        # the structural walk (gate rule, group counts, "requires")
-        # must run at SCAN, before anything executes: a cycle validates
-        # every command before running any, and a positional error
-        # must outrank a later conversion error.  Needed exactly when
-        # mature's need_dry would fire for an eager-eligible plan.
-        need_dry = self.gated or has_inner
+        # the structural walk (gate rule, group counts, "requires",
+        # scoped placement) must run at SCAN, before anything executes:
+        # a cycle validates every command before running any, and a
+        # positional error must outrank a later conversion error.
+        # Needed exactly when mature's need_dry would fire here.
+        need_dry = self.gated or self.scoped or has_inner
 
         # ---- stage 1: scan yields the IR (no user code) ----
         self.line(f'def scan_{self.symbol}(argv, command_words=None):')
@@ -893,16 +886,25 @@ class _Emitter:
                       f'{usage})')
         if need_dry:
             # reconstruct given + positions and dry-walk the operands:
-            # the gate rule and group count/legality checks raise HERE,
-            # before any command in a cycle runs and before conversion
+            # the gate rule, group count/legality, and scoped placement
+            # raise HERE, before any command in a cycle runs and before
+            # conversion
             self.line(f'    positions = {{}}')
             self.line(f'    _dry, given = fold_ir(tokens, {options_const}, '
                       f'{usage}, positions)')
+            if self.scoped:
+                own = self.scoped_own_literal(plan)
+                self.line(f'    scopes = scopes_for('
+                          f'{self.scoped_specs_literal()}, given)')
+                self.line(f"    scoped_window(scopes, {own}, 'in', 0)")
             self.line(f'    i = 0')
             self.line(f'    remaining = len(operands)')
             if self.gated:
                 self.line(f'    gate = 0')
             self.emit_slots(plan, 4, dry=True)
+            if self.scoped:
+                self.line(f"    scoped_window(scopes, {own}, 'out', i)")
+                self.line(f'    scoped_resolve(scopes, {usage})')
             self.line(f'    return operands, tokens, rest, positions')
         else:
             self.line(f'    return operands, tokens, rest, None')
@@ -928,72 +930,102 @@ class _Emitter:
                       f"stylesheet={sheet_name}), end='')")
             self.line(f'        return')
 
-        # initialize each option's parameter to its default; a fold
-        # (a MultiOption--list[T]/dict[K,V]/StrictOption) also gets an
-        # occurrence list, gathered in stream order then reduced once
-        # the walk is done (absent -> the default, never an empty fold)
-        folds = [o for o in plan.options if o.kind in ('fold', 'fold1')]
-        for o in plan.options:
-            self.line(f'    {_local(o.name)} = '
-                      f'{self.default_expr(o.name, o.default)}')
-        for o in folds:
-            self.line(f'    _occ_{_ident(o.name)} = []')
-
-        if plan.options:
-            self.line(f'    for _t in tokens:')
-            self.line(f'        _k = _t[0]')
-            first = True
-            for o in plan.options:
-                head = 'if' if first else 'elif'
-                first = False
-                self.line(f'        {head} _k == {o.key!r}:')
-                self._emit_eager_option(o, usage)
-
-        # reduce each fold's gathered occurrences (init<default>,
-        # option() per occurrence in order, render)
-        for o in folds:
-            occ = f'_occ_{_ident(o.name)}'
-            self.line(f'    if {occ}:')
-            cls_name = self.leaf_expr(o.converters[0])
-            convs = ', '.join(self.leaf_expr(c) for c in o.converters[1:])
-            comma = ',' if len(o.converters) == 2 else ''
-            self.line(f'        {_local(o.name)} = fold({cls_name}, '
-                      f'({convs}{comma}), {occ}, '
-                      f'{self.default_expr(o.name, o.default)}, '
-                      f'{o.name!r}, {usage})')
-
-        # ---- operands: gather done; size + convert (the automaton) ----
-        self.line(f'    n = len(operands)')
-        self.line(f'    i = 0')
-        self.line(f'    remaining = n')
-        if has_inner:
-            # a converter group's INNER options: fold them back into
-            # `given`, with `positions` for the gate.  The top plan's
-            # own options stay on-sight above; fold_ir gathers theirs
-            # too, harmlessly (those given entries go unread).
+        if self.scoped or self.sibling_parents:
+            # scoped/sibling options bind by stream-order/announcement--
+            # gather-then-place.  Reconstruct `given` and resolve through
+            # the full scopes + emit_options machinery (the same the
+            # mature emitter runs), fed by the IR instead of parse_tokens.
             self.line(f'    positions = {{}}')
             self.line(f'    _ops, given = fold_ir(tokens, {options_const}, '
                       f'{usage}, positions)')
-        elif group_slots:
-            # option-free group: its fill takes a `given` but never
-            # reads it--an empty one satisfies the signature
-            self.line(f'    given = {{}}')
-        if self.gated:
-            # a required group is a barrier; emit_slots stamps `gate` as
-            # it is fed.  Nothing checks it here (the gate only guards
-            # inner/windowed options, which this path excludes), but the
-            # option-free fills still take it, so it must exist.
-            self.line(f'    gate = 0')
-        self.emit_slots(plan, 4)
+            self.line(f'    n = len(operands)')
+            if self.sibling_parents:
+                first_key = self.sibling_parents[0][0]
+                (first,) = [o for o in plan.options if o.key == first_key]
+                self.line(f'    _sib, _sib_summon = sibling_scopes('
+                          f'{self.sibling_parents!r}, '
+                          f'{self.sibling_specs_literal()}, given, '
+                          f'positions or {{}}, {usage}, '
+                          f'summonable={(first.child.minimum == 0)!r})')
+            self.line(f'    i = 0')
+            self.line(f'    remaining = n')
+            if self.gated:
+                self.line(f'    gate = 0')
+            if self.scoped:
+                own = self.scoped_own_literal(plan)
+                self.line(f'    scopes = scopes_for('
+                          f'{self.scoped_specs_literal()}, given)')
+                self.line(f"    scoped_window(scopes, {own}, 'in', 0)")
+                if self.gated:
+                    self.line(f'    gate = 0')
+                self.emit_slots(plan, 4, dry=True)
+                self.line(f"    scoped_window(scopes, {own}, 'out', i)")
+                self.line(f'    scoped_resolve(scopes, {usage})')
+                self.line(f'    scoped_rewind(scopes)')
+                self.line(f'    i = 0')
+                self.line(f'    remaining = n')
+            self.emit_slots(plan, 4)
+            if self.scoped:
+                self.emit_scoped_pops(plan, '    ')
+            self.emit_options(plan, 4, legality=False)
+        else:
+            # ---- on-sight: convert each flat option as it is seen;
+            # a fold (MultiOption) gathers its occurrences then reduces
+            folds = [o for o in plan.options if o.kind in ('fold', 'fold1')]
+            for o in plan.options:
+                self.line(f'    {_local(o.name)} = '
+                          f'{self.default_expr(o.name, o.default)}')
+            for o in folds:
+                self.line(f'    _occ_{_ident(o.name)} = []')
+            if plan.options:
+                self.line(f'    for _t in tokens:')
+                self.line(f'        _k = _t[0]')
+                first = True
+                for o in plan.options:
+                    head = 'if' if first else 'elif'
+                    first = False
+                    self.line(f'        {head} _k == {o.key!r}:')
+                    self._emit_eager_option(o, usage)
+            for o in folds:
+                occ = f'_occ_{_ident(o.name)}'
+                self.line(f'    if {occ}:')
+                cls_name = self.leaf_expr(o.converters[0])
+                convs = ', '.join(self.leaf_expr(c)
+                                  for c in o.converters[1:])
+                comma = ',' if len(o.converters) == 2 else ''
+                self.line(f'        {_local(o.name)} = fold({cls_name}, '
+                          f'({convs}{comma}), {occ}, '
+                          f'{self.default_expr(o.name, o.default)}, '
+                          f'{o.name!r}, {usage})')
+            self.line(f'    n = len(operands)')
+            self.line(f'    i = 0')
+            self.line(f'    remaining = n')
+            if has_inner:
+                # a converter group's INNER options: fold them back into
+                # `given` for its fill (top options stayed on-sight)
+                self.line(f'    positions = {{}}')
+                self.line(f'    _ops, given = fold_ir(tokens, '
+                          f'{options_const}, {usage}, positions)')
+            elif group_slots:
+                # option-free group: its fill takes a `given` but never
+                # reads it--an empty one satisfies the signature
+                self.line(f'    given = {{}}')
+            if self.gated:
+                self.line(f'    gate = 0')
+            self.emit_slots(plan, 4)
 
+        # ---- the call (shared) ----
         args = []
         for slot in plan.slots:
             if slot.repeat:
                 args.append(f'*{_local(slot.name)}')
             else:
                 args.append(_local(slot.name))
-        for name in dict.fromkeys(o.name for o in plan.options):
+        for name in dict.fromkeys(o.name for o in plan.options
+                                   if not o.kwargs_delivered):
             args.append(f'{name}={_local(name)}')
+        if any(o.kwargs_delivered for o in plan.options):
+            args.append('**_extra')
         self.line(f'    return {command_name}({", ".join(args)})')
         self.line()
 
