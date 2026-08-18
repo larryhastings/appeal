@@ -36,7 +36,7 @@ from .runtime import (
     AppealConfigurationError, UsageError, Command, absorb_take,
     call_converter, convert,
     convert_value, fold,
-    parse_tokens, tokenize, check_count, scoped_forces, scoped_next,
+    parse_tokens, tokenize, fold_ir, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
     sibling_scopes,
     did_you_mean,
@@ -816,18 +816,21 @@ class _Emitter:
                 or getattr(c, 'appeal_stock', False)
                 or plan.binds is not None or plan.constructs is not None):
             return False
-        # operands: a plain leaf, a bare *args, or a converter GROUP
-        # whose whole subtree declares no options (its fill is then
-        # given-free--an empty given satisfies the signature).  No
-        # trailing, no absorbing (*args-containing) group.
+        # operands: a plain leaf, a bare *args, or a FIXED/OPTIONAL
+        # converter group.  A group's inner options are folded back
+        # into `given` (fold_ir) for its fill.  Excluded: trailing, an
+        # absorbing (*args-containing) group, and a WINDOWED group (a
+        # *args group binding options per instance--position-entangled,
+        # still mature).  Scoped/sibling inner options are refused up
+        # top (self.scoped / self.sibling).
         for slot in plan.slots:
             if slot.trailing:
                 return False
             if not slot.repeat and slot.count_options is None:
                 return False   # an absorbing slot (its converter has *args)
-            if not isinstance(slot.child, Terminal):
-                if subtree_option_keys(slot.child):
-                    return False   # a group with inner options: still mature
+            if (slot.repeat and not isinstance(slot.child, Terminal)
+                    and subtree_option_keys(slot.child)):
+                return False   # windowed: a *args group with inner options
         # options: only the flat kinds, one rule per parameter, no
         # **kwargs delivery, value converters simple leaves
         seen = set()
@@ -846,6 +849,15 @@ class _Emitter:
     def _emit_eager(self, plan, command_split, options_const, help_keys,
                     cmd_obj, command_name):
         usage = self.usage_const
+        group_slots = [s for s in plan.slots
+                       if not isinstance(s.child, Terminal)]
+        has_inner = any(subtree_option_keys(s.child) for s in group_slots)
+        # the structural walk (gate rule, group counts, "requires")
+        # must run at SCAN, before anything executes: a cycle validates
+        # every command before running any, and a positional error
+        # must outrank a later conversion error.  Needed exactly when
+        # mature's need_dry would fire for an eager-eligible plan.
+        need_dry = self.gated or has_inner
 
         # ---- stage 1: scan yields the IR (no user code) ----
         self.line(f'def scan_{self.symbol}(argv, command_words=None):')
@@ -882,7 +894,21 @@ class _Emitter:
             self.line(f'    check_count(len(operands), {plan.minimum}, '
                       f'{plan.maximum}, {set(sorted(plan.valid_counts))!r}, '
                       f'{usage})')
-        self.line(f'    return operands, tokens, rest, None')
+        if need_dry:
+            # reconstruct given + positions and dry-walk the operands:
+            # the gate rule and group count/legality checks raise HERE,
+            # before any command in a cycle runs and before conversion
+            self.line(f'    positions = {{}}')
+            self.line(f'    _dry, given = fold_ir(tokens, {options_const}, '
+                      f'{usage}, positions)')
+            self.line(f'    i = 0')
+            self.line(f'    remaining = len(operands)')
+            if self.gated:
+                self.line(f'    gate = 0')
+            self.emit_slots(plan, 4, dry=True)
+            self.line(f'    return operands, tokens, rest, positions')
+        else:
+            self.line(f'    return operands, tokens, rest, None')
         self.line()
 
         # ---- stage 2: run walks the IR, converting on sight ----
@@ -943,9 +969,17 @@ class _Emitter:
         self.line(f'    n = len(operands)')
         self.line(f'    i = 0')
         self.line(f'    remaining = n')
-        if any(not isinstance(s.child, Terminal) for s in plan.slots):
-            # a converter-group operand: its fill takes a `given`, but
-            # with no inner options it never reads it--an empty one does
+        if has_inner:
+            # a converter group's INNER options: fold them back into
+            # `given`, with `positions` for the gate.  The top plan's
+            # own options stay on-sight above; fold_ir gathers theirs
+            # too, harmlessly (those given entries go unread).
+            self.line(f'    positions = {{}}')
+            self.line(f'    _ops, given = fold_ir(tokens, {options_const}, '
+                      f'{usage}, positions)')
+        elif group_slots:
+            # option-free group: its fill takes a `given` but never
+            # reads it--an empty one satisfies the signature
             self.line(f'    given = {{}}')
         if self.gated:
             # a required group is a barrier; emit_slots stamps `gate` as
@@ -1492,6 +1526,7 @@ def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
     namespace = {
         'parse_tokens': parse_tokens,
         'tokenize': tokenize,
+        'fold_ir': fold_ir,
         'convert': convert,
         'fold': fold,
         'call_converter': call_converter,
@@ -1857,6 +1892,7 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, s
     namespace = {
         'parse_tokens': parse_tokens,
         'tokenize': tokenize,
+        'fold_ir': fold_ir,
         'convert': convert,
         'fold': fold,
         'call_converter': call_converter,
@@ -2084,7 +2120,7 @@ def _public_module(module, head):
 # core), so the import is fast and stdlib-only.  A superset--unused
 # names cost nothing.
 _RUNTIME_IMPORTS = (
-    'parse_tokens', 'tokenize', 'convert',
+    'parse_tokens', 'tokenize', 'fold_ir', 'convert',
     'fold', 'call_converter', 'convert_value', 'window_options',
     'greedy_sizes', 'did_you_mean', 'check_count', 'absorb_take',
     'scopes_for', 'sibling_scopes', 'scoped_forces', 'scoped_window',

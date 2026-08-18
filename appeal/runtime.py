@@ -247,10 +247,50 @@ def parse_tokens(argv, options, usage=None, command_split=None,
     appeared.  The gate rule (a required group blocks options
     behind it until it's been fed) is checked against these.
     """
+    # STAGE 1: recognition now lives once, in tokenize(); it walks
+    # the command line into the uniform IR (operand runs interleaved
+    # with canonical option tuples).  Every recognition error--
+    # unknown option, "requires a value", a value on a flag, a bad
+    # '=' boolean--raises THERE, in argv order, before we fold.
+    if command_split is not None:
+        tokens, rest = tokenize(argv, options, usage, command_split)
+    else:
+        tokens = tokenize(argv, options, usage)
+
+    # STAGE 1.5: fold the IR into operands + given (the value-shaping
+    # and occurrence tangle).  The generated eager walk reuses fold_ir
+    # too, to reconstruct `given` for a converter group's inner options.
+    operands, given = fold_ir(tokens, options, usage, positions)
+
+    if command_split is not None:
+        return operands, given, rest
+    return operands, given
+
+
+def fold_ir(tokens, options, usage=None, positions=None):
+    """
+    Fold the stage-1 IR into (operands, given): operands flattened from
+    the operand runs, given mapping each option KEY to its value(s) per
+    kind (a flag's last-wins scalar, a value/multi occurrence list, a
+    fold's tuples, a w:/s: option's positional records).  positions, if
+    given, is filled with each option's first-appearance operand count
+    (and a ('seq', key) clock) for the gate rule.
+
+    A key whose canonical name isn't in `options` is skipped--so a
+    caller can fold only a SUBSET of the recognized options (e.g. a
+    group's inner options) and leave the rest to the eager on-sight
+    walk.  operands are gathered regardless.
+    """
     operands = []
     given = {}
-
     seq = [0]
+
+    # the IR carries only canonical keys; recover each key's kind and
+    # arity from the string table (all of an option's strings share
+    # one entry shape).
+    by_key = {}
+    for _s, _entry in options.items():
+        by_key.setdefault(_entry[0], _entry)
 
     def record(key, kind, value):
         # seq is the token clock: adjacent options share an
@@ -306,34 +346,14 @@ def parse_tokens(argv, options, usage=None, command_split=None,
         else:   # 'multi' collects raw strings; 'fold' tuples of them
             given.setdefault(key, []).append(value)
 
-    # STAGE 1: recognition now lives once, in tokenize(); it walks
-    # the command line into the uniform IR (operand runs interleaved
-    # with canonical option tuples).  Every recognition error--
-    # unknown option, "requires a value", a value on a flag, a bad
-    # '=' boolean--raises THERE, in argv order, before we fold.
-    if command_split is not None:
-        tokens, rest = tokenize(argv, options, usage, command_split)
-    else:
-        tokens = tokenize(argv, options, usage)
-
-    # the IR carries only canonical keys; recover each key's kind and
-    # arity from the string table (all of an option's strings share
-    # one entry shape).
-    by_key = {}
-    for _s, _entry in options.items():
-        by_key.setdefault(_entry[0], _entry)
-
-    # STAGE 1.5 (transitional): fold the IR into operands + given,
-    # exactly as the old inline recognizer did--record() is untouched,
-    # so `given`, the positions dict, and the seq clock are identical.
-    # This value-shaping + occurrence tangle is what Larry's design
-    # moves into the generated stage-2 walk; isolated here for now.
     for token in tokens:
         key = token[0]
         if key == '':
             operands.extend(token[1:])
             continue
-        entry = by_key[key]
+        entry = by_key.get(key)
+        if entry is None:
+            continue   # not in this (sub)table--the caller owns this key
         kind = entry[1]
         base = kind[2:] if kind[:2] in ('w:', 's:') else kind
         if base in ('fold', 'fold1', 'group'):
@@ -359,8 +379,6 @@ def parse_tokens(argv, options, usage=None, command_split=None,
                      else values[0])
         record(key, kind, value)
 
-    if command_split is not None:
-        return operands, given, rest
     return operands, given
 
 
