@@ -375,7 +375,7 @@ def test_interpreter_scoped_overlay_kinds():
     def two(a: child = None, b: child = None):
         return (a, b)
     got = both(two, ['--flag', '--level', '3', '--tags', 't',
-                     '--env', 'k', 'v', '--spot', '1', '2', 'A'])
+                     '--env', 'k=v', '--spot', '1', '2', 'A'])
     assert got[0] == 'ok', got
     a, b = got[1]
     assert a == ('A', True, 3, ('t',), {'k': 'v'}, (1, 2)), a
@@ -476,7 +476,7 @@ def test_schema_branches():
     # the vocabulary mapping() is a FOLD (reads occurrences),
     # so its MCP shape is an array; dict[K,V]'s 'mapping' kind
     # is the object (pinned in test_39's territory)
-    assert p['env']['type'] == 'array'
+    assert p['env']['type'] == 'object'   # mapping -> a dict
     assert p['level']['type'] == 'integer'
     # a scalar-acceptable group (min 1): both shapes, like the reader
     assert {'type': 'string'} in p['where']['anyOf']
@@ -943,7 +943,7 @@ def test_interpreter_toplevel_scoped_overlay():
         return (a, flag, lvl, tuple(tags), env, spot, corner, bump,
                 once, mode)
     argv = ['A', '--flag', '--lvl', '2', '--tags', 't',
-            '--env', 'k', 'v', '--spot', '1', '2', '--bump',
+            '--env', 'k=v', '--spot', '1', '2', '--bump',
             '--once', '9', '--mode', '--corner', '3']
     got = both(cmd, argv)
     assert got[0] == 'ok', got

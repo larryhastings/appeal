@@ -117,15 +117,15 @@ def _option_value(o, value, path):
         if o.converters[0] is tuple:
             return tuple(converted)
         return o.converters[0](*converted)
-    if o.kind == 'accumulate':
-        if not _is_sequence(value):
-            _fail(f"expected a sequence, got {value!r}", path)
-        return [_convert(o.converters[0], v, path) for v in value]
-    if o.kind == 'mapping':
+    if getattr(o.converters[0], '__appeal_mapping__', False):
+        # the mapping MultiOption (dict[K, V]'s mechanism): config
+        # supplies a whole dict, not KEY=VALUE tokens, so read it as
+        # one--the K/V converters live on the parameterized class
         if not isinstance(value, Mapping):
             _fail(f"expected a mapping, got {value!r}", path)
-        return {_convert(o.converters[0], k, path):
-                _convert(o.converters[1], v, path)
+        cls = o.converters[0]
+        return {_convert(cls._key_converter, k, path):
+                _convert(cls._value_converter, v, path)
                 for k, v in value.items()}
     # Option/MultiOption classes: init/option/render, driven by
     # the mapping's shapes.  arity 1: a scalar per occurrence;

@@ -195,8 +195,9 @@ def pool(s, *, define:appeal.mapping={}):
 def snooker(s, *, define:appeal.mapping[int,str]={}):
     return (snooker, s, define)
 
-def skittles(s, *, define:appeal.mapping[int,str,float]={}):
-    return (skittles, s, define)
+# skittles used mapping[int,str,float] (three operands per occurrence);
+# v2 unified mapping onto the KEY=VALUE MultiOption, which is exactly
+# two halves, so 3-arity mapping is gone (Larry's ruling, 2026-08-18).
 
 def go(direction:appeal.validate("north", "south", "east", "west")):
     return (go, f"go {direction} young man!")
@@ -641,13 +642,8 @@ class SmokeTests(AppealTestsBase):
             )
 
 
-    def test_skittles_1(self):
-        command(skittles)
-        self.assert_process(
-            'skittles -d 1 e 3.3 -d 2 f 4.4 "part of the body" -d 3 g 5.5',
-            (skittles, "part of the body", {1: ('e', 3.3), 2: ('f', 4.4), 3: ('g', 5.5)}),
-            )
-
+    # test_skittles_1 removed: 3-arity mapping is gone in v2 (see the
+    # skittles note above).
 
     def test_go_1(self):
         command(go)

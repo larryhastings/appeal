@@ -2757,11 +2757,12 @@ def test_converter_vocabulary():
     assert got == ('ok', ('x', [(1, 'one'), (2, 'two')])), got
     def pool(s, *, define: appeal.mapping = {}):
         return (s, define)
-    assert run_both(pool, ['x', '--define', 'k', 'v']) == ('ok', ('x', {'k': 'v'}))
-    def skittles(s, *, define: appeal.mapping[int, str, float] = {}):
+    # mapping collects one KEY=VALUE token per occurrence
+    assert run_both(pool, ['x', '--define', 'k=v']) == ('ok', ('x', {'k': 'v'}))
+    def snooker(s, *, define: appeal.mapping[int, str] = {}):
         return (s, define)
-    got = run_both(skittles, ['x', '--define', '1', 'one', '1.5'])
-    assert got == ('ok', ('x', {1: ('one', 1.5)})), got
+    got = run_both(snooker, ['x', '--define', '1=one', '--define', '2=two'])
+    assert got == ('ok', ('x', {1: 'one', 2: 'two'})), got
     def set_path(path: appeal.split(':')):
         return path
     assert run_both(set_path, ['a:b:c']) == ('ok', ['a', 'b', 'c'])

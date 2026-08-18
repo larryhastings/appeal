@@ -215,6 +215,18 @@ def _config_inject(vetted, config, given, usage, scoped_keys=frozenset()):
                 given[key] = True if kind == 'flag' else ()
                 injected[name] = key
             return
+        if kind == 'fold' and getattr(rule.converters[0],
+                                      '__appeal_mapping__', False):
+            # the mapping MultiOption (dict[K, V]'s mechanism): config
+            # gives a whole dict; each pair becomes one KEY=VALUE
+            # occurrence, exactly as the command line spells it
+            if not isinstance(value, dict):
+                raise AppealDataError(
+                    f"config: {name!r} collects KEY=VALUE pairs; "
+                    f"give it a mapping", usage)
+            given[key] = [(f'{k}={v}',) for k, v in value.items()]
+            injected[name] = key
+            return
         if kind in ('accumulate', 'fold'):
             if not isinstance(value, (list, tuple)):
                 raise AppealDataError(
@@ -223,14 +235,6 @@ def _config_inject(vetted, config, given, usage, scoped_keys=frozenset()):
             given[key] = ([tuple(v) if isinstance(v, (list, tuple))
                            else (v,) for v in value]
                           if kind == 'fold' else list(value))
-            injected[name] = key
-            return
-        if kind == 'mapping':
-            if not isinstance(value, dict):
-                raise AppealDataError(
-                    f"config: {name!r} collects KEY=VALUE pairs; "
-                    f"give it a mapping", usage)
-            given[key] = [f'{k}={v}' for k, v in value.items()]
             injected[name] = key
             return
         if kind == 'group':

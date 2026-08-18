@@ -19,7 +19,7 @@ import inspect
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
 from .runtime import (
     AppealConfigurationError, Option, accumulator, is_multioption,
-    is_option,
+    is_option, mapping,
     )
 
 
@@ -678,20 +678,22 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
     if annotation is not inspect.Parameter.empty:
         annotation = dereference_annotated(annotation)
         _refuse_bare_factory(annotation, f"option {name!r}")
-        # list[T] is the modern sugar for the accumulator MultiOption
-        # (both are a repeatable option that appends to a list, one
-        # operand per occurrence--identical semantics).  The MultiOption
-        # works on every Python Appeal supports; the [T] subscript on
-        # builtin list is comparatively new.  Rewrite the sugar to the
-        # MultiOption so there is ONE list-accumulating mechanism (the
-        # fold path below), never two.
-        # (dict[K, V] is NOT rewritten to mapping: they have different
-        # command-line syntax--dict[K, V] is one KEY=VALUE token, the
-        # mapping MultiOption is space-separated KEY VALUE operands.)
+        # list[T] and dict[K, V] are the modern sugar for the
+        # accumulator and mapping MultiOptions--repeatable options
+        # collecting into a list or a dict (one KEY=VALUE token each).
+        # The MultiOptions work on every Python Appeal supports; the
+        # [T] subscript on builtin list/dict is comparatively new.
+        # Rewrite the sugar to the MultiOption so each repeatable kind
+        # has ONE mechanism (the fold path below), never two.
+        _context = f"option {name!r}"
         _origin = _generic_origin(annotation)
         if _origin is list:
             (_t,) = annotation.__args__
-            annotation = accumulator[_t]
+            annotation = accumulator[_leaf_callable(_t, _context)]
+        elif _origin is dict:
+            _k, _v = annotation.__args__
+            annotation = mapping[_leaf_callable(_k, _context),
+                                 _leaf_callable(_v, _context)]
     context = f"option {name!r}"
 
     def finish(rule):
@@ -760,16 +762,9 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
                 strings, name, kind='value', converters=converters,
                 default=default))
 
-    # list[T] was rewritten to accumulator up top, so it never reaches
-    # here as a bare generic--the fold path handled it.  dict[K, V]
-    # keeps its own KEY=VALUE collector (distinct syntax from mapping).
-    if origin is dict:
-        k, v = annotation.__args__
-        return finish(OptionRule(
-            strings, name, kind='mapping',
-            converters=(_leaf_callable(k, context),
-                        _leaf_callable(v, context)),
-            default=default))
+    # list[T]/dict[K, V] were rewritten to accumulator/mapping up top,
+    # so they never reach here as bare generics--the fold path handled
+    # them (one mechanism per repeatable kind, not two).
 
     if annotation is inspect.Parameter.empty:
         t = type(grammar_default)

@@ -2710,19 +2710,14 @@ class _Subscriptable(type):
         return cls._parameterize(types)
 
 
-def _folder(kind, types):
-    "The shared engine behind accumulator[...] and mapping[...]."
+def _accumulator_option(types):
+    "accumulator[...]'s option(): one operand per type, appended."
     names = [f'v{i}' for i in range(len(types))]
     params = ', '.join(f'{n}: _t{i}' for i, n in enumerate(names))
     namespace = {f'_t{i}': t for i, t in enumerate(types)}
-    if kind == 'accumulator':
-        payload = names[0] if len(names) == 1 else f'({", ".join(names)})'
-        body = f'self.values.append({payload})'
-    else:
-        payload = (names[1] if len(names) == 2
-                   else f'({", ".join(names[1:])})')
-        body = f'self.values[{names[0]}] = {payload}'
-    exec(f'def option(self, {params}):\n    {body}', namespace)
+    payload = names[0] if len(names) == 1 else f'({", ".join(names)})'
+    exec(f'def option(self, {params}):\n'
+         f'    self.values.append({payload})', namespace)
     return namespace['option']
 
 
@@ -2731,6 +2726,9 @@ class accumulator(MultiOption, metaclass=_Subscriptable):
     A repeatable option collecting values into a list.  Subscript
     for types: accumulator[int] collects ints; accumulator[int, str]
     collects (int, str) tuples, two operands per occurrence.
+
+    list[T] is sugar for accumulator[T]--one repeatable-list
+    mechanism, spelled either way.
     """
     __appeal_snippet__ = 'appeal folds'
 
@@ -2748,7 +2746,7 @@ class accumulator(MultiOption, metaclass=_Subscriptable):
         if not isinstance(types, tuple):
             types = (types,)
         sub = _Subscriptable('accumulator', (cls,),
-                             {'option': _folder('accumulator', types)})
+                             {'option': _accumulator_option(types)})
         sub.__appeal_recipe__ = ('subscript', 'accumulator',
                                  tuple(types), {})
         return sub
@@ -2756,32 +2754,49 @@ class accumulator(MultiOption, metaclass=_Subscriptable):
 
 class mapping(MultiOption, metaclass=_Subscriptable):
     """
-    A repeatable option collecting key/value pairs into a dict:
-    --define KEY VALUE.  Subscript for types: mapping[int, str]
-    maps ints to strs; mapping[int, str, float] maps ints to
-    (str, float) tuples, three operands per occurrence.
+    A repeatable option collecting KEY=VALUE pairs into a dict:
+    --define KEY=VALUE.  ONE operand per occurrence, split on the
+    first '='.  Subscript for the halves' types: mapping[str, int]
+    maps strs to ints.
+
+    dict[K, V] is sugar for mapping[K, V]--one repeatable-dict
+    mechanism, spelled either way; the config layer reads it from a
+    dict, the command line from KEY=VALUE tokens.
     """
     __appeal_snippet__ = 'appeal folds'
+    # the reader (config layer) hands these a whole dict, not a
+    # sequence of occurrences; the two halves' converters live on
+    # the parameterized subclass (below), invisible to the fold's
+    # single-operand protocol but caught by the recipe fingerprint.
+    __appeal_mapping__ = True
+    _key_converter = staticmethod(str)
+    _value_converter = staticmethod(str)
 
     def init(self, default):
         self.values = dict(default) if default else {}
 
-    def option(self, key, value):
+    def option(self, item):
+        key_text, equals, value_text = item.partition('=')
+        if not equals:
+            raise ValueError(f"{item!r}: expected KEY=VALUE")
+        key = self._key_converter(key_text)
         if key in self.values:
-            raise ValueError(f"key {key!r} defined more than once")
-        self.values[key] = value
+            raise ValueError(f"key {key_text!r} defined more than once")
+        self.values[key] = self._value_converter(value_text)
 
     def render(self):
         return self.values
 
     @classmethod
     def _parameterize(cls, types):
-        if not isinstance(types, tuple) or len(types) < 2:
-            raise TypeError("mapping[...] needs at least a key type "
-                            "and one value type")
+        if not isinstance(types, tuple) or len(types) != 2:
+            raise TypeError("mapping[...] needs exactly a key type and "
+                            "a value type (one KEY=VALUE per occurrence)")
+        key_type, value_type = types
         sub = _Subscriptable('mapping', (cls,),
-                             {'option': _folder('mapping', types)})
+                             {'_key_converter': staticmethod(key_type),
+                              '_value_converter': staticmethod(value_type)})
         sub.__appeal_recipe__ = ('subscript', 'mapping',
-                                 tuple(types), {})
+                                 (key_type, value_type), {})
         return sub
 
