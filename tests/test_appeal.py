@@ -2924,8 +2924,8 @@ def test_app_parameter_renames():
     # metavar.  An explicit usage= is the literal metavar text--it
     # wins outright, unadorned by positional_argument_usage_format
     app = Appeal()
-    @app.parameter('port', usage='PORT')
-    @app.parameter('times', usage='COUNT')
+    @app.argument('port', usage='PORT')
+    @app.argument('times', usage='COUNT')
     @app.global_command()
     def serve(host, port: int = 8080, *, times: int = 1):
         """
@@ -2948,14 +2948,14 @@ def test_app_parameter_renames():
     def pair(x: float, y: float):
         return (x, y)
     app_c = Appeal()
-    app_c.parameter('x', usage='X')(pair)
+    app_c.argument('x', usage='X')(pair)
     def draw(p: pair):
         return p
     plan_c = build_plan(draw, decorations=app_c._decorations)
     assert 'X' in plan_c.usage(), plan_c.usage()
     # naming a parameter the function doesn't have: config error
     app2 = Appeal()
-    @app2.parameter('nonesuch', usage='NOPE')
+    @app2.argument('nonesuch', usage='NOPE')
     @app2.global_command()
     def f(x):
         pass
@@ -3005,7 +3005,7 @@ def test_positional_argument_usage_format():
     # an explicit @app.parameter usage= is literal and wins outright,
     # unadorned by the format
     app = Appeal(positional_argument_usage_format='<{name}>')
-    @app.parameter('width', usage='W')
+    @app.argument('width', usage='W')
     @app.global_command()
     def g(count: int, *, width: int = 1):
         "G."

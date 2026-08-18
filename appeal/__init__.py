@@ -1610,13 +1610,12 @@ class Appeal:
             return callable
         return decorator
 
-    def parameter(self, parameter_name, *, usage):
+    def argument(self, parameter_name, *, usage):
         """
         Additional decorator for @command functions: renames one
         parameter in usage lines and help tables.  On an operand,
         the shown name; on an option, the metavar
-        (`[-t|--times <COUNT>]`).  v1's API, extended: v1's
-        @app.parameter only reached operands.
+        (`[-t|--times <COUNT>]`).  Reaches both, despite the name.
         """
         def decorator(callable):
             self.root._decorations.add_usage(callable,
@@ -1625,7 +1624,7 @@ class Appeal:
             return callable
         return decorator
 
-    argument = parameter    # v1's deprecated alias, kept
+    parameter = argument    # the older spelling, kept as an alias
 
     def app_class(self):
         """
