@@ -22,8 +22,6 @@ from appeal.runtime import (
     parse_tokens,
     tokenize,
     convert,
-    accumulate,
-    collect_mapping,
     fold,
     call_converter,
     convert_value,
@@ -88,7 +86,7 @@ def _fill_option_value(operands, i, remaining, given):
 def scan_weather(argv, command_words=None):
     # the global command: its arguments end at the first
     # operand naming a command (or at the maximum)
-    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'report', 'sync', 'version', 'help', 'forecast'})))
+    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'report', 'help', 'version', 'sync', 'forecast'})))
     if given.pop('-V', False) or given.pop('--version', False):
         print('1.0')
         raise SystemExit(0)

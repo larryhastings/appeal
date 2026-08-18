@@ -150,10 +150,12 @@ class OptionRule:
     name          the Python parameter it fills
     kind          'flag'        presence means True, consumes nothing
                   'value'       consumes one operand (last one wins)
-                  'accumulate'  list[T]: repeatable, collects values
-                  'mapping'     dict[K, V]: repeatable, KEY=VALUE
-    converters    () for a flag; (T,) for value/accumulate;
-                  (K, V) for mapping
+                  'fold'/'fold1' a MultiOption--repeatable (fold) or
+                                at-most-once (fold1); list[T] and
+                                dict[K, V] compile to fold via the
+                                accumulator/mapping MultiOptions
+    converters    () for a flag; (T,) for a value; (cls, *leaves) for
+                  a fold; the group's Plan lives on .child
     default       the value when the option never appears
     """
     __slots__ = ('strings', 'name', 'kind', 'converters', 'default', 'explicit',
@@ -211,8 +213,8 @@ class OptionRule:
             # stores (v1: `not default`)--never an operand count,
             # flags consume nothing
             entry = (self.key, 'flag', self.present)
-        else:
-            entry = (self.key, self.table_kind)
+        else:   # a single-operand value
+            entry = (self.key, self.kind)
         if not windowed:
             return entry
         kind = entry[1]
@@ -228,13 +230,6 @@ class OptionRule:
     @property
     def is_flag(self):
         return self.kind == 'flag'
-
-    @property
-    def table_kind(self):
-        "The kind as parse_tokens sees it: accumulate/mapping are both 'multi'."
-        if self.kind in ('accumulate', 'mapping'):
-            return 'multi'
-        return self.kind
 
     def __repr__(self):
         return f'<OptionRule {"/".join(self.strings)} ({self.kind}) -> {self.name}>'

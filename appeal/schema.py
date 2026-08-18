@@ -51,7 +51,7 @@ def _option_schema(o, docs):
         'name': o.name,
         'strings': list(o.strings),
         'kind': o.kind,
-        'repeatable': o.kind in ('accumulate', 'fold'),
+        'repeatable': o.kind == 'fold',
         # the mapping MultiOption (dict[K, V]) schemas as a JSON object
         'mapping': bool(o.converters) and getattr(
             o.converters[0], '__appeal_mapping__', False),
@@ -224,7 +224,7 @@ def _mcp_object_schema(described):
             entry = {'type': 'boolean'}
         elif option.get('mapping'):
             entry = {'type': 'object'}
-        elif kind in ('accumulate', 'fold'):
+        elif kind == 'fold':
             entry = {'type': 'array'}
         else:
             # value options: type from the converter when there's

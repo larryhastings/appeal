@@ -977,34 +977,6 @@ def convert_value(converters, occurrences, name, usage=None):
     return result
 
 
-def accumulate(converter, values, name, usage=None):
-    """
-    The collector behind list[T] options: convert each collected
-    occurrence, in order.
-    """
-    return [convert(converter, value, name, usage) for value in values]
-
-
-def collect_mapping(key_converter, value_converter, values, name, usage=None):
-    """
-    The collector behind dict[K, V] options: each occurrence is
-    KEY=VALUE; convert both halves.
-    """
-    result = {}
-    for text in values:
-        key_text, equals, value_text = text.partition('=')
-        if not equals:
-            raise UsageError(
-                f"invalid value for {name!r}: {text!r} (expected KEY=VALUE)",
-                usage, param=name)
-        key = convert(key_converter, key_text, name, usage)
-        if key in result:
-            raise UsageError(
-                f"{name}: key {key_text!r} defined more than once", usage)
-        result[key] = convert(value_converter, value_text, name, usage)
-    return result
-
-
 def absorb_take(remaining, suffix_counts, suffix_minimum, floor,
                 skippable):
     """

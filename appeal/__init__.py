@@ -227,7 +227,7 @@ def _config_inject(vetted, config, given, usage, scoped_keys=frozenset()):
             given[key] = [(f'{k}={v}',) for k, v in value.items()]
             injected[name] = key
             return
-        if kind in ('accumulate', 'fold'):
+        if kind == 'fold':
             if not isinstance(value, (list, tuple)):
                 raise AppealDataError(
                     f"config: {name!r} repeats; give it a sequence "

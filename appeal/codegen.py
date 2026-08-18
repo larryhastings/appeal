@@ -34,7 +34,7 @@ from .help import command_set_corpus, merge_docs, summary
 from .plan import Terminal, NO_DEFAULT, command_set_usage
 from .runtime import (
     AppealConfigurationError, UsageError, Command, absorb_take,
-    accumulate, call_converter, collect_mapping, convert,
+    call_converter, convert,
     convert_value, fold,
     parse_tokens, tokenize, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
@@ -86,8 +86,8 @@ _builtin_converters = {str: 'str', int: 'int', float: 'float', bool: 'bool',
 
 _RESERVED = frozenset((
     'argv', 'given', 'operands', 'i', 'n', 'remaining', 'gate',
-    'positions', 'rest', 'parse_tokens', 'convert', 'accumulate',
-    'mapping', 'fold', 'call_converter', 'convert_value', 'check_count', 'window_options',
+    'positions', 'rest', 'parse_tokens', 'convert',
+    'fold', 'call_converter', 'convert_value', 'check_count', 'window_options',
     'greedy_sizes', 'UsageError',
     ))
 
@@ -618,8 +618,7 @@ class _Emitter:
         for owner, o in all_options(self.plan):
             if o.key in self.scoped and o.key not in self.sibling:
                 specs[o.key] = (
-                    'multi' if o.kind in ('accumulate', 'mapping',
-                                          'fold')
+                    'multi' if o.kind == 'fold'
                     else 'strict' if o.kind == 'fold1'
                     else 'last')
         return ('{' + ', '.join(f'{k!r}: {v!r}'
@@ -631,8 +630,7 @@ class _Emitter:
         for owner, o in all_options(self.plan):
             if o.key in self.sibling:
                 specs[o.key] = (
-                    'multi' if o.kind in ('accumulate', 'mapping',
-                                          'fold')
+                    'multi' if o.kind == 'fold'
                     else 'strict' if o.kind == 'fold1'
                     else 'last')
         return ('{' + ', '.join(f'{k!r}: {v!r}'
@@ -656,7 +654,7 @@ class _Emitter:
         for o in own:
             self.line(f'{pad}_vals = scoped_next(scopes, {o.key!r})')
             self.line(f'{pad}if _vals:')
-            if o.kind in ('accumulate', 'mapping', 'fold'):
+            if o.kind == 'fold':
                 self.line(f'{pad}    _overlay[{o.key!r}] = _vals')
             elif o.kind == 'group':
                 child = o.child
@@ -708,14 +706,8 @@ class _Emitter:
                 default_name = self.default_expr(o.name, o.default)
             return (f'fold({cls_name}, ({convs}{comma}), {occurrences}, '
                     f'{default_name}, {o.name!r}, {self.usage_const})')
-        if o.kind == 'accumulate':
-            conv = self.leaf_expr(o.converters[0])
-            return (f'accumulate({conv}, {source}[{key!r}], '
-                    f'{o.name!r}, {self.usage_const})')
-        kconv = self.leaf_expr(o.converters[0])
-        vconv = self.leaf_expr(o.converters[1])
-        return (f'collect_mapping({kconv}, {vconv}, {source}[{key!r}], '
-                f'{o.name!r}, {self.usage_const})')
+        raise AssertionError(   # pragma: no cover
+            f"option_value_expr: unexpected kind {o.kind!r}")
 
     def emit_fill_function(self, plan, dry=False):
         fname = self.fill_ref(plan, dry)
@@ -795,7 +787,7 @@ class _Emitter:
 
     # ---- the eager path (stage-2 walk) ----
 
-    _EAGER_KINDS = frozenset(('flag', 'nullary', 'value', 'accumulate'))
+    _EAGER_KINDS = frozenset(('flag', 'nullary', 'value'))
 
     def _eager_ok(self, plan, command_split):
         """
@@ -904,17 +896,10 @@ class _Emitter:
                       f"stylesheet={sheet_name}), end='')")
             self.line(f'        return')
 
-        # initialize each option's parameter to its default; the
-        # collectors (accumulate) also need a running list + a
-        # seen-flag, since absence means the default, not [].
-        accum = []
+        # initialize each option's parameter to its default
         for o in plan.options:
             self.line(f'    {_local(o.name)} = '
                       f'{self.default_expr(o.name, o.default)}')
-            if o.kind == 'accumulate':
-                self.line(f'    _acc_{_ident(o.name)} = []')
-                self.line(f'    _seen_{_ident(o.name)} = False')
-                accum.append(o)
 
         if plan.options:
             self.line(f'    for _t in tokens:')
@@ -925,9 +910,6 @@ class _Emitter:
                 first = False
                 self.line(f'        {head} _k == {o.key!r}:')
                 self._emit_eager_option(o, usage)
-        for o in accum:
-            self.line(f'    if _seen_{_ident(o.name)}:')
-            self.line(f'        {_local(o.name)} = _acc_{_ident(o.name)}')
 
         # ---- operands: gather done; size + convert (the automaton) ----
         self.line(f'    n = len(operands)')
@@ -981,16 +963,11 @@ class _Emitter:
         elif o.kind == 'nullary':
             conv = self.leaf_expr(o.converters[0])
             self.line(f'            {local} = {conv}()')
-        elif o.kind == 'value':
+        else:   # value
             conv = self.leaf_expr(o.converters[0])
             # every occurrence converts (validate-all); last wins
             self.line(f'            {local} = convert({conv}, _t[1], '
                       f'{o.name!r}, {usage})')
-        else:   # accumulate
-            conv = self.leaf_expr(o.converters[0])
-            self.line(f'            _acc_{_ident(o.name)}.append('
-                      f'convert({conv}, _t[1], {o.name!r}, {usage}))')
-            self.line(f'            _seen_{_ident(o.name)} = True')
 
     def emit_parse_function(self, command_split=None):
         plan = self.plan
@@ -1469,8 +1446,6 @@ def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
         'parse_tokens': parse_tokens,
         'tokenize': tokenize,
         'convert': convert,
-        'accumulate': accumulate,
-        'collect_mapping': collect_mapping,
         'fold': fold,
         'call_converter': call_converter,
         'convert_value': convert_value,
@@ -1836,8 +1811,6 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, s
         'parse_tokens': parse_tokens,
         'tokenize': tokenize,
         'convert': convert,
-        'accumulate': accumulate,
-        'collect_mapping': collect_mapping,
         'fold': fold,
         'call_converter': call_converter,
         'convert_value': convert_value,
@@ -2064,7 +2037,7 @@ def _public_module(module, head):
 # core), so the import is fast and stdlib-only.  A superset--unused
 # names cost nothing.
 _RUNTIME_IMPORTS = (
-    'parse_tokens', 'tokenize', 'convert', 'accumulate', 'collect_mapping',
+    'parse_tokens', 'tokenize', 'convert',
     'fold', 'call_converter', 'convert_value', 'window_options',
     'greedy_sizes', 'did_you_mean', 'check_count', 'absorb_take',
     'scopes_for', 'sibling_scopes', 'scoped_forces', 'scoped_window',

@@ -15,8 +15,8 @@ from .build import all_options, help_option_strings, subtree_option_keys
 from .help import merge_docs
 from .plan import Terminal, NO_DEFAULT
 from .runtime import (
-    UsageError, absorb_take, accumulate, call_converter,
-    collect_mapping, convert, convert_value, fold, greedy_sizes,
+    UsageError, absorb_take, call_converter,
+    convert, convert_value, fold, greedy_sizes,
     parse_tokens, check_count,
     did_you_mean,
     scoped_forces, scoped_next, scoped_resolve, scoped_rewind,
@@ -86,9 +86,6 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None,
                     kwargs[o.name] = call_converter(
                         o.converters[0], o.converters[1:], value,
                         o.name, usage)
-            elif o.kind == 'accumulate':
-                kwargs[o.name] = accumulate(o.converters[0], value,
-                                            o.name, usage)
             elif o.kind == 'group':
                 child = o.child
                 child_args, _, _ = _fill(child, list(value), 0,
@@ -100,13 +97,9 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None,
             elif o.kind == 'fold':
                 kwargs[o.name] = fold(o.converters[0], o.converters[1:],
                                       value, o.default, o.name, usage)
-            elif o.kind == 'fold1':
+            else:   # fold1
                 kwargs[o.name] = fold(o.converters[0], o.converters[1:],
                                       (value,), o.default, o.name, usage)
-            else:   # mapping
-                kwargs[o.name] = collect_mapping(
-                    o.converters[0], o.converters[1], value,
-                    o.name, usage)
             continue
         if key not in given or (scopes is not None and key in scopes):
             # (a scoped key's raw entry is positional records, not
@@ -154,9 +147,6 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None,
             # convert every occurrence (all validated), last wins
             kwargs[o.name] = convert_value(o.converters, given[key],
                                            o.name, usage)
-        elif o.kind == 'accumulate':
-            kwargs[o.name] = accumulate(o.converters[0], given[key],
-                                        o.name, usage)
         elif o.kind == 'group':
             operands = list(given[key])
             child = o.child
@@ -182,12 +172,9 @@ def _option_kwargs(plan, given, usage, overlay=None, scopes=None,
         elif o.kind == 'fold':
             kwargs[o.name] = fold(o.converters[0], o.converters[1:],
                                   given[key], o.default, o.name, usage)
-        elif o.kind == 'fold1':
+        else:   # fold1
             kwargs[o.name] = fold(o.converters[0], o.converters[1:],
                                   (given[key],), o.default, o.name, usage)
-        else:   # mapping
-            kwargs[o.name] = collect_mapping(o.converters[0], o.converters[1],
-                                     given[key], o.name, usage)
     for name, default in defaults.items():
         kwargs.setdefault(name, default)
     return kwargs
@@ -201,7 +188,7 @@ def _scopes_for(plan, given):
             # sibling-group keys bind by announcement, not by the
             # positional walk (see _sibling_scopes)
             specs[o.key] = (
-                'multi' if o.kind in ('accumulate', 'mapping', 'fold')
+                'multi' if o.kind == 'fold'
                 else 'strict' if o.kind == 'fold1'
                 else 'last')
     return scopes_for(specs, given)
@@ -215,7 +202,7 @@ def _sibling_scopes(plan, given, positions, usage):
     for owner, o in all_options(plan):
         if o.key in plan.sibling_keys:
             specs[o.key] = (
-                'multi' if o.kind in ('accumulate', 'mapping', 'fold')
+                'multi' if o.kind == 'fold'
                 else 'strict' if o.kind == 'fold1'
                 else 'last')
     first_key = plan.sibling_parents[0][0]
@@ -238,7 +225,7 @@ def _claim_own(plan, scopes):
         values = scoped_next(scopes, o.key)
         if not values:
             continue
-        if o.kind in ('accumulate', 'mapping', 'fold'):
+        if o.kind == 'fold':
             overlay[o.key] = values
         else:   # flag, value, group, fold1, nullary
             overlay[o.key] = values[0]
