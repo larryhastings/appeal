@@ -2229,26 +2229,11 @@ class Appeal:
         subs = {parent: {name: sub_plan(name, fn)
                          for name, fn in entries}
                 for parent, entries in self._subs.items()}
-        # the baked-knob blob the module's shim compares its
-        # constructor arguments against (drift = regenerate)
+        # the baked knobs, each stored ONCE as its real value: the
+        # shim compares them for staleness (repr'ing both sides at
+        # compare time) AND replays them to reconstruct a real
+        # Appeal for help/errors--no repr-string/value split
         config = {
-            'name': _stable_repr(self.name),
-            'version': _stable_repr(self.version),
-            'repeat': _stable_repr(self.repeat),
-            'margin': _stable_repr(self.margin),
-            'margin_value': self.margin,
-            'positional_argument_usage_format':
-                _stable_repr(self.positional_argument_usage_format),
-            'doc': _stable_repr(self.doc),
-            'templates': _stable_repr(self.templates),
-        }
-        if self.version is not None:
-            config['version_value'] = str(self.version)
-        # the ACTUAL knob values the shim replays when it
-        # reconstructs a real Appeal to render help/errors (the
-        # keys above are _stable_repr strings, for staleness
-        # comparison only)
-        config['rebuild'] = {
             'name': self.name,
             'version': self.version,
             'repeat': self.repeat,
@@ -2256,6 +2241,7 @@ class Appeal:
             'positional_argument_usage_format':
                 self.positional_argument_usage_format,
             'doc': self.doc,
+            'templates': self.templates,
         }
         if words:
             text = emit_precompiled_module(

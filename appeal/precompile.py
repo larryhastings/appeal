@@ -74,10 +74,10 @@ def compiled_appeal(spec, namespace):
                 baked = spec['config'][knob]
                 if value is None and knob != 'repeat':
                     continue        # unspecified: the baked value
-                if _stable_repr(value) != baked:
+                if _stable_repr(value) != _stable_repr(baked):
                     self._staleness.append(
                         f"Appeal({knob}=...): compiled with "
-                        f"{baked}, now {_stable_repr(value)}")
+                        f"{_stable_repr(baked)}, now {_stable_repr(value)}")
             self._bound = {}        # id(spec entry) -> binding
             # what @app.option/@app.parameter expressed, keyed by
             # the decorated callable--recorded HERE, never on the
@@ -303,7 +303,7 @@ def compiled_appeal(spec, namespace):
                             f"{getattr(target, '__name__', target)!r}, "
                             f"which this compiled parser doesn't "
                             f"know")
-            if _stable_repr(self.templates) != spec['config']['templates']:
+            if _stable_repr(self.templates) != _stable_repr(spec['config']['templates']):
                 problems.append(
                     "app.templates has changed since this parser "
                     "was compiled")
@@ -332,12 +332,13 @@ def compiled_appeal(spec, namespace):
             # so run_main routes help (_CompiledHelp) and the error
             # family (tagged with their command) back here, and we
             # render them LIVE through full Appeal
+            version = spec['config'].get('version')
             sys.exit(run_main(parse, args,
                               stylesheet=self.stylesheet,
                               completion=completion,
                               errors=self.errors,
-                              version=spec['config'].get('version_value'),
-                              margin=spec['config']['margin_value'],
+                              version=None if version is None else str(version),
+                              margin=spec['config']['margin'],
                               fallback=self))
 
         # -- rendering help and errors live, through full Appeal ---
@@ -351,7 +352,7 @@ def compiled_appeal(spec, namespace):
             "A real appeal.Appeal, replayed from the recorded registrations."
             import appeal
             from inspect import Parameter
-            cfg = spec['config'].get('rebuild', {})
+            cfg = spec['config']
             real = appeal.Appeal(
                 name=cfg.get('name'),
                 version=cfg.get('version'),
@@ -493,7 +494,7 @@ def compiled_appeal(spec, namespace):
             return run_main(_reraise, [],
                             stylesheet=self.stylesheet,
                             errors=self.errors,
-                            margin=spec['config']['margin_value'])
+                            margin=spec['config']['margin'])
 
         # -- the honest refusals ---------------------------------
 
