@@ -2067,41 +2067,40 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
     imports, constants, slots, impl_names, ref_specs = _classify_refs(
         refs, impls, harvests, decorations)
 
-    def entry_literal(key):
-        # 'impl' is the Command object's global name: the shim sets
-        # its .callable to the live function at registration
-        return {'impl': refs.command_names.get(id(key_fn[key])),
-                'fingerprint': fingerprints[key],
-                'decorations': decor_fingerprints[key],
-                'refs': tuple(sorted(ref_specs[key]))}
+    # THE FOLD (ruled 2026-08-17): the verification data lives ON the
+    # Command objects, not in a parallel spec tree.  For each command
+    # we emit `_CMD_X.fingerprint = ... ; .options = ... ; .arguments
+    # = ... ; .converters = ...`, and the shim walks the runtime
+    # Command tree (skipping the fused version/help, which carry no
+    # fingerprint).  options/arguments are the @option and @argument
+    # decoration digests (decoration_fingerprint's two halves).
+    fold_lines = []
+    for key, fn in key_fn.items():
+        cn = refs.command_names.get(id(fn))
+        if cn is None:
+            continue        # a nested-class construct: no callable
+        opts, args_ = decor_fingerprints[key]
+        fold_lines.append(f'{cn}.fingerprint = {fingerprints[key]!r}')
+        fold_lines.append(f'{cn}.options = {opts!r}')
+        fold_lines.append(f'{cn}.arguments = {args_!r}')
+        fold_lines.append(
+            f'{cn}.converters = {tuple(sorted(ref_specs[key]))!r}')
 
-    def node_entry(word, key):
-        # the spec is the command TREE: a parent's entry carries
-        # its children (and its default), each a full entry--the
-        # shim's child nodes walk this shape
-        entry_ = entry_literal(key)
-        if sub_repeat.get(word):
-            entry_['repeat'] = True
-        table = subs.get(word)
-        if table:
-            entry_['commands'] = {
-                sub: node_entry(sub, ('sub', word, sub))
-                for sub in table}
-        if word in sub_defaults:
-            entry_['default'] = entry_literal(('subdefault', word))
-        return entry_
-
+    global_name = (refs.command_names.get(id(global_plan.callable))
+                   if user_global else None)
+    default_name = (refs.command_names.get(id(default.callable))
+                    if default is not None else None)
     spec = {
         'program': prog,
         'entry': entry,
         'complete': complete,
         'templates': templates,
         'config': dict(config or {}),
-        'global': entry_literal(('global',)) if user_global else None,
-        'default': (entry_literal(('default',))
-                    if default is not None else None),
-        'commands': {word: node_entry(word, ('command', word))
-                     for word in commands},
+        # names the shim resolves against the module globals and walks
+        # (the Commands carry the fingerprints); None where absent
+        'commands': '_COMMANDS' if commands else None,
+        'global': global_name,
+        'default': default_name,
     }
 
     header = (
@@ -2142,6 +2141,10 @@ def emit_precompiled_module(commands, global_plan=None, *, argv0=None,
                      + '\n')
     parts.append('\n# ---- generated parser ----\n')
     parts.append(source)
+    if fold_lines:
+        parts.append('\n# ---- drift fingerprints, folded onto the '
+                     'Commands ----\n')
+        parts.append('\n'.join(fold_lines) + '\n')
     parts.append(f'\n# ---- the Appeal your program imports ----\n'
                  f'_SPEC = {spec!r}\n\n'
                  f'Appeal = compiled_appeal(_SPEC, globals())\n')

@@ -87,7 +87,7 @@ def _fill_option_value(operands, i, remaining, given):
 def scan_weather(argv, command_words=None):
     # the global command: its arguments end at the first
     # operand naming a command (or at the maximum)
-    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'sync', 'help', 'forecast', 'report', 'version'})))
+    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'report', 'forecast', 'help', 'version', 'sync'})))
     if given.pop('-V', False) or given.pop('--version', False):
         print('1.0')
         raise SystemExit(0)
@@ -303,7 +303,23 @@ def parse_command_set(argv):
     return run_command_set(argv, _CMD_weather, _COMMANDS, None, repeat=False, words=_COMMAND_WORDS, listing=_print_terse_listing)
 
 
+# ---- drift fingerprints, folded onto the Commands ----
+
+_CMD_report.fingerprint = (1, 0, 2, False, False, ('city', 'units', 'verbose'), 'None', "{'units': 'C', 'verbose': False}", ())
+_CMD_report.options = ()
+_CMD_report.arguments = ()
+_CMD_report.converters = ()
+_CMD_forecast.fingerprint = (2, 0, 0, False, False, ('city', 'days'), '(3,)', 'None', (('days', 'builtins.int'),))
+_CMD_forecast.options = ()
+_CMD_forecast.arguments = ()
+_CMD_forecast.converters = ()
+_CMD_sync.fingerprint = (1, 0, 3, False, False, ('source', 'verbose', 'tag', 'mode'), 'None', "{'verbose': 0, 'tag': (), 'mode': 'safe'}", (('mode', "recipe:call:validate:('fast', 'safe'):{'type': <class 'str'>}"), ('source', "recipe:call:split:(':',):{}"), ('tag', "recipe:subscript:accumulator:(<class 'str'>,):{}"), ('verbose', "recipe:call:counter:():{'max': None, 'step': 1}")))
+_CMD_sync.options = ()
+_CMD_sync.arguments = ()
+_CMD_sync.converters = ()
+
+
 # ---- the Appeal your program imports ----
-_SPEC = {'program': 'weather', 'entry': 'parse_command_set', 'complete': '_COMPLETE_command_set', 'templates': 'usage: {usage}\n\n{summary}\n\n{doc}\n\n## Arguments\n{arguments}\n\n## Options\n{options}\n\n## Commands\n{commands}\n', 'config': {'name': 'weather', 'version': '1.0', 'repeat': False, 'margin': 79, 'positional_argument_usage_format': '<{name.upper()}>', 'doc': None, 'templates': 'usage: {usage}\n\n{summary}\n\n{doc}\n\n## Arguments\n{arguments}\n\n## Options\n{options}\n\n## Commands\n{commands}\n'}, 'global': None, 'default': None, 'commands': {'report': {'impl': '_CMD_report', 'fingerprint': (1, 0, 2, False, False, ('city', 'units', 'verbose'), 'None', "{'units': 'C', 'verbose': False}", ()), 'decorations': ((), ()), 'refs': ()}, 'forecast': {'impl': '_CMD_forecast', 'fingerprint': (2, 0, 0, False, False, ('city', 'days'), '(3,)', 'None', (('days', 'builtins.int'),)), 'decorations': ((), ()), 'refs': ()}, 'sync': {'impl': '_CMD_sync', 'fingerprint': (1, 0, 3, False, False, ('source', 'verbose', 'tag', 'mode'), 'None', "{'verbose': 0, 'tag': (), 'mode': 'safe'}", (('mode', "recipe:call:validate:('fast', 'safe'):{'type': <class 'str'>}"), ('source', "recipe:call:split:(':',):{}"), ('tag', "recipe:subscript:accumulator:(<class 'str'>,):{}"), ('verbose', "recipe:call:counter:():{'max': None, 'step': 1}"))), 'decorations': ((), ()), 'refs': ()}}}
+_SPEC = {'program': 'weather', 'entry': 'parse_command_set', 'complete': '_COMPLETE_command_set', 'templates': 'usage: {usage}\n\n{summary}\n\n{doc}\n\n## Arguments\n{arguments}\n\n## Options\n{options}\n\n## Commands\n{commands}\n', 'config': {'name': 'weather', 'version': '1.0', 'repeat': False, 'margin': 79, 'positional_argument_usage_format': '<{name.upper()}>', 'doc': None, 'templates': 'usage: {usage}\n\n{summary}\n\n{doc}\n\n## Arguments\n{arguments}\n\n## Options\n{options}\n\n## Commands\n{commands}\n'}, 'commands': '_COMMANDS', 'global': None, 'default': None}
 
 Appeal = compiled_appeal(_SPEC, globals())

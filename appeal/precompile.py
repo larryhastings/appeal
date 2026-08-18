@@ -94,6 +94,24 @@ def compiled_appeal(spec, namespace):
             # re-registration replaces (v1: the second wins)
             self._bound[id(entry)] = (entry, label, fn)
 
+        # the shim walks the runtime Command TREE (ruled 2026-08-17):
+        # the manifest names it, and each Command carries its own
+        # fingerprint/options/arguments/converters.  These resolve it
+        # against the module globals.
+
+        def _cmd_table(self):
+            "The top-level {word: Command} dispatch table."
+            name = spec.get('commands')
+            return namespace[name] if name else {}
+
+        def _global_cmd(self):
+            name = spec.get('global')
+            return namespace[name] if name else None
+
+        def _default_cmd(self):
+            name = spec.get('default')
+            return namespace[name] if name else None
+
         def _command_in(self, table, prefix, name, repeat, parent):
             if parent is not None:
                 if name is not None:
@@ -102,20 +120,22 @@ def compiled_appeal(spec, namespace):
                         "not both")
                 name = parent
             def fetch(word):
-                entry = table.get(word)
-                if entry is None:
-                    known = ', '.join(sorted(table)) or '(none)'
+                cmd = table.get(word)
+                if cmd is None or cmd.fingerprint is None:
+                    known = ', '.join(sorted(
+                        w for w, c in table.items()
+                        if c.fingerprint is not None)) or '(none)'
                     where = (f"under {prefix!r}" if prefix
                              else "at the top level")
                     raise AppealConfigurationError(
                         f"this compiled parser has no command "
                         f"{word!r} {where} (it knows: {known}); "
                         f"regenerate the compiled module")
-                if repeat and not entry.get('repeat'):
+                if repeat and not cmd.repeat:
                     self._staleness.append(
                         f"command {word!r}: repeat=True now, but "
                         f"this parser was compiled without it")
-                return entry
+                return cmd
             def label(word):
                 return (prefix + ' ' + word).strip()
             if name is not None:
@@ -128,49 +148,51 @@ def compiled_appeal(spec, namespace):
 
         def subcommand(self, parent, name=None, *, repeat=False):
             # the explicit spelling (ruled 2026-08-10): parent is
-            # a word path string or None; the baked spec IS the
-            # resolved tree, so the path checks immediately
+            # a word path string or None; the baked Command tree IS
+            # the resolved tree, so the path checks immediately
             if parent is None:
                 return self.command(name, repeat=repeat)
             if not isinstance(parent, str):
                 raise AppealConfigurationError(
                     f"subcommand: the parent is a command word "
                     f"path (a string) or None, not {parent!r}")
-            table = spec['commands']
+            table = self._cmd_table()
             label = ''
             for word in parent.split():
-                entry = table.get(word)
-                if entry is None:
+                cmd = table.get(word)
+                if cmd is None:
                     raise AppealConfigurationError(
                         f"this compiled parser has no command at "
                         f"path {parent!r}; regenerate the "
                         f"compiled module")
                 label = (label + ' ' + word).strip()
-                table = entry.get('commands') or {}
+                table = cmd.subcommands
             return self._command_in(table, label, name, repeat,
                                     None)
 
         def command(self, name=None, *, repeat=False, parent=None):
-            return self._command_in(spec['commands'], '',
+            return self._command_in(self._cmd_table(), '',
                                     name, repeat, parent)
 
         def default_command(self):
             def register(fn):
-                if spec.get('default') is None:
+                cmd = self._default_cmd()
+                if cmd is None:
                     raise AppealConfigurationError(
                         "this compiled parser has no root default "
                         "command; regenerate the compiled module")
-                self._bind(spec['default'], '<default>', fn)
+                self._bind(cmd, '<default>', fn)
                 return fn
             return register
 
         def global_command(self):
             def register(fn):
-                if spec['global'] is None:
+                cmd = self._global_cmd()
+                if cmd is None:
                     raise AppealConfigurationError(
                         "this compiled parser has no global "
                         "command; regenerate the compiled module")
-                self._bind(spec['global'], '<global>', fn)
+                self._bind(cmd, '<global>', fn)
                 return fn
             return register
 
@@ -213,29 +235,33 @@ def compiled_appeal(spec, namespace):
         # -- verification: all-or-nothing, at main() -------------
 
         def _walk_spec(self):
-            """Every entry in the baked tree, with what to call it."""
+            """Every verifiable Command in the tree, with its label."""
             out = []
-            if spec['global'] is not None:
-                out.append((spec['global'], 'the global command'))
-            if spec.get('default') is not None:
-                out.append((spec['default'], 'the default command'))
+            g = self._global_cmd()
+            if g is not None:
+                out.append((g, 'the global command'))
+            d = self._default_cmd()
+            if d is not None:
+                out.append((d, 'the default command'))
             def walk(table, prefix):
-                for word, entry in table.items():
+                for word, cmd in table.items():
+                    if cmd.fingerprint is None:
+                        continue    # the fused version/help autos
                     label = (prefix + ' ' + word).strip()
-                    out.append((entry, f'command {label!r}'))
-                    if entry.get('default') is not None:
-                        out.append((entry['default'],
+                    out.append((cmd, f'command {label!r}'))
+                    if cmd.default is not None:
+                        out.append((cmd.default,
                                     f'the default command of '
                                     f'{label!r}'))
-                    walk(entry.get('commands') or {}, label)
-            walk(spec['commands'], '')
+                    walk(cmd.subcommands, label)
+            walk(self._cmd_table(), '')
             return out
 
         def _verify_and_bind(self):
             problems = list(self._staleness)
             known = set()       # everything this parser resolves
-            for entry, what in self._walk_spec():
-                binding = self._bound.get(id(entry))
+            for cmd, what in self._walk_spec():
+                binding = self._bound.get(id(cmd))
                 if binding is None:
                     problems.append(
                         f"{what} was compiled in but never "
@@ -243,7 +269,7 @@ def compiled_appeal(spec, namespace):
                     continue
                 _, _, fn = binding
                 known.add(fn)
-                if fingerprint(fn) != entry['fingerprint']:
+                if fingerprint(fn) != cmd.fingerprint:
                     problems.append(
                         f"{what} has changed since this parser "
                         f"was compiled (signature, defaults, "
@@ -251,14 +277,15 @@ def compiled_appeal(spec, namespace):
                     continue
                 if decoration_fingerprint(
                         fn, self._option_overrides,
-                        self._parameter_usage) != entry['decorations']:
+                        self._parameter_usage) != (cmd.options,
+                                                   cmd.arguments):
                     problems.append(
-                        f"{what}: its @app.option/@app.parameter "
+                        f"{what}: its @app.option/@app.argument "
                         f"decorations have changed since this "
                         f"parser was compiled")
                     continue
                 known.add(fn)
-                for ref_name, path, ref_fpr, ref_decor in entry['refs']:
+                for ref_name, path, ref_fpr, ref_decor in cmd.converters:
                     try:
                         obj = resolve_fingerprint_path(
                             fn, path, self._option_overrides)
@@ -288,10 +315,9 @@ def compiled_appeal(spec, namespace):
                             f"compiled")
                         continue
                     namespace[ref_name] = obj
-                if entry['impl'] is not None:
-                    # bind the live function onto its Command object
-                    # (the shared dispatch record)
-                    namespace[entry['impl']].callable = fn
+                # bind the live function onto its Command (the entry
+                # in the walk IS the Command object)
+                cmd.callable = fn
             # a decoration aimed at something this parser never
             # resolves is drift too--yell, don't ignore
             for registry in (self._option_overrides,
@@ -387,18 +413,19 @@ def compiled_appeal(spec, namespace):
                     decorator(fn)
                     replay_decorations(fn)
 
-            register(bound(spec['global']), real.global_command())
-            register(bound(spec.get('default')), real.default_command())
+            register(bound(self._global_cmd()), real.global_command())
+            register(bound(self._default_cmd()), real.default_command())
 
             def walk(node, table):
-                for word, entry in table.items():
+                for word, cmd in table.items():
+                    if cmd.fingerprint is None:
+                        continue    # the fused version/help autos
                     child = node.command(word)
-                    register(bound(entry), child)
-                    register(bound(entry.get('default')),
-                             child.default_command())
-                    if entry.get('commands'):
-                        walk(child, entry['commands'])
-            walk(real, spec['commands'])
+                    register(bound(cmd), child)
+                    register(bound(cmd.default), child.default_command())
+                    if cmd.subcommands:
+                        walk(child, cmd.subcommands)
+            walk(real, self._cmd_table())
             return real
 
         def _topic_for(self, fn):
@@ -531,11 +558,11 @@ def compiled_appeal(spec, namespace):
 
         def command(self, name=None, *, repeat=False, parent=None):
             return self._shim._command_in(
-                self._entry.get('commands') or {}, self._label,
+                self._entry.subcommands, self._label,
                 name, repeat, parent)
 
         def default_command(self):
-            entry = self._entry.get('default')
+            entry = self._entry.default
             def register(fn):
                 if entry is None:
                     raise AppealConfigurationError(
