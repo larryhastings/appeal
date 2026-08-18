@@ -21,6 +21,7 @@ import sys
 from appeal.runtime import (
     parse_tokens,
     tokenize,
+    fold_ir,
     convert,
     fold,
     call_converter,
@@ -86,7 +87,7 @@ def _fill_option_value(operands, i, remaining, given):
 def scan_weather(argv, command_words=None):
     # the global command: its arguments end at the first
     # operand naming a command (or at the maximum)
-    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'report', 'help', 'version', 'sync', 'forecast'})))
+    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'sync', 'forecast', 'version', 'help', 'report'})))
     if given.pop('-V', False) or given.pop('--version', False):
         print('1.0')
         raise SystemExit(0)
@@ -214,43 +215,49 @@ _OPTIONS_sync = {'-v': ('--verbose', 'fold', 0, 0), '--verbose': ('--verbose', '
 
 def scan_sync(argv, command_words=None):
     if command_words is None:
-        operands, given = parse_tokens(argv, _OPTIONS_sync, None)
+        tokens = tokenize(argv, _OPTIONS_sync, None)
         rest = []
     else:
-        # cycling: the boundary is greedy saturation--the
-        # first non-option token after 1 argument is
-        # the next command word, whatever it looks like
-        operands, given, rest = parse_tokens(argv, _OPTIONS_sync, None, command_split=(1, 1, command_words))
-    if given.get('--help'):
+        tokens, rest = tokenize(argv, _OPTIONS_sync, None, command_split=(1, 1, command_words))
+    operands = [_s for _t in tokens if _t[0] == '' for _s in _t[1:]]
+    if any(_t[0] == '--help' for _t in tokens):
         # help outranks a malformed line (pinned order)
-        return operands, given, rest, None
+        return operands, tokens, rest, None
     check_count(len(operands), 1, 1, {1}, None)
-    return operands, given, rest, None
+    return operands, tokens, rest, None
 
-def run_sync(operands, given, positions=None, env=None, command=None):
-    if given.pop('--help', False):
+def run_sync(operands, tokens, positions=None, env=None, command=None):
+    if any(_t[0] == '--help' for _t in tokens):
         raise _CompiledHelp(command)
+    verbose = 0
+    tag = ()
+    mode = 'safe'
+    _occ_verbose = []
+    _occ_tag = []
+    for _t in tokens:
+        _k = _t[0]
+        if _k == '--verbose':
+            _occ_verbose.append(_t[1:])
+        elif _k == '--tag':
+            _occ_tag.append(_t[1:])
+        elif _k == '--mode':
+            mode = convert(_validate, _t[1], 'mode', None)
+    if _occ_verbose:
+        verbose = fold(_counter, (), _occ_verbose, 0, 'verbose', None)
+    if _occ_tag:
+        tag = fold(_accumulator, (str,), _occ_tag, (), 'tag', None)
     n = len(operands)
     i = 0
     remaining = n
     source = convert(_split, operands[i], 'source', None)
     i += 1
     remaining -= 1
-    verbose = 0
-    if '--verbose' in given:
-        verbose = fold(_counter, (), given['--verbose'], 0, 'verbose', None)
-    tag = ()
-    if '--tag' in given:
-        tag = fold(_accumulator, (str,), given['--tag'], (), 'tag', None)
-    mode = 'safe'
-    if '--mode' in given:
-        mode = convert_value((_validate,), given['--mode'], 'mode', None)
     return command.callable(source, verbose=verbose, tag=tag, mode=mode)
 
 _CMD_sync = Command('sync', scan=scan_sync, run=run_sync, fingerprint=(1, 0, 3, False, False, ('source', 'verbose', 'tag', 'mode'), 'None', "{'verbose': 0, 'tag': (), 'mode': 'safe'}", (('mode', "recipe:call:validate:('fast', 'safe'):{'type': <class 'str'>}"), ('source', "recipe:call:split:(':',):{}"), ('tag', "recipe:subscript:accumulator:(<class 'str'>,):{}"), ('verbose', "recipe:call:counter:():{'max': None, 'step': 1}"))), options=(), arguments=())
 def parse_sync(argv):
-    operands, given, rest, positions = scan_sync(argv)
-    return run_sync(operands, given, positions, command=_CMD_sync)
+    operands, tokens, rest, positions = scan_sync(argv)
+    return run_sync(operands, tokens, positions, command=_CMD_sync)
 
 
 
