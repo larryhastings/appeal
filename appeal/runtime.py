@@ -249,8 +249,6 @@ def parse_tokens(argv, options, usage=None, command_split=None,
     """
     operands = []
     given = {}
-    it = iter(argv)
-    force_positional = False
 
     seq = [0]
 
@@ -308,185 +306,61 @@ def parse_tokens(argv, options, usage=None, command_split=None,
         else:   # 'multi' collects raw strings; 'fold' tuples of them
             given.setdefault(key, []).append(value)
 
-    def flag_value(name, text):
-        # a flag's explicit '=' value: exactly these two
-        # spellings (ruled 2026-07-09)--no yes/no/on/off zoo
-        if text == 'true':
-            return True
-        if text == 'false':
-            return False
-        raise UsageError(
-            f"option {name!r}: '=' value must be 'true' or "
-            f"'false', not {text!r}", usage)
+    # STAGE 1: recognition now lives once, in tokenize(); it walks
+    # the command line into the uniform IR (operand runs interleaved
+    # with canonical option tuples).  Every recognition error--
+    # unknown option, "requires a value", a value on a flag, a bad
+    # '=' boolean--raises THERE, in argv order, before we fold.
+    if command_split is not None:
+        tokens, rest = tokenize(argv, options, usage, command_split)
+    else:
+        tokens = tokenize(argv, options, usage)
 
-    for token in it:
-        if force_positional or (not token.startswith('-')) or (token == '-'):
-            if command_split is not None:
-                minimum, maximum, command_words = command_split
-                n = len(operands)
-                if ((maximum is not None and n >= maximum)
-                        or (n >= minimum and token in command_words)):
-                    return operands, given, [token] + list(it)
-            operands.append(token)
+    # the IR carries only canonical keys; recover each key's kind and
+    # arity from the string table (all of an option's strings share
+    # one entry shape).
+    by_key = {}
+    for _s, _entry in options.items():
+        by_key.setdefault(_entry[0], _entry)
+
+    # STAGE 1.5 (transitional): fold the IR into operands + given,
+    # exactly as the old inline recognizer did--record() is untouched,
+    # so `given`, the positions dict, and the seq clock are identical.
+    # This value-shaping + occurrence tangle is what Larry's design
+    # moves into the generated stage-2 walk; isolated here for now.
+    for token in tokens:
+        key = token[0]
+        if key == '':
+            operands.extend(token[1:])
             continue
-
-        if token == '--':
-            force_positional = True
-            continue
-
-        if token.startswith('--'):
-            name_part, equals, value_part = token.partition('=')
-            entry = options.get(name_part)
-            if entry is None:
-                tail = did_you_mean(
-                    name_part,
-                    [s for s in options if s.startswith('--')])
-                raise UsageError(
-                    f"unknown option {name_part!r}{tail}", usage)
-            key, kind = entry[0], entry[1]
-            base = kind[2:] if kind[:2] in ('w:', 's:') else kind
-            if base in ('fold', 'fold1', 'group'):
-                minimum = entry[2]
-                maximum = entry[3] if len(entry) > 3 else entry[2]
+        entry = by_key[key]
+        kind = entry[1]
+        base = kind[2:] if kind[:2] in ('w:', 's:') else kind
+        if base in ('fold', 'fold1', 'group'):
+            maximum = entry[3] if len(entry) > 3 else entry[2]
+        else:
+            maximum = entry[2] if len(entry) > 2 else 1
+        raws = token[1:]
+        if base in ('flag', 'nullary') or maximum == 0:
+            if raws:
+                # a flag's explicit boolean, carried by tokenize as the
+                # literal 'true'/'false' (already validated there)
+                value = raws[0] == 'true'
             else:
-                minimum = maximum = entry[2] if len(entry) > 2 else 1
-            if base in ('flag', 'nullary') or maximum == 0:
-                # flags, value-producing flags, zero-operand
-                # folds, options-only groups
-                if equals:
-                    if base != 'flag':
-                        raise UsageError(
-                            f"option {name_part!r} doesn't take a value",
-                            usage)
-                    # a flag with an explicit boolean: --verbose=false
-                    # overrides anything a config layer said
-                    record(key, kind, flag_value(name_part, value_part))
-                    continue
-                # a flag's presence stores the value in its table
-                # entry (v1: `not default`; a bare entry--the auto
-                # help flag--stores True); nullary presence is
-                # just True (the converter supplies the value)
-                record(key, kind,
-                       entry[2] if base == 'flag' and len(entry) > 2
-                       else True if base in ('flag', 'nullary') else ())
-                continue
-            if equals:
-                if maximum > 1:
-                    counts = (f'{maximum} values' if minimum == maximum
-                              else f'up to {maximum} values')
-                    raise UsageError(
-                        f"option {name_part!r} takes {counts} "
-                        f"and can't use '='", usage)
-                record(key, kind,
-                       (value_part,) if base in ('fold', 'fold1', 'group')
-                       else value_part)
-                continue
-            # greedy to the maximum: an optional operand takes the
-            # next token unconditionally, whatever it looks like
-            # (v1, probed: -j -5 works, -j -v is a loud conversion
-            # error)--EXCEPT '--', the terminator, which outranks
-            # greed once the minimum is satisfied (ruled
-            # 2026-07-09, POSIX guideline 10: only a REQUIRED
-            # oparg may consume '--', the `grep -e --` idiom)
-            values = []
-            for value in it:
-                if value == '--' and len(values) >= minimum:
-                    force_positional = True
-                    break
-                values.append(value)
-                if len(values) == maximum:
-                    break
-            if len(values) < minimum:
-                raise UsageError(
-                    f"option {name_part!r} requires "
-                    f"{'a value' if minimum == 1 else f'{minimum} values'}",
-                    usage)
-            record(key, kind,
-                   tuple(values)
-                   if (base in ('fold', 'fold1', 'group') or maximum != 1)
-                   else values[0])
-            continue
-
-        # a negative number is an operand, unless the program
-        # defines that exact short option (v1)
-        if token[1].isdigit() and ('-' + token[1]) not in options:
-            if command_split is not None:
-                minimum, maximum, command_words = command_split
-                n = len(operands)
-                if ((maximum is not None and n >= maximum)
-                        or (n >= minimum and token in command_words)):
-                    return operands, given, [token] + list(it)
-            operands.append(token)
-            continue
-
-        # single dash: one short option, possibly a bundle of flags
-        chars = token[1:]
-        for index, c in enumerate(chars):
-            entry = options.get('-' + c)
-            if entry is None:
-                raise UsageError(f"unknown option {'-' + c!r}", usage)
-            key, kind = entry[0], entry[1]
-            base = kind[2:] if kind[:2] in ('w:', 's:') else kind
-            if base in ('fold', 'fold1', 'group'):
-                minimum = entry[2]
-                maximum = entry[3] if len(entry) > 3 else entry[2]
-            else:
-                minimum = maximum = entry[2] if len(entry) > 2 else 1
-            if base in ('flag', 'nullary') or maximum == 0:
-                rest = chars[index + 1:]
-                if rest.startswith('='):
-                    if base != 'flag':
-                        raise UsageError(
-                            f"option {'-' + c!r} doesn't take a value",
-                            usage)
-                    record(key, kind, flag_value('-' + c, rest[1:]))
-                    break
-                record(key, kind,
-                       entry[2] if base == 'flag' and len(entry) > 2
-                       else True if base in ('flag', 'nullary') else ())
-                continue
-            rest = chars[index + 1:]
-            if rest:
-                # attachment, getopt's rule (adopted 2026-07-09,
-                # overturning v1's refusal): for an option taking
-                # exactly one value, the rest of the token IS the
-                # oparg--`-fjoe` is `-f joe`, `-DX=1` is
-                # `-D 'X=1'`.  A leading '=' is the separator
-                # spelling and is stripped (`-f=joe` is `joe`).
-                if maximum == 1:
-                    if rest.startswith('='):
-                        rest = rest[1:]
-                    record(key, kind,
-                           (rest,) if base in ('fold', 'fold1', 'group')
-                           else rest)
-                    break
-                counts = (f'{maximum} values' if minimum == maximum
-                          else f'up to {maximum} values')
-                raise UsageError(
-                    f"option {'-' + c!r} takes {counts} and "
-                    f"must be last in a bundle", usage)
-            # last in its bundle: greedy to the maximum (see the
-            # long-option form above, '--' carve-out included)
-            values = []
-            for value in it:
-                if value == '--' and len(values) >= minimum:
-                    force_positional = True
-                    break
-                values.append(value)
-                if len(values) == maximum:
-                    break
-            if len(values) < minimum:
-                raise UsageError(
-                    f"option {'-' + c!r} requires "
-                    f"{'a value' if minimum == 1 else f'{minimum} values'}",
-                    usage)
-            record(key, kind,
-                   tuple(values)
-                   if (base in ('fold', 'fold1', 'group') or maximum != 1)
-                   else values[0])
+                # presence: a flag stores its entry's value (v1's `not
+                # default`; the bare auto-help entry stores True);
+                # nullary is True; an options-only group is ()
+                value = (entry[2] if base == 'flag' and len(entry) > 2
+                         else True if base in ('flag', 'nullary') else ())
+        else:
+            values = list(raws)
+            value = (tuple(values)
+                     if (base in ('fold', 'fold1', 'group') or maximum != 1)
+                     else values[0])
+        record(key, kind, value)
 
     if command_split is not None:
-        return operands, given, []
+        return operands, given, rest
     return operands, given
 
 
