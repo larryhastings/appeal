@@ -512,11 +512,14 @@ class Command:
     None in a compiled module (which renders live).
     """
     __slots__ = ('name', 'callable', 'scan', 'run', 'subcommands',
-                 'words', 'repeat', 'usage', 'default', 'fused')
+                 'words', 'repeat', 'usage', 'default', 'fused',
+                 'fingerprint', 'options', 'arguments', 'converters')
 
     def __init__(self, name=None, *, callable=None, scan=None, run=None,
                  subcommands=None, words=None, repeat=False,
-                 usage=None, default=None, fused=None):
+                 usage=None, default=None, fused=None,
+                 fingerprint=None, options=None, arguments=None,
+                 converters=None):
         self.name = name
         self.callable = callable
         self.scan = scan
@@ -527,6 +530,15 @@ class Command:
         self.usage = usage
         self.default = default
         self.fused = fused
+        # compile-time verification data a COMPILED module carries so
+        # its shim can police drift (all None in-process, and None on
+        # fused auto commands): the recursive signature fingerprint,
+        # the @option and @argument decoration digests, and the
+        # reachable converters (path + drift) for live binding.
+        self.fingerprint = fingerprint
+        self.options = options
+        self.arguments = arguments
+        self.converters = converters
 
     def __repr__(self):
         kind = ('fused' if self.fused else
@@ -541,23 +553,33 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
     portion, command word, command portion--with no user code.  A
     malformed line dies here, before anything runs (Appeal rule).
 
-    parse_globals is a (scan, run) pair; each commands value is a
-    Command (leaf, nested set, or fused auto command).  With repeat
-    (Appeal's cycling), a command's arguments--all of them, optional
-    included--may be followed by another command word, resolved
-    against `words`; scanning loops until the line runs out.  Returns
-    (invocations, tail): invocations is a list of (word, run,
-    operands, given, positions)--word None for the global
-    command--and tail is the odd trailing job, if any: ('fused',
-    word, callable, tokens) for a fused Command (a nested dispatcher,
-    or the generated help command--scanned and executed together), or
-    ('default',) for an empty line with a default command.
+    parse_globals is the global command's Command (or None); each
+    commands value is a Command (leaf, nested set, or fused auto
+    command).  With repeat (Appeal's cycling), a command's
+    arguments--all of them, optional included--may be followed by
+    another command word, resolved against `words`; scanning loops
+    until the line runs out.  Returns (invocations, tail):
+    invocations is a list of (word, command, operands, given,
+    positions)--word None for the global command--and tail is the
+    odd trailing job, if any: ('fused', word, callable, tokens) for a
+    fused Command, or ('default',) for an empty line with a default
+    command.  A compiled command bakes no usage, so any error from
+    its scan is tagged HERE with its Command (its own operand error--
+    a usage line, not the set listing).
     """
+    def do_scan(command, *args):
+        try:
+            return command.scan(*args)
+        except DataError as e:
+            if e.command is None:
+                e.command = command
+            raise
+
     invocations = []
     if parse_globals is not None:
-        scan_globals, run_globals = parse_globals
-        operands, given, rest, positions = scan_globals(argv)
-        invocations.append((None, run_globals, operands, given, positions))
+        operands, given, rest, positions = do_scan(parse_globals, argv)
+        invocations.append((None, parse_globals, operands, given,
+                            positions))
     else:
         rest = list(argv)
     if not rest:
@@ -620,9 +642,9 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
             # command of its own little set
             stack.append({'command': entry, 'entered': False})
             boundary = resolvable_words()
-            operands, given, rest, positions = entry.scan(
-                rest[1:], boundary)
-            invocations.append((word, entry.run, operands, given,
+            operands, given, rest, positions = do_scan(
+                entry, rest[1:], boundary)
+            invocations.append((word, entry, operands, given,
                                 positions))
             continue
         if entry.fused is not None:
@@ -630,10 +652,9 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
             # separation inside is its own business)
             return invocations, ('fused', word, entry.fused, rest[1:])
         boundary = resolvable_words()
-        operands, given, rest, positions = entry.scan(
-            rest[1:], boundary or None)
-        invocations.append((word, entry.run, operands, given,
-                            positions))
+        operands, given, rest, positions = do_scan(
+            entry, rest[1:], boundary or None)
+        invocations.append((word, entry, operands, given, positions))
 
     if len(stack) > 1 and not stack[-1]['entered']:
         # a parent was named but its set never got a command: the
@@ -642,8 +663,8 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
         if d is None:
             raise tag(UsageError("no command specified.",
                                  stack[-1]['command'].usage), stack[-1])
-        operands, given, _, positions = d.scan([], None)
-        invocations.append((None, d.run, operands, given, positions))
+        operands, given, _, positions = do_scan(d, [], None)
+        invocations.append((None, d, operands, given, positions))
     return invocations, None
 
 
@@ -672,15 +693,27 @@ def run_command_set(argv, parse_globals, commands, usage=None,
         return 1
     result = None
     env = {}    # class-based commands: instances live here
-    for word, run, operands, given, positions in invocations:
-        result = run(operands, given, positions, env)
+    for word, command, operands, given, positions in invocations:
+        # the command runs with its OWN Command in hand (for the live
+        # callable and its -h); a compiled command bakes no usage, so
+        # its convert-time errors get tagged with it here
+        try:
+            result = command.run(operands, given, positions, env,
+                                  command)
+        except DataError as e:
+            if e.command is None:
+                e.command = command
+            raise
         if (isinstance(result, int)
                 and not isinstance(result, bool) and result):
             return result
     if tail is not None:
         if tail[0] == 'fused':
             return tail[2](tail[3])
-        return default([])
+        # ('default',): the root default command (a Command), run
+        # with its own Command in hand like any other
+        operands, given, rest, positions = default.scan([])
+        return default.run(operands, given, positions, {}, default)
     return result
 
 

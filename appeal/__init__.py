@@ -414,10 +414,9 @@ class Processor:
                 self._config = (vetted, dict(config))
         kind = app._pieces[0]
         if kind == 'single':
-            _, fused = app._pieces
-            operands, given, rest, positions = fused.scan(argv)
-            self.invocations = [(None, fused.run, operands, given,
-                                 positions)]
+            _, cmd = app._pieces
+            operands, given, rest, positions = cmd.scan(argv)
+            self.invocations = [(None, cmd, operands, given, positions)]
             self._tail = None
             return self
         (_, parse_globals, commands, usage, default, auto_help,
@@ -459,7 +458,7 @@ class Processor:
             return 1
         result = None
         env = {}    # class-based commands: instances live here
-        for word, run, operands, given, positions in self.invocations:
+        for word, cmd, operands, given, positions in self.invocations:
             injected = None
             if word is None and self._config is not None:
                 # the config layer: defaults < config < argv,
@@ -477,7 +476,7 @@ class Processor:
                 injected_params.update(injected_name.split('.'))
                 injected_params.add(injected_key)
             try:
-                result = run(operands, given, positions, env)
+                result = cmd.run(operands, given, positions, env, cmd)
             except UsageError as e:
                 # provenance travels structurally: the error says
                 # WHICH parameter it's about (e.param), and only
@@ -516,7 +515,9 @@ class Processor:
                     # which are never registered
                     self.instances.append((command, None))
             else:   # 'default'
-                result = app._pieces[4]([])
+                d = app._pieces[4]
+                operands, given, rest, positions = d.scan([])
+                result = d.run(operands, given, positions, {}, d)
                 self.instances.append((app._default, None))
         self.result = result
         return result
@@ -580,11 +581,12 @@ class _CompileOnDispatch:
         if node is not None and node._children:
             return app._set_entry_for(word, node)
         parse = self.app._parse_for(word)
+        fn = node._command_callable() if node is not None else None
         if hasattr(parse, 'scan'):
             # two-stage dispatch (parse-before-execute): the shared
-            # Command record (in-process, its callable is unused--the
-            # dispatcher reads scan/run, errors render baked usage)
-            return _Command(word, scan=parse.scan, run=parse.run)
+            # Command record--run() calls command.callable
+            return _Command(word, callable=fn, scan=parse.scan,
+                            run=parse.run)
         # fused: _parse_for compiles every registered word two-stage
         # and nested parents are intercepted above; belt and braces
         return _Command(word, fused=parse)   # pragma: no cover
@@ -1892,7 +1894,8 @@ class Appeal:
                                     templates=self.templates,
                                     stylesheet=self.stylesheet,
                                     max_columns=self.margin)
-            sub_default = _Command(scan=compiled.scan, run=compiled.run)
+            sub_default = _Command(callable=default_fn,
+                                   scan=compiled.scan, run=compiled.run)
         else:
             sub_default = None
         entry = _Command(word, callable=node._command_callable(),
@@ -1925,9 +1928,11 @@ class Appeal:
             parse.scan = fused.scan
             parse.run = fused.run
             parse.source = fused.source
+            single = _Command(callable=self.global_plan.callable,
+                              scan=fused.scan, run=fused.run)
             with self._lock:
                 if self._parse is None:
-                    self._pieces = ('single', fused)
+                    self._pieces = ('single', single)
                     self._parse = parse
                 return self._parse
 
@@ -1941,7 +1946,8 @@ class Appeal:
                 max_columns=self.margin,
                 command_split=(global_plan.minimum, global_plan.maximum,
                                command_words))
-            parse_globals = (fused.scan, fused.run)
+            parse_globals = _Command(callable=global_plan.callable,
+                                     scan=fused.scan, run=fused.run)
         else:
             parse_globals = None
         from .help import summary, command_set_corpus
@@ -1958,10 +1964,15 @@ class Appeal:
         commands = _CompileOnDispatch(self, usage)
         auto_help = self._help_enabled and 'help' not in table
 
-        default = (compile_plan(self._build(self._default), templates=self.templates,
-                                stylesheet=self.stylesheet,
-                                max_columns=self.margin)
-                   if self._default is not None else None)
+        if self._default is not None:
+            d_plan = self._build(self._default)
+            d_fused = compile_plan(d_plan, templates=self.templates,
+                                   stylesheet=self.stylesheet,
+                                   max_columns=self.margin)
+            default = _Command(callable=d_plan.callable,
+                               scan=d_fused.scan, run=d_fused.run)
+        else:
+            default = None
 
         pieces = ('set', parse_globals, commands, usage, default,
                   auto_help, self.repeat, command_words)

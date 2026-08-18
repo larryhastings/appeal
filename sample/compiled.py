@@ -42,7 +42,6 @@ from appeal.runtime import (
     UsageError,
     Command,
     _CompiledHelp,
-    _tag_errors,
     optional,
     split,
     validate,
@@ -88,7 +87,7 @@ def _fill_option_value(operands, i, remaining, given):
 def scan_weather(argv, command_words=None):
     # the global command: its arguments end at the first
     # operand naming a command (or at the maximum)
-    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'help', 'version', 'sync', 'forecast', 'report'})))
+    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'sync', 'help', 'forecast', 'report', 'version'})))
     if given.pop('-V', False) or given.pop('--version', False):
         print('1.0')
         raise SystemExit(0)
@@ -105,7 +104,7 @@ def scan_weather(argv, command_words=None):
         check_count(len(given['--help']), 0, 1, {0, 1}, None, what="option --help", param='--help')
     return operands, given, rest, None
 
-def run_weather(operands, given, positions=None, env=None):
+def run_weather(operands, given, positions=None, env=None, command=None):
     n = len(operands)
     i = 0
     remaining = n
@@ -118,15 +117,10 @@ def run_weather(operands, given, positions=None, env=None):
         raise SystemExit(0)
     return None
 
+_CMD_weather = Command('weather', scan=scan_weather, run=run_weather)
 def parse_weather(argv):
     operands, given, rest, positions = scan_weather(argv)
-    return run_weather(operands, given, positions), rest
-
-_CMD_weather = Command('weather', scan=scan_weather, run=run_weather)
-scan_weather = _tag_errors(scan_weather, _CMD_weather)
-run_weather = _tag_errors(run_weather, _CMD_weather)
-_CMD_weather.scan = scan_weather
-_CMD_weather.run = run_weather
+    return run_weather(operands, given, positions, command=_CMD_weather), rest
 
 
 
@@ -149,9 +143,9 @@ def scan_report(argv, command_words=None):
     check_count(len(operands), 1, 1, {1}, None)
     return operands, given, rest, None
 
-def run_report(operands, given, positions=None, env=None):
+def run_report(operands, given, positions=None, env=None, command=None):
     if given.pop('--help', False):
-        raise _CompiledHelp(_CMD_report)
+        raise _CompiledHelp(command)
     n = len(operands)
     i = 0
     remaining = n
@@ -162,17 +156,12 @@ def run_report(operands, given, positions=None, env=None):
     if '--units' in given:
         units = convert_value((str,), given['--units'], 'units', None)
     verbose = given.get('--verbose', False)
-    return _CMD_report.callable(city, units=units, verbose=verbose)
-
-def parse_report(argv):
-    operands, given, rest, positions = scan_report(argv)
-    return run_report(operands, given, positions)
+    return command.callable(city, units=units, verbose=verbose)
 
 _CMD_report = Command('report', scan=scan_report, run=run_report)
-scan_report = _tag_errors(scan_report, _CMD_report)
-run_report = _tag_errors(run_report, _CMD_report)
-_CMD_report.scan = scan_report
-_CMD_report.run = run_report
+def parse_report(argv):
+    operands, given, rest, positions = scan_report(argv)
+    return run_report(operands, given, positions, command=_CMD_report)
 
 
 
@@ -195,9 +184,9 @@ def scan_forecast(argv, command_words=None):
     check_count(len(operands), 1, 2, {1, 2}, None)
     return operands, given, rest, None
 
-def run_forecast(operands, given, positions=None, env=None):
+def run_forecast(operands, given, positions=None, env=None, command=None):
     if given.pop('--help', False):
-        raise _CompiledHelp(_CMD_forecast)
+        raise _CompiledHelp(command)
     n = len(operands)
     i = 0
     remaining = n
@@ -211,17 +200,12 @@ def run_forecast(operands, given, positions=None, env=None):
         remaining -= 1
     else:
         days = 3
-    return _CMD_forecast.callable(city, days)
-
-def parse_forecast(argv):
-    operands, given, rest, positions = scan_forecast(argv)
-    return run_forecast(operands, given, positions)
+    return command.callable(city, days)
 
 _CMD_forecast = Command('forecast', scan=scan_forecast, run=run_forecast)
-scan_forecast = _tag_errors(scan_forecast, _CMD_forecast)
-run_forecast = _tag_errors(run_forecast, _CMD_forecast)
-_CMD_forecast.scan = scan_forecast
-_CMD_forecast.run = run_forecast
+def parse_forecast(argv):
+    operands, given, rest, positions = scan_forecast(argv)
+    return run_forecast(operands, given, positions, command=_CMD_forecast)
 
 
 
@@ -244,9 +228,9 @@ def scan_sync(argv, command_words=None):
     check_count(len(operands), 1, 1, {1}, None)
     return operands, given, rest, None
 
-def run_sync(operands, given, positions=None, env=None):
+def run_sync(operands, given, positions=None, env=None, command=None):
     if given.pop('--help', False):
-        raise _CompiledHelp(_CMD_sync)
+        raise _CompiledHelp(command)
     n = len(operands)
     i = 0
     remaining = n
@@ -262,17 +246,12 @@ def run_sync(operands, given, positions=None, env=None):
     mode = 'safe'
     if '--mode' in given:
         mode = convert_value((_validate,), given['--mode'], 'mode', None)
-    return _CMD_sync.callable(source, verbose=verbose, tag=tag, mode=mode)
-
-def parse_sync(argv):
-    operands, given, rest, positions = scan_sync(argv)
-    return run_sync(operands, given, positions)
+    return command.callable(source, verbose=verbose, tag=tag, mode=mode)
 
 _CMD_sync = Command('sync', scan=scan_sync, run=run_sync)
-scan_sync = _tag_errors(scan_sync, _CMD_sync)
-run_sync = _tag_errors(run_sync, _CMD_sync)
-_CMD_sync.scan = scan_sync
-_CMD_sync.run = run_sync
+def parse_sync(argv):
+    operands, given, rest, positions = scan_sync(argv)
+    return run_sync(operands, given, positions, command=_CMD_sync)
 
 
 
@@ -307,9 +286,9 @@ def parse_help(argv):
         # a nested set: drive its parent -h, which raises
         # the help signal tagged with the parent command
         operands, given, rest, positions = entry.scan(['--help'])
-        return entry.run(operands, given, positions)
+        return entry.run(operands, given, positions, command=entry)
     operands, given, rest, positions = entry.scan(['--help'])
-    return entry.run(operands, given, positions)
+    return entry.run(operands, given, positions, command=entry)
 
 def _print_listing():
     raise _CompiledHelp(None, 0)
@@ -321,7 +300,7 @@ _COMMANDS = {'report': _CMD_report, 'forecast': _CMD_forecast, 'sync': _CMD_sync
 _COMMAND_WORDS = frozenset(('forecast', 'help', 'report', 'sync', 'version',))
 
 def parse_command_set(argv):
-    return run_command_set(argv, (scan_weather, run_weather), _COMMANDS, None, repeat=False, words=_COMMAND_WORDS, listing=_print_terse_listing)
+    return run_command_set(argv, _CMD_weather, _COMMANDS, None, repeat=False, words=_COMMAND_WORDS, listing=_print_terse_listing)
 
 
 # ---- the Appeal your program imports ----

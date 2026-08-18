@@ -2411,8 +2411,10 @@ def test_runtime_token_and_set_edges():
         rc = run_command_set([], None, {}, 'the-usage', None, False,
                              frozenset())
     assert rc == 1 and out.getvalue() == 'usage: the-usage\n'
-    rc = run_command_set([], None, {}, 'u', (lambda argv: 'ran-default'),
-                         False, frozenset())
+    from appeal.runtime import Command
+    d = Command(scan=lambda argv: ([], {}, [], None),
+                run=lambda o, g, p, e, c: 'ran-default')
+    rc = run_command_set([], None, {}, 'u', d, False, frozenset())
     assert rc == 'ran-default'
 
 

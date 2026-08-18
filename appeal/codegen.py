@@ -838,8 +838,9 @@ class _Emitter:
             command_name = None
             self.cmd_callable_ref = None
         else:
-            # calls go THROUGH the Command's callable (live)
-            command_name = f'{cmd_obj}.callable'
+            # calls go THROUGH the Command the dispatcher passes in
+            # (run's `command` param)--live, no per-command global ref
+            command_name = 'command.callable'
             self.cmd_callable_ref = (
                 None if self.compiled
                 else self.refs.add('_' + plan.name.lstrip('_'),
@@ -1002,14 +1003,14 @@ class _Emitter:
         # stage 2: build bottom-up and call--the conversions (user
         # code) and the command itself
         self.line(f'def run_{self.symbol}(operands, given, positions=None, '
-                  f'env=None):')
+                  f'env=None, command=None):')
         if help_keys and self.compiled:
             # a precompiled module bakes no page: -h raises the help
-            # signal tagged with THIS command's Command object (its
-            # callable filled live by the shim); full Appeal renders
-            # the page
+            # signal tagged with the Command the dispatcher passed in
+            # (its callable filled live by the shim); full Appeal
+            # renders the page
             self.line(f"    if given.pop('--help', False):")
-            self.line(f'        raise _CompiledHelp({cmd_obj})')
+            self.line(f'        raise _CompiledHelp(command)')
         elif help_keys:
             # compiled means the documentation too: the whole
             # Markdown pipeline runs at BUILD time (parse, style,
@@ -1129,32 +1130,26 @@ class _Emitter:
             self.line(f'    return {call}')
         self.line()
 
-        # both stages, glued: the fused convenience
-        self.line(f'def {fname}(argv):')
-        self.line(f'    operands, given, rest, positions = scan_{self.symbol}(argv)')
-        if command_split is None:
-            self.line(f'    return run_{self.symbol}(operands, given, positions)')
-        else:
-            self.line(f'    return run_{self.symbol}(operands, given, positions), rest')
-        self.line()
-
         # the Command object: the shared dispatch record.  In-process
         # its callable is the bound ref; compiled, the shim fills it.
+        # Error-tagging lives in the dispatcher now (it holds the
+        # Command), so there are no per-command wrappers.
         callable_kw = ('' if self.cmd_callable_ref is None
                        else f', callable={self.cmd_callable_ref}')
         self.line(f'{cmd_obj} = Command({plan.name!r}{callable_kw}, '
                   f'scan=scan_{self.symbol}, run=run_{self.symbol})')
-        if self.compiled:
-            # tag any help-rendering error from either stage with this
-            # Command--the deepest command wins.  Rebind the module
-            # globals too, so the fused parse_X (which calls them by
-            # name) tags as well; the Command holds the wrapped pair.
-            self.line(f'scan_{self.symbol} = _tag_errors('
-                      f'scan_{self.symbol}, {cmd_obj})')
-            self.line(f'run_{self.symbol} = _tag_errors('
-                      f'run_{self.symbol}, {cmd_obj})')
-            self.line(f'{cmd_obj}.scan = scan_{self.symbol}')
-            self.line(f'{cmd_obj}.run = run_{self.symbol}')
+
+        # both stages, glued: the fused convenience, handing run its
+        # Command (the dispatcher does this for a set; this is the
+        # bare-app / default path)
+        self.line(f'def {fname}(argv):')
+        self.line(f'    operands, given, rest, positions = scan_{self.symbol}(argv)')
+        if command_split is None:
+            self.line(f'    return run_{self.symbol}(operands, given, '
+                      f'positions, command={cmd_obj})')
+        else:
+            self.line(f'    return run_{self.symbol}(operands, given, '
+                      f'positions, command={cmd_obj}), rest')
         self.line()
 
     def emit_completion_table(self):
@@ -1429,7 +1424,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         pieces_name = refs.add('_HELP_command_set', page_pieces,
                                dedupe=False)
         sheet_name = refs.add('_SHEET_command_set', stylesheet, dedupe=False)
-    globals_name = (f'(scan_{sym(global_plan)}, run_{sym(global_plan)})'
+    globals_name = (f'_CMD_{sym(global_plan)}'
                     if global_plan is not None else 'None')
     # every entry is a Command now--leaf or nested set alike
     table = ', '.join(f'{word!r}: _CMD_{sym(plan)}'
@@ -1531,7 +1526,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             '        # a nested set: drive its parent -h, which raises',
             '        # the help signal tagged with the parent command',
             "        operands, given, rest, positions = entry.scan(['--help'])",
-            "        return entry.run(operands, given, positions)",
+            "        return entry.run(operands, given, positions, command=entry)",
             ] if compiled else [
             '        # a nested set: its listing, baked pieces,',
             '        # finished at the real margin',
@@ -1540,7 +1535,7 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             '        return',
             ]) + [
             "    operands, given, rest, positions = entry.scan(['--help'])",
-            '    return entry.run(operands, given, positions)',
+            '    return entry.run(operands, given, positions, command=entry)',
             '',
             ])
     lines.extend([
@@ -1572,16 +1567,11 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
             '        return',
             ])
     if default is not None:
+        # the root default command: an empty line runs it.  Its
+        # Command (emitted by emit_one) goes straight to
+        # run_command_set, which scans+runs it with itself in hand
         emit_one(default)
-        lines.extend([
-            'def parse_default(argv):',
-            '    # the root default command: an empty line runs it',
-            f'    operands, given, rest, positions = '
-            f'scan_{sym(default)}(argv)',
-            f'    return run_{sym(default)}(operands, given, positions)',
-            '',
-            ])
-        default_arg = 'default=parse_default, '
+        default_arg = f'default=_CMD_{sym(default)}, '
     else:
         default_arg = ''
     body.append(f'    return run_command_set(argv, {globals_name}, '
@@ -1846,9 +1836,9 @@ _RUNTIME_IMPORTS = (
     'scopes_for', 'sibling_scopes', 'scoped_forces', 'scoped_window',
     'scoped_resolve', 'scoped_rewind', 'scoped_next',
     'run_command_set', 'UsageError', 'Command',
-    # compiled modules bake no help/usage: -h and the DataError
-    # family route to full Appeal through these
-    '_CompiledHelp', '_tag_errors',
+    # compiled modules bake no help/usage: -h routes to full Appeal
+    # through this signal (error-tagging lives in the dispatcher)
+    '_CompiledHelp',
     # the converter vocabulary (recipe factories, rendered bare)
     'optional', 'split', 'validate', 'validate_range', 'counter',
     'file', 'accumulator', 'mapping',
