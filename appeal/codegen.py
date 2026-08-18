@@ -92,6 +92,25 @@ _RESERVED = frozenset((
     ))
 
 
+def _inlineable(value):
+    """
+    True if value is a simple immutable whose repr round-trips as a
+    literal, so it's safe to inline instead of binding a named ref--
+    there's no identity to preserve (unlike a mutable default, which
+    in-process must be the same object every call).  The round-trip
+    gate rules out floats like inf/nan (whose repr isn't a literal)
+    and containers like frozenset.
+    """
+    if not isinstance(value, (type(None), bool, int, float, str,
+                              bytes, tuple)):
+        return False
+    try:
+        from ast import literal_eval
+        return literal_eval(repr(value)) == value
+    except (ValueError, SyntaxError):
+        return False
+
+
 def _local(name):
     "Parameters named like the emitter's own locals get a suffix."
     return name + '_' if name in _RESERVED else name
@@ -164,6 +183,19 @@ class _Emitter:
             return builtin
         preferred = '_' + getattr(converter, '__name__', 'converter').lstrip('_')
         return self.refs.add(preferred, converter)
+
+    def default_expr(self, name, value):
+        """
+        A parameter's default value as source.  A simple immutable
+        (str/int/bool/None/tuple-of-those) round-trips through repr
+        and has no identity to preserve, so it inlines--`units = 'C'`,
+        not a `_units_default` global used once.  Anything else (a
+        mutable, an object) keeps a bound ref: in-process it must be
+        the SAME object every call.
+        """
+        if _inlineable(value):
+            return repr(value)
+        return self.refs.add(f'_{name}_default', value, dedupe=False)
 
     def converter_expr(self, child):
         converter = child.converter
@@ -335,9 +367,7 @@ class _Emitter:
                     if dry:
                         self.line(f'{pad}    pass')
                     else:
-                        default_name = self.refs.add(
-                            f'_{slot.name}_default', slot.default,
-                            dedupe=False)
+                        default_name = self.default_expr(slot.name, slot.default)
                         self.line(f'{pad}    {_local(slot.name)} = '
                                   f'{default_name}')
                 if self.gated and slot.barrier:
@@ -349,7 +379,7 @@ class _Emitter:
                 if c == 0 and not slot.required:
                     child = slot.child
                     if not dry:
-                        default_name = self.refs.add(f'_{slot.name}_default', slot.default, dedupe=False)
+                        default_name = self.default_expr(slot.name, slot.default)
                     if isinstance(child, Terminal) or not subtree_option_keys(child):
                         self.line(f'{pad2}{_local(slot.name)} = {default_name}'
                                   if not dry else f'{pad2}pass')
@@ -512,7 +542,7 @@ class _Emitter:
                     # @app.option can declare a flag on a parameter
                     # whose own default isn't False; that default
                     # still fills when the flag is absent
-                    absent = self.refs.add(f'_{o.name}_default', o.default, dedupe=False)
+                    absent = self.default_expr(o.name, o.default)
                 source = '_overlay' if scoped_key else 'given'
                 self.line(f'{pad}{_local(o.name)} = '
                           f'{source}.get({key!r}, {absent})')
@@ -524,8 +554,7 @@ class _Emitter:
                 # several rules may share a parameter (per-
                 # declaration @app.option): the first initializes
                 # the default, the winning rule overwrites
-                default_name = self.refs.add(f'_{o.name}_default', o.default,
-                                             dedupe=False)
+                default_name = self.default_expr(o.name, o.default)
                 self.line(f'{pad}{_local(o.name)} = {default_name}')
             if len(siblings) > 1 and not scoped_key:
                 sel = f'_sel_{_ident(o.name)}'
@@ -669,8 +698,7 @@ class _Emitter:
             occurrences = (f'{source}[{key!r}]' if o.kind == 'fold'
                            else f'({source}[{key!r}],)')
             if default_name is None:
-                default_name = self.refs.add(f'_{o.name}_default', o.default,
-                                             dedupe=False)
+                default_name = self.default_expr(o.name, o.default)
             return (f'fold({cls_name}, ({convs}{comma}), {occurrences}, '
                     f'{default_name}, {o.name!r}, {self.usage_const})')
         if o.kind == 'accumulate':

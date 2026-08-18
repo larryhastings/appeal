@@ -58,20 +58,13 @@ from appeal.precompile import compiled_appeal
 
 # ---- your program (bound live at registration) ----
 
-_value_default = None
 _option_value = optional[str]
 def _default_help(topic):
     parse_help([topic] if topic else [])
-_help_default = None
-_units_default = 'C'
-_days_default = 3
 _validate = validate('fast', 'safe', type=str)
 _split = split(':')
 _counter = counter(max=None, step=1)
-_verbose_default = 0
 _accumulator = accumulator[str]
-_tag_default = ()
-_mode_default = 'safe'
 
 
 # ---- generated parser ----
@@ -89,13 +82,13 @@ def _fill_option_value(operands, i, remaining, given):
         i += 1
         remaining -= 1
     else:
-        value = _value_default
+        value = None
     return _option_value(value), i
 
 def scan_weather(argv, command_words=None):
     # the global command: its arguments end at the first
     # operand naming a command (or at the maximum)
-    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'sync', 'version', 'forecast', 'report', 'help'})))
+    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'help', 'version', 'sync', 'forecast', 'report'})))
     if given.pop('-V', False) or given.pop('--version', False):
         print('1.0')
         raise SystemExit(0)
@@ -116,7 +109,7 @@ def run_weather(operands, given, positions=None, env=None):
     n = len(operands)
     i = 0
     remaining = n
-    help = _help_default
+    help = None
     if '--help' in given:
         help = _fill_option_value(list(given['--help']), 0, len(given['--help']), given)[0]
     version = given.get('--version', False)
@@ -165,7 +158,7 @@ def run_report(operands, given, positions=None, env=None):
     city = convert(str, operands[i], 'city', None)
     i += 1
     remaining -= 1
-    units = _units_default
+    units = 'C'
     if '--units' in given:
         units = convert_value((str,), given['--units'], 'units', None)
     verbose = given.get('--verbose', False)
@@ -217,7 +210,7 @@ def run_forecast(operands, given, positions=None, env=None):
         i += 1
         remaining -= 1
     else:
-        days = _days_default
+        days = 3
     return _CMD_forecast.callable(city, days)
 
 def parse_forecast(argv):
@@ -260,13 +253,13 @@ def run_sync(operands, given, positions=None, env=None):
     source = convert(_split, operands[i], 'source', None)
     i += 1
     remaining -= 1
-    verbose = _verbose_default
+    verbose = 0
     if '--verbose' in given:
-        verbose = fold(_counter, (), given['--verbose'], _verbose_default, 'verbose', None)
-    tag = _tag_default
+        verbose = fold(_counter, (), given['--verbose'], 0, 'verbose', None)
+    tag = ()
     if '--tag' in given:
-        tag = fold(_accumulator, (str,), given['--tag'], _tag_default, 'tag', None)
-    mode = _mode_default
+        tag = fold(_accumulator, (str,), given['--tag'], (), 'tag', None)
+    mode = 'safe'
     if '--mode' in given:
         mode = convert_value((_validate,), given['--mode'], 'mode', None)
     return _CMD_sync.callable(source, verbose=verbose, tag=tag, mode=mode)
