@@ -36,7 +36,7 @@ from .runtime import (
     AppealConfigurationError, UsageError, Command, absorb_take,
     accumulate, call_converter, collect_mapping, convert,
     convert_value, fold,
-    parse_tokens, check_count, scoped_forces, scoped_next,
+    parse_tokens, tokenize, check_count, scoped_forces, scoped_next,
     scoped_resolve, scoped_rewind, scoped_window, scopes_for,
     sibling_scopes,
     did_you_mean,
@@ -124,7 +124,7 @@ def _ident(name):
 class _Emitter:
     def __init__(self, plan, refs=None, fill_names=None, templates=None, stylesheet=None,
                  boundary='saturation', max_columns=79, symbol=None,
-                 compiled=False, command_meta=None):
+                 compiled=False, command_meta=None, is_global=False):
         # refs and fill_names may be shared across the emitters of
         # a command set, so converters common to several commands
         # keep one name (and one rendering) in the combined source.
@@ -168,6 +168,10 @@ class _Emitter:
         # with its command; full Appeal renders it), and -h raises
         # _CompiledHelp instead of printing a baked page.
         self.compiled = compiled
+        # the global command hosts config layering (Processor mutates
+        # its `given`), the precommand, and global options: it stays on
+        # the mature two-pass emitter, never the eager path.
+        self.is_global = is_global
         # id(callable) -> (fingerprint, options, arguments), baked into
         # the Command constructor in a compiled module (empty in-process)
         self.command_meta = command_meta or {}
@@ -789,6 +793,205 @@ class _Emitter:
             self.line(f'    return {converter_name}({", ".join(args)}), i')
         self.line()
 
+    # ---- the eager path (stage-2 walk) ----
+
+    _EAGER_KINDS = frozenset(('flag', 'nullary', 'value', 'accumulate'))
+
+    def _eager_ok(self, plan, command_split):
+        """
+        True when this plan has the common shape the eager stage-2
+        walk handles: no positional option machinery, no converter
+        groups, no trailing operands, no precommand/class wrapping.
+        Richer plans fall through to the mature two-pass emitter.
+        """
+        if self.is_global:
+            return False
+        if (self.gated or self.scoped or self.sibling
+                or self.sibling_parents or self.reserves
+                or getattr(self, 'need_dry', False)):
+            return False
+        if plan.pre_plan is not None:
+            return False
+        c = plan.callable
+        if (getattr(c, 'appeal_precommand', False)
+                or getattr(c, 'appeal_stock', False)
+                or plan.binds is not None or plan.constructs is not None):
+            return False
+        # operands: every slot a plain leaf or a bare *args (repeat
+        # Terminal)--no converter groups, no absorbing slots, no
+        # trailing
+        for slot in plan.slots:
+            if slot.trailing:
+                return False
+            if not isinstance(slot.child, Terminal):
+                return False
+            if not slot.repeat and slot.count_options is None:
+                return False
+        # options: only the flat kinds, one rule per parameter, no
+        # **kwargs delivery, value converters simple leaves
+        seen = set()
+        for o in plan.options:
+            if o.kwargs_delivered or o.child is not None:
+                return False
+            if o.kind not in self._EAGER_KINDS:
+                return False
+            if o.kind == 'value' and len(o.converters) != 1:
+                return False
+            if o.name in seen:
+                return False
+            seen.add(o.name)
+        return True
+
+    def _emit_eager(self, plan, command_split, options_const, help_keys,
+                    cmd_obj, command_name):
+        usage = self.usage_const
+
+        # ---- stage 1: scan yields the IR (no user code) ----
+        self.line(f'def scan_{self.symbol}(argv, command_words=None):')
+        if command_split is not None:
+            self.line(f'    tokens, rest = tokenize(argv, {options_const}, '
+                      f'{usage}, command_split={command_split!r})')
+        elif self.boundary == 'saturation' and plan.maximum is None:
+            self.line(f'    tokens = tokenize(argv, {options_const}, {usage})')
+            self.line(f'    rest = []')
+        else:
+            if self.boundary == 'saturation':
+                split = f'({plan.maximum}, {plan.maximum}, command_words)'
+            else:
+                maximum = 'None' if plan.maximum is None else str(plan.maximum)
+                split = f'({plan.minimum}, {maximum}, command_words)'
+            self.line(f'    if command_words is None:')
+            self.line(f'        tokens = tokenize(argv, {options_const}, '
+                      f'{usage})')
+            self.line(f'        rest = []')
+            self.line(f'    else:')
+            self.line(f'        tokens, rest = tokenize(argv, '
+                      f'{options_const}, {usage}, command_split={split})')
+        self.line(f"    operands = [_s for _t in tokens if _t[0] == '' "
+                  f"for _s in _t[1:]]")
+        if help_keys:
+            self.line(f"    if any(_t[0] == '--help' for _t in tokens):")
+            self.line(f'        # help outranks a malformed line '
+                      f'(pinned order)')
+            self.line(f'        return operands, tokens, rest, None')
+        if plan.valid_counts is None:
+            self.line(f'    check_count(len(operands), {plan.minimum}, '
+                      f'None, None, {usage})')
+        else:
+            self.line(f'    check_count(len(operands), {plan.minimum}, '
+                      f'{plan.maximum}, {set(sorted(plan.valid_counts))!r}, '
+                      f'{usage})')
+        self.line(f'    return operands, tokens, rest, None')
+        self.line()
+
+        # ---- stage 2: run walks the IR, converting on sight ----
+        self.line(f'def run_{self.symbol}(operands, tokens, positions=None, '
+                  f'env=None, command=None):')
+        if help_keys and self.compiled:
+            self.line(f"    if any(_t[0] == '--help' for _t in tokens):")
+            self.line(f'        raise _CompiledHelp(command)')
+        elif help_keys:
+            corpus = merge_docs(plan)
+            pieces = help_page_pieces(plan.usage(), corpus, self.templates)
+            pieces_name = self.refs.add(f'_HELP_{self.symbol}', pieces,
+                                        dedupe=False)
+            sheet_name = self.refs.add(f'_SHEET_{self.symbol}',
+                                       self.stylesheet, dedupe=False)
+            self.line(f"    if any(_t[0] == '--help' for _t in tokens):")
+            self.line(f'        print(render_baked_help({pieces_name}, '
+                      f'margin=help_margin({self.max_columns!r}), '
+                      f'file=sys.stdout, '
+                      f"stylesheet={sheet_name}), end='')")
+            self.line(f'        return')
+
+        # initialize each option's parameter to its default; the
+        # collectors (accumulate) also need a running list + a
+        # seen-flag, since absence means the default, not [].
+        accum = []
+        for o in plan.options:
+            self.line(f'    {_local(o.name)} = '
+                      f'{self.default_expr(o.name, o.default)}')
+            if o.kind == 'accumulate':
+                self.line(f'    _acc_{_ident(o.name)} = []')
+                self.line(f'    _seen_{_ident(o.name)} = False')
+                accum.append(o)
+
+        if plan.options:
+            self.line(f'    for _t in tokens:')
+            self.line(f'        _k = _t[0]')
+            first = True
+            for o in plan.options:
+                head = 'if' if first else 'elif'
+                first = False
+                self.line(f'        {head} _k == {o.key!r}:')
+                self._emit_eager_option(o, usage)
+        for o in accum:
+            self.line(f'    if _seen_{_ident(o.name)}:')
+            self.line(f'        {_local(o.name)} = _acc_{_ident(o.name)}')
+
+        # ---- operands: gather done; size + convert (the automaton) ----
+        self.line(f'    n = len(operands)')
+        self.line(f'    i = 0')
+        self.line(f'    remaining = n')
+        self.emit_slots(plan, 4)
+
+        args = []
+        for slot in plan.slots:
+            if slot.repeat:
+                args.append(f'*{_local(slot.name)}')
+            else:
+                args.append(_local(slot.name))
+        for name in dict.fromkeys(o.name for o in plan.options):
+            args.append(f'{name}={_local(name)}')
+        self.line(f'    return {command_name}({", ".join(args)})')
+        self.line()
+
+        # ---- the shared tail: the Command + the fused parse_X ----
+        callable_kw = ('' if self.cmd_callable_ref is None
+                       else f', callable={self.cmd_callable_ref}')
+        meta = self.command_meta.get(id(plan.callable))
+        meta_kw = ''
+        if meta is not None:
+            fp, opts, args_ = meta
+            meta_kw = (f', fingerprint={fp!r}, options={opts!r}'
+                       f', arguments={args_!r}')
+        self.line(f'{cmd_obj} = Command({plan.name!r}{callable_kw}, '
+                  f'scan=scan_{self.symbol}, run=run_{self.symbol}'
+                  f'{meta_kw})')
+        self.line(f'def parse_{self.symbol}(argv):')
+        self.line(f'    operands, tokens, rest, positions = '
+                  f'scan_{self.symbol}(argv)')
+        if command_split is None:
+            self.line(f'    return run_{self.symbol}(operands, tokens, '
+                      f'positions, command={cmd_obj})')
+        else:
+            self.line(f'    return run_{self.symbol}(operands, tokens, '
+                      f'positions, command={cmd_obj}), rest')
+        self.line()
+
+    def _emit_eager_option(self, o, usage):
+        "One option's on-sight conversion in the stage-2 walk."
+        local = _local(o.name)
+        if o.kind == 'flag':
+            # presence stores the flag's value (v1's `not default`);
+            # an explicit --flag=true/false, carried by tokenize as
+            # the literal, overrides
+            self.line(f"            {local} = (_t[1] == 'true') "
+                      f'if len(_t) > 1 else {o.present!r}')
+        elif o.kind == 'nullary':
+            conv = self.leaf_expr(o.converters[0])
+            self.line(f'            {local} = {conv}()')
+        elif o.kind == 'value':
+            conv = self.leaf_expr(o.converters[0])
+            # every occurrence converts (validate-all); last wins
+            self.line(f'            {local} = convert({conv}, _t[1], '
+                      f'{o.name!r}, {usage})')
+        else:   # accumulate
+            conv = self.leaf_expr(o.converters[0])
+            self.line(f'            _acc_{_ident(o.name)}.append('
+                      f'convert({conv}, _t[1], {o.name!r}, {usage}))')
+            self.line(f'            _seen_{_ident(o.name)} = True')
+
     def emit_parse_function(self, command_split=None):
         plan = self.plan
         fname = f'parse_{self.symbol}'
@@ -852,6 +1055,21 @@ class _Emitter:
         # compiled module's spec can point the shim's binding at it
         self.refs.command_names[id(plan.callable)] = cmd_obj
         trailing = [s for s in plan.slots if s.trailing]
+
+        # the two-stage eager path (Larry's design): for the common
+        # plan shape--flat options, plain-leaf and *args operands, no
+        # positional option machinery--scan yields the IR and run
+        # walks it, converting options ON SIGHT (last-wins & validate-
+        # all fall out of stream order; no `given`, no convert_value).
+        # Everything richer (gates, windows, scoped/sibling options,
+        # converter groups, trailing operands, precommand, classes)
+        # still rides the mature two-pass emitter below.  Both feed the
+        # SAME positional scan/run contract, so the dispatcher--which
+        # never inspects the handoff--carries a mix without knowing.
+        if self._eager_ok(plan, command_split):
+            self._emit_eager(plan, command_split, options_const,
+                             help_keys, cmd_obj, command_name)
+            return
 
         # stage 1: the structural parse--no user code.  A malformed
         # line dies here, before anything runs.
@@ -1231,7 +1449,7 @@ def emit(plan, templates=None, stylesheet=None, max_columns=79,
 
 def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
                  max_columns=79,
-                 boundary='saturation'):
+                 boundary='saturation', is_global=False):
     """
     In-process mode: exec the generated source, binding the refs
     by reference.  Returns the parse function.  The source is
@@ -1242,13 +1460,14 @@ def compile_plan(plan, command_split=None, templates=None, stylesheet=None,
     parse_tokens): the parse function returns (result, rest).
     """
     source, refs = _Emitter(plan, templates=templates, stylesheet=stylesheet,
-                            boundary=boundary,
+                            boundary=boundary, is_global=is_global,
                             max_columns=max_columns).emit(command_split)
     filename = f'<appeal generated: {plan.name}>'
     linecache.cache[filename] = (
         len(source), None, source.splitlines(keepends=True), filename)
     namespace = {
         'parse_tokens': parse_tokens,
+        'tokenize': tokenize,
         'convert': convert,
         'accumulate': accumulate,
         'collect_mapping': collect_mapping,
@@ -1615,6 +1834,7 @@ def compile_command_set(commands, global_plan=None, prog=None, templates=None, s
         len(source), None, source.splitlines(keepends=True), filename)
     namespace = {
         'parse_tokens': parse_tokens,
+        'tokenize': tokenize,
         'convert': convert,
         'accumulate': accumulate,
         'collect_mapping': collect_mapping,
@@ -1844,7 +2064,7 @@ def _public_module(module, head):
 # core), so the import is fast and stdlib-only.  A superset--unused
 # names cost nothing.
 _RUNTIME_IMPORTS = (
-    'parse_tokens', 'convert', 'accumulate', 'collect_mapping',
+    'parse_tokens', 'tokenize', 'convert', 'accumulate', 'collect_mapping',
     'fold', 'call_converter', 'convert_value', 'window_options',
     'greedy_sizes', 'did_you_mean', 'check_count', 'absorb_take',
     'scopes_for', 'sibling_scopes', 'scoped_forces', 'scoped_window',

@@ -355,11 +355,17 @@ class Processor:
         if self.invocations is None:
             return '<Processor (unparsed)>'
         parts = []
-        for word, run, operands, given, positions in self.invocations:
+        for word, run, operands, handoff, positions in self.invocations:
             name = '(global)' if word is None else word
             text = f'{name} {" ".join(operands)}'.rstrip()
-            if given:
-                text += ' [' + ' '.join(sorted(given)) + ']'
+            # the handoff is either the mature `given` dict or the
+            # eager IR (a token list); show the option keys either way
+            if isinstance(handoff, dict):
+                keys = sorted(handoff)
+            else:
+                keys = sorted({t[0] for t in handoff if t and t[0]})
+            if keys:
+                text += ' [' + ' '.join(keys) + ']'
             parts.append(text)
         if self._tail is not None:
             parts.append(f'({self._tail[0]})')
@@ -1920,7 +1926,7 @@ class Appeal:
             # line, options after operands and all
             fused = compile_plan(self.global_plan, templates=self.templates,
                                  stylesheet=self.stylesheet,
-                                 max_columns=self.margin)
+                                 max_columns=self.margin, is_global=True)
             def parse(argv):
                 processor = Processor(self)
                 processor.parse(argv)
@@ -1943,7 +1949,7 @@ class Appeal:
         if global_plan is not None:
             fused = compile_plan(
                 global_plan, templates=self.templates, stylesheet=self.stylesheet,
-                max_columns=self.margin,
+                max_columns=self.margin, is_global=True,
                 command_split=(global_plan.minimum, global_plan.maximum,
                                command_words))
             parse_globals = _Command(callable=global_plan.callable,

@@ -20,6 +20,7 @@ import sys
 
 from appeal.runtime import (
     parse_tokens,
+    tokenize,
     convert,
     accumulate,
     collect_mapping,
@@ -87,7 +88,7 @@ def _fill_option_value(operands, i, remaining, given):
 def scan_weather(argv, command_words=None):
     # the global command: its arguments end at the first
     # operand naming a command (or at the maximum)
-    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'version', 'help', 'report', 'sync', 'forecast'})))
+    operands, given, rest = parse_tokens(argv, _OPTIONS_weather, None, command_split=(0, 0, frozenset({'report', 'sync', 'version', 'help', 'forecast'})))
     if given.pop('-V', False) or given.pop('--version', False):
         print('1.0')
         raise SystemExit(0)
@@ -130,38 +131,40 @@ _OPTIONS_report = {'-u': ('--units', 'value'), '--units': ('--units', 'value'), 
 
 def scan_report(argv, command_words=None):
     if command_words is None:
-        operands, given = parse_tokens(argv, _OPTIONS_report, None)
+        tokens = tokenize(argv, _OPTIONS_report, None)
         rest = []
     else:
-        # cycling: the boundary is greedy saturation--the
-        # first non-option token after 1 argument is
-        # the next command word, whatever it looks like
-        operands, given, rest = parse_tokens(argv, _OPTIONS_report, None, command_split=(1, 1, command_words))
-    if given.get('--help'):
+        tokens, rest = tokenize(argv, _OPTIONS_report, None, command_split=(1, 1, command_words))
+    operands = [_s for _t in tokens if _t[0] == '' for _s in _t[1:]]
+    if any(_t[0] == '--help' for _t in tokens):
         # help outranks a malformed line (pinned order)
-        return operands, given, rest, None
+        return operands, tokens, rest, None
     check_count(len(operands), 1, 1, {1}, None)
-    return operands, given, rest, None
+    return operands, tokens, rest, None
 
-def run_report(operands, given, positions=None, env=None, command=None):
-    if given.pop('--help', False):
+def run_report(operands, tokens, positions=None, env=None, command=None):
+    if any(_t[0] == '--help' for _t in tokens):
         raise _CompiledHelp(command)
+    units = 'C'
+    verbose = False
+    for _t in tokens:
+        _k = _t[0]
+        if _k == '--units':
+            units = convert(str, _t[1], 'units', None)
+        elif _k == '--verbose':
+            verbose = (_t[1] == 'true') if len(_t) > 1 else True
     n = len(operands)
     i = 0
     remaining = n
     city = convert(str, operands[i], 'city', None)
     i += 1
     remaining -= 1
-    units = 'C'
-    if '--units' in given:
-        units = convert_value((str,), given['--units'], 'units', None)
-    verbose = given.get('--verbose', False)
     return command.callable(city, units=units, verbose=verbose)
 
 _CMD_report = Command('report', scan=scan_report, run=run_report, fingerprint=(1, 0, 2, False, False, ('city', 'units', 'verbose'), 'None', "{'units': 'C', 'verbose': False}", ()), options=(), arguments=())
 def parse_report(argv):
-    operands, given, rest, positions = scan_report(argv)
-    return run_report(operands, given, positions, command=_CMD_report)
+    operands, tokens, rest, positions = scan_report(argv)
+    return run_report(operands, tokens, positions, command=_CMD_report)
 
 
 
@@ -171,21 +174,19 @@ _OPTIONS_forecast = {'-h': ('--help', 'flag'), '--help': ('--help', 'flag')}
 
 def scan_forecast(argv, command_words=None):
     if command_words is None:
-        operands, given = parse_tokens(argv, _OPTIONS_forecast, None)
+        tokens = tokenize(argv, _OPTIONS_forecast, None)
         rest = []
     else:
-        # cycling: the boundary is greedy saturation--the
-        # first non-option token after 2 arguments is
-        # the next command word, whatever it looks like
-        operands, given, rest = parse_tokens(argv, _OPTIONS_forecast, None, command_split=(2, 2, command_words))
-    if given.get('--help'):
+        tokens, rest = tokenize(argv, _OPTIONS_forecast, None, command_split=(2, 2, command_words))
+    operands = [_s for _t in tokens if _t[0] == '' for _s in _t[1:]]
+    if any(_t[0] == '--help' for _t in tokens):
         # help outranks a malformed line (pinned order)
-        return operands, given, rest, None
+        return operands, tokens, rest, None
     check_count(len(operands), 1, 2, {1, 2}, None)
-    return operands, given, rest, None
+    return operands, tokens, rest, None
 
-def run_forecast(operands, given, positions=None, env=None, command=None):
-    if given.pop('--help', False):
+def run_forecast(operands, tokens, positions=None, env=None, command=None):
+    if any(_t[0] == '--help' for _t in tokens):
         raise _CompiledHelp(command)
     n = len(operands)
     i = 0
@@ -204,8 +205,8 @@ def run_forecast(operands, given, positions=None, env=None, command=None):
 
 _CMD_forecast = Command('forecast', scan=scan_forecast, run=run_forecast, fingerprint=(2, 0, 0, False, False, ('city', 'days'), '(3,)', 'None', (('days', 'builtins.int'),)), options=(), arguments=())
 def parse_forecast(argv):
-    operands, given, rest, positions = scan_forecast(argv)
-    return run_forecast(operands, given, positions, command=_CMD_forecast)
+    operands, tokens, rest, positions = scan_forecast(argv)
+    return run_forecast(operands, tokens, positions, command=_CMD_forecast)
 
 
 
