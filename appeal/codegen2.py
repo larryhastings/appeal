@@ -137,18 +137,37 @@ def _converter_expr(name, converter):
     return f"self.callable.__annotations__[{name!r}]"
 
 
-def _is_flat(plan):
-    "True when every operand slot is a plain required leaf (first slice)."
+def _is_leafy(plan):
+    "Every operand slot a Terminal (leaf or bare *args); no groups yet."
     from .plan import Terminal
     for slot in plan.slots:
-        if slot.trailing or slot.repeat or not isinstance(slot.child, Terminal):
-            return False
-        if slot.count_options != (1,):
+        if slot.trailing or not isinstance(slot.child, Terminal):
             return False
     for o in plan.options:
         if o.child is not None or o.kwargs_delivered:
             return False
     return True
+
+
+def _feasible(c, suffix):
+    "Can the slots after this one consume what's left after taking c?"
+    counts, minimum = suffix
+    take = 'remaining' if c == 0 else f'remaining - {c}'
+    if counts is None:
+        return f'{take} >= {minimum}'
+    if len(counts) == 1:
+        return f'{take} == {next(iter(counts))}'
+    return f'{take} in ({", ".join(str(x) for x in sorted(counts))})'
+
+
+def _default_literal(value):
+    "A simple default baked inline; complex ones await a later pass."
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return repr(value)
+    if isinstance(value, tuple) and all(
+            x is None or isinstance(x, (bool, int, float, str)) for x in value):
+        return repr(value)
+    raise NotImplementedError(f"non-literal positional default {value!r}")
 
 
 def _option_ranges(o):
@@ -166,7 +185,7 @@ def _option_ranges(o):
 
 def emit_command_class(plan, name):
     "Return source for `class Command_<name>(Command)` -- flat only."
-    assert _is_flat(plan), f"{name}: not a flat command (groups land next)"
+    assert _is_leafy(plan), f"{name}: has converter groups (land next)"
     sym = name or 'global'
     L = [f"class Command_{sym}(Command):"]
     L.append(f"    name = {name!r}")
@@ -214,11 +233,39 @@ def emit_command_class(plan, name):
         else:  # value
             conv = _converter_expr(o.name, o.converters[0])
             L.append(f"                    v_{o.name} = convert({conv}, item[1], {o.name!r})")
-    # operands: flat, each a required leaf
+    # operands: the counting automaton -- leftmost-maximal-completable.
+    # tokenize already validated the total count, so some branch fires.
+    L.append("        n = len(arguments)")
+    L.append("        i = 0")
+    L.append("        remaining = n")
     call_args = []
-    for i, slot in enumerate(plan.slots):
+    for slot in plan.slots:
         conv = _converter_expr(slot.name, slot.child.converter)
-        L.append(f"        a_{slot.name} = convert({conv}, arguments[{i}], {slot.name!r})")
+        if slot.repeat:                     # bare *args: takes all the suffix spares
+            _, smin = slot.suffix_after
+            L.append(f"        _take = remaining - {smin}")
+            L.append(f"        a_{slot.name} = tuple(convert({conv}, _x, "
+                     f"{slot.name!r}) for _x in arguments[i:i + _take])")
+            L.append("        i += _take; remaining -= _take")
+            call_args.append(f"*a_{slot.name}")
+            continue
+        opts = slot.count_options
+        take1 = (f"        a_{slot.name} = convert({conv}, arguments[i], "
+                 f"{slot.name!r}); i += 1; remaining -= 1")
+        if opts == (1,):
+            L.append(take1)
+        else:                               # optional leaf: 1 if it fits, else default
+            for k, c in enumerate(opts):
+                if k == 0:
+                    L.append(f"        if {_feasible(c, slot.suffix_after)}:")
+                elif k < len(opts) - 1:
+                    L.append(f"        elif {_feasible(c, slot.suffix_after)}:")
+                else:
+                    L.append("        else:")
+                if c == 0:
+                    L.append(f"            a_{slot.name} = {_default_literal(slot.default)}")
+                else:
+                    L.append("    " + take1)
         call_args.append(f"a_{slot.name}")
     for o in plan.options:
         val = f"self.o_{o.name}.render()" if o.kind in ('fold', 'fold1') else f"v_{o.name}"
