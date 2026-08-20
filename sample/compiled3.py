@@ -4,25 +4,16 @@
 # and your program is unchanged.  Imports only appeal.processor and
 # appeal.runtime (the stdlib-only core).  Regenerate rather than edit.
 
-import sys
-
-from appeal.processor import Converter, Repeat, Processor, execute
+from appeal.processor import Converter, Repeat
 from appeal.runtime import (
-    UsageError, split, validate, validate_range, counter, accumulator,
+    appeal_class, split, validate, validate_range, counter, accumulator,
     mapping, file, optional,
     )
 
-commands = {}
+Appeal = appeal_class()
 
 
-def command(name):
-    def command(cls):
-        commands[name] = cls
-        return cls
-    return command
-
-
-@command('report')
+@Appeal._converter('report')
 class Converter_report(Converter):
     def register(self, processor):
         processor.prepend([
@@ -31,7 +22,7 @@ class Converter_report(Converter):
             self.Argument('city', str, required=True),
         ])
 
-@command('forecast')
+@Appeal._converter('forecast')
 class Converter_forecast(Converter):
     def register(self, processor):
         annotations = type(self).converter.__annotations__
@@ -40,7 +31,7 @@ class Converter_forecast(Converter):
             self.Argument('days', annotations['days'], required=False),
         ])
 
-@command('sync')
+@Appeal._converter('sync')
 class Converter_sync(Converter):
     def register(self, processor):
         annotations = type(self).converter.__annotations__
@@ -50,32 +41,3 @@ class Converter_sync(Converter):
             self.Option('mode', annotations['mode'], '-m', '--mode'),
             self.Argument('source', annotations['source'], required=True),
         ])
-
-class Appeal:
-    "The compiled parser wearing the Appeal API (parse + dispatch only)."
-    def __init__(self, name=None, *, version=None):
-        self.name = name
-        self.version = version
-        self.commands = {}
-
-    def command(self, name=None):
-        def command(converter):
-            nonlocal name
-            name = name or converter.__name__
-            cls = commands[name]
-            cls.converter = converter
-            self.commands[name] = cls
-            return converter
-        return command
-
-    def process(self, args):
-        return execute(self.commands, list(args))
-
-    def main(self, args=None):
-        args = sys.argv[1:] if args is None else list(args)
-        try:
-            result = self.process(args)
-        except UsageError as e:
-            print(f'{self.name or "error"}: {e}', file=sys.stderr)
-            return 2
-        return result if isinstance(result, int) else 0

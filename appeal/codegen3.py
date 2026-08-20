@@ -155,7 +155,7 @@ def emit_source(plan):
             body.append(f'            self.Argument({slot.name!r}, {ref}, '
                         f'required={slot.required!r}{extra}),')
 
-    lines = [f'@command({plan.name!r})',
+    lines = [f'@Appeal._converter({plan.name!r})',
              f'class Converter_{plan.name}(Converter):']
     n_trailing = sum(1 for slot in plan.slots if slot.trailing)
     if n_trailing:
@@ -176,61 +176,20 @@ _MODULE_HEADER = '''\
 # and your program is unchanged.  Imports only appeal.processor and
 # appeal.runtime (the stdlib-only core).  Regenerate rather than edit.
 
-import sys
-
-from appeal.processor import Converter, Repeat, Processor, execute
+from appeal.processor import Converter, Repeat
 from appeal.runtime import (
-    UsageError, split, validate, validate_range, counter, accumulator,
+    appeal_class, split, validate, validate_range, counter, accumulator,
     mapping, file, optional,
     )
 
-commands = {}
-
-
-def command(name):
-    def command(cls):
-        commands[name] = cls
-        return cls
-    return command
-'''
-
-_SHIM = '''\
-class Appeal:
-    "The compiled parser wearing the Appeal API (parse + dispatch only)."
-    def __init__(self, name=None, *, version=None):
-        self.name = name
-        self.version = version
-        self.commands = {}
-
-    def command(self, name=None):
-        def command(converter):
-            nonlocal name
-            name = name or converter.__name__
-            cls = commands[name]
-            cls.converter = converter
-            self.commands[name] = cls
-            return converter
-        return command
-
-    def process(self, args):
-        return execute(self.commands, list(args))
-
-    def main(self, args=None):
-        args = sys.argv[1:] if args is None else list(args)
-        try:
-            result = self.process(args)
-        except UsageError as e:
-            print(f'{self.name or "error"}: {e}', file=sys.stderr)
-            return 2
-        return result if isinstance(result, int) else 0
+Appeal = appeal_class()
 '''
 
 
 def emit_module(plans):
     "Emit a complete, runnable compiled parser module for a list of plans."
     parts = [_MODULE_HEADER, '']
-    for plan in plans:                          # each @command(name) registers
-        parts.append(emit_source(plan))         # itself into `commands`
+    for plan in plans:              # each @Appeal._converter registers itself
+        parts.append(emit_source(plan))
         parts.append('')
-    parts.append(_SHIM)
     return '\n'.join(parts)

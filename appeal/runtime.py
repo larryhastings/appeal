@@ -2790,3 +2790,66 @@ class mapping(MultiOption, metaclass=_Subscriptable):
                                  (key_type, value_type), {})
         return sub
 
+
+
+def appeal_class():
+    """
+    Build the Appeal class a compiled parser module wears.  A fresh class
+    per module (so each program's registered Converters stay its own): the
+    generated module does `Appeal = appeal_class()` and decorates its
+    Converter subclasses with @Appeal._converter(name).
+    """
+    from .processor import execute       # lazy: processor imports runtime
+
+    class Appeal:
+        """
+        The v2 API surface, matching v1's shape:
+
+          * @app.command() functions are *subcommands*: the first
+            operand on the line names one (literally--the function's
+            name, no mangling), even when only one is registered.
+          * @app.global_command() is the command with no name: its
+            options and operands come before the command word.  With
+            no @app.command()s at all, it owns the whole line--that's
+            how you spell a program without subcommands.
+
+        Decoration only records; the plans are built and compiled at
+        first use (see "Laziness and late binding" in the grammar doc).
+        """
+        Converters = {}
+
+        def __init__(self, name=None, *, version=None):
+            self.name = name
+            self.version = version
+            self.commands = {}
+
+        @classmethod
+        def _converter(cls, name):
+            def _converter(converter):
+                cls.Converters[name] = converter
+                return converter
+            return _converter
+
+        def command(self, name=None):
+            def command(converter):
+                nonlocal name
+                name = name or converter.__name__
+                cls = self.Converters[name]
+                cls.converter = converter
+                self.commands[name] = cls
+                return converter
+            return command
+
+        def process(self, args):
+            return execute(self.commands, list(args))
+
+        def main(self, args=None):
+            args = sys.argv[1:] if args is None else list(args)
+            try:
+                result = self.process(args)
+            except UsageError as e:
+                print(f'{self.name or "error"}: {e}', file=sys.stderr)
+                return 2
+            return result if isinstance(result, int) else 0
+
+    return Appeal
