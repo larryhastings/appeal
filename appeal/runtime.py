@@ -2842,10 +2842,10 @@ class OptionInstruction:
         conv = self.converter
         if conv is bool:
             binding = LiveBinding(self.owner, self.name)
+        elif isinstance(conv, tuple):                   # (Converter cls, callable)
+            binding = GroupBinding(self.owner, self.name, conv)
         elif isinstance(conv, type) and issubclass(conv, MultiOption):
             binding = MultiBinding(self.owner, self.name, conv)
-        elif isinstance(conv, type) and issubclass(conv, Converter):
-            binding = GroupBinding(self.owner, self.name, conv)
         else:
             binding = ValueBinding(self.owner, self.name, conv)
         for string in self.strings:
@@ -2853,16 +2853,16 @@ class OptionInstruction:
 
 class PreOptionInstruction:
     "Registers a conjure: fire before the converter exists to summon one."
-    __slots__ = ('owner', 'string', 'name', 'slot', 'converter_cls')
-    def __init__(self, owner, string, name, slot, converter_cls):
+    __slots__ = ('owner', 'string', 'name', 'slot', 'group')
+    def __init__(self, owner, string, name, slot, group):
         self.owner = owner
         self.string = string
         self.name = name
         self.slot = slot
-        self.converter_cls = converter_cls
+        self.group = group              # (Converter subclass, callable)
     def register(self, processor):
         processor.handlers[self.string] = ConjureBinding(
-            self.name, self.slot, self.converter_cls)
+            self.name, self.slot, self.group)
 
 class RepeatInstruction:
     "A *args template ([PreOption?, Argument]) re-laid before each element."
@@ -2873,12 +2873,12 @@ class RepeatInstruction:
 
 def _presence(instance, name):
     "A flag's presence value: `not default`, read live off the callable."
-    default = (type(instance).converter.__kwdefaults__ or {}).get(name, False)
+    default = (instance.converter.__kwdefaults__ or {}).get(name, False)
     return not default
 
 def _default(instance, name):
     "The parameter's default, read live off the callable (for init)."
-    return (type(instance).converter.__kwdefaults__ or {}).get(name)
+    return (instance.converter.__kwdefaults__ or {}).get(name)
 
 
 class LiveBinding:
@@ -2964,27 +2964,29 @@ class GroupBinding:
     Siblings fall out of the flat table: --e2 re-registers them at e2.  No
     summon -- a shared option before any --e1/--e2 has no handler (error).
     """
-    __slots__ = ('owner', 'name', 'converter_cls')
-    def __init__(self, owner, name, converter_cls):
+    __slots__ = ('owner', 'name', 'group')
+    def __init__(self, owner, name, group):
         self.owner = owner
         self.name = name
-        self.converter_cls = converter_cls
+        self.group = group              # (Converter subclass, callable)
     def invoke(self, processor, value=None):
-        instance = self.converter_cls()
+        cls, converter = self.group
+        instance = cls(converter)
         self.owner.kwargs[self.name] = instance     # rendered at finalize
         processor.enter(instance)                   # register its options
 
 class ConjureBinding:
     "Invoke -> conjure a fresh converter on its defaults, stashed by slot."
-    __slots__ = ('name', 'slot', 'converter_cls')
-    def __init__(self, name, slot, converter_cls):
+    __slots__ = ('name', 'slot', 'group')
+    def __init__(self, name, slot, group):
         self.name = name
         self.slot = slot
-        self.converter_cls = converter_cls
+        self.group = group              # (Converter subclass, callable)
     def invoke(self, processor, value=None):
         obj = processor.conjured.get(self.slot)
         if obj is None:
-            obj = self.converter_cls()
+            cls, converter = self.group
+            obj = cls(converter)
             processor.conjured[self.slot] = obj
         obj.kwargs[self.name] = (_presence(obj, self.name) if value is None
                                  else value == 'true')
@@ -2993,28 +2995,28 @@ class ConjureBinding:
 # ---- the converter base --------------------------------------------
 class Converter:
     """
-    Base for a generated command or converter.  The user's callable is a
-    class attribute `converter`, set on the subclass (by @command, or by
-    the emitter) -- reached via type(self).converter, never self.converter
-    (a bare function on a class binds as a method).  A subclass adds
-    register(self, processor), which pushes its work via
-    processor.prepend([...]) using the self.X factories.  register is
-    called by the Argument that enters this converter -- never by a
-    PreOption (conjuring builds the object but defers its work).
+    Base for a generated command or converter.  The user's callable is
+    passed to the constructor and stored as instance data on `self.converter`
+    -- an instance-dict lookup, so a bare function does NOT bind as a method
+    (that's why it need not be reached via the class).  A subclass adds
+    register(self, processor), which pushes its work via processor.prepend(
+    [...]) using the self.X factories.  register is called by the Argument
+    that enters this converter -- never by a PreOption (conjuring builds the
+    object but defers its work).
     """
     trailing = 0                        # count of this converter's own
                                         # trailing operands (emitter sets it)
 
-    converter = None                    # the user's callable, set on the
-                                        # subclass (by @command, or the emitter)
-
-    def __init__(self):
+    def __init__(self, converter):
+        self.converter = converter      # the user's callable (instance data)
         self.args = []
         self.kwargs = {}
         self.multis = {}                # name -> live MultiOption, finalized last
         self.reserve = []               # this converter's end-pocket
 
-    # work-item factories -- owner is self, bound implicitly
+    # work-item factories -- owner is self, bound implicitly.  A group
+    # operand/option passes a (Converter subclass, callable) 2-tuple as its
+    # converter; a leaf passes a plain callable.
     def Argument(self, name, converter, *, required, trailing=False):
         return ArgumentInstruction(self, name, converter, required=required,
                         trailing=trailing)
@@ -3022,8 +3024,8 @@ class Converter:
         return OpargInstruction(self, name, converter)
     def Option(self, name, converter, *strings):
         return OptionInstruction(self, name, converter, strings)
-    def PreOption(self, string, name, slot, converter_cls):
-        return PreOptionInstruction(self, string, name, slot, converter_cls)
+    def PreOption(self, string, name, slot, group):
+        return PreOptionInstruction(self, string, name, slot, group)
     def Repeat(self, items):
         return RepeatInstruction(items)
 
@@ -3035,7 +3037,7 @@ class Converter:
             if isinstance(value, Converter):
                 self.kwargs[name] = value()
         args = [a() if isinstance(a, Converter) else a for a in self.args]
-        return type(self).converter(*args, **self.kwargs)
+        return self.converter(*args, **self.kwargs)
 
 
 # ---- the engine ----------------------------------------------------
@@ -3146,9 +3148,8 @@ class Processor:
             return
         tok = self.peek()
         # a leaf converter is any one-string-in callable (str, int, split(':'),
-        # ...); a group is a Converter subclass (a nested command tree)
-        if not (isinstance(arg.converter, type)
-                and issubclass(arg.converter, Converter)):
+        # ...); a group is a (Converter subclass, callable) 2-tuple
+        if not isinstance(arg.converter, tuple):
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
                     raise UsageError(f"missing argument {arg.name!r}", None)
@@ -3170,7 +3171,8 @@ class Processor:
                 self.queue.popleft()                 # end the *args
             return
         if obj is None:
-            obj = arg.converter()
+            cls, converter = arg.converter
+            obj = cls(converter)
         arg.owner.args.append(obj)
         self.queue.popleft()
         self.enter(obj)                             # pocket + front-splice
@@ -3185,10 +3187,11 @@ def execute(commands, argv):
     if not argv:
         raise UsageError("no command given", None)
     word = argv[0]
-    converter_cls = commands.get(word)
-    if converter_cls is None:
+    entry = commands.get(word)
+    if entry is None:
         raise UsageError(f"unknown command {word!r}", None)
-    return Processor(argv[1:], converter_cls()).run()
+    cls, converter = entry
+    return Processor(argv[1:], cls(converter)).run()
 
 
 def appeal_class():
@@ -3232,8 +3235,7 @@ def appeal_class():
                 nonlocal name
                 name = name or converter.__name__
                 cls = self.Converters[name]
-                cls.converter = converter
-                self.commands[name] = cls
+                self.commands[name] = (cls, converter)
                 return converter
             return command
 

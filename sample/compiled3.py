@@ -24,16 +24,15 @@ class Converter_report(Converter):
 @Appeal._converter('forecast')
 class Converter_forecast(Converter):
     def register(self, processor):
-        annotations = type(self).converter.__annotations__
         processor.prepend([
             self.Argument('city', str, required=True),
-            self.Argument('days', annotations['days'], required=False),
+            self.Argument('days', int, required=False),
         ])
 
 @Appeal._converter('sync')
 class Converter_sync(Converter):
     def register(self, processor):
-        annotations = type(self).converter.__annotations__
+        annotations = self.converter.__annotations__
         processor.prepend([
             self.Option('verbose', annotations['verbose'], '-v', '--verbose'),
             self.Option('tag', annotations['tag'], '-t', '--tag'),
