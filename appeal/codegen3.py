@@ -48,18 +48,17 @@ def build_converter(plan):
             fallback = option_children[o.name]
         else:                                   # multi-oparg value: later
             continue
-        for s in o.strings:
-            option_specs.append((s, o.name, o.kind, fallback))
+        option_specs.append((o.name, o.kind, fallback, o.strings))
 
     def register(self, processor):
         # this plan's own options register FIRST, so an option before the
         # positionals (or a child option mid-fill) is already known
         annotations = type(self).converter.__annotations__
         items = []
-        for s, name, kind, fallback in option_specs:
+        for name, kind, fallback, strings in option_specs:
             conv = (fallback if kind == 'group'
                     else annotations.get(name, fallback))
-            items.append(self.Option(s, name, conv))
+            items.append(self.Option(name, conv, *strings))
         boundary = len(items)   # insertion point for a conjurable slot's
                                 # PreOption: after the last required-or-group
                                 # slot (so it leaps over optional leaves)
@@ -140,8 +139,8 @@ def emit_source(plan):
             ref = _conv_ref(plan, o.name, o.converters[0])
         else:
             continue
-        for s in o.strings:
-            body.append(f'            self.Option({s!r}, {o.name!r}, {ref}),')
+        strings = ', '.join(repr(s) for s in o.strings)
+        body.append(f'            self.Option({o.name!r}, {ref}, {strings}),')
     for slot in plan.slots:
         if not isinstance(slot.child, Terminal):
             body.append(f'            # (converter-group slot {slot.name!r} '
@@ -179,7 +178,7 @@ _MODULE_HEADER = '''\
 
 import sys
 
-from appeal.processor import Converter, Repeat, Processor, dispatch
+from appeal.processor import Converter, Repeat, Processor, execute
 from appeal.runtime import (
     UsageError, split, validate, validate_range, counter, accumulator,
     mapping, file, optional,
@@ -214,7 +213,7 @@ class Appeal:
         return command
 
     def process(self, args):
-        return dispatch(self.commands, list(args))
+        return execute(self.commands, list(args))
 
     def main(self, args=None):
         args = sys.argv[1:] if args is None else list(args)

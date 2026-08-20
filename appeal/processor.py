@@ -66,31 +66,32 @@ class Oparg:
 
 class Option:
     """
-    Registers `string` against an already-built owner.  The converter is
-    always explicit (pulled from the callable's annotation) and tells the
-    runtime how the option behaves: `bool` -> a flag (presence, stores
-    `not default`, no oparg); a MultiOption class -> accumulate; anything
-    else -> a value option (`--units F`: raw-grab one oparg, convert).
+    Registers all of an option's `strings` against an already-built owner.
+    The converter is always explicit (pulled from the callable's annotation)
+    and tells the runtime how the option behaves: `bool` -> a flag (presence,
+    stores `not default`, no oparg); a MultiOption class -> accumulate; a
+    Converter class -> a converter-group option; anything else -> a value
+    option (`--units F`: raw-grab one oparg, convert).  One binding is shared
+    across the strings (so -v and --verbose feed the same MultiOption).
     """
-    __slots__ = ('owner', 'string', 'name', 'converter')
-    def __init__(self, owner, string, name, converter):
+    __slots__ = ('owner', 'name', 'converter', 'strings')
+    def __init__(self, owner, name, converter, strings):
         self.owner = owner
-        self.string = string
         self.name = name
         self.converter = converter
+        self.strings = strings
     def register(self, processor):
         conv = self.converter
         if conv is bool:
-            processor.handlers[self.string] = LiveBinding(self.owner, self.name)
+            binding = LiveBinding(self.owner, self.name)
         elif isinstance(conv, type) and issubclass(conv, MultiOption):
-            processor.handlers[self.string] = MultiBinding(
-                self.owner, self.name, conv)
+            binding = MultiBinding(self.owner, self.name, conv)
         elif isinstance(conv, type) and issubclass(conv, Converter):
-            processor.handlers[self.string] = GroupBinding(
-                self.owner, self.name, conv)
+            binding = GroupBinding(self.owner, self.name, conv)
         else:
-            processor.handlers[self.string] = ValueBinding(
-                self.owner, self.name, conv)
+            binding = ValueBinding(self.owner, self.name, conv)
+        for string in self.strings:
+            processor.handlers[string] = binding
 
 class PreOption:
     "Registers a conjure: fire before the converter exists to summon one."
@@ -246,8 +247,8 @@ class Converter:
                         trailing=trailing)
     def Oparg(self, name, converter):
         return Oparg(self, name, converter)
-    def Option(self, string, name, converter):
-        return Option(self, string, name, converter)
+    def Option(self, name, converter, *strings):
+        return Option(self, name, converter, strings)
     def PreOption(self, string, name, slot, converter_cls):
         return PreOption(self, string, name, slot, converter_cls)
 
@@ -400,7 +401,7 @@ class Processor:
         self.enter(obj)                             # pocket + front-splice
 
 
-def dispatch(commands, argv):
+def execute(commands, argv):
     """
     Run a multi-command program: the first token names the command, the
     rest are its arguments.  commands maps command-word -> Converter class.

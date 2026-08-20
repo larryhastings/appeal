@@ -6,7 +6,7 @@
 
 import sys
 
-from appeal.processor import Converter, Repeat, Processor, dispatch
+from appeal.processor import Converter, Repeat, Processor, execute
 from appeal.runtime import (
     UsageError, split, validate, validate_range, counter, accumulator,
     mapping, file, optional,
@@ -26,10 +26,8 @@ def command(name):
 class Converter_report(Converter):
     def register(self, processor):
         processor.prepend([
-            self.Option('-u', 'units', str),
-            self.Option('--units', 'units', str),
-            self.Option('-v', 'verbose', bool),
-            self.Option('--verbose', 'verbose', bool),
+            self.Option('units', str, '-u', '--units'),
+            self.Option('verbose', bool, '-v', '--verbose'),
             self.Argument('city', str, required=True),
         ])
 
@@ -47,12 +45,9 @@ class Converter_sync(Converter):
     def register(self, processor):
         annotations = type(self).converter.__annotations__
         processor.prepend([
-            self.Option('-v', 'verbose', annotations['verbose']),
-            self.Option('--verbose', 'verbose', annotations['verbose']),
-            self.Option('-t', 'tag', annotations['tag']),
-            self.Option('--tag', 'tag', annotations['tag']),
-            self.Option('-m', 'mode', annotations['mode']),
-            self.Option('--mode', 'mode', annotations['mode']),
+            self.Option('verbose', annotations['verbose'], '-v', '--verbose'),
+            self.Option('tag', annotations['tag'], '-t', '--tag'),
+            self.Option('mode', annotations['mode'], '-m', '--mode'),
             self.Argument('source', annotations['source'], required=True),
         ])
 
@@ -74,7 +69,7 @@ class Appeal:
         return command
 
     def process(self, args):
-        return dispatch(self.commands, list(args))
+        return execute(self.commands, list(args))
 
     def main(self, args=None):
         args = sys.argv[1:] if args is None else list(args)
