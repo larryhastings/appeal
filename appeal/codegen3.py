@@ -101,3 +101,68 @@ def build_converter(plan):
     return type(f'Converter_{plan.name}', (Converter,),
                 {'__init__': __init__, 'register': register,
                  'trailing': n_trailing, '__module__': __name__})
+
+
+# ====================================================================
+#  source emission -- the same shapes as build_converter, as text
+# ====================================================================
+def _ref(converter):
+    "A source expression for a converter (builtin, recipe, class, or name)."
+    if converter in (str, int, float, bool):
+        return converter.__name__
+    recipe = getattr(converter, '__appeal_recipe__', None)
+    if recipe:
+        kind, name, args, kwargs = recipe
+        show = lambda v: v.__name__ if isinstance(v, type) else repr(v)
+        if kind == 'call':
+            parts = [repr(a) for a in args]
+            parts += [f'{k}={show(v)}' for k, v in kwargs.items()]
+            return f'{name}({", ".join(parts)})'
+        if kind == 'subscript':
+            return f'{name}[{", ".join(show(t) for t in args)}]'
+    if isinstance(converter, type):
+        return converter.__name__
+    return getattr(converter, '__name__', repr(converter))
+
+
+def emit_source(plan):
+    """
+    Emit the Converter subclass for a flat command as source text (options,
+    leaf/*args/trailing operands).  Groups/scoped/windowed/conjuring follow
+    the same shapes build_converter produces; this covers the sample.
+    """
+    lines = [f'class Converter_{plan.name}(Converter):']
+    n_trailing = sum(1 for slot in plan.slots if slot.trailing)
+    if n_trailing:
+        lines.append(f'    trailing = {n_trailing}')
+    lines.append('    def __init__(self):')
+    lines.append(f'        Converter.__init__(self, {plan.callable.__name__})')
+    lines.append('    def register(self, processor):')
+    lines.append('        processor.prepend([')
+    for o in plan.options:                      # options first
+        if o.kind == 'flag':
+            ref = 'bool'
+        elif o.kind == 'value' and len(o.converters) == 1:
+            ref = _ref(o.converters[0])
+        elif o.kind in ('fold', 'fold1'):
+            base = o.converters[0]
+            ref = _ref(base if len(o.converters) == 1 else base[o.converters[1:]])
+        else:
+            continue
+        for s in o.strings:
+            lines.append(f'            self.Option({s!r}, {o.name!r}, {ref}),')
+    for slot in plan.slots:
+        if not isinstance(slot.child, Terminal):
+            lines.append(f'            # (converter-group slot {slot.name!r} '
+                         f'-- see build_converter)')
+            continue
+        ref = _ref(slot.child.converter)
+        if slot.repeat:
+            lines.append(f'            Repeat([self.Argument({slot.name!r}, '
+                         f'{ref}, False)]),')
+        else:
+            extra = ', trailing=True' if slot.trailing else ''
+            lines.append(f'            self.Argument({slot.name!r}, {ref}, '
+                         f'{slot.required!r}{extra}),')
+    lines.append('        ])')
+    return '\n'.join(lines)

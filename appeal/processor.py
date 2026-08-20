@@ -35,7 +35,6 @@ import inspect
 
 from .runtime import convert, UsageError, MultiOption
 
-LEAVES = (str, int, float, bool)
 
 
 # ---- work items ----------------------------------------------------
@@ -365,7 +364,10 @@ class Processor:
             arg.owner.kwargs[arg.name] = convert(arg.converter, raw, arg.name)
             return
         tok = self.peek()
-        if arg.converter in LEAVES:
+        # a leaf converter is any one-string-in callable (str, int, split(':'),
+        # ...); a group is a Converter subclass (a nested command tree)
+        if not (isinstance(arg.converter, type)
+                and issubclass(arg.converter, Converter)):
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
                     raise UsageError(f"missing argument {arg.name!r}", None)
