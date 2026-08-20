@@ -70,11 +70,12 @@ def build_converter(plan):
                 conv = annotations.get(slot.name, slot.child.converter)
                 if slot.repeat:                         # *args of a leaf
                     items.append(Repeat([
-                        self.Argument(slot.name, conv, False)]))
+                        self.Argument(slot.name, conv, required=False)]))
                     boundary = len(items)
                     continue
                 items.append(self.Argument(slot.name, conv,
-                                           slot.required, trailing=slot.trailing))
+                                           required=slot.required,
+                                           trailing=slot.trailing))
                 if slot.required:
                     boundary = len(items)
                 continue
@@ -91,12 +92,13 @@ def build_converter(plan):
                             self.PreOption(s, o.name, slot.name, childcls))
             if slot.repeat:                             # windowed *args
                 items.append(Repeat(
-                    preopts + [self.Argument(slot.name, childcls, False)]))
+                    preopts + [self.Argument(slot.name, childcls, required=False)]))
                 boundary = len(items)
                 continue
             for k, pre in enumerate(preopts):           # leap over optionals
                 items.insert(boundary + k, pre)
-            items.append(self.Argument(slot.name, childcls, slot.required))
+            items.append(self.Argument(slot.name, childcls,
+                                       required=slot.required))
             boundary = len(items)
 
         processor.prepend(items)
@@ -116,12 +118,12 @@ def build_converter(plan):
 def _conv_ref(plan, param, converter):
     """
     A source expression for a converter.  A user-supplied annotation is
-    reused verbatim -- pulled live off the callable
-    (_callables[cmd].__annotations__[param]) -- exactly as Larry asked;
-    only a bare builtin derived from a default (no annotation) is baked.
+    reused verbatim -- referenced through the register-local `annotations`
+    (bound to the callable's __annotations__), exactly as Larry asked; only
+    a bare builtin derived from a default (no annotation) is baked.
     """
     if param in plan.callable.__annotations__:
-        return f'_callables[{plan.name!r}].__annotations__[{param!r}]'
+        return f'annotations[{param!r}]'
     return converter.__name__       # derived from the default (str/int/...)
 
 
@@ -131,14 +133,7 @@ def emit_source(plan):
     leaf/*args/trailing operands).  Groups/scoped/windowed/conjuring follow
     the same shapes build_converter produces; this covers the sample.
     """
-    lines = [f'class Converter_{plan.name}(Converter):']
-    n_trailing = sum(1 for slot in plan.slots if slot.trailing)
-    if n_trailing:
-        lines.append(f'    trailing = {n_trailing}')
-    lines.append('    def __init__(self):')
-    lines.append(f'        Converter.__init__(self, _callables[{plan.name!r}])')
-    lines.append('    def register(self, processor):')
-    lines.append('        processor.prepend([')
+    body = []                                   # the prepended work items
     for o in plan.options:                      # options first
         if o.kind == 'flag':
             ref = 'bool'
@@ -149,20 +144,33 @@ def emit_source(plan):
         else:
             continue
         for s in o.strings:
-            lines.append(f'            self.Option({s!r}, {o.name!r}, {ref}),')
+            body.append(f'            self.Option({s!r}, {o.name!r}, {ref}),')
     for slot in plan.slots:
         if not isinstance(slot.child, Terminal):
-            lines.append(f'            # (converter-group slot {slot.name!r} '
-                         f'-- see build_converter)')
+            body.append(f'            # (converter-group slot {slot.name!r} '
+                        f'-- see build_converter)')
             continue
         ref = _conv_ref(plan, slot.name, slot.child.converter)
         if slot.repeat:
-            lines.append(f'            Repeat([self.Argument({slot.name!r}, '
-                         f'{ref}, False)]),')
+            body.append(f'            Repeat([self.Argument({slot.name!r}, '
+                        f'{ref}, required=False)]),')
         else:
             extra = ', trailing=True' if slot.trailing else ''
-            lines.append(f'            self.Argument({slot.name!r}, {ref}, '
-                         f'{slot.required!r}{extra}),')
+            body.append(f'            self.Argument({slot.name!r}, {ref}, '
+                        f'required={slot.required!r}{extra}),')
+
+    lines = [f'class Converter_{plan.name}(Converter):']
+    n_trailing = sum(1 for slot in plan.slots if slot.trailing)
+    if n_trailing:
+        lines.append(f'    trailing = {n_trailing}')
+    lines.append('    def __init__(self):')
+    lines.append(f'        Converter.__init__(self, _callables[{plan.name!r}])')
+    lines.append('    def register(self, processor):')
+    if any('annotations[' in line for line in body):
+        lines.append(f'        annotations = '
+                     f'_callables[{plan.name!r}].__annotations__')
+    lines.append('        processor.prepend([')
+    lines.extend(body)
     lines.append('        ])')
     return '\n'.join(lines)
 

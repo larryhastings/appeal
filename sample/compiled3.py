@@ -24,30 +24,32 @@ class Converter_report(Converter):
             self.Option('--units', 'units', str),
             self.Option('-v', 'verbose', bool),
             self.Option('--verbose', 'verbose', bool),
-            self.Argument('city', str, True),
+            self.Argument('city', str, required=True),
         ])
 
 class Converter_forecast(Converter):
     def __init__(self):
         Converter.__init__(self, _callables['forecast'])
     def register(self, processor):
+        annotations = _callables['forecast'].__annotations__
         processor.prepend([
-            self.Argument('city', str, True),
-            self.Argument('days', _callables['forecast'].__annotations__['days'], False),
+            self.Argument('city', str, required=True),
+            self.Argument('days', annotations['days'], required=False),
         ])
 
 class Converter_sync(Converter):
     def __init__(self):
         Converter.__init__(self, _callables['sync'])
     def register(self, processor):
+        annotations = _callables['sync'].__annotations__
         processor.prepend([
-            self.Option('-v', 'verbose', _callables['sync'].__annotations__['verbose']),
-            self.Option('--verbose', 'verbose', _callables['sync'].__annotations__['verbose']),
-            self.Option('-t', 'tag', _callables['sync'].__annotations__['tag']),
-            self.Option('--tag', 'tag', _callables['sync'].__annotations__['tag']),
-            self.Option('-m', 'mode', _callables['sync'].__annotations__['mode']),
-            self.Option('--mode', 'mode', _callables['sync'].__annotations__['mode']),
-            self.Argument('source', _callables['sync'].__annotations__['source'], True),
+            self.Option('-v', 'verbose', annotations['verbose']),
+            self.Option('--verbose', 'verbose', annotations['verbose']),
+            self.Option('-t', 'tag', annotations['tag']),
+            self.Option('--tag', 'tag', annotations['tag']),
+            self.Option('-m', 'mode', annotations['mode']),
+            self.Option('--mode', 'mode', annotations['mode']),
+            self.Argument('source', annotations['source'], required=True),
         ])
 
 _COMMANDS = {

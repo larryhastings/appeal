@@ -48,7 +48,7 @@ class Argument:
     from its owner's end-pocket and is delivered as a keyword argument.
     """
     __slots__ = ('owner', 'name', 'converter', 'required', 'slot', 'trailing')
-    def __init__(self, owner, name, converter, required, trailing=False):
+    def __init__(self, owner, name, converter, *, required, trailing=False):
         self.owner = owner
         self.name = name
         self.converter = converter
@@ -237,8 +237,9 @@ class Converter:
         self.reserve = []               # this converter's end-pocket
 
     # work-item factories -- owner is self, bound implicitly
-    def Argument(self, name, converter, required, trailing=False):
-        return Argument(self, name, converter, required, trailing)
+    def Argument(self, name, converter, *, required, trailing=False):
+        return Argument(self, name, converter, required=required,
+                        trailing=trailing)
     def Oparg(self, name, converter):
         return Oparg(self, name, converter)
     def Option(self, string, name, converter):
