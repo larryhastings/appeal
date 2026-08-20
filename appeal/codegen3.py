@@ -32,41 +32,48 @@ def build_converter(plan):
     # options register when the group option fires (siblings, no summon)
     option_children = {o.name: build_converter(o.child)
                        for o in plan.options if o.kind == 'group'}
-    # (string, name, converter): converter None -> flag, else value option.
-    # A multi-oparg value option (len(converters) > 1) awaits a later pass.
+    # (string, name, kind, fallback): the converter is read LIVE off the
+    # callable's annotations at register time (reuse the user's own type);
+    # `fallback` covers a builtin derived from a default (no annotation) and
+    # a group option (whose converter is the emitted child Converter class).
     option_specs = []
     for o in plan.options:
         if o.kind == 'flag':
-            conv = bool                         # the flag marker
+            fallback = bool                     # the flag marker
         elif o.kind == 'value' and len(o.converters) == 1:
-            conv = o.converters[0]
+            fallback = o.converters[0]
         elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
-            base = o.converters[0]              # the MultiOption class; re-
-            conv = base if len(o.converters) == 1 else base[o.converters[1:]]
+            fallback = o.converters[0]
         elif o.kind == 'group':                 # converter-group option (sibling)
-            conv = option_children[o.name]
+            fallback = option_children[o.name]
         else:                                   # multi-oparg value: later
             continue
         for s in o.strings:
-            option_specs.append((s, o.name, conv))
+            option_specs.append((s, o.name, o.kind, fallback))
 
     def register(self, processor):
         # this plan's own options register FIRST, so an option before the
         # positionals (or a child option mid-fill) is already known
+        annotations = self.converter.__annotations__
         items = []
-        for s, name, conv in option_specs:
+        for s, name, kind, fallback in option_specs:
+            conv = (fallback if kind == 'group'
+                    else annotations.get(name, fallback))
             items.append(self.Option(s, name, conv))
         boundary = len(items)   # insertion point for a conjurable slot's
                                 # PreOption: after the last required-or-group
                                 # slot (so it leaps over optional leaves)
         for slot in plan.slots:
             if isinstance(slot.child, Terminal):
+                # the leaf converter, read live off the callable's annotation
+                # (else the builtin derived from the default)
+                conv = annotations.get(slot.name, slot.child.converter)
                 if slot.repeat:                         # *args of a leaf
                     items.append(Repeat([
-                        self.Argument(slot.name, slot.child.converter, False)]))
+                        self.Argument(slot.name, conv, False)]))
                     boundary = len(items)
                     continue
-                items.append(self.Argument(slot.name, slot.child.converter,
+                items.append(self.Argument(slot.name, conv,
                                            slot.required, trailing=slot.trailing))
                 if slot.required:
                     boundary = len(items)
@@ -106,23 +113,16 @@ def build_converter(plan):
 # ====================================================================
 #  source emission -- the same shapes as build_converter, as text
 # ====================================================================
-def _ref(converter):
-    "A source expression for a converter (builtin, recipe, class, or name)."
-    if converter in (str, int, float, bool):
-        return converter.__name__
-    recipe = getattr(converter, '__appeal_recipe__', None)
-    if recipe:
-        kind, name, args, kwargs = recipe
-        show = lambda v: v.__name__ if isinstance(v, type) else repr(v)
-        if kind == 'call':
-            parts = [repr(a) for a in args]
-            parts += [f'{k}={show(v)}' for k, v in kwargs.items()]
-            return f'{name}({", ".join(parts)})'
-        if kind == 'subscript':
-            return f'{name}[{", ".join(show(t) for t in args)}]'
-    if isinstance(converter, type):
-        return converter.__name__
-    return getattr(converter, '__name__', repr(converter))
+def _conv_ref(plan, param, converter):
+    """
+    A source expression for a converter.  A user-supplied annotation is
+    reused verbatim -- pulled live off the callable
+    (_callables[cmd].__annotations__[param]) -- exactly as Larry asked;
+    only a bare builtin derived from a default (no annotation) is baked.
+    """
+    if param in plan.callable.__annotations__:
+        return f'_callables[{plan.name!r}].__annotations__[{param!r}]'
+    return converter.__name__       # derived from the default (str/int/...)
 
 
 def emit_source(plan):
@@ -143,10 +143,9 @@ def emit_source(plan):
         if o.kind == 'flag':
             ref = 'bool'
         elif o.kind == 'value' and len(o.converters) == 1:
-            ref = _ref(o.converters[0])
-        elif o.kind in ('fold', 'fold1'):
-            base = o.converters[0]
-            ref = _ref(base if len(o.converters) == 1 else base[o.converters[1:]])
+            ref = _conv_ref(plan, o.name, o.converters[0])
+        elif o.kind in ('fold', 'fold1'):       # counter/accumulator: annotated
+            ref = _conv_ref(plan, o.name, o.converters[0])
         else:
             continue
         for s in o.strings:
@@ -156,7 +155,7 @@ def emit_source(plan):
             lines.append(f'            # (converter-group slot {slot.name!r} '
                          f'-- see build_converter)')
             continue
-        ref = _ref(slot.child.converter)
+        ref = _conv_ref(plan, slot.name, slot.child.converter)
         if slot.repeat:
             lines.append(f'            Repeat([self.Argument({slot.name!r}, '
                          f'{ref}, False)]),')

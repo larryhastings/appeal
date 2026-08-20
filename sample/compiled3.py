@@ -33,7 +33,7 @@ class Converter_forecast(Converter):
     def register(self, processor):
         processor.prepend([
             self.Argument('city', str, True),
-            self.Argument('days', int, False),
+            self.Argument('days', _callables['forecast'].__annotations__['days'], False),
         ])
 
 class Converter_sync(Converter):
@@ -41,13 +41,13 @@ class Converter_sync(Converter):
         Converter.__init__(self, _callables['sync'])
     def register(self, processor):
         processor.prepend([
-            self.Option('-v', 'verbose', counter(max=None, step=1)),
-            self.Option('--verbose', 'verbose', counter(max=None, step=1)),
-            self.Option('-t', 'tag', accumulator[str]),
-            self.Option('--tag', 'tag', accumulator[str]),
-            self.Option('-m', 'mode', validate('fast', 'safe', type=str)),
-            self.Option('--mode', 'mode', validate('fast', 'safe', type=str)),
-            self.Argument('source', split(':'), True),
+            self.Option('-v', 'verbose', _callables['sync'].__annotations__['verbose']),
+            self.Option('--verbose', 'verbose', _callables['sync'].__annotations__['verbose']),
+            self.Option('-t', 'tag', _callables['sync'].__annotations__['tag']),
+            self.Option('--tag', 'tag', _callables['sync'].__annotations__['tag']),
+            self.Option('-m', 'mode', _callables['sync'].__annotations__['mode']),
+            self.Option('--mode', 'mode', _callables['sync'].__annotations__['mode']),
+            self.Argument('source', _callables['sync'].__annotations__['source'], True),
         ])
 
 _COMMANDS = {
