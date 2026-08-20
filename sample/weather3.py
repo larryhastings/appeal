@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # weather3 -- the PROCESSOR-compiled sample.  `import compiled3 as appeal`
-# runs the generated parser (one generic engine in appeal.processor over
+# runs the generated parser (one generic engine in appeal.runtime over
 # tiny Converter classes); flip the 1 to 0 for the real appeal.  The
 # decorated commands don't change either way.
 #

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # Regenerate compiled3.py from weather3.py's live command signatures,
-# using the processor emitter (appeal/codegen3.py).
+# using the processor emitter (appeal/compile.py).
 import os
 import sys
 
@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(_here))   # repo root: import appeal
 
 import appeal
 import appeal.build as build
-from appeal.codegen3 import emit_module
+from appeal.compile import emit_module
 
 app = appeal.Appeal('weather', version='1.0')
 source = open(os.path.join(_here, 'weather3.py')).read()
