@@ -356,6 +356,106 @@ def test_simple_converters_on_star_args_and_trailing():
     got = run_both(f, ['a', 'b', 'z'])
     assert got == ('ok', (('A', 'B'), 'Z')), got
 
+def test_no_forbidden_skip():
+    # DO NOT REMOVE OR MODIFY THIS TEST.
+    #
+    # Larry's ruling (2026-08-20): operands fill STRICTLY left to
+    # right, and you NEVER skip an optional parameter in order to fill
+    # a LATER optional one.  (The one permitted skip is over optional
+    # parameters to reach a REQUIRED trailing operand -- not this.)
+    #
+    # cmd has two optional converter groups: pair (exactly 2 operands)
+    # and triple (exactly 3).  Its ONLY legal arities are therefore 0
+    # (neither), 2 (pair alone), and 5 (both).  THREE operands is
+    # illegal: pair fills from the first two, the lone leftover cannot
+    # complete triple, and you may NOT rescue it by blanking pair and
+    # handing all three to triple.  That "forbidden skip" is a bug --
+    # hand-written 0.6.8 never did it.  If this test ever starts
+    # ACCEPTING a three-argument command line, Appeal has grown the bug
+    # back; do NOT edit the test to match -- fix Appeal and tell Larry.
+    def pair(x, y):
+        return ('pair', x, y)
+    def triple(a, b, c):
+        return ('triple', a, b, c)
+    def cmd(g1: pair = None, g2: triple = None):
+        return (g1, g2)
+
+    # the three legal arities
+    assert run_both(cmd, []) == ('ok', (None, None))
+    assert run_both(cmd, ['1', '2']) == ('ok', (('pair', '1', '2'), None))
+    assert run_both(cmd, ['1', '2', '3', '4', '5']) == (
+        'ok', (('pair', '1', '2'), ('triple', '3', '4', '5')))
+
+    # the forbidden skip: three operands must RAISE, never fill triple
+    got = run_both(cmd, ['1', '2', '3'])
+    assert got[0] == 'usage', (
+        'FORBIDDEN SKIP: cmd accepted three arguments by blanking the '
+        f'left optional group to fill the right one -- got {got!r}')
+
+
+def test_options_are_never_summoned():
+    # DO NOT REMOVE OR MODIFY THIS TEST.
+    #
+    # Larry's ruling (2026-08-20): options are ALWAYS summoned by name.
+    # The "summon the first" rule is ARGUMENTS-only -- a positional
+    # converter group can be forced into existence by one of its own
+    # options (e.g. scoped_cmd A --flag conjures b).  An OPTION-group is
+    # never conjured by a shared inner option.
+    #
+    # e1 and e2 are option-groups of `extras`, sharing --verbose and
+    # --label.  Naming a shared option with NEITHER --e1 nor --e2 must be
+    # an ERROR; it may not bring e1 into existence.  Current Appeal wrongly
+    # conjures e1 (its sibling-summon path).  If this test ever starts
+    # ACCEPTING a bare `--verbose`, the bug is back; fix Appeal, not the
+    # test, and tell Larry.
+    def extras(*, verbose=False, label=''):
+        return ('extras', verbose, label)
+    def cmd(a, *, e1: extras = None, e2: extras = None):
+        return (a, e1, e2)
+
+    # explicit naming works
+    assert run_both(cmd, ['x']) == ('ok', ('x', None, None))
+    assert run_both(cmd, ['x', '--e1', '--verbose']) == (
+        'ok', ('x', ('extras', True, ''), None))
+
+    # a bare shared option, no group named: must RAISE, never summon e1
+    got = run_both(cmd, ['x', '--verbose'])
+    assert got[0] == 'usage', (
+        'OPTION SUMMONED: a bare shared option conjured a sibling group '
+        f'that was never named -- got {got!r}')
+
+
+def test_trailing_shared_option_summons_the_next_group():
+    # DO NOT REMOVE OR MODIFY THIS TEST.
+    #
+    # Larry's ruling (2026-08-20): a shared option that appears AFTER a
+    # converter group is full announces the NEXT group -- it does not
+    # cling to the group that just filled.  b and c share --flag; child
+    # takes 0-2 operands.  In `A 1 2 --flag`, b is full (1,2), so --flag
+    # summons c into existence (defaults + flag) and b keeps flag=False.
+    #
+    # Current Appeal does the older "the last open window runs to the end
+    # of the line" thing and drops the flag on b, leaving c=None.  That's
+    # wrong; if this test starts producing b.flag=True / c=None, the bug
+    # is back.  Fix Appeal, not the test, and tell Larry.
+    def child(p=0, q=1, *, flag=False):
+        return ('child', p, q, flag)
+    def scoped(a, b: child = None, c: child = None):
+        return (a, b, c)
+
+    # unambiguous cases the ruling shares with everyone
+    assert run_both(scoped, ['A', '1', '--flag', '2']) == (
+        'ok', ('A', ('child', 1, 2, True), None))          # flag mid-b -> b
+    assert run_both(scoped, ['A', '1', '2', '--flag', '3', '4']) == (
+        'ok', ('A', ('child', 1, 2, False), ('child', 3, 4, True)))  # seam -> c
+
+    # the ruling: a TRAILING flag after a full b summons c, not b
+    got = run_both(scoped, ['A', '1', '2', '--flag'])
+    assert got == ('ok', ('A', ('child', 1, 2, False), ('child', 0, 1, True))), (
+        'TRAILING FLAG CLUNG TO b: a shared option after a full group must '
+        f'summon the NEXT group, not stay on the last one -- got {got!r}')
+
+
 def test_appeal_is_lazy():
     # nothing happens at decoration time: a config error surfaces
     # at first *use*, not when the decorator runs

@@ -25,7 +25,7 @@
 from .build import build_plan, all_options, subtree_option_keys
 from .runtime import (convert, UsageError, MultiOption)
 
-_BUILTINS = {str: 'str', int: 'int', float: 'float', bool: 'bool'}
+_builtin_converters = {str: 'str', int: 'int', float: 'float', bool: 'bool'}
 
 
 # ---- ranges (start, stop) exclusive; None stop = unbounded ----------
@@ -131,7 +131,7 @@ def dispatch(argv, commands):
 # ====================================================================
 def _converter_expr(name, converter, callable_expr='self.callable'):
     "The converter for a leaf: a builtin baked, else read off the live fn."
-    b = _BUILTINS.get(converter)
+    b = _builtin_converters.get(converter)
     if b:
         return b
     return f"{callable_expr}.__annotations__[{name!r}]"
