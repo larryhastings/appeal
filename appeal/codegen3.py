@@ -54,7 +54,7 @@ def build_converter(plan):
     def register(self, processor):
         # this plan's own options register FIRST, so an option before the
         # positionals (or a child option mid-fill) is already known
-        annotations = self.converter.__annotations__
+        annotations = type(self).converter.__annotations__
         items = []
         for s, name, kind, fallback in option_specs:
             conv = (fallback if kind == 'group'
@@ -103,12 +103,9 @@ def build_converter(plan):
 
         processor.prepend(items)
 
-    def __init__(self):
-        Converter.__init__(self, callable_)
-
     n_trailing = sum(1 for slot in plan.slots if slot.trailing)
     return type(f'Converter_{plan.name}', (Converter,),
-                {'__init__': __init__, 'register': register,
+                {'register': register, 'converter': callable_,
                  'trailing': n_trailing, '__module__': __name__})
 
 
@@ -163,12 +160,9 @@ def emit_source(plan):
     n_trailing = sum(1 for slot in plan.slots if slot.trailing)
     if n_trailing:
         lines.append(f'    trailing = {n_trailing}')
-    lines.append('    def __init__(self):')
-    lines.append(f'        Converter.__init__(self, _callables[{plan.name!r}])')
     lines.append('    def register(self, processor):')
     if any('annotations[' in line for line in body):
-        lines.append(f'        annotations = '
-                     f'_callables[{plan.name!r}].__annotations__')
+        lines.append('        annotations = type(self).converter.__annotations__')
     lines.append('        processor.prepend([')
     lines.extend(body)
     lines.append('        ])')
@@ -189,8 +183,6 @@ from appeal.runtime import (
     UsageError, split, validate, validate_range, counter, accumulator,
     mapping, file, optional,
     )
-
-_callables = {}     # command word -> the user's function, bound at @command
 '''
 
 _SHIM = '''\
@@ -202,20 +194,21 @@ class Appeal:
         self.commands = {}
 
     def command(self, name=None):
-        def register(fn):
-            word = name or fn.__name__
-            _callables[word] = fn
-            self.commands[word] = _COMMANDS[word]
-            return fn
-        return register
+        def command(converter):
+            word = name or converter.__name__
+            cls = commands[word]
+            cls.converter = converter       # bind the callable on the class
+            self.commands[word] = cls
+            return converter
+        return command
 
-    def process(self, argv):
-        return dispatch(self.commands, list(argv))
+    def process(self, args):
+        return dispatch(self.commands, list(args))
 
-    def main(self, argv=None):
-        argv = sys.argv[1:] if argv is None else list(argv)
+    def main(self, args=None):
+        args = sys.argv[1:] if args is None else list(args)
         try:
-            result = self.process(argv)
+            result = self.process(args)
         except UsageError as e:
             print(f'{self.name or "error"}: {e}', file=sys.stderr)
             return 2
@@ -229,7 +222,7 @@ def emit_module(plans):
     for plan in plans:
         parts.append(emit_source(plan))
         parts.append('')
-    parts.append('_COMMANDS = {')
+    parts.append('commands = {')
     for plan in plans:
         parts.append(f'    {plan.name!r}: Converter_{plan.name},')
     parts.append('}')

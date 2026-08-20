@@ -12,12 +12,8 @@ from appeal.runtime import (
     mapping, file, optional,
     )
 
-_callables = {}     # command word -> the user's function, bound at @command
-
 
 class Converter_report(Converter):
-    def __init__(self):
-        Converter.__init__(self, _callables['report'])
     def register(self, processor):
         processor.prepend([
             self.Option('-u', 'units', str),
@@ -28,20 +24,16 @@ class Converter_report(Converter):
         ])
 
 class Converter_forecast(Converter):
-    def __init__(self):
-        Converter.__init__(self, _callables['forecast'])
     def register(self, processor):
-        annotations = _callables['forecast'].__annotations__
+        annotations = type(self).converter.__annotations__
         processor.prepend([
             self.Argument('city', str, required=True),
             self.Argument('days', annotations['days'], required=False),
         ])
 
 class Converter_sync(Converter):
-    def __init__(self):
-        Converter.__init__(self, _callables['sync'])
     def register(self, processor):
-        annotations = _callables['sync'].__annotations__
+        annotations = type(self).converter.__annotations__
         processor.prepend([
             self.Option('-v', 'verbose', annotations['verbose']),
             self.Option('--verbose', 'verbose', annotations['verbose']),
@@ -52,7 +44,7 @@ class Converter_sync(Converter):
             self.Argument('source', annotations['source'], required=True),
         ])
 
-_COMMANDS = {
+commands = {
     'report': Converter_report,
     'forecast': Converter_forecast,
     'sync': Converter_sync,
@@ -66,20 +58,21 @@ class Appeal:
         self.commands = {}
 
     def command(self, name=None):
-        def register(fn):
-            word = name or fn.__name__
-            _callables[word] = fn
-            self.commands[word] = _COMMANDS[word]
-            return fn
-        return register
+        def command(converter):
+            word = name or converter.__name__
+            cls = commands[word]
+            cls.converter = converter       # bind the callable on the class
+            self.commands[word] = cls
+            return converter
+        return command
 
-    def process(self, argv):
-        return dispatch(self.commands, list(argv))
+    def process(self, args):
+        return dispatch(self.commands, list(args))
 
-    def main(self, argv=None):
-        argv = sys.argv[1:] if argv is None else list(argv)
+    def main(self, args=None):
+        args = sys.argv[1:] if args is None else list(args)
         try:
-            result = self.process(argv)
+            result = self.process(args)
         except UsageError as e:
             print(f'{self.name or "error"}: {e}', file=sys.stderr)
             return 2

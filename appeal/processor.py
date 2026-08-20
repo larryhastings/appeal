@@ -114,12 +114,12 @@ class Repeat:
 
 def _presence(instance, name):
     "A flag's presence value: `not default`, read live off the callable."
-    default = (instance.converter.__kwdefaults__ or {}).get(name, False)
+    default = (type(instance).converter.__kwdefaults__ or {}).get(name, False)
     return not default
 
 def _default(instance, name):
     "The parameter's default, read live off the callable (for init)."
-    return (instance.converter.__kwdefaults__ or {}).get(name)
+    return (type(instance).converter.__kwdefaults__ or {}).get(name)
 
 
 class LiveBinding:
@@ -219,9 +219,11 @@ class ConjureBinding:
 # ---- the converter base --------------------------------------------
 class Converter:
     """
-    Base for a generated command or converter.  `super().__init__(fn)`
-    stores the user's callable as self.converter (no staticmethod).  A
-    subclass adds register(self, processor), which pushes its work via
+    Base for a generated command or converter.  The user's callable is a
+    class attribute `converter`, set on the subclass (by @command, or by
+    the emitter) -- reached via type(self).converter, never self.converter
+    (a bare function on a class binds as a method).  A subclass adds
+    register(self, processor), which pushes its work via
     processor.prepend([...]) using the self.X factories.  register is
     called by the Argument that enters this converter -- never by a
     PreOption (conjuring builds the object but defers its work).
@@ -229,8 +231,10 @@ class Converter:
     trailing = 0                        # count of this converter's own
                                         # trailing operands (emitter sets it)
 
-    def __init__(self, converter):
-        self.converter = converter
+    converter = None                    # the user's callable, set on the
+                                        # subclass (by @command, or the emitter)
+
+    def __init__(self):
         self.args = []
         self.kwargs = {}
         self.multis = {}                # name -> live MultiOption, finalized last
@@ -255,7 +259,7 @@ class Converter:
             if isinstance(value, Converter):
                 self.kwargs[name] = value()
         args = [a() if isinstance(a, Converter) else a for a in self.args]
-        return self.converter(*args, **self.kwargs)
+        return type(self).converter(*args, **self.kwargs)
 
 
 # ---- the engine ----------------------------------------------------
