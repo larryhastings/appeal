@@ -31,7 +31,6 @@
 # converter-group options with opargs, source-string emission.
 
 import collections
-import inspect
 
 from .runtime import convert, UsageError, MultiOption
 
@@ -149,23 +148,38 @@ class ValueBinding:
         self.instance.kwargs[self.name] = convert(
             self.converter, value, self.name)
 
+_oparg_converters_cache = {}
+
+def _oparg_converters(factory):
+    """
+    A MultiOption's per-occurrence oparg converters, from its option()
+    parameters -- read off __code__/__annotations__ (no `inspect`, which
+    costs ~7ms to import) and cached ONCE per type, not every parse.
+    """
+    converters = _oparg_converters_cache.get(factory)
+    if converters is None:
+        option = factory.option
+        code = option.__code__
+        names = code.co_varnames[1:code.co_argcount]    # skip self
+        annotations = option.__annotations__
+        converters = tuple(annotations.get(name, str) for name in names)
+        _oparg_converters_cache[factory] = converters
+    return converters
+
+
 class MultiBinding:
     """
     Invoke -> feed a persistent MultiOption (counter/accumulator/mapping).
     The instance is created lazily on first occurrence (so an unused
     option leaves the parameter's default untouched), init()'d with that
     default, and fed once per occurrence.  render() happens at finalize.
-    Arity and element converters are introspected from the type's option().
     """
     __slots__ = ('owner', 'name', 'factory', 'converters')
     def __init__(self, owner, name, factory):
         self.owner = owner
         self.name = name
         self.factory = factory
-        params = list(inspect.signature(factory.option).parameters.values())[1:]
-        self.converters = [p.annotation
-                           if p.annotation is not inspect.Parameter.empty
-                           else str for p in params]
+        self.converters = _oparg_converters(factory)
     def invoke(self, processor, value=None):
         instance = self.owner.multis.get(self.name)
         if instance is None:
