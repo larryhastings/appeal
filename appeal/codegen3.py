@@ -156,7 +156,8 @@ def emit_source(plan):
             body.append(f'            self.Argument({slot.name!r}, {ref}, '
                         f'required={slot.required!r}{extra}),')
 
-    lines = [f'class Converter_{plan.name}(Converter):']
+    lines = [f'@command({plan.name!r})',
+             f'class Converter_{plan.name}(Converter):']
     n_trailing = sum(1 for slot in plan.slots if slot.trailing)
     if n_trailing:
         lines.append(f'    trailing = {n_trailing}')
@@ -183,6 +184,15 @@ from appeal.runtime import (
     UsageError, split, validate, validate_range, counter, accumulator,
     mapping, file, optional,
     )
+
+commands = {}
+
+
+def command(name):
+    def command(cls):
+        commands[name] = cls
+        return cls
+    return command
 '''
 
 _SHIM = '''\
@@ -195,10 +205,11 @@ class Appeal:
 
     def command(self, name=None):
         def command(converter):
-            word = name or converter.__name__
-            cls = commands[word]
-            cls.converter = converter       # bind the callable on the class
-            self.commands[word] = cls
+            nonlocal name
+            name = name or converter.__name__
+            cls = commands[name]
+            cls.converter = converter
+            self.commands[name] = cls
             return converter
         return command
 
@@ -219,13 +230,8 @@ class Appeal:
 def emit_module(plans):
     "Emit a complete, runnable compiled parser module for a list of plans."
     parts = [_MODULE_HEADER, '']
-    for plan in plans:
-        parts.append(emit_source(plan))
+    for plan in plans:                          # each @command(name) registers
+        parts.append(emit_source(plan))         # itself into `commands`
         parts.append('')
-    parts.append('commands = {')
-    for plan in plans:
-        parts.append(f'    {plan.name!r}: Converter_{plan.name},')
-    parts.append('}')
-    parts.append('')
     parts.append(_SHIM)
     return '\n'.join(parts)

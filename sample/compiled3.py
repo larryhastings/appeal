@@ -12,7 +12,17 @@ from appeal.runtime import (
     mapping, file, optional,
     )
 
+commands = {}
 
+
+def command(name):
+    def command(cls):
+        commands[name] = cls
+        return cls
+    return command
+
+
+@command('report')
 class Converter_report(Converter):
     def register(self, processor):
         processor.prepend([
@@ -23,6 +33,7 @@ class Converter_report(Converter):
             self.Argument('city', str, required=True),
         ])
 
+@command('forecast')
 class Converter_forecast(Converter):
     def register(self, processor):
         annotations = type(self).converter.__annotations__
@@ -31,6 +42,7 @@ class Converter_forecast(Converter):
             self.Argument('days', annotations['days'], required=False),
         ])
 
+@command('sync')
 class Converter_sync(Converter):
     def register(self, processor):
         annotations = type(self).converter.__annotations__
@@ -44,12 +56,6 @@ class Converter_sync(Converter):
             self.Argument('source', annotations['source'], required=True),
         ])
 
-commands = {
-    'report': Converter_report,
-    'forecast': Converter_forecast,
-    'sync': Converter_sync,
-}
-
 class Appeal:
     "The compiled parser wearing the Appeal API (parse + dispatch only)."
     def __init__(self, name=None, *, version=None):
@@ -59,10 +65,11 @@ class Appeal:
 
     def command(self, name=None):
         def command(converter):
-            word = name or converter.__name__
-            cls = commands[word]
-            cls.converter = converter       # bind the callable on the class
-            self.commands[word] = cls
+            nonlocal name
+            name = name or converter.__name__
+            cls = commands[name]
+            cls.converter = converter
+            self.commands[name] = cls
             return converter
         return command
 
