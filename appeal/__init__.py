@@ -713,6 +713,8 @@ class Appeal:
         self.parent = parent
         self._children = {}       # command word -> child Appeal
         self._impl = None         # this node's command function
+        self._precommands = []    # ordered precommand eras (the head; _impl
+                                  # tracks the primary until dispatch runs them all)
         self._auto_impl = None    # synthesized fn for a pure dispatcher
         self._node_default = None # this node's default command
         self._node_repeat = False # this node's set cycles
@@ -1201,13 +1203,20 @@ class Appeal:
         "v1's API: an unparsed Processor; call it with an argv."
         return Processor(self)
 
-    def precommand(self):
+    def precommand(self, *, index=-1):
         def decorator(callable):
             # a class here is class-as-app (§8.6): its __init__
             # is the global command's grammar; its methods
             # register themselves explicitly and membership
-            # derivation binds them (ruled 2026-08-10)
-            self._impl = callable
+            # derivation binds them (ruled 2026-08-10).  precommand is
+            # REPEATABLE (Larry, 2026-08-21): each call inserts an era into
+            # the ordered list (index -1 = append, 0 = head); they run
+            # front-to-back before the commands, each its own era.
+            if index == -1:
+                self._precommands.append(callable)
+            else:
+                self._precommands.insert(index, callable)
+            self._impl = self._precommands[-1]
             self._invalidate()
             return callable
         return decorator
