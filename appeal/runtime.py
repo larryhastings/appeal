@@ -3202,6 +3202,12 @@ class Processor:
     def _is_option(self, tok):
         return tok.startswith('-') and tok not in ('-', '--')
 
+    def _owns_option(self, tok):
+        "Does this option token name one of the converter's registered options?"
+        if tok.startswith('--'):
+            return tok.partition('=')[0] in self.handlers
+        return len(tok) > 1 and ('-' + tok[1]) in self.handlers
+
     def enter(self, converter):
         "Pocket the converter's trailing operands from the end, then register."
         for _ in range(converter.trailing):
@@ -3232,17 +3238,17 @@ class Processor:
 
             if (tok is not None and not self.force_positional
                     and self._is_option(tok)):
+                if not self.queue and not self._owns_option(tok):
+                    return          # saturated + an option we don't own: this
+                                    # era/command's boundary is over -- yield it
                 self._invoke_option(); continue
 
             if front is None:
-                # arguments saturated; options already bound above (the
-                # window).  A command word here hands off to dispatch (stop,
-                # leaving self.pos on it); anything else is a stray argument.
-                if tok is None:
-                    return
-                if not self.force_positional and tok in self.commands:
-                    return
-                raise UsageError(f"too many arguments (unexpected {tok!r})", None)
+                # saturated: this era/command owns nothing more here.  Yield
+                # whatever's next (a command word, a later era's option or
+                # argument, or a stray) to execute, which diagnoses it --
+                # commands never start with a dash.
+                return
 
             self._fill_argument(front)
 
@@ -3325,41 +3331,51 @@ def _halts(result):
     return isinstance(result, int) and not isinstance(result, bool) and result
 
 
-def execute(commands, argv, *, global_cls=None, repeat=False):
+def _unexpected(token):
     """
-    Run a program left to right.  If there's a global command it runs first,
-    saturating its arguments from the head of the line (a truthy int halts).
-    Then each remaining command word names a command whose arguments follow;
-    with `repeat`, that cycles until the line is consumed.  A command runs to
-    saturation, keeps binding options (the window), and stops at the next
-    command word.  commands maps command-word -> Converter class.
+    Diagnose a token nobody claimed.  Commands never start with a dash, so a
+    leading-dash leftover is a mistyped option (--verison), not a mystery
+    command -- a friendlier, truthful error than "unknown command".
+    """
+    if token.startswith('-') and token not in ('-', '--'):
+        return UsageError(f"unknown option {token}", None)
+    return UsageError(f"unknown command {token!r}", None)
+
+
+def execute(commands, argv, *, precommands=(), repeat=False):
+    """
+    Run a program left to right.  Any precommand ERAS run first, in order --
+    each saturates its own arguments and binds its own options from the head of
+    the line, then yields at the first token it doesn't own (a truthy int
+    return from any era halts).  Then each command word names a command whose
+    arguments follow; with `repeat`, that cycles until the line runs out.  A
+    converter runs greedily to saturation, keeps binding its options (the
+    window), and yields at the next command word or an option it doesn't own.
+    commands maps command-word -> Converter class.
     """
     result = None
     pos = 0
-    if global_cls is not None:
-        processor = Processor(argv, global_cls(), commands)
+    for era_cls in precommands:                 # the head eras, in order
+        processor = Processor(argv[pos:], era_cls(), commands)
         result = processor.run()
         if _halts(result):
             return result
-        pos = processor.pos
-    elif not argv:
+        pos += processor.pos
+    if not precommands and not argv:
         raise UsageError("no command given", None)
     while pos < len(argv):
         word = argv[pos]
         converter_cls = commands.get(word)
         if converter_cls is None:
-            raise UsageError(f"unknown command {word!r}", None)
+            raise _unexpected(word)
         pos += 1
         processor = Processor(argv[pos:], converter_cls(), commands)
         result = processor.run()
         if _halts(result):
             return result
         pos += processor.pos
-        if not repeat:
-            if pos < len(argv):
-                raise UsageError(
-                    f"too many arguments (unexpected {argv[pos]!r})", None)
-            break
+        if not repeat and pos < len(argv):
+            raise _unexpected(argv[pos])
     return result
 
 
@@ -3402,7 +3418,7 @@ def appeal_class(baked_fingerprint=None, default_mappings_fp=None,
             self.version = version
             self.repeat = repeat            # cycle commands left to right
             self.commands = {}
-            self.global_cls = None          # the unnamed command, if any
+            self.precommands = []           # ordered precommand eras (run first)
             # config kept for reconstruct (help/error render through full Appeal)
             self.default_mappings = default_mappings
             self.default_options = default_options
@@ -3444,18 +3460,21 @@ def appeal_class(baked_fingerprint=None, default_mappings_fp=None,
                 return converter
             return command
 
-        def precommand(self):
+        def precommand(self, *, index=-1):
             def precommand(converter):
                 cls = self.Converters[converter.__name__]
                 cls.fixup_converters(converter)     # wire cls + its children
-                self.global_cls = cls               # runs first; not a command word
+                if index == -1:                     # an ordered era; runs first,
+                    self.precommands.append(cls)    # before commands
+                else:
+                    self.precommands.insert(index, cls)
                 return converter
             return precommand
         global_command = precommand     # transitional alias for the old name
 
         def process(self, args):
             return execute(self.commands, list(args),
-                           global_cls=self.global_cls, repeat=self.repeat)
+                           precommands=self.precommands, repeat=self.repeat)
 
         def main(self, args=None):
             args = sys.argv[1:] if args is None else list(args)
