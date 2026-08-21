@@ -2216,8 +2216,10 @@ class Appeal:
             if runtime._halts(result):
                 return result, pos
             pos += proc.consumed
-            child = self._children.get(word)        # a parent command's subcommands
-            if child is not None and pos < len(argv):
+            # a child node exists for every command (for lazy subcommand
+            # registration); only recurse when it actually HAS subcommands.
+            child = self._children.get(word)
+            if child is not None and child._commands and pos < len(argv):
                 result, pos = child._run_node(argv, pos, holder, top=False)
             if not self.repeat and pos < len(argv):
                 raise runtime._unexpected(argv[pos])
