@@ -571,22 +571,22 @@ def test_multioption_zero_arity():
     assert got == ('ok', 3), got
 
 def test_gate_rule():
-    # Larry's ruling: a REQUIRED group is a wall--options of
-    # skippable things behind it wait until it has been fed
+    # The gate rule is DROPPED (Larry, 2026-08-21): flat recognition wins.
+    # 0.6.4 gated a skippable group's options behind a required "wall"; 1.0
+    # recognizes an option ANYWHERE -- the parse is unambiguous (--bright can
+    # only conjure color; 2.5 can only feed size), so order doesn't matter.
     def size(width: float, *, bold=False):
         return (width, bold)
     def color(name='black', *, bright=False):
         return (name, bright)
-    def draw(shape, s: size, c: color = None):     # s required: a wall
+    def draw(shape, s: size, c: color = None):
         return (shape, s, c)
     got = run_both(draw, ['dot', '2.5', '--bright'])
     assert got == ('ok', ('dot', (2.5, False), ('black', True))), got
-    got = run_both(draw, ['dot', '--bright', '2.5'])
-    assert got[0] == 'usage' and 'too early' in got[1], got
-    got = run_both(draw, ['--bright', 'dot', '2.5'])
-    assert got[0] == 'usage' and 'too early' in got[1], got
-    # ...but the wall's OWN options float free: size is coming no
-    # matter what, so --bold announces it (v1, probed)
+    got = run_both(draw, ['dot', '--bright', '2.5'])       # 0.6.4 said "too early"
+    assert got == ('ok', ('dot', (2.5, False), ('black', True))), got
+    got = run_both(draw, ['--bright', 'dot', '2.5'])       # ditto -- now accepted
+    assert got == ('ok', ('dot', (2.5, False), ('black', True))), got
     got = run_both(draw, ['--bold', 'dot', '2.5'])
     assert got == ('ok', ('dot', (2.5, True), None)), got
 
@@ -606,9 +606,8 @@ def test_gate_skippable_groups_never_gate():
     assert got == ('ok', ('dot', None, ('black', True))), got
 
 def test_gate_certain_nested_options_float():
-    # caught by the differential fuzz: v1 lets a required group's
-    # options appear anywhere, even nested behind other unfed
-    # walls--they announce something certain to exist
+    # flat recognition (gate rule dropped): every option is recognized
+    # anywhere, whether it belongs to a required group or a skippable one.
     def pair(x: float, y: float):
         return (x, y)
     def sub(v: float, *, mark=False):
@@ -617,11 +616,11 @@ def test_gate_certain_nested_options_float():
         return (name, bright)
     def f(p: pair, b: sub, c: color = None):
         return (p, b, c)
-    got = run_both(f, ['--mark', '1', '2', '3'])       # b's own, early: fine
+    got = run_both(f, ['--mark', '1', '2', '3'])       # b's own option, early
     assert got == ('ok', ((1.0, 2.0), (3.0, True), None)), got
-    got = run_both(f, ['--bright', '1', '2', '3'])     # c is skippable: gated
-    assert got[0] == 'usage' and 'too early' in got[1], got
-    got = run_both(f, ['1', '2', '3', '--bright'])     # both walls fed
+    got = run_both(f, ['--bright', '1', '2', '3'])     # c's option, early: conjures c
+    assert got == ('ok', ((1.0, 2.0), (3.0, False), ('black', True))), got
+    got = run_both(f, ['1', '2', '3', '--bright'])
     assert got == ('ok', ((1.0, 2.0), (3.0, False), ('black', True))), got
 
 def test_gate_and_windows():
@@ -2143,15 +2142,26 @@ def needs_39(what):
 
 def run_both(command, argv, decorations=None):
     """
-    Run argv through the interpreter and the generated parser.
-    Returns ('ok', result) or ('usage', message)--and asserts
-    the two rungs agree exactly.  decorations: a
-    build.Decorations carrying @option/@parameter declarations
-    (the app-side registry; ruled 2026-08-09, nothing rides the
-    functions).
+    Run argv through 1.0's parser built TWO ways from the same plan: the
+    Converter classes constructed in memory, and the same classes emitted
+    as source and exec'd.  Both run the one runtime.Processor (the compiled
+    path just skips class construction -- "the difference is speed"), so this
+    is a codegen-fidelity check.  Returns ('ok', result) or ('usage', message)
+    and asserts the two agree.  decorations: the app-side @option/@parameter
+    registry (ruled 2026-08-09, nothing rides the functions).
     """
+    from appeal import runtime
+    from appeal.compile import build_converters, emit_module, _converter_key
     plan = build_plan(command, decorations=decorations)
-    parse = compile_plan(plan)
+    word = plan.name.replace('_', '-')
+
+    classes = build_converters([plan])              # rung A: built in memory
+    cls = classes[_converter_key(plan)]
+
+    ns = {}                                         # rung B: from emitted source
+    exec(compile(emit_module([plan]), '<compiled>', 'exec'), ns)
+    app = ns['Appeal']()
+    app.command()(command)
 
     def run(fn):
         try:
@@ -2159,9 +2169,10 @@ def run_both(command, argv, decorations=None):
         except UsageError as e:
             return ('usage', str(e))
 
-    a = run(lambda: interpreter_parse(plan, list(argv)))
-    b = run(lambda: parse(list(argv)))
-    assert a == b, f'parity failure on {command.__name__} {argv!r}:\n  interpreter: {a!r}\n  rung 3: {b!r}'
+    a = run(lambda: runtime.execute({word: cls}, [word] + list(argv)))
+    b = run(lambda: app.process([word] + list(argv)))
+    assert a == b, (f'codegen parity failure on {command.__name__} {argv!r}:\n'
+                    f'  in-memory: {a!r}\n  compiled:  {b!r}')
     return a
 
 def run_both_set(commands, global_command, argv):

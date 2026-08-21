@@ -28,15 +28,20 @@ _BUILTIN_CONVERTERS = (str, bool, int, float, complex)
 
 def _conjurable(child_plan):
     """
-    A converter with no required operand -- it can be invoked with zero operands
-    (all operand slots defaulted, or *args), so a required slot summons it from
-    its defaults when the line runs out.  Read from slot.default, NOT plan.minimum:
-    v1's optionality promotion inflates minimum for nested groups, but the
-    compiled engine fills greedily (minimum governs operands), so it wants the
-    intrinsic optionality that survives on slot.default.
+    Can this converter be invoked with ZERO operands (so a required slot summons
+    it from its defaults when the line runs out)?  Every slot must be skippable:
+    optional (has a default), a *args (contributes nothing), or a required slot
+    whose own converter is RECURSIVELY conjurable (a required g1 whose g0 needs
+    no operands still builds from nothing).  Read from slot.default, NOT
+    plan.minimum: v1's promotion inflates minimum for nested groups, but the
+    compiled engine fills greedily, so it wants the intrinsic shape.
     """
-    return not any(slot.default is NO_DEFAULT and not slot.repeat
-                   for slot in child_plan.slots)
+    for slot in child_plan.slots:
+        if slot.repeat or slot.default is not NO_DEFAULT:
+            continue                            # *args / optional: skippable
+        if isinstance(slot.child, Terminal) or not _conjurable(slot.child):
+            return False                        # a required leaf, or a required
+    return True                                 # non-conjurable group: needs input
 
 
 def _converter_key(plan):
@@ -193,13 +198,12 @@ def _build_class(plan, classes):
             # a converter group -- reference the child class
             childcls = classes[_converter_key(slot.child)]
             preopts = []
-            if _conjurable(slot.child):
-                for o in slot.child.options:
-                    if o.kind != 'flag':        # value-option conjure: later
-                        continue
-                    for s in o.strings:
-                        preopts.append(
-                            self.PreOption(s, o.name, slot.name, childcls))
+            for o in slot.child.options:        # flat recognition (see emit_source)
+                if o.kind != 'flag':
+                    continue
+                for s in o.strings:
+                    preopts.append(
+                        self.PreOption(s, o.name, slot.name, childcls))
             if slot.repeat:                             # windowed *args
                 items.append(self.Repeat(
                     preopts + [self.Argument(slot.name, childcls, required=False)]))
@@ -364,13 +368,12 @@ def emit_source(plan, names, is_command):
         # a converter group -- reference the child class
         childcls = names[_converter_key(slot.child)]
         preopts = []
-        if _conjurable(slot.child):
-            for o in slot.child.options:
-                if o.kind != 'flag':            # value-option conjure: later
-                    continue
-                for s in o.strings:
-                    preopts.append(f'self.PreOption({s!r}, {o.name!r}, '
-                                   f'{slot.name!r}, {childcls})')
+        for o in slot.child.options:            # flat recognition: a group's flag
+            if o.kind != 'flag':                # is known anywhere on the line;
+                continue                        # firing it forces the group (a
+            for s in o.strings:                 # conjurable one from defaults, a
+                preopts.append(f'self.PreOption({s!r}, {o.name!r}, '  # non-conjurable
+                               f'{slot.name!r}, {childcls})')         # one must get operands)
         if slot.repeat:                             # windowed *args
             inner = ', '.join(preopts +
                               [f'self.Argument({slot.name!r}, {childcls}, required=False)'])

@@ -2984,6 +2984,19 @@ def _default(instance, name):
     "The parameter's default, read live off the callable (for init)."
     return (type(instance).converter.__kwdefaults__ or {}).get(name)
 
+def _positional_default(instance, name):
+    """
+    A positional parameter's default, read live off the callable.  A skipped
+    optional positional slot appends this so later slots (e.g. a conjured group)
+    stay positionally aligned -- "signature default fills the tail" is false once
+    conjuring can fill a slot to the right of a skipped one.
+    """
+    host = _params_host(type(instance).converter)
+    code = host.__code__
+    names = code.co_varnames[:code.co_argcount]
+    defaults = host.__defaults__ or ()
+    return defaults[names.index(name) - (code.co_argcount - len(defaults))]
+
 
 class LiveBinding:
     "Invoke -> set the flag; `--flag=false` gives an explicit boolean."
@@ -3213,6 +3226,13 @@ class Processor:
 
     def prepend(self, items):
         "Push work onto the FRONT, preserving order (a la rextend)."
+        # flat recognition (Larry's v2 ruling): an option is recognized anywhere
+        # on the line, even before its converter is entered.  Register a batch's
+        # options into the handlers table eagerly, not only when they reach the
+        # queue front, so `--dashed dot 2.5` knows --dashed before `dot` fills.
+        for item in items:
+            if isinstance(item, (OptionInstruction, PreOptionInstruction)):
+                item.register(self)
         self.queue.extendleft(reversed(items))
 
     def peek(self):
@@ -3338,9 +3358,12 @@ class Processor:
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
                     raise UsageError(f"missing argument {arg.name!r}", None)
-                self.queue.popleft()                 # skip; signature default fills
+                self.queue.popleft()
                 if self.queue and isinstance(self.queue[0], RepeatInstruction):
-                    self.queue.popleft()             # end a *args of leaves
+                    self.queue.popleft()             # end a *args of leaves -- no
+                else:                                # phantom element; a plain
+                    arg.owner.args.append(           # optional keeps its position
+                        _positional_default(arg.owner, arg.name))
                 return
             self.advance()
             arg.owner.args.append(convert(arg.converter, tok, arg.name))
@@ -3348,6 +3371,11 @@ class Processor:
             return
         # a converter slot: a conjured instance, or a fresh one from an operand
         obj = self.conjured.pop(arg.slot, None)
+        if (obj is not None and not arg.converter.conjurable
+                and (tok is None or self._is_option(tok))):
+            # an option forced a non-conjurable group, but no operands arrived to
+            # build it -- name the slot the option belongs to (v1's error).
+            raise UsageError(f"option requires {arg.name!r}", None)
         if obj is None and (tok is None or self._is_option(tok)):
             if tok is None and arg.required and arg.converter.conjurable:
                 obj = arg.converter()                # required slot: invoke from
@@ -3358,7 +3386,10 @@ class Processor:
                 if arg.required:
                     raise UsageError(f"missing argument {arg.name!r}", None)
                 if self.queue and isinstance(self.queue[0], RepeatInstruction):
-                    self.queue.popleft()             # end the *args
+                    self.queue.popleft()             # end the *args -- no phantom
+                else:                                # element; a plain optional
+                    arg.owner.args.append(           # group keeps its position
+                        _positional_default(arg.owner, arg.name))
                 return
         if obj is None:
             obj = arg.converter()
