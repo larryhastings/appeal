@@ -113,12 +113,16 @@ def _child_converters(plan):
     and group options), as callable -> a representative parameter name.  Feeds
     fixup_converters: one wire-up per child, its callable read off `annotations`.
     """
+    annotations = getattr(_params_host(plan.callable), '__annotations__', {}) or {}
     children = {}
     for slot in plan.slots:
         if not isinstance(slot.child, Terminal):
             children.setdefault(_converter_key(slot.child), slot.name)
     for option in plan.options:
-        if option.kind == 'group':
+        # fixup wires a child off annotations[name]; a decoration-supplied group
+        # option (e.g. the help precommand's -h/--help) isn't a signature
+        # parameter, so it can't be wired that way -- skip it here.
+        if option.kind == 'group' and option.name in annotations:
             children.setdefault(_converter_key(option.child), option.name)
     return children
 

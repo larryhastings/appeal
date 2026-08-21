@@ -3005,9 +3005,13 @@ class LiveBinding:
         self.instance = instance
         self.name = name
     def invoke(self, processor, value=None):
-        self.instance.kwargs[self.name] = (
-            _presence(self.instance, self.name) if value is None
-            else value == 'true')
+        if value is None:
+            self.instance.kwargs[self.name] = _presence(self.instance, self.name)
+            return
+        if value not in ('true', 'false'):          # ruled: only these two
+            raise UsageError(
+                f"option {self.name!r} expected 'true' or 'false'", None)
+        self.instance.kwargs[self.name] = (value == 'true')
 
 class ValueBinding:
     """
@@ -3083,8 +3087,10 @@ class MultiBinding:
             self.owner.multis[self.name] = instance
         opargs = []
         if value is not None:                           # =value / attached
-            if self.converters:
-                opargs = [convert(self.converters[0], value, self.name)]
+            if not self.converters:                     # a 0-arity fold (counter)
+                raise UsageError(
+                    f"option {self.name!r} doesn't take a value", None)
+            opargs = [convert(self.converters[0], value, self.name)]
         else:
             for converter in self.converters:
                 if processor.peek() is None:
@@ -3324,14 +3330,14 @@ class Processor:
             binding = self.handlers.get(opt)
             if binding is None:
                 raise UsageError(f"unknown option {opt}", None)
+            if chars[i + 1:i + 2] == '=':               # -v=false / -n=5: explicit
+                binding.invoke(self, chars[i + 2:])      # value for THIS option
+                return
             if self._nullary(binding):                  # no oparg: keep bundling
                 binding.invoke(self)
                 i += 1
             else:                                       # takes a value: rest is it
-                rest = chars[i + 1:]
-                if rest.startswith('='):                 # -n=5 spelled with equals
-                    rest = rest[1:]
-                binding.invoke(self, rest or None)
+                binding.invoke(self, chars[i + 1:] or None)
                 return
 
     @staticmethod
