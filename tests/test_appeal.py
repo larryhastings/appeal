@@ -2335,6 +2335,45 @@ def test_greedy_global_converter_group():
     got = run_both_set([run], g, ['9', '9', 'run', 'x'])  # p=(9,9) -> truthy halt
     assert got == ('ok', 3), got
 
+def test_repeatable_precommand_eras():
+    # precommand is repeatable (Larry, 2026-08-21): eras run front-to-back
+    # before the commands, each greedily saturating its own arguments, then
+    # yielding at the first token it doesn't own
+    ran = []
+    app = Appeal(name='tool')
+    @app.precommand()
+    def setup(*, debug=False):
+        ran.append(('setup', debug))
+    @app.precommand()
+    def scope(where):
+        ran.append(('scope', where))
+    @app.command()
+    def run(target):
+        return ('run', target)
+    ran.clear()
+    assert app.process(['--debug', 'here', 'run', 'x']) == ('run', 'x')
+    assert ran == [('setup', True), ('scope', 'here')], ran
+
+    # index=0 inserts at the head; a truthy int from any era halts, the
+    # rest of the line never runs
+    gated = []
+    app2 = Appeal()
+    @app2.precommand(index=0)
+    def gate(*, fail=False):
+        return 3 if fail else None
+    @app2.precommand()
+    def base(x):
+        gated.append(('base', x))
+    @app2.command()
+    def go(target):
+        gated.append(('go', target)); return 0
+    gated.clear()
+    assert app2.process(['--fail', 'v', 'go', 'y']) == 3     # gate halts first
+    assert gated == [], gated
+    gated.clear()
+    assert app2.process(['v', 'go', 'y']) == 0
+    assert gated == [('base', 'v'), ('go', 'y')], gated
+
 def test_appeal_facade_dispatch():
     app = Appeal(name='tool')
     @app.global_command()
