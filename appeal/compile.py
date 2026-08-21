@@ -394,17 +394,26 @@ from appeal.runtime import (
     Converter, appeal_class, split, validate, validate_range, counter,
     accumulator, mapping, file, optional,
     )
-
-Appeal = appeal_class()
 '''
 
 
-def emit_module(plans):
-    "Emit a complete, runnable compiled parser module for a list of plans."
+def emit_module(plans, baked_fingerprint=None, default_mappings_fp=None,
+                default_options_fp=None):
+    """
+    Emit a complete, runnable compiled parser module for a list of plans.
+    baked_fingerprint (from runtime.config_fingerprint at compile time) is the
+    configuration identity the compiled Appeal verifies against at __init__;
+    default_mappings_fp/default_options_fp are the compile-time policy
+    fingerprints the sentinel default falls back to.
+    """
     converters = _converters(plans)
     names = _class_names(converters)
     commands = {plan.callable for plan in plans}
-    parts = [_MODULE_HEADER, '']
+    parts = [_MODULE_HEADER,
+             f'Appeal = appeal_class(baked_fingerprint={baked_fingerprint!r},\n'
+             f'                      default_mappings_fp={default_mappings_fp!r},\n'
+             f'                      default_options_fp={default_options_fp!r})',
+             '']
     for callable_, plan in converters.items():  # children first; commands self-register
         parts.append(emit_source(plan, names, is_command=callable_ in commands))
         parts.append('')

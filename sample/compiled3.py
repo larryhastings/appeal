@@ -9,8 +9,9 @@ from appeal.runtime import (
     accumulator, mapping, file, optional,
     )
 
-Appeal = appeal_class()
-
+Appeal = appeal_class(baked_fingerprint='2f2808dac5cf0aac4523f100fe6a3649c4846fae',
+                      default_mappings_fp='496c9a6acedd25efbe35bb420b68ec4673d76edd',
+                      default_options_fp='5c7d671508534e3a249d37a138442b740dc2c7d2')
 
 @Appeal._converter('report')
 class Converter_report(Converter):

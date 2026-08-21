@@ -1477,6 +1477,65 @@ def _stable_repr(obj):
     return re.sub(r'0x[0-9a-fA-F]+', '0x?', repr(obj))
 
 
+def _canonical(obj):
+    """
+    A hash-seed-stable serialization of a value: sets/dicts sorted (their
+    repr order is randomized per run), code objects recursed (a nested
+    function's own bytecode + consts).  Feeds _callable_fingerprint.
+    """
+    if isinstance(obj, (bytes, bytearray)):
+        return b'b' + bytes(obj)
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return repr(obj).encode()
+    if isinstance(obj, (tuple, list)):
+        return b'(' + b','.join(_canonical(x) for x in obj) + b')'
+    if isinstance(obj, (set, frozenset)):
+        return b'{' + b','.join(sorted(_canonical(x) for x in obj)) + b'}'
+    if isinstance(obj, dict):
+        return b'{' + b','.join(sorted(
+            _canonical(k) + b':' + _canonical(v) for k, v in obj.items())) + b'}'
+    code = getattr(obj, 'co_code', None)
+    if code is not None:                        # a code object (nested callable)
+        return b'code(' + code + _canonical(obj.co_consts) + b')'
+    return _stable_repr(obj).encode()
+
+
+def _callable_fingerprint(fn):
+    """
+    A hash identifying a policy callable (default_mappings/default_options) by
+    its bytecode, constants, and closure -- enough to catch a swapped or
+    edited callable at run time (compile-time bake vs run-time check).  It
+    cannot see through calls the callable MAKES: change a function it calls
+    and this won't notice (accepted -- we can only do so much).
+    """
+    if fn is None:
+        return None
+    import _sha1                              # C module: ~0.1ms, vs hashlib ~16ms
+    code = fn.__code__
+    closure = tuple(cell.cell_contents for cell in (fn.__closure__ or ()))
+    material = _canonical((code.co_code, code.co_consts, closure))
+    return _sha1.sha1(material).hexdigest()
+
+
+# the compiled Appeal's default for a policy argument: "use the library
+# default".  The facade can't reproduce that default without importing full
+# appeal, so for the sentinel it falls back to the fingerprint the emitter
+# baked (the compile-time policy's).  An explicit value is fingerprinted live.
+_CONFIG_DEFAULT = object()
+
+
+def config_fingerprint(version, default_mappings_fp, default_options_fp):
+    """
+    The compiled Appeal's configuration identity: the version plus the two
+    policy callables' fingerprints (default_mappings/default_options).  Baked
+    at compile time, recomputed in the compiled Appeal's __init__; a mismatch
+    means the configuration changed since compile -> regenerate.
+    """
+    import _sha1
+    material = _canonical((version, default_mappings_fp, default_options_fp))
+    return _sha1.sha1(material).hexdigest()
+
+
 def _deref_annotated(value):
     # Annotated[T, converter]: the LAST metadata element is the
     # converter (v1's documented rule, kept)
@@ -3256,12 +3315,17 @@ def execute(commands, argv, *, global_cls=None, repeat=False):
     return result
 
 
-def appeal_class():
+def appeal_class(baked_fingerprint=None, default_mappings_fp=None,
+                 default_options_fp=None):
     """
     Build the Appeal class a compiled parser module wears.  A fresh class
     per module (so each program's registered Converters stay its own): the
-    generated module does `Appeal = appeal_class()` and decorates its
-    Converter subclasses with @Appeal._converter(name).
+    generated module does `Appeal = appeal_class(baked_fingerprint=...)` and
+    decorates its Converter subclasses with @Appeal._converter(name).
+    `baked_fingerprint` is the compile-time configuration identity;
+    default_mappings_fp/default_options_fp are the compile-time policy
+    fingerprints the sentinel default falls back to.  Appeal.__init__
+    recomputes the identity and raises on drift.
     """
     class Appeal:
         """
@@ -3280,12 +3344,40 @@ def appeal_class():
         """
         Converters = {}
 
-        def __init__(self, name=None, *, version=None, repeat=False):
+        def __init__(self, name=None, *, version=None, repeat=False,
+                     default_mappings=_CONFIG_DEFAULT,
+                     default_options=_CONFIG_DEFAULT,
+                     stylesheet=None, margin=79, errors=None,
+                     positional_argument_usage_format='<{name.upper()}>',
+                     doc=None):
             self.name = name
             self.version = version
             self.repeat = repeat            # cycle commands left to right
             self.commands = {}
             self.global_cls = None          # the unnamed command, if any
+            # config kept for reconstruct (help/error render through full Appeal)
+            self.default_mappings = default_mappings
+            self.default_options = default_options
+            self.stylesheet = stylesheet
+            self.margin = margin
+            self.errors = errors
+            self.positional_argument_usage_format = positional_argument_usage_format
+            self.doc = doc
+            if baked_fingerprint is not None:
+                # sentinel default -> the compile-time policy's baked fp;
+                # an explicit value -> its live fingerprint
+                dm_fp = (default_mappings_fp
+                         if default_mappings is _CONFIG_DEFAULT
+                         else _callable_fingerprint(default_mappings))
+                do_fp = (default_options_fp
+                         if default_options is _CONFIG_DEFAULT
+                         else _callable_fingerprint(default_options))
+                current = config_fingerprint(version, dm_fp, do_fp)
+                if current != baked_fingerprint:
+                    raise ConfigurationError(
+                        f"{name or 'this program'}: the compiled parser is "
+                        f"stale -- the Appeal configuration changed since it "
+                        f"was generated; regenerate the compiled module")
 
         @classmethod
         def _converter(cls, name):
