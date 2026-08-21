@@ -3397,8 +3397,19 @@ class Processor:
         obj = self.conjured.pop(arg.slot, None)
         if (obj is not None and not arg.converter.conjurable
                 and (tok is None or self._is_option(tok))):
-            # an option forced a non-conjurable group, but no operands arrived to
-            # build it -- name the slot the option belongs to (v1's error).
+            # an option summoned a non-conjurable group, but no operands arrived.
+            # queue[0] is THIS Argument; a *args window has the Repeat behind it.
+            if len(self.queue) > 1 and isinstance(self.queue[1], RepeatInstruction):
+                # a *args window: an option past the last operand binds to the
+                # NEAREST built instance, not a new window that can't be filled.
+                for built in reversed(arg.owner.args):
+                    if isinstance(built, arg.converter):
+                        built.kwargs.update(obj.kwargs)
+                        self.queue.popleft()        # the Argument
+                        self.queue.popleft()        # the Repeat -- end the *args
+                        return
+                self.queue.popleft(); self.queue.popleft()
+                raise UsageError(f"expected at least one {arg.name!r}", None)
             raise UsageError(f"option requires {arg.name!r}", None)
         if obj is None and (tok is None or self._is_option(tok)):
             if tok is None and arg.required and arg.converter.conjurable:
