@@ -2681,14 +2681,14 @@ def test_command_set_help_facade():
     with contextlib.redirect_stdout(out):
         result = app.process(['help'])
     assert result is None
-    assert 'add_item  Adds an item to the pile.' in out.getvalue()
+    assert 'add-item  Adds an item to the pile.' in out.getvalue()  # _ -> -
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app.process(['help', 'add_item'])
+        app.process(['help', 'add-item'])
     assert out.getvalue().startswith('usage: '), out.getvalue()
     assert 'Adds an item to the pile.' in out.getvalue()
     # app-built plans carry the prog prefix (ruled 2026-07-19)
-    assert 'usage: pile add_item' in out.getvalue()
+    assert 'usage: pile add-item' in out.getvalue()
 
 def test_set_level_help_flag():
     # `tool --help` (or -h) at position 0: the command listing,
@@ -2727,7 +2727,7 @@ def test_set_level_help_flag():
         assert False, 'expected SystemExit(0)'
     except SystemExit as e:
         assert (e.code or 0) == 0
-    assert 'add_item2' in out.getvalue()
+    assert 'add-item2' in out.getvalue()            # _ -> - in the command word
 
 def test_completion():
     from appeal import completions, completions_set
@@ -4271,6 +4271,37 @@ def test_config_layering():
     except AppealDataError as e:
         assert 'no global command' in str(e), e
 
+
+def test_command_name_underscores_become_dashes():
+    # a function's underscores map to dashes in the command word (Larry,
+    # 2026-08-21): upload_database -> upload-database (cf. git format-patch)
+    app = Appeal()
+    @app.command()
+    def upload_database():
+        return 'up'
+    assert 'upload-database' in app.commands, list(app.commands)
+    assert app.process(['upload-database']) == 'up'
+
+def test_command_name_leading_underscore_rejected():
+    # _command -> -command starts with a dash: commands are words, not
+    # options, so registering it is a configuration error
+    app = Appeal()
+    try:
+        @app.command()
+        def _command():
+            pass
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'dash' in str(e), e
+
+def test_command_name_explicit_dash_rejected():
+    # an explicit name starting with a dash is rejected too
+    app = Appeal()
+    try:
+        app.command(name='--foo')
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert 'dash' in str(e), e
 
 def test_command_name_override():
     # name= (ruled 2026-07-08): the word decouples from __name__.

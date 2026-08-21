@@ -1138,10 +1138,28 @@ class Appeal:
                 for word, node in self._iter_set_nodes()
                 if node._node_default is not None}
 
+    @staticmethod
+    def _command_word(name, callable=None):
+        """
+        The command word for a registration: an explicit name verbatim, else
+        the function name with underscores turned to dashes (upload_database
+        -> upload-database, like git's format-patch/range-diff).  A command
+        word can never start with a dash -- that's an option's shape -- so a
+        leading dash, whether from name='--foo' or a function named _command
+        (-> -command), is a configuration error.
+        """
+        word = name if name is not None else callable.__name__.replace('_', '-')
+        if word.startswith('-'):
+            raise AppealConfigurationError(
+                f"a command name can't start with a dash: {word!r} "
+                f"(commands are words, not options)")
+        return word
+
     def command(self, name=None, *, repeat=False, parent=None):
         """
-        @app.command() registers a command under the callable's
-        literal name (no mangling, ever).  app.command('db')
+        @app.command() registers a command under the callable's name with
+        underscores turned to dashes (upload_database -> upload-database).
+        app.command('db')
         returns the child Appeal for the word 'db', creating it
         if needed--the command tree is a tree of Appeal instances
         (v1).  Use the child as a decorator to set the command's
@@ -1232,13 +1250,13 @@ class Appeal:
                     raise AppealConfigurationError(
                         f"command(): the command word must be a "
                         f"string, not {name!r}")
-                node = self._child(name)
+                node = self._child(self._command_word(name))
                 if repeat and not node._node_repeat:
                     node._node_repeat = True
                     self._invalidate()
                 return node
             def decorator(callable):
-                node = self._child(callable.__name__)
+                node = self._child(self._command_word(None, callable))
                 node._node_repeat = node._node_repeat or repeat
                 return node(callable)
             return decorator
@@ -1275,7 +1293,7 @@ class Appeal:
             raise AppealConfigurationError(
                 f"subcommand: no command at path {parent!r} (for "
                 f"{getattr(callable, '__name__', callable)!r})")
-        child = node._child(name or callable.__name__)
+        child = node._child(self._command_word(name, callable))
         child._node_repeat = child._node_repeat or repeat
         child(callable)
 
