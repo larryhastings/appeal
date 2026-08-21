@@ -1469,6 +1469,20 @@ def _unshare(plan, seen):
 _PROMOTE_INF = 1 << 29
 
 
+def _needs_operand(slot):
+    """
+    Does filling this slot consume at least one operand?  A leaf always does; a
+    converter GROUP does only if it has a required operand of its own (intrinsic
+    minimum >= 1).  A required slot whose converter is conjurable (minimum 0)
+    needs nothing from the command line, so it must NOT force earlier optionals
+    to fill up ahead of it (Larry, 2026-08-21): promotion is for a required
+    operand that follows, and a conjurable slot isn't one.
+    """
+    if isinstance(slot.child, Plan):
+        return slot.child.minimum >= 1
+    return True                         # a Terminal leaf consumes exactly one
+
+
 def _promote_walk(plan, parent_opt, lowest_required, mutate, flag):
     """
     v1's optionality promotion (argument_grouping.py's first_pass/
@@ -1510,7 +1524,7 @@ def _promote_walk(plan, parent_opt, lowest_required, mutate, flag):
                 flag[0] = True
                 if mutate:
                     slot.required = True
-        elif slot.required:
+        elif slot.required and _needs_operand(slot):
             lr = min(lr, opt)
     return lr
 

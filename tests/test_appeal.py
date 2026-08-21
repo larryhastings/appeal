@@ -3669,7 +3669,7 @@ def test_differential_fuzz_converter_group_conversion_and_arity():
     # (b) 1.0's minimum accepted operand count is never BELOW
     # 0.6.4's (no arity too-lenient).  Deterministic; 0.6.4 extracted
     # from git master into a subprocess.
-    import json, os.path, random, subprocess, sys, tempfile
+    import collections, json, os.path, random, subprocess, sys, tempfile
 
     LEAF = ['int', 'float', 'str']
     DEFV = {'int': '0', 'float': '0.0', 'str': "'d'"}
@@ -3759,42 +3759,58 @@ def test_differential_fuzz_converter_group_conversion_and_arity():
         assert r.returncode == 0, f'v1 driver crashed:\n{r.stderr[-2000:]}'
         v1_results = json.load(open(out_path))
 
+    # 0.6.4 and 1.0 are DIFFERENT parsers: 1.0 deliberately changed several
+    # parsing semantics.  This is NOT a conformance test -- it's an AWARENESS
+    # census.  Every place 0.6.4 and 1.0 disagree must fall into an APPROVED
+    # category; an UNAPPROVED disagreement fails, so a new, unnoticed behavior
+    # change can't slip in.  Approved for this converter-group-arity fuzz:
+    #   * 1.0-wider -- 1.0 accepts a command line 0.6.4 rejected.  1.0's rule
+    #     ("a required slot invokes its converter; minimum governs operands")
+    #     no longer promotes an optional group that sits ahead of a slot whose
+    #     converter needs nothing, so 1.0 accepts shorter lines (conjuring the
+    #     defaults).  See processor-design / the invoke-always ruling.
+    # NOT approved (a tripwire for the unexpected): 1.0-narrower (0.6.4 accepts,
+    # 1.0 rejects) and different-result (both accept, different value).
+    # (Dev-only: when 1.0 ships, 0.6.4 retires and this differential leaves the
+    # suite -- testing 1.0 must never need 0.6.4, hence the clean skip above.)
+    census = collections.Counter()
+    unapproved = []
     compared = 0
     for (src, args), results in zip(jobs, v1_results):
         ns = {}
         exec(src, ns)
-        v1_ok_counts, our_ok_counts = [], []
         deferred = False
         for argv, (kind, payload) in zip(args, results):
             try:
-                ours = run_both(ns['cmd'], argv)         # both rungs agree
+                ours = run_both(ns['cmd'], argv)         # 1.0 interp == 1.0 compiled
             except AppealConfigurationError as e:
                 if 'awaits the streaming driver' in str(e):
                     deferred = True; break               # known 1.0 deferral
                 raise
-            n = len(argv)
-            if kind == 'ok':
-                v1_ok_counts.append(n)
-            if ours[0] == 'ok':
-                our_ok_counts.append(n)
-            if kind == 'ok':
-                compared += 1
-                assert ours[0] == 'ok', (
-                    f'0.6.4 accepted, 1.0 refused:\n{src}\nargv={argv!r}\n'
-                    f'v1={payload}\nours={ours!r}')
-                assert repr(ours[1]) == payload, (
-                    f'DIVERGENCE (conversion?):\n{src}\nargv={argv!r}\n'
-                    f'v1={payload}\nours={ours[1]!r}')
+            compared += 1
+            v164_ok, ours_ok = (kind == 'ok'), (ours[0] == 'ok')
+            if v164_ok and ours_ok:
+                if repr(ours[1]) == payload:
+                    census['agree'] += 1
+                else:
+                    census['different-result'] += 1
+                    unapproved.append(('different-result', src, argv, payload, repr(ours[1])))
+            elif not v164_ok and not ours_ok:
+                census['agree'] += 1
+            elif ours_ok:                                # 1.0 accepts, 0.6.4 rejects
+                census['1.0-wider'] += 1                 # approved: minimum governs
+            else:                                        # 0.6.4 accepts, 1.0 rejects
+                census['1.0-narrower'] += 1
+                unapproved.append(('1.0-narrower', src, argv, payload, ours))
         if deferred:
             continue
-        # promotion-class guard: 1.0 must never accept FEWER operands
-        # than 0.6.4 (a defaulted operand behind a required one)
-        if v1_ok_counts and our_ok_counts:
-            assert min(our_ok_counts) >= min(v1_ok_counts), (
-                f'1.0 accepts fewer operands than 0.6.4 (promotion?):\n'
-                f'{src}\n0.6.4 min={min(v1_ok_counts)} '
-                f'1.0 min={min(our_ok_counts)}')
+    print(f'  0.6.4<->1.0 census: {dict(census)}')
     assert compared >= 40, compared
+    assert not unapproved, (
+        f'{len(unapproved)} UNAPPROVED 0.6.4<->1.0 divergence(s) -- a behavior '
+        f'change we did not catalog.  First few:\n' + '\n'.join(
+            f'  [{c}] argv={a!r}  0.6.4={p}  1.0={o!r}\n{s}'
+            for c, s, a, p, o in unapproved[:5]))
 
 
 def test_fuzz_parity():
