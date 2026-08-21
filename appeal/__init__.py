@@ -1979,16 +1979,15 @@ class Appeal:
         from .runtime import run_command_set
         global_plan = self.global_plan
         command_words = frozenset(table)
+        parse_globals = []              # an ordered list of head eras
         if global_plan is not None:
             fused = compile_plan(
                 global_plan, templates=self.templates, stylesheet=self.stylesheet,
                 max_columns=self.margin, is_global=True,
                 command_split=(global_plan.minimum, global_plan.maximum,
                                command_words))
-            parse_globals = _Command(callable=global_plan.callable,
-                                     scan=fused.scan, run=fused.run)
-        else:
-            parse_globals = None
+            parse_globals.append(_Command(callable=global_plan.callable,
+                                          scan=fused.scan, run=fused.run))
         from .help import summary, command_set_corpus
         from .render import listing_pieces
         entries = [(word, summary(callable))

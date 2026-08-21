@@ -1743,8 +1743,8 @@ def emit_command_set(commands, global_plan=None, prog=None, templates=None, styl
         pieces_name = refs.add('_HELP_command_set', page_pieces,
                                dedupe=False)
         sheet_name = refs.add('_SHEET_command_set', stylesheet, dedupe=False)
-    globals_name = (f'_CMD_{sym(global_plan)}'
-                    if global_plan is not None else 'None')
+    globals_name = (f'[_CMD_{sym(global_plan)}]'  # an ordered list of head eras
+                    if global_plan is not None else '[]')
     # every entry is a Command now--leaf or nested set alike
     table = ', '.join(f'{word!r}: _CMD_{sym(plan)}'
                       for word, plan in commands.items())

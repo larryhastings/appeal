@@ -650,12 +650,11 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
             raise
 
     invocations = []
-    if parse_globals is not None:
-        operands, given, rest, positions = do_scan(parse_globals, argv)
-        invocations.append((None, parse_globals, operands, given,
-                            positions))
-    else:
-        rest = list(argv)
+    rest = list(argv)
+    for era in parse_globals:            # an ordered list of head eras (each a
+                                         # Command); they run front-to-back
+        operands, given, rest, positions = do_scan(era, rest)
+        invocations.append((None, era, operands, given, positions))
     if not rest:
         if default is not None:
             return invocations, ('default',)
