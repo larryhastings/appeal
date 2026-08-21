@@ -498,9 +498,10 @@ class Processor:
                         param=e.param) from None
                 raise
             command = self._command_for(word)
-            if word is None and app._global is None:
-                # the precommand hosting the global slot: not a
-                # command execution, keep the log clean
+            if word is None and getattr(cmd.callable, 'appeal_precommand', False):
+                # the precommand era (help/version): it ran (and may have
+                # exited on --help/--version), but it isn't a command
+                # execution, so keep the instances log clean
                 continue
             instance = result if _is_class_command(command) or (
                 word is None and _is_class_command(app._global)) else None
@@ -1980,13 +1981,13 @@ class Appeal:
         global_plan = self.global_plan
         command_words = frozenset(table)
         parse_globals = []              # an ordered list of head eras
-        if global_plan is not None:
+        for era_plan in self.global_plans():
             fused = compile_plan(
-                global_plan, templates=self.templates, stylesheet=self.stylesheet,
+                era_plan, templates=self.templates, stylesheet=self.stylesheet,
                 max_columns=self.margin, is_global=True,
-                command_split=(global_plan.minimum, global_plan.maximum,
+                command_split=(era_plan.minimum, era_plan.maximum,
                                command_words))
-            parse_globals.append(_Command(callable=global_plan.callable,
+            parse_globals.append(_Command(callable=era_plan.callable,
                                           scan=fused.scan, run=fused.run))
         from .help import summary, command_set_corpus
         from .render import listing_pieces
@@ -2120,6 +2121,23 @@ class Appeal:
                         self._global_plan = plan
                     plan = self._global_plan
         return plan
+
+    def global_plans(self):
+        """
+        The ordered head eras' plans (Larry's repeatable precommand, 2026-08-21):
+        the help/version precommand at the head (when default_mappings mapped
+        anything to it), then each precommand the user registered, front-to-back.
+        Empty when there's no head at all.  scan_command_set scans them in order.
+        """
+        self._finalize()
+        plans = []
+        if self.parent is None:
+            pre = self._precommand_plan()
+            if pre is not None:
+                plans.append(pre)
+        for era in self._precommands:
+            plans.append(self._build(era))
+        return plans
 
     def parse(self, args=None, config=None):
         """
