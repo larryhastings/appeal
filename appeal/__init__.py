@@ -2170,9 +2170,9 @@ class Appeal:
         table = self._table()
         era_plans = self.global_plans()
         cmd_plans = {word: self._build(c) for word, c in table.items()}
+        # global_plans() already carries the global command as a head era (and
+        # the help/version precommand); don't add it again.
         all_plans = list(cmd_plans.values()) + list(era_plans)
-        if not table and self._global is not None:
-            all_plans.append(self.global_plan)      # global owns the whole line
         src = emit_module(all_plans, baked_fingerprint=None)
         ns = {}
         exec(src, ns)                               # `compile` is the submodule here
@@ -2186,8 +2186,6 @@ class Appeal:
             commands[word] = wire(plan)
             callables[word] = plan.callable
         precommands = [wire(p) for p in era_plans]
-        if not table and self._global is not None:
-            precommands.append(wire(self.global_plan))
 
         holder = Processor(self)
         self._last_processor = holder

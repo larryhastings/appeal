@@ -3088,7 +3088,10 @@ class MultiBinding:
         else:
             for converter in self.converters:
                 if processor.peek() is None:
-                    raise UsageError(f"option {self.name!r} needs a value", None)
+                    n = len(self.converters)
+                    raise UsageError(
+                        f"option {self.name!r} expects {n} "
+                        f"value{'s' if n != 1 else ''}", None)
                 opargs.append(convert(converter, processor.advance(), self.name))
         try:
             instance.option(*opargs)
