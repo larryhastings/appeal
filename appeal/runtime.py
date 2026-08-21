@@ -3071,7 +3071,7 @@ class Converter:
 
 # ---- the engine ----------------------------------------------------
 class Processor:
-    def __init__(self, argv, root):
+    def __init__(self, argv, root, commands=()):
         self.argv = list(argv)
         self.pos = 0
         self.end = len(self.argv)       # exclusive: trailing pockets shrink it
@@ -3080,6 +3080,7 @@ class Processor:
         self.conjured = {}
         self.force_positional = False
         self.root = root
+        self.commands = commands        # command words: the saturation boundary
 
     def prepend(self, items):
         "Push work onto the FRONT, preserving order (a la rextend)."
@@ -3127,7 +3128,12 @@ class Processor:
                 self._invoke_option(); continue
 
             if front is None:
+                # arguments saturated; options already bound above (the
+                # window).  A command word here hands off to dispatch (stop,
+                # leaving self.pos on it); anything else is a stray argument.
                 if tok is None:
+                    return
+                if not self.force_positional and tok in self.commands:
                     return
                 raise UsageError(f"too many arguments (unexpected {tok!r})", None)
 
@@ -3207,19 +3213,47 @@ class Processor:
         self.enter(obj)                             # pocket + front-splice
 
 
-def execute(commands, argv):
+def _halts(result):
+    "The early-exit contract: a nonzero non-bool int result halts dispatch."
+    return isinstance(result, int) and not isinstance(result, bool) and result
+
+
+def execute(commands, argv, *, global_cls=None, repeat=False):
     """
-    Run a multi-command program: the first token names the command, the
-    rest are its arguments.  commands maps command-word -> Converter class.
-    (Global command + cycling land on top of this.)
+    Run a program left to right.  If there's a global command it runs first,
+    saturating its arguments from the head of the line (a truthy int halts).
+    Then each remaining command word names a command whose arguments follow;
+    with `repeat`, that cycles until the line is consumed.  A command runs to
+    saturation, keeps binding options (the window), and stops at the next
+    command word.  commands maps command-word -> Converter class.
     """
-    if not argv:
+    result = None
+    pos = 0
+    if global_cls is not None:
+        processor = Processor(argv, global_cls(), commands)
+        result = processor.run()
+        if _halts(result):
+            return result
+        pos = processor.pos
+    elif not argv:
         raise UsageError("no command given", None)
-    word = argv[0]
-    converter_cls = commands.get(word)
-    if converter_cls is None:
-        raise UsageError(f"unknown command {word!r}", None)
-    return Processor(argv[1:], converter_cls()).run()
+    while pos < len(argv):
+        word = argv[pos]
+        converter_cls = commands.get(word)
+        if converter_cls is None:
+            raise UsageError(f"unknown command {word!r}", None)
+        pos += 1
+        processor = Processor(argv[pos:], converter_cls(), commands)
+        result = processor.run()
+        if _halts(result):
+            return result
+        pos += processor.pos
+        if not repeat:
+            if pos < len(argv):
+                raise UsageError(
+                    f"too many arguments (unexpected {argv[pos]!r})", None)
+            break
+    return result
 
 
 def appeal_class():
@@ -3246,10 +3280,12 @@ def appeal_class():
         """
         Converters = {}
 
-        def __init__(self, name=None, *, version=None):
+        def __init__(self, name=None, *, version=None, repeat=False):
             self.name = name
             self.version = version
+            self.repeat = repeat            # cycle commands left to right
             self.commands = {}
+            self.global_cls = None          # the unnamed command, if any
 
         @classmethod
         def _converter(cls, name):
@@ -3268,8 +3304,17 @@ def appeal_class():
                 return converter
             return command
 
+        def global_command(self):
+            def global_command(converter):
+                cls = self.Converters[converter.__name__]
+                cls.fixup_converters(converter)     # wire cls + its children
+                self.global_cls = cls               # runs first; not a command word
+                return converter
+            return global_command
+
         def process(self, args):
-            return execute(self.commands, list(args))
+            return execute(self.commands, list(args),
+                           global_cls=self.global_cls, repeat=self.repeat)
 
         def main(self, args=None):
             args = sys.argv[1:] if args is None else list(args)
