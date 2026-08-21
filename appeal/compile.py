@@ -10,12 +10,12 @@
 # The unit of compilation is the CONVERTER (identified by its callable):
 # `_converters()` enumerates the distinct converters reachable from the
 # commands, and everything downstream produces exactly one Converter_x per
-# converter x.  References between converters (a group operand/option, a
-# conjure) resolve through a shared registry -- a (Converter subclass,
-# callable) 2-tuple whose callable is read live off the parent's annotations.
-# Handles options (flag / value / counter-accumulator / sibling group), leaf
-# & group operands, *args windows, trailing pockets, and conjuring.  NOT YET:
-# multi-oparg value options, mapping KEY=VALUE, global command + cycling.
+# converter x.  A group operand/option references its child by class; the
+# callable is wired onto each class once, by a generated fixup_converters
+# classmethod called from @command (never at parse time).  Per-parameter
+# leaf/option converters are hard-coded per the rule (builtin literal, else
+# annotations['x'], else the default's type).  NOT YET: multi-oparg value
+# options, mapping KEY=VALUE, global command + cycling.
 
 from .plan import Terminal
 from .runtime import Converter
@@ -68,19 +68,38 @@ def _class_names(converters):
     return names
 
 
+def _child_converters(plan):
+    """
+    The distinct child converters this converter references (group operands
+    and group options), as callable -> a representative parameter name.  Feeds
+    fixup_converters: one wire-up per child, its callable read off `annotations`.
+    """
+    children = {}
+    for slot in plan.slots:
+        if not isinstance(slot.child, Terminal):
+            children.setdefault(slot.child.callable, slot.name)
+    for option in plan.options:
+        if option.kind == 'group':
+            children.setdefault(option.child.callable, option.name)
+    return children
+
+
 # ====================================================================
 #  in-memory build -- one live Converter subclass per converter
 # ====================================================================
 def build_converters(plans):
     """
     The compiled Converter subclasses, in memory, as a map callable -> class.
-    One class per converter; a group operand/option resolves its child class
-    through the shared registry at parse time.  The callable is NOT baked onto
-    the class -- the runtime passes it to the constructor.
+    One class per converter; group operands/options reference their child
+    class.  Callables are wired by fixup_converters, exactly as @command does
+    for a generated module.
     """
+    converters = _converters(plans)
     classes = {}
-    for callable_, plan in _converters(plans).items():
+    for callable_, plan in converters.items():
         classes[callable_] = _build_class(plan, classes)
+    for plan in plans:                          # wire each command's reachable tree
+        classes[plan.callable].fixup_converters(plan.callable)
     return classes
 
 
@@ -90,7 +109,7 @@ def build_converter(plan):
 
 
 def _build_class(plan, classes):
-    "One Converter subclass; group refs resolve through `classes` at parse time."
+    "One Converter subclass; group refs and fixup resolve through `classes`."
     option_specs = []
     for o in plan.options:
         if o.kind == 'flag':
@@ -106,14 +125,14 @@ def _build_class(plan, classes):
         option_specs.append((o.name, kind, extra, o.strings))
 
     def register(self, processor):
-        annotations = self.converter.__annotations__
+        annotations = type(self).converter.__annotations__
         items = []
         for name, kind, extra, strings in option_specs:
             if kind == 'flag':
                 conv = bool
             elif kind == 'group':
-                conv = (classes[extra], annotations[name])      # (child cls, callable)
-            else:                                               # value / fold
+                conv = classes[extra]                   # the child Converter class
+            else:                                       # value / fold
                 conv = annotations.get(name, extra)
             items.append(self.Option(name, conv, *strings))
         boundary = len(items)   # a conjurable slot's PreOption inserts here:
@@ -133,8 +152,8 @@ def _build_class(plan, classes):
                 if slot.required:
                     boundary = len(items)
                 continue
-            # a converter group -- (child class, callable) tuple
-            group = (classes[slot.child.callable], annotations[slot.name])
+            # a converter group -- reference the child class
+            childcls = classes[slot.child.callable]
             preopts = []
             if _conjurable(slot.child):
                 for o in slot.child.options:
@@ -142,23 +161,39 @@ def _build_class(plan, classes):
                         continue
                     for s in o.strings:
                         preopts.append(
-                            self.PreOption(s, o.name, slot.name, group))
+                            self.PreOption(s, o.name, slot.name, childcls))
             if slot.repeat:                             # windowed *args
                 items.append(self.Repeat(
-                    preopts + [self.Argument(slot.name, group, required=False)]))
+                    preopts + [self.Argument(slot.name, childcls, required=False)]))
                 boundary = len(items)
                 continue
             for k, pre in enumerate(preopts):           # leap over optionals
                 items.insert(boundary + k, pre)
-            items.append(self.Argument(slot.name, group, required=slot.required))
+            items.append(self.Argument(slot.name, childcls, required=slot.required))
             boundary = len(items)
 
         processor.prepend(items)
 
-    n_trailing = sum(1 for slot in plan.slots if slot.trailing)
-    return type(f'Converter_{plan.name}', (Converter,),
-                {'register': register, 'trailing': n_trailing,
-                 '__module__': __name__})
+    children = _child_converters(plan)
+
+    def fixup_converters(cls, converter):
+        cls.converter = converter
+        if children:
+            annotations = converter.__annotations__
+            for child_callable, param in children.items():
+                child_cls = classes[child_callable]
+                if not child_cls.converter:
+                    child_cls.fixup_converters(annotations[param])
+
+    dct = {'register': register, 'trailing': _n_trailing(plan),
+           '__module__': __name__}
+    if children:                                # else the base default suffices
+        dct['fixup_converters'] = classmethod(fixup_converters)
+    return type(f'Converter_{plan.name}', (Converter,), dct)
+
+
+def _n_trailing(plan):
+    return sum(1 for slot in plan.slots if slot.trailing)
 
 
 # ====================================================================
@@ -189,19 +224,13 @@ def _default_type_expr(fn, param):
     return f'type(converter.__kwdefaults__[{param!r}])'
 
 
-def _group_expr(plan, slot_or_option, names):
-    "A group converter as source: (Converter_child, <callable>)."
-    child = slot_or_option.child
-    callable_expr = _converter_expr(plan, slot_or_option.name, child.callable)
-    return f'({names[child.callable]}, {callable_expr})'
-
-
 def emit_source(plan, names, is_command):
     """
     Emit one Converter subclass as source text, mirroring _build_class:
     options first, then leaf/group operands with conjuring PreOptions, *args
-    windows, and trailing pockets.  `names` maps a converter's callable to its
-    class name; `is_command` decorates the class with @Appeal._converter.
+    windows, and trailing pockets, plus a fixup_converters classmethod that
+    wires child callables.  `names` maps a converter's callable to its class
+    name; `is_command` decorates the class with @Appeal._converter.
     """
     items = []                                  # source for each work item
 
@@ -213,7 +242,7 @@ def emit_source(plan, names, is_command):
         elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
             conv = _converter_expr(plan, o.name, o.converters[0])
         elif o.kind == 'group':                 # sibling converter-group option
-            conv = _group_expr(plan, o, names)
+            conv = names[o.child.callable]      # the child Converter class
         else:                                   # multi-oparg value: later
             continue
         strings = ', '.join(repr(s) for s in o.strings)
@@ -234,8 +263,8 @@ def emit_source(plan, names, is_command):
             if slot.required:
                 boundary = len(items)
             continue
-        # a converter group
-        group = _group_expr(plan, slot, names)
+        # a converter group -- reference the child class
+        childcls = names[slot.child.callable]
         preopts = []
         if _conjurable(slot.child):
             for o in slot.child.options:
@@ -243,16 +272,16 @@ def emit_source(plan, names, is_command):
                     continue
                 for s in o.strings:
                     preopts.append(f'self.PreOption({s!r}, {o.name!r}, '
-                                   f'{slot.name!r}, {group})')
+                                   f'{slot.name!r}, {childcls})')
         if slot.repeat:                             # windowed *args
             inner = ', '.join(preopts +
-                              [f'self.Argument({slot.name!r}, {group}, required=False)'])
+                              [f'self.Argument({slot.name!r}, {childcls}, required=False)'])
             items.append(f'self.Repeat([{inner}])')
             boundary = len(items)
             continue
         for k, pre in enumerate(preopts):           # leap over optionals
             items.insert(boundary + k, pre)
-        items.append(f'self.Argument({slot.name!r}, {group}, '
+        items.append(f'self.Argument({slot.name!r}, {childcls}, '
                      f'required={slot.required!r})')
         boundary = len(items)
 
@@ -260,23 +289,33 @@ def emit_source(plan, names, is_command):
     if is_command:
         lines.append(f'@Appeal._converter({plan.name!r})')
     lines.append(f'class {names[plan.callable]}(Converter):')
-    n_trailing = sum(1 for slot in plan.slots if slot.trailing)
-    if n_trailing:
-        lines.append(f'    trailing = {n_trailing}')
+    if _n_trailing(plan):
+        lines.append(f'    trailing = {_n_trailing(plan)}')
     lines.append('    def register(self, processor):')
     joined = '\n'.join(items)
     need_converter = ('converter.__defaults__' in joined
                       or 'converter.__kwdefaults__' in joined)
     need_annotations = 'annotations[' in joined
     if need_converter:
-        lines.append('        converter = self.converter')
+        lines.append('        converter = type(self).converter')
     if need_annotations:
-        source = 'converter' if need_converter else 'self.converter'
+        source = 'converter' if need_converter else 'type(self).converter'
         lines.append(f'        annotations = {source}.__annotations__')
     lines.append('        processor.prepend([')
     for it in items:
         lines.append(f'            {it},')
     lines.append('        ])')
+
+    children = _child_converters(plan)
+    if children:                                # wire child callables at @command
+        lines.append('    @classmethod')
+        lines.append('    def fixup_converters(cls, converter):')
+        lines.append('        cls.converter = converter')
+        lines.append('        annotations = converter.__annotations__')
+        for child_callable, param in children.items():
+            cname = names[child_callable]
+            lines.append(f'        if not {cname}.converter:')
+            lines.append(f'            {cname}.fixup_converters(annotations[{param!r}])')
     return '\n'.join(lines)
 
 

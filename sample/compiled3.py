@@ -32,7 +32,7 @@ class Converter_forecast(Converter):
 @Appeal._converter('sync')
 class Converter_sync(Converter):
     def register(self, processor):
-        annotations = self.converter.__annotations__
+        annotations = type(self).converter.__annotations__
         processor.prepend([
             self.Option('verbose', annotations['verbose'], '-v', '--verbose'),
             self.Option('tag', annotations['tag'], '-t', '--tag'),
