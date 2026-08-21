@@ -3224,7 +3224,10 @@ class Converter:
         conv = type(self).converter
         if type(self)._iterable:            # tuple[...]/list[...]: build from the iterable
             return conv(args)
-        if type(self).binds is not None:    # a method command: self is the instance
+        if type(self).binds is not None and type(self).constructs is None:
+            # a method command: self is the instance a parent constructed.  A
+            # nested CLASS command also has binds (it's a subcommand) but must
+            # construct plainly -- it doesn't take the outer instance as self.
             return conv(self.bound, *args, **self.kwargs)
         return conv(*args, **self.kwargs)
 

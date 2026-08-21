@@ -2217,6 +2217,8 @@ class Appeal:
             word = argv[pos]
             cls = commands.get(word)
             if cls is None:
+                if not top:
+                    return result, pos          # pop back: a parent may own it
                 raise runtime._unexpected(word)
             pos += 1
             conv = cls()
@@ -2237,6 +2239,8 @@ class Appeal:
             if child is not None and child._commands and pos < len(argv):
                 result, pos = child._run_node(argv, pos, holder, top=False, env=env)
             if not self.repeat and pos < len(argv):
+                if not top:
+                    return result, pos          # non-cycling child: pop leftover back
                 raise runtime._unexpected(argv[pos])
         return result, pos
 
