@@ -467,8 +467,10 @@ def tokenize(argv, options, usage=None, command_split=None):
             return None
         _minimum, maximum, _command_words = command_split
         n = n_operands()
-        if maximum is not None and n >= maximum:
-            return [token] + list(it)
+        if maximum is not None:
+            assert n <= maximum
+            if n == maximum:
+                return [token] + list(it)
         return None
 
     for token in it:
