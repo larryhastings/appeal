@@ -3228,6 +3228,9 @@ class Converter:
             # a method command: self is the instance a parent constructed.  A
             # nested CLASS command also has binds (it's a subcommand) but must
             # construct plainly -- it doesn't take the outer instance as self.
+            # (A BoundInnerClass, which DOES construct through the outer, is a
+            # known-unported edge -- build hands the compiler a _Probe-bound
+            # grammar, not the real descriptor.)
             return conv(self.bound, *args, **self.kwargs)
         return conv(*args, **self.kwargs)
 
