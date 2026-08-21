@@ -2149,10 +2149,80 @@ class Appeal:
         Parse args (default: sys.argv[1:]) and invoke the command;
         returns its return value.
         """
-        processor = Processor(self)
-        processor.parse(
-            _sys.argv[1:] if args is None else list(args), config)
-        return processor.execute()
+        argv = _sys.argv[1:] if args is None else list(args)
+        if config is not None:
+            # config layering isn't ported to the Processor yet -- old path
+            processor = Processor(self)
+            processor.parse(argv, config)
+            return processor.execute()
+        return self._compiled_dispatch(argv)
+
+    def _compiled_dispatch(self, argv):
+        """
+        The one path (Larry, 2026-08-21): compile the parser in memory (same as
+        a precompiled module, minus the fingerprint check) and run the Processor.
+        Dispatches the eras then the command words, logging the instances the way
+        the old two-stage execute() did (app.instances reads _last_processor).
+        """
+        from .compile import emit_module
+        from . import runtime
+        self._finalize()
+        table = self._table()
+        era_plans = self.global_plans()
+        cmd_plans = {word: self._build(c) for word, c in table.items()}
+        all_plans = list(cmd_plans.values()) + list(era_plans)
+        if not table and self._global is not None:
+            all_plans.append(self.global_plan)      # global owns the whole line
+        src = emit_module(all_plans, baked_fingerprint=None)
+        ns = {}
+        exec(src, ns)                               # `compile` is the submodule here
+        Converters = ns['Appeal'].Converters
+        def wire(plan):
+            cls = Converters[plan.name.replace('_', '-')]
+            cls.fixup_converters(plan.callable)
+            return cls
+        commands, callables = {}, {}
+        for word, plan in cmd_plans.items():
+            commands[word] = wire(plan)
+            callables[word] = plan.callable
+        precommands = [wire(p) for p in era_plans]
+        if not table and self._global is not None:
+            precommands.append(wire(self.global_plan))
+
+        holder = Processor(self)
+        self._last_processor = holder
+        argv = list(argv)
+        pos = 0
+        result = None
+        for cls in precommands:                     # head eras, in order
+            proc = runtime.Processor(argv[pos:], cls(), commands)
+            result = proc.run()
+            holder.instances.append((None, None))   # eras log uniformly
+            if runtime._halts(result):
+                holder.result = result
+                return result
+            pos += proc.consumed
+        if not precommands and not argv:
+            raise UsageError("no command given", None)
+        while pos < len(argv):
+            word = argv[pos]
+            cls = commands.get(word)
+            if cls is None:
+                raise runtime._unexpected(word)
+            pos += 1
+            proc = runtime.Processor(argv[pos:], cls(), commands)
+            result = proc.run()
+            command = holder._command_for(word)
+            instance = result if _is_class_command(callables[word]) else None
+            holder.instances.append((command, instance))
+            if runtime._halts(result):
+                holder.result = result
+                return result
+            pos += proc.consumed
+            if not self.repeat and pos < len(argv):
+                raise runtime._unexpected(argv[pos])
+        holder.result = result
+        return result
 
     @property
     def instances(self):
