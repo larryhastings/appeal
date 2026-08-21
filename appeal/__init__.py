@@ -2181,8 +2181,12 @@ class Appeal:
         self._finalize()
         table = self._table()
         era_plans = self.global_plans()             # carries the global as a head era
-        cmd_plans = {word: self._build(c, method_of=self._method_owner.get(id(c)))
-                     for word, c in table.items()}  # method_of -> binds (class-as-app)
+        cmd_plans = {}
+        for word, c in table.items():
+            owner = self._method_owner.get(id(c))
+            if owner is None:                       # a self-method with no class
+                _refuse_orphan_method(c)            # that claimed it: refuse by name
+            cmd_plans[word] = self._build(c, method_of=owner)  # method_of -> binds
         all_plans = list(cmd_plans.values()) + list(era_plans)
         # look classes up by their UNIQUE emitted class name, not the name-keyed
         # registry: a precommand era named for the program can share a name with
