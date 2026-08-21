@@ -1472,9 +1472,26 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
 ##
 
 def _stable_repr(obj):
-    "repr with memory addresses masked--id churn isn't drift."
-    import re
-    return re.sub(r'0x[0-9a-fA-F]+', '0x?', repr(obj))
+    "repr with memory addresses masked--id churn isn't drift (no `re`)."
+    s = repr(obj)
+    if '0x' not in s:
+        return s
+    hexdigits = '0123456789abcdefABCDEF'
+    out = []
+    i, n = 0, len(s)
+    while i < n:
+        # mask 0x followed by at least one hex digit (a memory address),
+        # matching the old r'0x[0-9a-fA-F]+' -> '0x?'
+        if (s[i] == '0' and i + 2 < n and s[i + 1] == 'x'
+                and s[i + 2] in hexdigits):
+            out.append('0x?')
+            i += 2
+            while i < n and s[i] in hexdigits:
+                i += 1
+        else:
+            out.append(s[i])
+            i += 1
+    return ''.join(out)
 
 
 def _canonical(obj):
@@ -1534,6 +1551,17 @@ def config_fingerprint(version, default_mappings_fp, default_options_fp):
     import _sha1
     material = _canonical((version, default_mappings_fp, default_options_fp))
     return _sha1.sha1(material).hexdigest()
+
+
+def signature_fingerprint(fn):
+    """
+    A short hash of fingerprint(fn) -- the compiled parser's per-command drift
+    check, baked per Converter class and re-verified when the live function is
+    wired at @command.  fingerprint() covers the signature shape/defaults/
+    annotations the baked register() depends on; the docstring is not identity.
+    """
+    import _sha1
+    return _sha1.sha1(_canonical(fingerprint(fn))).hexdigest()
 
 
 def _deref_annotated(value):
@@ -3085,16 +3113,30 @@ class Converter:
                                         # trailing operands (emitter sets it)
     converter = None                    # the user's callable, wired by
                                         # fixup_converters at @command time
+    _fingerprint = None                 # signature hash the emitter bakes;
+                                        # None in the in-memory build (no drift)
 
     @classmethod
     def fixup_converters(cls, converter):
         """
-        Wire the callable onto the class (and, in a generated override, wire
-        every child converter it reaches, guarded by `if not X.converter` so
-        a shared child is wired once).  Called from @command; the 1:1 mapping
-        makes the class the natural home for the callable.
+        Wire the callable onto the class, verify it hasn't drifted from what
+        was compiled, and wire every child converter it reaches (via the
+        generated _fixup_children, guarded so a shared child wires once).
+        Called from @command; the 1:1 mapping makes the class the callable's
+        home.
         """
         cls.converter = converter
+        if (cls._fingerprint is not None
+                and signature_fingerprint(converter) != cls._fingerprint):
+            raise ConfigurationError(
+                f"the compiled parser is stale: command "
+                f"{converter.__name__!r} changed since it was generated; "
+                f"regenerate the compiled module")
+        cls._fixup_children(converter)
+
+    @classmethod
+    def _fixup_children(cls, converter):
+        "Wire this converter's child converters (generated override; base no-op)."
 
     def __init__(self):
         self.args = []

@@ -15,6 +15,7 @@ Appeal = appeal_class(baked_fingerprint='2f2808dac5cf0aac4523f100fe6a3649c4846fa
 
 @Appeal._converter('report')
 class Converter_report(Converter):
+    _fingerprint = 'ab1c61e4bbf05e6c5cf7a5530f753825319b482d'
     def register(self, processor):
         processor.prepend([
             self.Option('units', str, '-u', '--units'),
@@ -24,6 +25,7 @@ class Converter_report(Converter):
 
 @Appeal._converter('forecast')
 class Converter_forecast(Converter):
+    _fingerprint = '5fd9199908d88fe5942aba920086e0d97cd6956d'
     def register(self, processor):
         processor.prepend([
             self.Argument('city', str, required=True),
@@ -32,6 +34,7 @@ class Converter_forecast(Converter):
 
 @Appeal._converter('sync')
 class Converter_sync(Converter):
+    _fingerprint = '87f6f4c00ee4e9fb09fee6637fbd71ffc419c54b'
     def register(self, processor):
         annotations = type(self).converter.__annotations__
         processor.prepend([

@@ -18,7 +18,7 @@
 # options, mapping KEY=VALUE, global command + cycling.
 
 from .plan import Terminal
-from .runtime import Converter
+from .runtime import Converter, signature_fingerprint
 
 
 # builtins we hard-code as a literal (the fingerprint guarantees the shape,
@@ -182,19 +182,17 @@ def _build_class(plan, classes):
 
     children = _child_converters(plan)
 
-    def fixup_converters(cls, converter):
-        cls.converter = converter
-        if children:
-            annotations = converter.__annotations__
-            for child_callable, param in children.items():
-                child_cls = classes[child_callable]
-                if not child_cls.converter:
-                    child_cls.fixup_converters(annotations[param])
+    def fixup_children(cls, converter):
+        annotations = converter.__annotations__
+        for child_callable, param in children.items():
+            child_cls = classes[child_callable]
+            if not child_cls.converter:
+                child_cls.fixup_converters(annotations[param])
 
     dct = {'register': register, 'trailing': _n_trailing(plan),
            '__module__': __name__}
-    if children:                                # else the base default suffices
-        dct['fixup_converters'] = classmethod(fixup_converters)
+    if children:                                # else the base no-op suffices
+        dct['_fixup_children'] = classmethod(fixup_children)
     return type(f'Converter_{plan.name}', (Converter,), dct)
 
 
@@ -353,6 +351,7 @@ def emit_source(plan, names, is_command):
     if is_command:
         lines.append(f'@Appeal._converter({plan.name!r})')
     lines.append(f'class {names[plan.callable]}(Converter):')
+    lines.append(f'    _fingerprint = {signature_fingerprint(plan.callable)!r}')
     if _n_trailing(plan):
         lines.append(f'    trailing = {_n_trailing(plan)}')
     lines.append('    def register(self, processor):')
@@ -373,8 +372,7 @@ def emit_source(plan, names, is_command):
     children = _child_converters(plan)
     if children:                                # wire child callables at @command
         lines.append('    @classmethod')
-        lines.append('    def fixup_converters(cls, converter):')
-        lines.append('        cls.converter = converter')
+        lines.append('    def _fixup_children(cls, converter):')
         lines.append('        annotations = converter.__annotations__')
         for child_callable, param in children.items():
             cname = names[child_callable]
