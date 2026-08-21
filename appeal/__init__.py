@@ -2207,7 +2207,8 @@ class Appeal:
             result = proc.run()
             if cls.constructs is not None:          # a global class-as-app: its
                 env[cls.constructs] = result        # methods bind to this instance
-            holder.instances.append((None, None))   # eras log uniformly
+            holder.instances.append(               # eras log (None, instance-or-None)
+                (None, result if cls.constructs is not None else None))
             if runtime._halts(result):
                 return result, pos
             pos += proc.consumed
