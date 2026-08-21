@@ -656,7 +656,7 @@ def default_mappings(*options):
             free = [s for s in ('-V', '--version')
                     if s in requested and s not in app.options]
             if free:
-                app.option('version', *free)(app.precommand)
+                app.option('version', *free)(app.help_and_version_precommand)
         if has_commands:
             if 'help' in requested and 'help' not in app.commands:
                 app.command('help')(app.help)
@@ -670,7 +670,7 @@ def default_mappings(*options):
             free = [s for s in ('-h', '--help')
                     if s in requested and s not in app.options]
             if free:
-                app.option('help', *free)(app.precommand)
+                app.option('help', *free)(app.help_and_version_precommand)
 
     # _finalize reads this to drive the legacy help machinery
     # (per-command --help, bare-app -h) until the era unification
@@ -1044,7 +1044,7 @@ class Appeal:
             suppress=suppress).rstrip('\n')
         print(text)
 
-    def precommand(self, *, help: optional[str] = None,
+    def help_and_version_precommand(self, *, help: optional[str] = None,
                    version=False):
         """
         The stage ahead of the global command: program metadata.
@@ -1052,7 +1052,7 @@ class Appeal:
         the first command word.  Absent from the grammar entirely
         when default_mappings mapped nothing to it.  Map options
         onto it the ordinary way:
-        app.option('help', '-h', '--help')(app.precommand).
+        app.option('help', '-h', '--help')(app.help_and_version_precommand).
         """
         if version:
             _sys.exit(self.print_version())
@@ -1165,7 +1165,7 @@ class Appeal:
             name = parent
         return self.subcommand(None, name, repeat=repeat)
 
-    def default_command(self):
+    def default(self):
         """
         v1's API: the command run when the line stops at this
         node--for the root, a line naming no command; for a
@@ -1177,12 +1177,13 @@ class Appeal:
             self._invalidate()
             return callable
         return decorator
+    default_command = default           # transitional alias for the old name
 
     def processor(self):
         "v1's API: an unparsed Processor; call it with an argv."
         return Processor(self)
 
-    def global_command(self):
+    def precommand(self):
         def decorator(callable):
             # a class here is class-as-app (§8.6): its __init__
             # is the global command's grammar; its methods
@@ -1192,6 +1193,7 @@ class Appeal:
             self._invalidate()
             return callable
         return decorator
+    global_command = precommand         # transitional alias for the old name
 
     def subcommand(self, parent, name=None, *, repeat=False):
         """
@@ -1384,7 +1386,7 @@ class Appeal:
             if (_inspect.ismethod(callable)
                     and isinstance(callable.__self__, Appeal)
                     and callable.__func__
-                        is type(callable.__self__).precommand):
+                        is type(callable.__self__).help_and_version_precommand):
                 # the bound precommand: Python mints a fresh bound
                 # object per attribute access, so attribute-marking
                 # can't stick--record in the app's own table
@@ -1649,7 +1651,7 @@ class Appeal:
         """
         def app_class_decorator():
             def decorator(cls):
-                self.global_command()(cls)
+                self.precommand()(cls)
                 return cls
             return decorator
         def command_method(name=None):
@@ -1680,7 +1682,7 @@ class Appeal:
                 f"same name as a command")
         if not table and self._global is None:
             raise AppealConfigurationError(
-                "no commands: use @app.command() or @app.global_command()")
+                "no commands: use @app.command() or @app.precommand()")
         return table
 
     def _build(self, callable, **kwargs):
@@ -2047,13 +2049,13 @@ class Appeal:
         if want_v and want_h:
             def precommand(*, help: optional[str] = None,
                            version=False):
-                app.precommand(help=help, version=version)
+                app.help_and_version_precommand(help=help, version=version)
         elif want_v:
             def precommand(*, version=False):
-                app.precommand(version=version)
+                app.help_and_version_precommand(version=version)
         else:
             def precommand(*, help: optional[str] = None):
-                app.precommand(help=help)
+                app.help_and_version_precommand(help=help)
         if want_v:
             app.root._decorations.add_option(precommand, 'version',
                                              mapped['version'])
@@ -2064,7 +2066,7 @@ class Appeal:
         precommand.appeal_help = app.help
         precommand.appeal_precommand = True
         precommand.appeal_stock = (
-            cls.precommand is Appeal.precommand
+            cls.help_and_version_precommand is Appeal.help_and_version_precommand
             and cls.print_version is Appeal.print_version
             and cls.help is Appeal.help)
         precommand.appeal_version = (str(app.version)

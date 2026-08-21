@@ -3439,13 +3439,14 @@ def appeal_class(baked_fingerprint=None, default_mappings_fp=None,
                 return converter
             return command
 
-        def global_command(self):
-            def global_command(converter):
+        def precommand(self):
+            def precommand(converter):
                 cls = self.Converters[converter.__name__]
                 cls.fixup_converters(converter)     # wire cls + its children
                 self.global_cls = cls               # runs first; not a command word
                 return converter
-            return global_command
+            return precommand
+        global_command = precommand     # transitional alias for the old name
 
         def process(self, args):
             return execute(self.commands, list(args),
