@@ -3077,7 +3077,10 @@ class MultiBinding:
                 if processor.peek() is None:
                     raise UsageError(f"option {self.name!r} needs a value", None)
                 opargs.append(convert(converter, processor.advance(), self.name))
-        instance.option(*opargs)
+        try:
+            instance.option(*opargs)
+        except (ValueError, TypeError) as e:    # match the interpreter's wrap
+            raise UsageError(f"{self.name}: {e}", None)
 
 class GroupBinding:
     """
@@ -3128,6 +3131,11 @@ class Converter:
     """
     trailing = 0                        # count of this converter's own
                                         # trailing operands (emitter sets it)
+    _iterable = False                   # tuple[...]/list[...] group: build from
+                                        # the args iterable, don't splat them
+    conjurable = False                  # no required operand: a required slot
+                                        # invokes it from defaults when operands
+                                        # run out (mix-ins, all-defaulted groups)
     converter = None                    # the user's callable, wired by
                                         # fixup_converters at @command time
     _fingerprint = None                 # signature hash the emitter bakes;
@@ -3184,7 +3192,10 @@ class Converter:
             if isinstance(value, Converter):
                 self.kwargs[name] = value()
         args = [a() if isinstance(a, Converter) else a for a in self.args]
-        return type(self).converter(*args, **self.kwargs)
+        conv = type(self).converter
+        if type(self)._iterable:            # tuple[...]/list[...]: build from the iterable
+            return conv(args)
+        return conv(*args, **self.kwargs)
 
 
 # ---- the engine ----------------------------------------------------
@@ -3222,9 +3233,17 @@ class Processor:
     def enter(self, converter):
         "Pocket the converter's trailing operands from the end, then register."
         for _ in range(converter.trailing):
+            if self.end <= self.pos:            # too few tokens for the pocket;
+                break                           # the trailing fill reports it
             self.end -= 1
             converter.reserve.insert(0, self.argv[self.end])
         converter.register(self)
+
+    @property
+    def consumed(self):
+        "Tokens this processor claimed: the front it advanced through, plus the"
+        " trailing operands it pocketed off the end (which never touched `pos`)."
+        return self.pos + (len(self.argv) - self.end)
 
     def run(self):
         self.enter(self.root)
@@ -3287,6 +3306,8 @@ class Processor:
                 i += 1
             else:                                       # takes a value: rest is it
                 rest = chars[i + 1:]
+                if rest.startswith('='):                 # -n=5 spelled with equals
+                    rest = rest[1:]
                 binding.invoke(self, rest or None)
                 return
 
@@ -3302,6 +3323,10 @@ class Processor:
     def _fill_argument(self, arg):
         if arg.trailing:                            # drawn from the end-pocket,
             self.queue.popleft()                    # delivered as a keyword arg
+            if not arg.owner.reserve:               # pocket ran short: too few args
+                if arg.required:
+                    raise UsageError(f"missing argument {arg.name!r}", None)
+                return                              # optional: signature default fills
             raw = arg.owner.reserve.pop(0)
             arg.owner.kwargs[arg.name] = convert(arg.converter, raw, arg.name)
             return
@@ -3324,12 +3349,17 @@ class Processor:
         # a converter slot: a conjured instance, or a fresh one from an operand
         obj = self.conjured.pop(arg.slot, None)
         if obj is None and (tok is None or self._is_option(tok)):
-            self.queue.popleft()                     # nothing to build here
-            if arg.required:
-                raise UsageError(f"missing argument {arg.name!r}", None)
-            if self.queue and isinstance(self.queue[0], RepeatInstruction):
-                self.queue.popleft()                 # end the *args
-            return
+            if tok is None and arg.required and arg.converter.conjurable:
+                obj = arg.converter()                # required slot: invoke from
+                                                     # defaults (its operands, all
+                                                     # optional, will default too)
+            else:
+                self.queue.popleft()                 # nothing to build here
+                if arg.required:
+                    raise UsageError(f"missing argument {arg.name!r}", None)
+                if self.queue and isinstance(self.queue[0], RepeatInstruction):
+                    self.queue.popleft()             # end the *args
+                return
         if obj is None:
             obj = arg.converter()
         arg.owner.args.append(obj)
@@ -3371,7 +3401,7 @@ def execute(commands, argv, *, precommands=(), repeat=False):
         result = processor.run()
         if _halts(result):
             return result
-        pos += processor.pos
+        pos += processor.consumed
     if not precommands and not argv:
         raise UsageError("no command given", None)
     while pos < len(argv):
@@ -3384,7 +3414,7 @@ def execute(commands, argv, *, precommands=(), repeat=False):
         result = processor.run()
         if _halts(result):
             return result
-        pos += processor.pos
+        pos += processor.consumed
         if not repeat and pos < len(argv):
             raise _unexpected(argv[pos])
     return result

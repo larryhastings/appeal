@@ -17,8 +17,8 @@
 # annotations['x'], else the default's type).  NOT YET: multi-oparg value
 # options, mapping KEY=VALUE, global command + cycling.
 
-from .plan import Terminal
-from .runtime import Converter, signature_fingerprint
+from .plan import Terminal, NO_DEFAULT
+from .runtime import Converter, signature_fingerprint, _params_host
 
 
 # builtins we hard-code as a literal (the fingerprint guarantees the shape,
@@ -27,8 +27,38 @@ _BUILTIN_CONVERTERS = (str, bool, int, float, complex)
 
 
 def _conjurable(child_plan):
-    "A converter with no required positional parameters can be conjured."
-    return child_plan.minimum == 0
+    """
+    A converter with no required operand -- it can be invoked with zero operands
+    (all operand slots defaulted, or *args), so a required slot summons it from
+    its defaults when the line runs out.  Read from slot.default, NOT plan.minimum:
+    v1's optionality promotion inflates minimum for nested groups, but the
+    compiled engine fills greedily (minimum governs operands), so it wants the
+    intrinsic optionality that survives on slot.default.
+    """
+    return not any(slot.default is NO_DEFAULT and not slot.repeat
+                   for slot in child_plan.slots)
+
+
+def _converter_key(plan):
+    """
+    A converter's identity for deduplication.  Normally the callable (one class
+    per callable, per Larry's rule).  But a builtin iterable-constructor group --
+    tuple[int, str] -- has callable `tuple` for EVERY parameterization, so those
+    collide onto one class unless keyed by their element shape too.  Without this,
+    tuple[int, str] and tuple[str, int] would share a class and mis-convert.
+    """
+    if plan.callable in (tuple, list):
+        return (plan.callable, _group_shape(plan))
+    return plan.callable
+
+
+def _group_shape(plan):
+    "A hashable signature of a builtin group's element slots (converter + shape)."
+    return tuple(
+        ((slot.child.converter if isinstance(slot.child, Terminal)
+          else _converter_key(slot.child)),
+         slot.required, slot.repeat, slot.trailing)
+        for slot in plan.slots)
 
 
 def _converters(plans):
@@ -41,7 +71,8 @@ def _converters(plans):
     found = {}
 
     def visit(plan):
-        if plan.callable in found:
+        key = _converter_key(plan)
+        if key in found:
             return
         for slot in plan.slots:                 # its own converters first
             if not isinstance(slot.child, Terminal):
@@ -49,7 +80,7 @@ def _converters(plans):
         for option in plan.options:
             if option.kind == 'group':
                 visit(option.child)
-        found[plan.callable] = plan
+        found[key] = plan
     for plan in plans:
         visit(plan)
     return found
@@ -58,12 +89,12 @@ def _converters(plans):
 def _class_names(converters):
     "Assign each converter its class name (Converter_<name>), unique per program."
     names, used = {}, set()
-    for callable_, plan in converters.items():
+    for key, plan in converters.items():
         base = name = f'Converter_{plan.name}'
         n = 2
         while name in used:                     # two distinct converters, one name
             name, n = f'{base}_{n}', n + 1
-        names[callable_] = name
+        names[key] = name
         used.add(name)
     return names
 
@@ -77,10 +108,10 @@ def _child_converters(plan):
     children = {}
     for slot in plan.slots:
         if not isinstance(slot.child, Terminal):
-            children.setdefault(slot.child.callable, slot.name)
+            children.setdefault(_converter_key(slot.child), slot.name)
     for option in plan.options:
         if option.kind == 'group':
-            children.setdefault(option.child.callable, option.name)
+            children.setdefault(_converter_key(option.child), option.name)
     return children
 
 
@@ -96,16 +127,16 @@ def build_converters(plans):
     """
     converters = _converters(plans)
     classes = {}
-    for callable_, plan in converters.items():
-        classes[callable_] = _build_class(plan, classes)
+    for key, plan in converters.items():
+        classes[key] = _build_class(plan, classes)
     for plan in plans:                          # wire each command's reachable tree
-        classes[plan.callable].fixup_converters(plan.callable)
+        classes[_converter_key(plan)].fixup_converters(plan.callable)
     return classes
 
 
 def build_converter(plan):
     "The single command's live Converter subclass (convenience over build_converters)."
-    return build_converters([plan])[plan.callable]
+    return build_converters([plan])[_converter_key(plan)]
 
 
 def _build_class(plan, classes):
@@ -121,7 +152,7 @@ def _build_class(plan, classes):
         elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
             kind, extra = 'fold', o.converters[0]
         elif o.kind == 'group':                 # sibling converter-group option
-            kind, extra = 'group', o.child.callable
+            kind, extra = 'group', _converter_key(o.child)
         else:                                   # nullary and the rest: later
             continue
         option_specs.append((o.name, kind, extra, o.strings))
@@ -145,6 +176,7 @@ def _build_class(plan, classes):
                                 # after the last required-or-group slot (so it
                                 # leaps over optional leaves to reach its slot)
         for slot in plan.slots:
+            req = slot.default is NO_DEFAULT        # intrinsic, not promoted
             if isinstance(slot.child, Terminal):
                 conv = annotations.get(slot.name, slot.child.converter)
                 if slot.repeat:                         # *args of a leaf
@@ -153,13 +185,13 @@ def _build_class(plan, classes):
                     boundary = len(items)
                     continue
                 items.append(self.Argument(slot.name, conv,
-                                           required=slot.required,
+                                           required=req,
                                            trailing=slot.trailing))
-                if slot.required:
+                if req:
                     boundary = len(items)
                 continue
             # a converter group -- reference the child class
-            childcls = classes[slot.child.callable]
+            childcls = classes[_converter_key(slot.child)]
             preopts = []
             if _conjurable(slot.child):
                 for o in slot.child.options:
@@ -175,7 +207,7 @@ def _build_class(plan, classes):
                 continue
             for k, pre in enumerate(preopts):           # leap over optionals
                 items.insert(boundary + k, pre)
-            items.append(self.Argument(slot.name, childcls, required=slot.required))
+            items.append(self.Argument(slot.name, childcls, required=req))
             boundary = len(items)
 
         processor.prepend(items)
@@ -184,13 +216,13 @@ def _build_class(plan, classes):
 
     def fixup_children(cls, converter):
         annotations = converter.__annotations__
-        for child_callable, param in children.items():
-            child_cls = classes[child_callable]
+        for child_key, param in children.items():
+            child_cls = classes[child_key]
             if not child_cls.converter:
                 child_cls.fixup_converters(annotations[param])
 
     dct = {'register': register, 'trailing': _n_trailing(plan),
-           '__module__': __name__}
+           'conjurable': _conjurable(plan), '__module__': __name__}
     if children:                                # else the base no-op suffices
         dct['_fixup_children'] = classmethod(fixup_children)
     return type(f'Converter_{plan.name}', (Converter,), dct)
@@ -304,7 +336,7 @@ def emit_source(plan, names, is_command):
         elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
             conv = _fold_expr(plan, o)
         elif o.kind == 'group':                 # sibling converter-group option
-            conv = names[o.child.callable]      # the child Converter class
+            conv = names[_converter_key(o.child)]   # the child Converter class
         else:                                   # nullary and the rest: later
             continue
         strings = ', '.join(repr(s) for s in o.strings)
@@ -312,6 +344,10 @@ def emit_source(plan, names, is_command):
 
     boundary = len(items)
     for slot in plan.slots:
+        # intrinsic requiredness (has no default), NOT slot.required -- v1's
+        # promotion inflates the latter, but the compiled engine fills greedily
+        # (minimum governs operands), so a defaulted operand stays optional.
+        req = slot.default is NO_DEFAULT
         if isinstance(slot.child, Terminal):
             conv = _converter_expr(plan, slot.name, slot.child.converter)
             if slot.repeat:                         # *args of a leaf
@@ -321,12 +357,12 @@ def emit_source(plan, names, is_command):
                 continue
             extra = ', trailing=True' if slot.trailing else ''
             items.append(f'self.Argument({slot.name!r}, {conv}, '
-                         f'required={slot.required!r}{extra})')
-            if slot.required:
+                         f'required={req!r}{extra})')
+            if req:
                 boundary = len(items)
             continue
         # a converter group -- reference the child class
-        childcls = names[slot.child.callable]
+        childcls = names[_converter_key(slot.child)]
         preopts = []
         if _conjurable(slot.child):
             for o in slot.child.options:
@@ -344,7 +380,7 @@ def emit_source(plan, names, is_command):
         for k, pre in enumerate(preopts):           # leap over optionals
             items.insert(boundary + k, pre)
         items.append(f'self.Argument({slot.name!r}, {childcls}, '
-                     f'required={slot.required!r})')
+                     f'required={req!r})')
         boundary = len(items)
 
     lines = []
@@ -352,8 +388,18 @@ def emit_source(plan, names, is_command):
         # the registry key is the command word (function name, _->-); the
         # class name keeps underscores (a dash is an invalid identifier)
         lines.append(f'@Appeal._converter({plan.name.replace("_", "-")!r})')
-    lines.append(f'class {names[plan.callable]}(Converter):')
-    lines.append(f'    _fingerprint = {signature_fingerprint(plan.callable)!r}')
+    lines.append(f'class {names[_converter_key(plan)]}(Converter):')
+    # a group built on a code-less builtin (tuple/list/...) has no signature of
+    # its own to drift; its shape is already covered structurally by the parent
+    # command's fingerprint (the tuple[int, int] annotation token).  Bake None so
+    # fixup skips verification rather than fingerprinting a callable with no code.
+    fp = (signature_fingerprint(plan.callable)
+          if _params_host(plan.callable) is not None else None)
+    lines.append(f'    _fingerprint = {fp!r}')
+    if plan.callable in (tuple, list):      # iterable constructor: build, don't splat
+        lines.append('    _iterable = True')
+    if _conjurable(plan):                   # invoked from defaults when operands run out
+        lines.append('    conjurable = True')
     if _n_trailing(plan):
         lines.append(f'    trailing = {_n_trailing(plan)}')
     lines.append('    def register(self, processor):')
@@ -376,8 +422,8 @@ def emit_source(plan, names, is_command):
         lines.append('    @classmethod')
         lines.append('    def _fixup_children(cls, converter):')
         lines.append('        annotations = converter.__annotations__')
-        for child_callable, param in children.items():
-            cname = names[child_callable]
+        for child_key, param in children.items():
+            cname = names[child_key]
             lines.append(f'        if not {cname}.converter:')
             lines.append(f'            {cname}.fixup_converters(annotations[{param!r}])')
     return '\n'.join(lines)
@@ -408,13 +454,13 @@ def emit_module(plans, baked_fingerprint=None, default_mappings_fp=None,
     """
     converters = _converters(plans)
     names = _class_names(converters)
-    commands = {plan.callable for plan in plans}
+    commands = {_converter_key(plan) for plan in plans}
     parts = [_MODULE_HEADER,
              f'Appeal = appeal_class(baked_fingerprint={baked_fingerprint!r},\n'
              f'                      default_mappings_fp={default_mappings_fp!r},\n'
              f'                      default_options_fp={default_options_fp!r})',
              '']
-    for callable_, plan in converters.items():  # children first; commands self-register
-        parts.append(emit_source(plan, names, is_command=callable_ in commands))
+    for key, plan in converters.items():        # children first; commands self-register
+        parts.append(emit_source(plan, names, is_command=key in commands))
         parts.append('')
     return '\n'.join(parts)
