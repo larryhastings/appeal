@@ -2161,21 +2161,27 @@ class Appeal:
         """
         The one path (Larry, 2026-08-21): compile the parser in memory (same as
         a precompiled module, minus the fingerprint check) and run the Processor.
-        Dispatches the eras then the command words, logging the instances the way
-        the old two-stage execute() did (app.instances reads _last_processor).
+        Dispatches the head eras then the command words -- recursing into a
+        command's subcommand node when it has one -- and logs the instances the
+        old two-stage execute() did (app.instances reads _last_processor).
         """
+        holder = Processor(self)
+        self._last_processor = holder
+        result, _ = self._run_node(list(argv), 0, holder, top=True)
+        holder.result = result
+        return result
+
+    def _run_node(self, argv, pos, holder, top):
+        "Dispatch one set node's eras + command words; recurse for subcommands."
         from .compile import emit_module
         from . import runtime
         self._finalize()
         table = self._table()
-        era_plans = self.global_plans()
+        era_plans = self.global_plans()             # carries the global as a head era
         cmd_plans = {word: self._build(c) for word, c in table.items()}
-        # global_plans() already carries the global command as a head era (and
-        # the help/version precommand); don't add it again.
-        all_plans = list(cmd_plans.values()) + list(era_plans)
-        src = emit_module(all_plans, baked_fingerprint=None)
         ns = {}
-        exec(src, ns)                               # `compile` is the submodule here
+        exec(emit_module(list(cmd_plans.values()) + list(era_plans),
+                         baked_fingerprint=None), ns)   # `compile` is the submodule
         Converters = ns['Appeal'].Converters
         def wire(plan):
             cls = Converters[plan.name.replace('_', '-')]
@@ -2187,20 +2193,15 @@ class Appeal:
             callables[word] = plan.callable
         precommands = [wire(p) for p in era_plans]
 
-        holder = Processor(self)
-        self._last_processor = holder
-        argv = list(argv)
-        pos = 0
         result = None
         for cls in precommands:                     # head eras, in order
             proc = runtime.Processor(argv[pos:], cls(), commands)
             result = proc.run()
             holder.instances.append((None, None))   # eras log uniformly
             if runtime._halts(result):
-                holder.result = result
-                return result
+                return result, pos
             pos += proc.consumed
-        if not precommands and not argv:
+        if top and not precommands and not argv:
             raise UsageError("no command given", None)
         while pos < len(argv):
             word = argv[pos]
@@ -2210,17 +2211,17 @@ class Appeal:
             pos += 1
             proc = runtime.Processor(argv[pos:], cls(), commands)
             result = proc.run()
-            command = holder._command_for(word)
             instance = result if _is_class_command(callables[word]) else None
-            holder.instances.append((command, instance))
+            holder.instances.append((holder._command_for(word), instance))
             if runtime._halts(result):
-                holder.result = result
-                return result
+                return result, pos
             pos += proc.consumed
+            child = self._children.get(word)        # a parent command's subcommands
+            if child is not None and pos < len(argv):
+                result, pos = child._run_node(argv, pos, holder, top=False)
             if not self.repeat and pos < len(argv):
                 raise runtime._unexpected(argv[pos])
-        holder.result = result
-        return result
+        return result, pos
 
     @property
     def instances(self):
