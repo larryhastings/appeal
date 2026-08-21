@@ -498,13 +498,10 @@ class Processor:
                         param=e.param) from None
                 raise
             command = self._command_for(word)
-            if word is None and getattr(cmd.callable, 'appeal_precommand', False):
-                # the precommand era (help/version): it ran (and may have
-                # exited on --help/--version), but it isn't a command
-                # execution, so keep the instances log clean
-                continue
-            instance = result if _is_class_command(command) or (
-                word is None and _is_class_command(app._global)) else None
+            # every invocation that ran is logged, precommand eras included
+            # (they're commands that run first, not a special case); the
+            # instance is this invocation's own class-as-app object, if any
+            instance = result if _is_class_command(cmd.callable) else None
             self.instances.append((command, instance))
             if (isinstance(result, int)
                     and not isinstance(result, bool) and result):

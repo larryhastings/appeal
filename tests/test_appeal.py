@@ -5840,8 +5840,10 @@ def test_processor():
     # stage 2: left to right, and the mechanical execution log
     processor.execute()
     assert ran == ['top', ('add', 1, 2)]
-    assert processor.instances == [(None, None), (add, None)]
-    assert app.instances == [(None, None), (add, None)]
+    # a leading (None, None) is the help/version precommand era (it runs first,
+    # logged like any invocation), then the global, then add
+    assert processor.instances == [(None, None), (None, None), (add, None)]
+    assert app.instances == [(None, None), (None, None), (add, None)]
     # a malformed line dies at parse time
     try:
         app.parse(['add', '1'])
@@ -5851,7 +5853,7 @@ def test_processor():
     # app.instances reads the most recent run
     app.process(['add', '3', '4'])
     assert ran[-1] == ('add', 3, 4)
-    assert app.instances == [(None, None), (add, None)]
+    assert app.instances == [(None, None), (None, None), (add, None)]
     # v1 compat: an unparsed Processor is a callable execution object
     p2 = app.processor()
     p2(['add', '5', '6'])
@@ -5900,7 +5902,9 @@ def test_cycling():
     # sibling cycle, left to right, logged in order
     app.process(['add', '1', '2', 'mul', '3', '4', 'add', '5', '6'])
     assert ran == [('add', 1, 2), ('mul', 3, 4), ('add', 5, 6)], ran
-    assert [c.__name__ for c, _ in app.instances] == ['add', 'mul', 'add']
+    # leading None is the help/version precommand era (runs once at the head)
+    assert [getattr(c, '__name__', None) for c, _ in app.instances] == \
+        [None, 'add', 'mul', 'add']
 
     # optionals must be spelled: greedy saturation takes the
     # would-be command word as greet's greeting
@@ -6038,7 +6042,7 @@ def test_nested_cycling_and_popup():
     app.process(['db', 'add', '3', 'remove', '4'])
     assert ran == [('db', False), ('add', 3), ('remove', 4)], ran
     assert [getattr(c, '__name__', c) for c, _ in app.instances] == \
-        ['db', 'add', 'remove']
+        [None, 'db', 'add', 'remove']    # leading None = precommand era
 
     # pop-up: add's set has no 'status'; db's set doesn't either;
     # the root's repeat resolves it
@@ -6241,12 +6245,12 @@ def test_class_as_app():
     app.process(['-v', 'fgrep', 'patt', 'file', '-c', '33'])
     assert out == [('init', True),
                    ('fgrep', True, 'patt', 'file', 33)], out
-    # the log: the global class logs (None, instance); the method
-    # logs (the function, None)
-    command, instance = app.instances[0]
+    # the log: instances[0] is the help/version precommand era (None, None);
+    # then the global class logs (None, instance); the method logs (fn, None)
+    command, instance = app.instances[1]
     assert command is None and isinstance(instance, MyApp)
     assert instance.verbose is True
-    assert app.instances[1] == (MyApp.fgrep, None)
+    assert app.instances[2] == (MyApp.fgrep, None)
     # undecorated methods aren't commands
     try:
         app.process(['helper'])
@@ -6295,8 +6299,9 @@ def test_class_as_app_nested():
     kinds = [(getattr(c, '__name__', None),
               type(i).__name__ if i is not None else None)
              for c, i in app.instances]
-    assert kinds == [(None, 'Outer'), ('Db', 'Db'), ('add', None),
-                     ('top', None)], kinds
+    # a leading (None, None) is the help/version precommand era
+    assert kinds == [(None, None), (None, 'Outer'), ('Db', 'Db'),
+                     ('add', None), ('top', None)], kinds
 
 
 def test_class_as_app_bic():
@@ -6321,7 +6326,8 @@ def test_class_as_app_bic():
 
     app.process(['-v', 'Job', 'nightly', '--dry'])
     assert out == [('job', True, 'nightly', True)], out
-    command, instance = app.instances[1]
+    # [0] precommand era, [1] the Host global, [2] the Job command
+    command, instance = app.instances[2]
     assert type(instance).__name__ == 'Job'
 
 
