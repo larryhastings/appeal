@@ -459,12 +459,15 @@ def tokenize(argv, options, usage=None, command_split=None):
         return values
 
     def split_here(token):
+        # deterministic: a global/precommand era fills its arguments greedily
+        # to its maximum, then hands the rest (a command word, or a stray) to
+        # the command loop.  It NEVER peeks at the command-word set mid-fill --
+        # an optional argument eats whatever's next, a *args runs to the end.
         if command_split is None:
             return None
-        minimum, maximum, command_words = command_split
+        _minimum, maximum, _command_words = command_split
         n = n_operands()
-        if ((maximum is not None and n >= maximum)
-                or (n >= minimum and token in command_words)):
+        if maximum is not None and n >= maximum:
             return [token] + list(it)
         return None
 

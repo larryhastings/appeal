@@ -2293,55 +2293,47 @@ def test_global_command_truthy_return_halts():
     assert got == ('ok', 0), got
     assert ran == ['x', 'x'], ran      # both rungs
 
-def test_flexible_global_operands():
-    # the command word is the first operand naming a command, once
-    # the global's minimum is satisfied (v1's greedy ate the word:
-    # 'run x' became project='run'--a footgun, deliberately fixed)
-    def g(project='default', *, verbose=False):
-        return None
+def test_greedy_global_operands():
+    # deterministic (Larry, 2026-08-21): the global fills its arguments
+    # greedily -- an optional argument eats whatever's next, even a would-be
+    # command word.  'run x' makes project='run', then 'x' isn't a command
+    # (no "flexible" yielding to the command-word set mid-fill).  Spell the
+    # optional to reach a subcommand.
     seen = []
     def g2(project='default'):
         seen.append(project)
     def run(target):
         return ('run', target)
-    got = run_both_set([run], g2, ['run', 'x'])          # word yields
+    got = run_both_set([run], g2, ['run', 'x'])          # project='run', 'x' unknown
+    assert got[0] == 'usage' and 'unknown command' in got[1], got
+    got = run_both_set([run], g2, ['proj', 'run', 'x'])  # spell it -> dispatches run
     assert got == ('ok', ('run', 'x')), got
-    assert seen == ['default', 'default'], seen          # both rungs
-    got = run_both_set([run], g2, ['proj', 'run', 'x'])
-    assert got == ('ok', ('run', 'x')), got
-    assert seen[-2:] == ['proj', 'proj'], seen
-    # over the maximum: the next operand is forced to be the word
-    got = run_both_set([run], g2, ['a', 'b', 'x'])
+    assert seen[-2:] == ['proj', 'proj'], seen           # both rungs ran g2('proj')
+    got = run_both_set([run], g2, ['a', 'b', 'x'])       # 'a' fills, 'b' isn't a command
     assert got[0] == 'usage' and 'unknown command' in got[1], got
 
-def test_flexible_global_star_args():
+def test_greedy_global_star_args():
+    # deterministic: *args never saturates, so a *args global swallows the
+    # whole line -- a subcommand after it is unreachable (its word is eaten).
     tags = []
     def g(*seen):
         tags.append(seen)
     def go(target):
         return ('go', target)
-    got = run_both_set([go], g, ['a', 'b', 'go', 'x'])
-    assert got == ('ok', ('go', 'x')), got
-    assert tags[-1] == ('a', 'b'), tags
-    got = run_both_set([go], g, ['go', 'x'])
-    assert got == ('ok', ('go', 'x')), got
-    assert tags[-1] == (), tags
+    got = run_both_set([go], g, ['a', 'b', 'go', 'x'])   # *seen eats it all
+    assert got != ('ok', ('go', 'x')), got               # go never dispatches
 
-def test_flexible_global_converter_group():
+def test_greedy_global_converter_group():
     def pair(x: int, y: int):
         return (x, y)
     def g(p: pair = None):
         return 3 if p == (9, 9) else None    # truthy return halts
     def run(target):
         return ('run', target)
-    got = run_both_set([run], g, ['1', '2', 'run', 'x'])
+    got = run_both_set([run], g, ['1', '2', 'run', 'x'])  # p=(1,2), then run('x')
     assert got == ('ok', ('run', 'x')), got
-    got = run_both_set([run], g, ['run', 'x'])           # group skipped
-    assert got == ('ok', ('run', 'x')), got
-    got = run_both_set([run], g, ['9', '9', 'run', 'x'])
-    assert got == ('ok', 3), got                          # halt still works
-    got = run_both_set([run], g, ['1', 'run', 'x'])      # 1 ∉ {0, 2}
-    assert got[0] == 'usage', got
+    got = run_both_set([run], g, ['9', '9', 'run', 'x'])  # p=(9,9) -> truthy halt
+    assert got == ('ok', 3), got
 
 def test_appeal_facade_dispatch():
     app = Appeal(name='tool')
