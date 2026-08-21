@@ -2205,6 +2205,8 @@ class Appeal:
         for cls in precommands:                     # head eras, in order
             proc = runtime.Processor(argv[pos:], cls(), commands)
             result = proc.run()
+            if cls.constructs is not None:          # a global class-as-app: its
+                env[cls.constructs] = result        # methods bind to this instance
             holder.instances.append((None, None))   # eras log uniformly
             if runtime._halts(result):
                 return result, pos
