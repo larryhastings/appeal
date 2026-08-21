@@ -431,12 +431,6 @@ class Processor:
             return self
         (_, parse_globals, commands, usage, default, auto_help,
          repeat, words) = app._pieces
-        if (app._help_enabled and argv
-                and not app.root._precommand_options.get('help')
-                and argv[0] in ('-h', '--help')):
-            self.invocations = []
-            self._tail = ('listing',)
-            return self
         from .runtime import scan_command_set
         self.invocations, self._tail = scan_command_set(
             argv, parse_globals, commands, usage, default, repeat, words)
