@@ -2171,15 +2171,18 @@ class Appeal:
         holder.result = result
         return result
 
-    def _run_node(self, argv, pos, holder, top):
+    def _run_node(self, argv, pos, holder, top, env=None):
         "Dispatch one set node's eras + command words; recurse for subcommands."
+        if env is None:
+            env = {}                                # class-as-app instance store
         from .compile import (emit_module, _converters, _class_names,
                               _converter_key)
         from . import runtime
         self._finalize()
         table = self._table()
         era_plans = self.global_plans()             # carries the global as a head era
-        cmd_plans = {word: self._build(c) for word, c in table.items()}
+        cmd_plans = {word: self._build(c, method_of=self._method_owner.get(id(c)))
+                     for word, c in table.items()}  # method_of -> binds (class-as-app)
         all_plans = list(cmd_plans.values()) + list(era_plans)
         # look classes up by their UNIQUE emitted class name, not the name-keyed
         # registry: a precommand era named for the program can share a name with
@@ -2214,8 +2217,13 @@ class Appeal:
             if cls is None:
                 raise runtime._unexpected(word)
             pos += 1
-            proc = runtime.Processor(argv[pos:], cls(), commands)
+            conv = cls()
+            if cls.binds is not None:               # a method command: self is the
+                conv.bound = env.get(cls.binds)     # instance a parent constructed
+            proc = runtime.Processor(argv[pos:], conv, commands)
             result = proc.run()
+            if cls.constructs is not None:          # a class command: stash instance
+                env[cls.constructs] = result
             instance = result if _is_class_command(callables[word]) else None
             holder.instances.append((holder._command_for(word), instance))
             if runtime._halts(result):
@@ -2225,7 +2233,7 @@ class Appeal:
             # registration); only recurse when it actually HAS subcommands.
             child = self._children.get(word)
             if child is not None and child._commands and pos < len(argv):
-                result, pos = child._run_node(argv, pos, holder, top=False)
+                result, pos = child._run_node(argv, pos, holder, top=False, env=env)
             if not self.repeat and pos < len(argv):
                 raise runtime._unexpected(argv[pos])
         return result, pos

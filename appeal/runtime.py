@@ -2977,12 +2977,14 @@ class RepeatInstruction:
 
 def _presence(instance, name):
     "A flag's presence value: `not default`, read live off the callable."
-    default = (type(instance).converter.__kwdefaults__ or {}).get(name, False)
+    host = _params_host(type(instance).converter)   # a class: its __init__
+    default = (getattr(host, '__kwdefaults__', None) or {}).get(name, False)
     return not default
 
 def _default(instance, name):
     "The parameter's default, read live off the callable (for init)."
-    return (type(instance).converter.__kwdefaults__ or {}).get(name)
+    host = _params_host(type(instance).converter)
+    return (getattr(host, '__kwdefaults__', None) or {}).get(name)
 
 def _positional_default(instance, name):
     """
@@ -3162,6 +3164,10 @@ class Converter:
                                         # fixup_converters at @command time
     _fingerprint = None                 # signature hash the emitter bakes;
                                         # None in the in-memory build (no drift)
+    binds = None                        # a method command: the env key of the
+                                        # instance to pass as self (class-as-app)
+    constructs = None                   # a class command: the env key to stash
+                                        # the instance it builds under
 
     @classmethod
     def fixup_converters(cls, converter):
@@ -3190,6 +3196,7 @@ class Converter:
         self.kwargs = {}
         self.multis = {}                # name -> live MultiOption, finalized last
         self.reserve = []               # this converter's end-pocket
+        self.bound = None               # a method command's instance (self)
 
     # work-item factories -- owner is self, bound implicitly.  A group
     # operand/option passes its child Converter subclass as its converter;
@@ -3217,6 +3224,8 @@ class Converter:
         conv = type(self).converter
         if type(self)._iterable:            # tuple[...]/list[...]: build from the iterable
             return conv(args)
+        if type(self).binds is not None:    # a method command: self is the instance
+            return conv(self.bound, *args, **self.kwargs)
         return conv(*args, **self.kwargs)
 
 
