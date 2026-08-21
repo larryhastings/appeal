@@ -489,6 +489,9 @@ def tokenize(argv, options, usage=None, command_split=None):
             name_part, equals, value_part = token.partition('=')
             entry = options.get(name_part)
             if entry is None:
+                rest = split_here(token)    # saturated era: an option we don't
+                if rest is not None:        # own ends our boundary -- yield it
+                    return tokens, rest
                 tail = did_you_mean(
                     name_part,
                     [s for s in options if s.startswith('--')])
@@ -530,6 +533,10 @@ def tokenize(argv, options, usage=None, command_split=None):
         for index, c in enumerate(chars):
             entry = options.get('-' + c)
             if entry is None:
+                if index == 0:              # whole bundle unowned: a saturated
+                    rest = split_here(token)  # era yields it (a later char was
+                    if rest is not None:      # ours, so a stray there is an error)
+                        return tokens, rest
                 raise UsageError(f"unknown option {'-' + c!r}", usage)
             key, kind = entry[0], entry[1]
             base = kind[2:] if kind[:2] in ('w:', 's:') else kind
@@ -704,6 +711,11 @@ def scan_command_set(argv, parse_globals, commands, usage=None,
                 target = frame
                 break
         if entry is None:
+            if word.startswith('-') and word not in ('-', '--'):
+                # commands never start with a dash: a leading-dash straggler
+                # is a mistyped option (--verison), not a mystery command
+                raise tag(UsageError(f"unknown option {word}",
+                                     stack[-1]['command'].usage), stack[-1])
             tail = did_you_mean(word, resolvable_words())
             raise tag(UsageError(f"unknown command {word!r}{tail}",
                                  stack[-1]['command'].usage), stack[-1])
