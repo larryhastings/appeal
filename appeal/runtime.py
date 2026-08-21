@@ -2893,19 +2893,38 @@ class LiveBinding:
             else value == 'true')
 
 class ValueBinding:
-    "Invoke -> the oparg from `=value`/attached, else raw-grab one; convert."
+    """
+    Invoke -> one leaf oparg (`--units F`), or a multi-oparg option whose
+    converter is a `(constructor, leaf1, leaf2, ...)` tuple (`--where X Y`,
+    `--coord 3 4`): raw-grab one oparg per leaf, convert each, then build the
+    value -- `tuple(args)` for a tuple option, else `constructor(*args)`.
+    """
     __slots__ = ('instance', 'name', 'converter')
     def __init__(self, instance, name, converter):
         self.instance = instance
         self.name = name
         self.converter = converter
     def invoke(self, processor, value=None):
+        conv = self.converter
+        if isinstance(conv, tuple):
+            self.instance.kwargs[self.name] = self._multi(processor, conv, value)
+            return
         if value is None:
             if processor.peek() is None:
                 raise UsageError(f"option {self.name!r} needs a value", None)
             value = processor.advance()                 # raw: no option check
-        self.instance.kwargs[self.name] = convert(
-            self.converter, value, self.name)
+        self.instance.kwargs[self.name] = convert(conv, value, self.name)
+    def _multi(self, processor, conv, value):
+        constructor, leaves = conv[0], conv[1:]
+        texts = [value] if value is not None else []    # =value/attached is first
+        while len(texts) < len(leaves):
+            if processor.peek() is None:
+                raise UsageError(
+                    f"option {self.name!r} requires {len(leaves)} values", None)
+            texts.append(processor.advance())           # raw grab
+        args = [convert(leaf, text, self.name)
+                for leaf, text in zip(leaves, texts)]
+        return tuple(args) if constructor is tuple else constructor(*args)
 
 _oparg_converters_cache = {}
 

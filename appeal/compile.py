@@ -116,11 +116,13 @@ def _build_class(plan, classes):
             kind, extra = 'flag', None
         elif o.kind == 'value' and len(o.converters) == 1:
             kind, extra = 'value', o.converters[0]
+        elif o.kind == 'value':                 # multi-oparg: (constructor, *leaves)
+            kind, extra = 'multi', o.converters
         elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
             kind, extra = 'fold', o.converters[0]
         elif o.kind == 'group':                 # sibling converter-group option
             kind, extra = 'group', o.child.callable
-        else:                                   # multi-oparg value: later
+        else:                                   # nullary and the rest: later
             continue
         option_specs.append((o.name, kind, extra, o.strings))
 
@@ -132,6 +134,8 @@ def _build_class(plan, classes):
                 conv = bool
             elif kind == 'group':
                 conv = classes[extra]                   # the child Converter class
+            elif kind == 'multi':
+                conv = extra                            # (constructor, *leaves)
             else:                                       # value / fold
                 conv = annotations.get(name, extra)
             items.append(self.Option(name, conv, *strings))
@@ -224,6 +228,37 @@ def _default_type_expr(fn, param):
     return f'type(converter.__kwdefaults__[{param!r}])'
 
 
+def _value_option_expr(plan, o):
+    """
+    Source for a value option's converter: one leaf (`--units F`), or a
+    multi-oparg `(constructor, leaf, ...)` tuple (`--where X Y`, `--coord 3 4`).
+    The constructor is `tuple` for a tuple[...] option, else the inner
+    callable (annotations['name']); each operand leaf follows the usual rule.
+    """
+    if len(o.converters) == 1:
+        return _converter_expr(plan, o.name, o.converters[0])
+    constructor = o.converters[0]
+    head = 'tuple' if constructor is tuple else _converter_expr(
+        plan, o.name, constructor)
+    parts = [head] + [_leaf_expr(o, constructor, i, leaf)
+                      for i, leaf in enumerate(o.converters[1:])]
+    return '(' + ', '.join(parts) + ')'
+
+
+def _leaf_expr(o, constructor, i, leaf):
+    """
+    Source for a multi-oparg option's i-th operand converter: a builtin as a
+    literal, else read live off the inner callable -- a tuple[...] element from
+    its __args__, a multi-param converter's operand from its __annotations__.
+    """
+    if leaf in _BUILTIN_CONVERTERS:
+        return leaf.__name__
+    if constructor is tuple:                    # tuple[...] element type
+        return f'annotations[{o.name!r}].__args__[{i}]'
+    inner = constructor.__code__.co_varnames[i]  # the converter's own parameter
+    return f'annotations[{o.name!r}].__annotations__[{inner!r}]'
+
+
 def emit_source(plan, names, is_command):
     """
     Emit one Converter subclass as source text, mirroring _build_class:
@@ -237,13 +272,13 @@ def emit_source(plan, names, is_command):
     for o in plan.options:                      # options first
         if o.kind == 'flag':
             conv = 'bool'
-        elif o.kind == 'value' and len(o.converters) == 1:
-            conv = _converter_expr(plan, o.name, o.converters[0])
+        elif o.kind == 'value':                 # one leaf, or a multi-oparg tuple
+            conv = _value_option_expr(plan, o)
         elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
             conv = _converter_expr(plan, o.name, o.converters[0])
         elif o.kind == 'group':                 # sibling converter-group option
             conv = names[o.child.callable]      # the child Converter class
-        else:                                   # multi-oparg value: later
+        else:                                   # nullary and the rest: later
             continue
         strings = ', '.join(repr(s) for s in o.strings)
         items.append(f'self.Option({o.name!r}, {conv}, {strings})')
