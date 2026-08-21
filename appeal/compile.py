@@ -280,7 +280,23 @@ def _fold_expr(plan, o):
     if origin is dict:
         return (f'mapping[{_arg_expr(o, annotation, 0)}, '
                 f'{_arg_expr(o, annotation, 1)}]')
-    return _converter_expr(plan, o.name, o.converters[0])
+    if o.name in plan.callable.__annotations__:
+        return _converter_expr(plan, o.name, o.converters[0])
+    # a decoration-supplied fold (delivered via **kwargs, so the parameter isn't
+    # in the signature): reconstruct it from o.converters -- the fold class plus
+    # its value converters -- instead of reading annotations['name'].
+    fold = o.converters[0]
+    values = o.converters[1:]
+    if not values:                              # counter(): a nullary fold
+        return f'{fold.__name__}()'
+    return f'{fold.__name__}[{", ".join(_type_literal(v) for v in values)}]'
+
+
+def _type_literal(converter):
+    "A converter as a bare literal (builtins by name); the reconstruction case."
+    if converter in _BUILTIN_CONVERTERS:
+        return converter.__name__
+    return converter.__name__                   # a named class, imported or global
 
 
 def _arg_expr(o, annotation, i):
