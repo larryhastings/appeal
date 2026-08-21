@@ -349,7 +349,9 @@ def emit_source(plan, names, is_command):
 
     lines = []
     if is_command:
-        lines.append(f'@Appeal._converter({plan.name!r})')
+        # the registry key is the command word (function name, _->-); the
+        # class name keeps underscores (a dash is an invalid identifier)
+        lines.append(f'@Appeal._converter({plan.name.replace("_", "-")!r})')
     lines.append(f'class {names[plan.callable]}(Converter):')
     lines.append(f'    _fingerprint = {signature_fingerprint(plan.callable)!r}')
     if _n_trailing(plan):

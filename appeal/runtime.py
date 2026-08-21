@@ -3452,11 +3452,16 @@ def appeal_class(baked_fingerprint=None, default_mappings_fp=None,
 
         def command(self, name=None):
             def command(converter):
-                nonlocal name
-                name = name or converter.__name__
-                cls = self.Converters[name]
+                # mirror full Appeal: the function name maps _->- (an explicit
+                # name is verbatim), and a command word can't start with a dash
+                word = (name if name is not None
+                        else converter.__name__.replace('_', '-'))
+                if word.startswith('-'):
+                    raise ConfigurationError(
+                        f"a command name can't start with a dash: {word!r}")
+                cls = self.Converters[word]
                 cls.fixup_converters(converter)     # wire cls + its children
-                self.commands[name] = cls
+                self.commands[word] = cls
                 return converter
             return command
 
