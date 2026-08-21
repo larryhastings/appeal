@@ -2173,20 +2173,23 @@ class Appeal:
 
     def _run_node(self, argv, pos, holder, top):
         "Dispatch one set node's eras + command words; recurse for subcommands."
-        from .compile import emit_module
+        from .compile import (emit_module, _converters, _class_names,
+                              _converter_key)
         from . import runtime
         self._finalize()
         table = self._table()
         era_plans = self.global_plans()             # carries the global as a head era
         cmd_plans = {word: self._build(c) for word, c in table.items()}
+        all_plans = list(cmd_plans.values()) + list(era_plans)
+        # look classes up by their UNIQUE emitted class name, not the name-keyed
+        # registry: a precommand era named for the program can share a name with
+        # a command (app 'kw' + command 'kw'), which collides in the registry.
+        names = _class_names(_converters(all_plans))
         ns = {}
-        exec(emit_module(list(cmd_plans.values()) + list(era_plans),
-                         baked_fingerprint=None), ns)   # `compile` is the submodule
-        Converters = ns['Appeal'].Converters
-        for cls in Converters.values():         # fresh compile: no staleness to
-            cls._fingerprint = None             # check (the file-drift guard)
+        exec(emit_module(all_plans, baked_fingerprint=None), ns)  # `compile` is the submodule
         def wire(plan):
-            cls = Converters[plan.name.replace('_', '-')]
+            cls = ns[names[_converter_key(plan)]]
+            cls._fingerprint = None             # fresh compile: no staleness check
             cls.fixup_converters(plan.callable)
             return cls
         commands, callables = {}, {}
