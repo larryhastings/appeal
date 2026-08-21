@@ -2183,6 +2183,8 @@ class Appeal:
         exec(emit_module(list(cmd_plans.values()) + list(era_plans),
                          baked_fingerprint=None), ns)   # `compile` is the submodule
         Converters = ns['Appeal'].Converters
+        for cls in Converters.values():         # fresh compile: no staleness to
+            cls._fingerprint = None             # check (the file-drift guard)
         def wire(plan):
             cls = Converters[plan.name.replace('_', '-')]
             cls.fixup_converters(plan.callable)
