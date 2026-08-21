@@ -136,7 +136,9 @@ def _build_class(plan, classes):
                 conv = classes[extra]                   # the child Converter class
             elif kind == 'multi':
                 conv = extra                            # (constructor, *leaves)
-            else:                                       # value / fold
+            elif kind == 'fold':
+                conv = extra                            # the MultiOption (build's rewrite)
+            else:                                       # value(single)
                 conv = annotations.get(name, extra)
             items.append(self.Option(name, conv, *strings))
         boundary = len(items)   # a conjurable slot's PreOption inserts here:
@@ -228,6 +230,33 @@ def _default_type_expr(fn, param):
     return f'type(converter.__kwdefaults__[{param!r}])'
 
 
+def _fold_expr(plan, o):
+    """
+    Source for a counter/accumulator/mapping option.  The explicit spellings
+    (counter(), accumulator[T], mapping[K, V]) ARE the annotation, reused as
+    annotations['name'].  The dict[K, V]/list[T] sugar is canonicalized to
+    mapping[...]/accumulator[...] -- both subscript portably (they're Appeal's
+    own _Subscriptable, not the builtins) -- since the raw generic isn't a
+    usable converter.
+    """
+    annotation = plan.callable.__annotations__.get(o.name)
+    origin = getattr(annotation, '__origin__', None)
+    if origin is list:
+        return f'accumulator[{_arg_expr(o, annotation, 0)}]'
+    if origin is dict:
+        return (f'mapping[{_arg_expr(o, annotation, 0)}, '
+                f'{_arg_expr(o, annotation, 1)}]')
+    return _converter_expr(plan, o.name, o.converters[0])
+
+
+def _arg_expr(o, annotation, i):
+    "The i-th type argument of a sugar generic, hard-coded per the rule."
+    arg = annotation.__args__[i]
+    if arg in _BUILTIN_CONVERTERS:
+        return arg.__name__
+    return f'annotations[{o.name!r}].__args__[{i}]'
+
+
 def _value_option_expr(plan, o):
     """
     Source for a value option's converter: one leaf (`--units F`), or a
@@ -275,7 +304,7 @@ def emit_source(plan, names, is_command):
         elif o.kind == 'value':                 # one leaf, or a multi-oparg tuple
             conv = _value_option_expr(plan, o)
         elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
-            conv = _converter_expr(plan, o.name, o.converters[0])
+            conv = _fold_expr(plan, o)
         elif o.kind == 'group':                 # sibling converter-group option
             conv = names[o.child.callable]      # the child Converter class
         else:                                   # nullary and the rest: later
