@@ -95,7 +95,10 @@ def _class_names(converters):
     "Assign each converter its class name (Converter_<name>), unique per program."
     names, used = {}, set()
     for key, plan in converters.items():
-        base = name = f'Converter_{plan.name}'
+        # a plan name can carry dots/dashes (a precommand named for the program,
+        # a dashed command word) -- sanitize into a valid Python identifier.
+        ident = ''.join(c if c.isalnum() or c == '_' else '_' for c in plan.name)
+        base = name = f'Converter_{ident}'
         n = 2
         while name in used:                     # two distinct converters, one name
             name, n = f'{base}_{n}', n + 1
