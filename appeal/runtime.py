@@ -1480,11 +1480,12 @@ def _stable_repr(obj):
     out = []
     i, n = 0, len(s)
     while i < n:
-        # mask 0x followed by at least one hex digit (a memory address),
-        # matching the old r'0x[0-9a-fA-F]+' -> '0x?'
+        # mask 0x + one-or-more hex digits (a memory address) to a fixed
+        # token -- the digit count never leaks, so the fingerprint is the
+        # same on 32- and 64-bit
         if (s[i] == '0' and i + 2 < n and s[i + 1] == 'x'
                 and s[i + 2] in hexdigits):
-            out.append('0x?')
+            out.append('<address>')
             i += 2
             while i < n and s[i] in hexdigits:
                 i += 1
