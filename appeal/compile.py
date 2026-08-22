@@ -206,11 +206,16 @@ def _build_class(plan, classes):
             childcls = classes[_converter_key(slot.child)]
             preopts = []
             for o in slot.child.options:        # flat recognition (see emit_source)
-                if o.kind != 'flag':
-                    continue
-                for s in o.strings:
-                    preopts.append(
-                        self.PreOption(s, o.name, slot.name, childcls))
+                if o.kind == 'flag':
+                    for s in o.strings:
+                        preopts.append(
+                            self.PreOption(s, o.name, slot.name, childcls))
+                elif slot.repeat and o.kind == 'value' and len(o.converters) == 1:
+                    # a windowed group's VALUE option binds forward at a window
+                    # boundary (--label up): carry its oparg converter
+                    for s in o.strings:
+                        preopts.append(self.PreOption(
+                            s, o.name, slot.name, childcls, o.converters[0]))
             if slot.repeat:                             # windowed *args
                 items.append(self.Repeat(
                     preopts + [self.Argument(slot.name, childcls, required=False)]))
@@ -393,11 +398,21 @@ def emit_source(plan, names, is_command):
         childcls = names[_converter_key(slot.child)]
         preopts = []
         for o in slot.child.options:            # flat recognition: a group's flag
-            if o.kind != 'flag':                # is known anywhere on the line;
-                continue                        # firing it forces the group (a
-            for s in o.strings:                 # conjurable one from defaults, a
-                preopts.append(f'self.PreOption({s!r}, {o.name!r}, '  # non-conjurable
-                               f'{slot.name!r}, {childcls})')         # one must get operands)
+            if o.kind == 'flag':                # is known anywhere on the line;
+                for s in o.strings:             # firing it forces the group (a
+                    preopts.append(f'self.PreOption({s!r}, {o.name!r}, '  # conjurable
+                                   f'{slot.name!r}, {childcls})')      # from defaults,
+                continue                        # non-conjurable must get operands)
+            if slot.repeat and o.kind == 'value' and len(o.converters) == 1:
+                # a windowed group's VALUE option binds forward at a boundary
+                # (--label up): carry its oparg converter as a source expr
+                c = o.converters[0]
+                conv = (c.__name__ if c in _BUILTIN_CONVERTERS else
+                        f'{childcls}.converter.__annotations__'
+                        f'.get({o.name!r}, str)')
+                for s in o.strings:
+                    preopts.append(f'self.PreOption({s!r}, {o.name!r}, '
+                                   f'{slot.name!r}, {childcls}, {conv})')
         if slot.repeat:                             # windowed *args
             inner = ', '.join(preopts +
                               [f'self.Argument({slot.name!r}, {childcls}, required=False)'])

@@ -2957,16 +2957,24 @@ class OptionInstruction:
 
 class PreOptionInstruction:
     "Registers a conjure: fire before the converter exists to summon one."
-    __slots__ = ('owner', 'string', 'name', 'slot', 'converter_cls')
-    def __init__(self, owner, string, name, slot, converter_cls):
+    __slots__ = ('owner', 'string', 'name', 'slot', 'converter_cls',
+                 'converter')
+    def __init__(self, owner, string, name, slot, converter_cls,
+                 converter=None):
         self.owner = owner
         self.string = string
         self.name = name
         self.slot = slot
         self.converter_cls = converter_cls
+        self.converter = converter          # set -> a value option (forward
+                                            # oparg); None -> a flag (conjure)
     def register(self, processor):
-        processor.handlers[self.string] = ConjureBinding(
-            self.name, self.slot, self.converter_cls)
+        if self.converter is not None:
+            processor.handlers[self.string] = ConjureValueBinding(
+                self.name, self.slot, self.converter_cls, self.converter)
+        else:
+            processor.handlers[self.string] = ConjureBinding(
+                self.name, self.slot, self.converter_cls)
 
 class RepeatInstruction:
     "A *args template ([PreOption?, Argument]) re-laid before each element."
@@ -3139,6 +3147,31 @@ class ConjureBinding:
         obj.kwargs[self.name] = (_presence(obj, self.name) if value is None
                                  else value == 'true')
 
+class ConjureValueBinding:
+    """
+    A windowed *args group's VALUE option (`--label up`) at a window boundary:
+    grab one oparg, convert it, and set it on a conjured FORWARD instance that
+    the next operand's Argument will pick up.  The mid-instance ValueBinding
+    (registered when a window is entered) is overwritten by this at the
+    boundary, exactly as a flag's ConjureBinding overwrites its LiveBinding.
+    """
+    __slots__ = ('name', 'slot', 'converter_cls', 'converter')
+    def __init__(self, name, slot, converter_cls, converter):
+        self.name = name
+        self.slot = slot
+        self.converter_cls = converter_cls
+        self.converter = converter
+    def invoke(self, processor, value=None):
+        obj = processor.conjured.get(self.slot)
+        if obj is None:
+            obj = self.converter_cls()
+            processor.conjured[self.slot] = obj
+        if value is None:
+            if processor.peek() is None:
+                raise UsageError(f"option {self.name!r} needs a value", None)
+            value = processor.advance()             # raw: no option check
+        obj.kwargs[self.name] = convert(self.converter, value, self.name)
+
 
 # ---- the converter base --------------------------------------------
 class Converter:
@@ -3212,8 +3245,9 @@ class Converter:
         return OpargInstruction(self, name, converter)
     def Option(self, name, converter, *strings):
         return OptionInstruction(self, name, converter, strings)
-    def PreOption(self, string, name, slot, converter_cls):
-        return PreOptionInstruction(self, string, name, slot, converter_cls)
+    def PreOption(self, string, name, slot, converter_cls, converter=None):
+        return PreOptionInstruction(self, string, name, slot, converter_cls,
+                                    converter)
     def Repeat(self, items):
         return RepeatInstruction(items)
 
