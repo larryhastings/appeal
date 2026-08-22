@@ -176,7 +176,9 @@ def _build_class(plan, classes):
         option_specs.append((o.name, kind, extra, o.strings))
 
     def register(self, processor):
-        annotations = type(self).converter.__annotations__
+        # a tuple[...]/list[...] group's converter is the builtin tuple/list,
+        # which has no __annotations__ (and no options to look up anyway)
+        annotations = getattr(type(self).converter, '__annotations__', {})
         items = []
         for name, kind, extra, strings in option_specs:
             if kind == 'flag':
@@ -244,7 +246,7 @@ def _build_class(plan, classes):
                 child_cls.fixup_converters(annotations[param])
 
     dct = {'register': register, 'trailing': _n_trailing(plan),
-           'binds': plan.binds,
+           'binds': plan.binds, '_iterable': plan.callable in (tuple, list),
            'constructs': plan.constructs, '__module__': __name__}
     if children:                                # else the base no-op suffices
         dct['_fixup_children'] = classmethod(fixup_children)
