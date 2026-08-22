@@ -38,6 +38,11 @@ VAR_POSITIONAL        = _Kind('VAR_POSITIONAL', 2)
 KEYWORD_ONLY          = _Kind('KEYWORD_ONLY', 3)
 VAR_KEYWORD           = _Kind('VAR_KEYWORD', 4)
 
+# ordinal-indexed, to translate a real inspect._ParameterKind (an IntEnum)
+# back to ours when we delegate to the real inspect (see _adopt).
+_KINDS = (POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD, VAR_POSITIONAL,
+          KEYWORD_ONLY, VAR_KEYWORD)
+
 
 class Parameter:
     __slots__ = ('name', 'kind', 'default', 'annotation')
@@ -73,6 +78,23 @@ class Signature:
 
 class _Uninspectable(Exception):
     "No __code__ to read -- signature() falls back to the real inspect."
+
+
+def _adopt(sig, inspect):
+    """
+    Translate a real inspect.Signature into ours, so callers only ever see our
+    sentinels.  Real inspect uses its own `empty` (compared with `is`) and its
+    own IntEnum kinds; a delegated signature carrying those would slip past our
+    `annotation is empty` / `kind is KEYWORD_ONLY` tests and corrupt the build.
+    """
+    real_empty = inspect.Parameter.empty
+    params = {}
+    for name, p in sig.parameters.items():
+        params[name] = Parameter(
+            name, _KINDS[int(p.kind)],
+            default=empty if p.default is real_empty else p.default,
+            annotation=empty if p.annotation is real_empty else p.annotation)
+    return Signature(params)
 
 
 def _resolve(callable):
@@ -122,7 +144,7 @@ def signature(callable):
     sig = getattr(callable, '__signature__', None)
     if sig is not None:
         import inspect
-        return inspect.signature(callable)
+        return _adopt(inspect.signature(callable), inspect)
 
     try:
         func, skip = _resolve(callable)
@@ -131,7 +153,7 @@ def signature(callable):
         # Argument Clinic signatures most builtins now carry (and raises the
         # same ValueError we would when there genuinely isn't one).
         import inspect
-        return inspect.signature(callable)
+        return _adopt(inspect.signature(callable), inspect)
     if func is None:
         return Signature({})
 

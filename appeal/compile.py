@@ -257,7 +257,8 @@ def _build_class(plan, classes):
 
     dct = {'register': register, 'trailing': _n_trailing(plan),
            'binds': plan.binds, '_iterable': plan.callable in (tuple, list),
-           'constructs': plan.constructs, '__module__': __name__}
+           'constructs': plan.constructs, '_bound_inner': plan.bound_inner,
+           '__module__': __name__}
     if children:                                # else the base no-op suffices
         dct['_fixup_children'] = classmethod(fixup_children)
     return type(f'Converter_{plan.name}', (Converter,), dct)

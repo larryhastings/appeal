@@ -388,6 +388,10 @@ def build_plan(callable, name=None, method_of=None,
         plan.constructs = callable.__qualname__
     if method_of is not None:
         plan.binds = method_of
+    # a BoundInnerClass constructs THROUGH the parent instance (host.Job(...)),
+    # not plainly: the grammar we introspected is bound to a throwaway _Probe,
+    # so the runtime must re-fetch the descriptor off the real bound instance.
+    plan.bound_inner = wrapped_class
     # v1's optionality promotion: a defaulted operand followed by a
     # required one (across group nesting) can never be skipped, so
     # it becomes required.  Re-analyze if anything moved.

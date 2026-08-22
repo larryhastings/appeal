@@ -254,7 +254,8 @@ class Plan:
                  'minimum', 'maximum', 'valid_counts', 'windowed', 'gated',
                  'certain', 'var_keyword', 'constructs', 'binds',
                  'tree_trailing', 'scoped_keys', 'arg_format', 'auto_help',
-                 'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0')
+                 'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0',
+                 'bound_inner')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
@@ -278,6 +279,9 @@ class Plan:
         # nested class is constructed from).
         self.constructs = None
         self.binds = None
+        # True for a BoundInnerClass: construction goes through the parent
+        # instance (host.Job(...)), not by calling the callable plainly.
+        self.bound_inner = False
         # trailing arguments in this whole subtree: they reserve
         # from the END of the command's argument stream, wherever
         # they sit in the tree (the uniform end-reservation rule)

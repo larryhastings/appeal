@@ -3343,6 +3343,8 @@ class Converter:
                                         # instance to pass as self (class-as-app)
     constructs = None                   # a class command: the env key to stash
                                         # the instance it builds under
+    _bound_inner = False                # a BoundInnerClass: construct THROUGH
+                                        # the bound parent instance, not plainly
     _window = False                     # set on an instance built as one element
                                         # of a *args window; a starved required
                                         # operand of a window is "left over", not
@@ -3418,6 +3420,12 @@ class Converter:
         conv = type(self).converter
         if type(self)._iterable:            # tuple[...]/list[...]: build from the iterable
             return conv(args)
+        if type(self)._bound_inner:
+            # a BoundInnerClass: the compiled converter is bound to a throwaway
+            # probe (build only needed its grammar).  Construct through the REAL
+            # parent instance's attribute, which re-binds the descriptor.
+            inner = type(self).constructs.rpartition('.')[2]
+            return getattr(self.bound, inner)(*args, **self.kwargs)
         if type(self).binds is not None and type(self).constructs is None:
             # a method command: self is the instance a parent constructed.  A
             # nested CLASS command also has binds (it's a subcommand) but must
