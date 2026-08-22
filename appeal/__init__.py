@@ -63,8 +63,6 @@ _LAZY_REEXPORTS = {
     'default_short_option': 'build',
     'strip_first_argument_from_signature': 'build',
     'strip_self_from_signature': 'build',
-    'compile_command_set': 'codegen', 'compile_plan': 'codegen',
-    'emit': 'codegen', 'emit_command_set': 'codegen',
     'appeal_markdown_defaults': 'render', 'appeal_theme': 'render',
     'uncolored_theme': 'render', 'plain_theme': 'render',
     'dark_cool_theme': 'render', 'dark_warm_theme': 'render',
@@ -73,8 +71,6 @@ _LAZY_REEXPORTS = {
     'completions': 'complete', 'completions_set': 'complete',
     'read_csv': 'read', 'read_iterable': 'read', 'read_mapping': 'read',
     'describe': 'schema', 'describe_set': 'schema',
-    'interpreter_dispatch': ('interpreter', 'dispatch'),
-    'interpreter_parse': ('interpreter', 'parse'),
 }
 
 
@@ -500,205 +496,6 @@ class Processor:
             return fn
         return None
 
-    def parse(self, argv, config=None):
-        "Stage 1: scan argv.  Nothing executes.  Returns self."
-        app = self.app
-        app._compile()
-        argv = list(argv)
-        if config is not None:
-            # strict keys, stage 1: a bad config does no work
-            global_plan = app.global_plan
-            if (global_plan is not None
-                    and getattr(global_plan.callable,
-                                'appeal_precommand', False)):
-                # the precommand hosting the global plan isn't a
-                # global COMMAND; config has nothing to configure
-                global_plan = None
-            if global_plan is None:
-                # no global command: any key is a refusal by
-                # name; an empty mapping lays nothing over
-                # nothing, a no-op
-                for key in config:
-                    raise AppealDataError(
-                        f"config: {key!r} isn't an option of this "
-                        f"program (it has no global command)")
-            else:
-                table = app._table()
-                vetted = _config_vet(global_plan, frozenset(table),
-                                     config, app.plan_for)
-                self._config = (vetted, dict(config))
-        kind = app._pieces[0]
-        if kind == 'single':
-            _, cmd = app._pieces
-            operands, given, rest, positions = cmd.scan(argv)
-            self.invocations = [(None, cmd, operands, given, positions)]
-            self._tail = None
-            return self
-        (_, parse_globals, commands, usage, default, auto_help,
-         repeat, words) = app._pieces
-        from .runtime import scan_command_set
-        self.invocations, self._tail = scan_command_set(
-            argv, parse_globals, commands, usage, default, repeat, words)
-        return self
-
-    def _print_listing(self):
-        "The set listing: baked pieces, rendered at the real margin."
-        from .render import help_margin, render_baked_help
-        app = self.app
-        print(render_baked_help(app._pieces[3],
-                                margin=help_margin(app.margin)),
-              end='')
-
-    def execute(self):
-        "Stage 2: conversions and commands, left to right."
-        if self.invocations is None:
-            raise AppealConfigurationError(
-                "this Processor hasn't parsed anything yet")
-        app = self.app
-        app._last_processor = self
-        if self._tail == ('bare',):
-            # an empty command line: the listing, stdout, exit 1
-            # (ruled 2026-07-09, git-style); nothing runs.  The
-            # listing is baked pieces, finished at print time
-            # (errors and orientation ride the pipeline, ruled
-            # 2026-08-06)
-            self._print_listing()
-            self.result = 1
-            return 1
-        result = None
-        env = {}    # class-based commands: instances live here
-        for word, cmd, operands, given, positions in self.invocations:
-            injected = None
-            if word is None and self._config is not None:
-                # the config layer: defaults < config < argv,
-                # atomic per option, global command only
-                vetted, mapping = self._config
-                usage = self.app.global_plan.usage()
-                injected = _config_inject(
-                    vetted, mapping, given, usage,
-                    self.app.global_plan.scoped_keys)
-            injected_params = set()
-            for injected_name, injected_key in (injected or {}).items():
-                # 'where.deep' attributes errors about 'where'
-                # OR 'deep'; keys ('--where') attribute count
-                # errors, which name the option string
-                injected_params.update(injected_name.split('.'))
-                injected_params.add(injected_key)
-            try:
-                result = cmd.run(operands, given, positions, env, cmd)
-            except UsageError as e:
-                # provenance travels structurally: the error says
-                # WHICH parameter it's about (e.param), and only
-                # an error about something config supplied becomes
-                # a config error--never a substring guess
-                if getattr(e, 'param', None) in injected_params:
-                    raise AppealDataError(
-                        f"config: {e}", getattr(e, 'usage', None),
-                        param=e.param) from None
-                raise
-            command = self._command_for(word)
-            # every invocation that ran is logged, precommand eras included
-            # (they're commands that run first, not a special case); the
-            # instance is this invocation's own class-as-app object, if any
-            instance = result if _is_class_command(cmd.callable) else None
-            self.instances.append((command, instance))
-            if (isinstance(result, int)
-                    and not isinstance(result, bool) and result):
-                # the early-exit contract, every command in a
-                # cycle: a nonzero int halts dispatch
-                self.result = result
-                return result
-        if self._tail is not None:
-            kind = self._tail[0]
-            if kind == 'listing':
-                self._print_listing()
-                result = None
-            elif kind == 'fused':
-                _, word, fn, tokens = self._tail
-                result = fn(tokens)
-                command = app._table().get(word)
-                if command is not None:   # pragma: no cover -- fused
-                    # tails carry only the auto help/version words,
-                    # which are never registered
-                    self.instances.append((command, None))
-            else:   # 'default'
-                d = app._pieces[4]
-                operands, given, rest, positions = d.scan([])
-                result = d.run(operands, given, positions, {}, d)
-                self.instances.append((app._default, None))
-        self.result = result
-        return result
-
-    def __call__(self, args):
-        "v1 compat: both stages in one call."
-        self.parse(list(args))
-        return self.execute()
-
-
-class _CompileOnDispatch:
-    """
-    The commands mapping handed to run_command_set: .get(word)
-    builds and compiles that one command at its first dispatch.
-    The other commands stay untouched.  Also supplies the automatic
-    `help` command, unless the program defines its own.
-    """
-    def __init__(self, app, usage):
-        self.app = app
-        self.usage = usage
-
-    def get(self, word):
-        table = self.app._table()
-        if False and (word == 'version' and 'version' not in table
-                and self.app.version is not None):
-            def parse_version(argv):
-                if argv:
-                    raise UsageError(
-                        'version takes no arguments', self.usage)
-                print(self.app.version)
-            return parse_version
-        if False and word == 'help' and 'help' not in table:
-            def parse_help(argv):
-                # `help` alone: the listing; `help CMD`: CMD's
-                # --help; the auto commands describe themselves
-                # (help should DESCRIBE a topic, not run it)
-                if not argv:
-                    print('usage: ' + self.usage)
-                    return
-                topic = argv[0]
-                if topic == 'help':
-                    print('Print usage documentation on a '
-                          'specific command.')
-                    return
-                if False and (topic == 'version' and 'version' not in table
-                        and self.app.version is not None):
-                    print("Print the program's version.")
-                    return
-                if topic not in table:
-                    from .runtime import did_you_mean
-                    raise UsageError(
-                        f"unknown command {topic!r}"
-                        f"{did_you_mean(topic, table)}",
-                        self.usage)
-                return self.app._parse_for(topic)(['--help'])
-            return parse_help
-        if word not in table:
-            return None
-        app = self.app
-        node = app._children.get(word)
-        if node is not None and node._children:
-            return app._set_entry_for(word, node)
-        parse = self.app._parse_for(word)
-        fn = node._command_callable() if node is not None else None
-        if hasattr(parse, 'scan'):
-            # two-stage dispatch (parse-before-execute): the shared
-            # Command record--run() calls command.callable
-            return _Command(word, callable=fn, scan=parse.scan,
-                            run=parse.run)
-        # fused: _parse_for compiles every registered word two-stage
-        # and nested parents are intercepted above; belt and braces
-        return _Command(word, fused=parse)   # pragma: no cover
-
-
 # the default_mappings menu, importable (spell your subset with
 # these: default_mappings(*default_mappings_help))
 default_mappings_help = ('-h', '--help', 'help')
@@ -976,7 +773,6 @@ class Appeal:
         # harmlessly discard.  The dict caches are eager-{} so there's no
         # None-then-{} check-and-set to race.
         self._parse = None        # scalar: the single-command parse fn
-        self._pieces = None       # scalar: what a Processor drives, paired w/parse
         self._set_entries = {}    # nested set dicts, built per parent node
         self._last_processor = None   # app.instances reads this
         self._plans = {}          # {id(node): Plan}, filled per word
@@ -991,7 +787,6 @@ class Appeal:
         node = self
         while node is not None:
             node._parse = None
-            node._pieces = None
             node._set_entries = {}
             node._plans = {}
             node._parses = {}
@@ -1331,10 +1126,6 @@ class Appeal:
             return callable
         return decorator
     default_command = default           # transitional alias for the old name
-
-    def processor(self):
-        "v1's API: an unparsed Processor; call it with an argv."
-        return Processor(self)
 
     def precommand(self, *, index=-1):
         def decorator(callable):
@@ -1916,39 +1707,6 @@ class Appeal:
             raise AppealConfigurationError(f"no command named {word!r}")
         return self._plan_for_node(node, word)
 
-    def _parse_for(self, word):
-        from .codegen import compile_command_set, compile_plan
-        self.root._finalize()   # drain the subcommand ledger
-        node = self._node_for(word)
-        if node is None:
-            raise AppealConfigurationError(f"no command named {word!r}")
-        parse = self._parses.get(id(node))
-        if parse is None:
-            if node._children:
-                # a parent with subcommands is a nested command set:
-                # the parent is its global command, so parent options
-                # come before the subcommand word and the parent runs
-                # first--all machinery reused.  Addressed by NODE
-                # (deepest set wins at dispatch; words can repeat).
-                sub_plans = {w: self._plan_for_node(c, w)
-                             for w, c in node._children.items()
-                             if c._command_callable() is not None}
-                default_fn = node._node_default
-                parse = compile_command_set(
-                    sub_plans, self._plan_for_node(node, word),
-                    prog=word,
-                    templates=self.templates, stylesheet=self.stylesheet,
-                    max_columns=self.margin, help=self._help_enabled,
-                    default=(self._build(default_fn)
-                             if default_fn is not None else None))
-            else:
-                parse = compile_plan(self._plan_for_node(node, word),
-                                     templates=self.templates,
-                                     stylesheet=self.stylesheet,
-                                     max_columns=self.margin)
-            parse = self._parses.setdefault(id(node), parse)
-        return parse
-
     def _program_doc(self):
         """
         The program's documentation, three tiers (ruled
@@ -2005,143 +1763,6 @@ class Appeal:
 
     def _prog(self):
         return self.name or _os.path.basename(self.script) or 'program'
-
-    def _set_entry_for(self, word, node=None):
-        """
-        The nested set dict behind a parent command: the parent
-        compiled with the flexible boundary (a global command of
-        its own little set), each subcommand a (scan, run) pair--
-        or, recursively, another set dict.  Addressed by NODE
-        (Larry's ruling, 2026-07-19: depth takes precedence, and
-        words may repeat at different depths--`A X X` runs X's
-        own subcommand X).
-        """
-        from .codegen import compile_plan
-        if node is None:
-            node = self._children.get(word)
-        entry = self._set_entries.get(id(node))
-        if entry is not None:
-            return entry
-        from .plan import command_set_usage
-        from .help import summary, command_set_corpus
-        from .render import listing_pieces
-        parent_plan = self._plan_for_node(node, word)
-        parent = compile_plan(parent_plan, templates=self.templates,
-                              stylesheet=self.stylesheet, boundary='flexible',
-                              max_columns=self.margin)
-        subs = {}
-        listed = []
-        for w, child in node._children.items():
-            fn = child._command_callable()
-            if fn is None:
-                continue
-            listed.append((w, summary(fn)))
-            if child._children:
-                subs[w] = self._set_entry_for(w, child)
-                continue
-            owner = self._method_owner.get(id(fn))
-            if owner is None:
-                _refuse_orphan_method(fn)
-            sub = compile_plan(self._plan_for_node(child, w),
-                               templates=self.templates, stylesheet=self.stylesheet,
-                               max_columns=self.margin)
-            subs[w] = _Command(w, callable=fn, scan=sub.scan, run=sub.run)
-        entries = listed
-        corpus = command_set_corpus(parent_plan, entries, False)
-        sub_usage = listing_pieces(
-            command_set_usage(word, parent_plan), corpus,
-            self.templates)
-        default_fn = node._node_default
-        if default_fn is not None:
-            compiled = compile_plan(self._build(default_fn),
-                                    templates=self.templates,
-                                    stylesheet=self.stylesheet,
-                                    max_columns=self.margin)
-            sub_default = _Command(callable=default_fn,
-                                   scan=compiled.scan, run=compiled.run)
-        else:
-            sub_default = None
-        entry = _Command(word, callable=node._command_callable(),
-                         scan=parent.scan, run=parent.run,
-                         subcommands=subs, words=frozenset(subs),
-                         repeat=node._node_repeat, usage=sub_usage,
-                         default=sub_default)
-        entry = self._set_entries.setdefault(id(node), entry)
-        return entry
-
-    def _compile(self):
-        from .codegen import compile_plan
-        if self._parse is not None:
-            return self._parse
-        table = self._table()
-        if not table:
-            # a global command and nothing else: it owns the whole
-            # line, options after operands and all
-            fused = compile_plan(self.global_plan, templates=self.templates,
-                                 stylesheet=self.stylesheet,
-                                 max_columns=self.margin, is_global=True)
-            def parse(argv):
-                processor = Processor(self)
-                processor.parse(argv)
-                return processor.execute()
-            parse.scan = fused.scan
-            parse.run = fused.run
-            parse.source = fused.source
-            single = _Command(callable=self.global_plan.callable,
-                              scan=fused.scan, run=fused.run)
-            if self._parse is None:
-                self._pieces = ('single', single)
-                self._parse = parse
-            return self._parse
-
-        from .plan import command_set_usage
-        from .runtime import run_command_set
-        global_plan = self.global_plan
-        command_words = frozenset(table)
-        parse_globals = []              # an ordered list of head eras
-        for era_plan in self.global_plans():
-            fused = compile_plan(
-                era_plan, templates=self.templates, stylesheet=self.stylesheet,
-                max_columns=self.margin, is_global=True,
-                command_split=(era_plan.minimum, era_plan.maximum,
-                               command_words))
-            parse_globals.append(_Command(callable=era_plan.callable,
-                                          scan=fused.scan, run=fused.run))
-        from .help import summary, command_set_corpus
-        from .render import listing_pieces
-        entries = [(word, summary(callable))
-                   for word, callable in table.items()]
-        corpus = command_set_corpus(
-            global_plan, entries, False, auto_version=False,
-            doc=self._program_doc_override())
-        usage = listing_pieces(
-            command_set_usage(self._prog(), self._display_global()),
-            corpus, self.templates)
-
-        commands = _CompileOnDispatch(self, usage)
-        auto_help = self._help_enabled and 'help' not in table
-
-        if self._default is not None:
-            d_plan = self._build(self._default)
-            d_fused = compile_plan(d_plan, templates=self.templates,
-                                   stylesheet=self.stylesheet,
-                                   max_columns=self.margin)
-            default = _Command(callable=d_plan.callable,
-                               scan=d_fused.scan, run=d_fused.run)
-        else:
-            default = None
-
-        pieces = ('set', parse_globals, commands, usage, default,
-                  auto_help, self.repeat, command_words)
-
-        def parse(argv):
-            processor = Processor(self)
-            processor.parse(argv)
-            return processor.execute()
-        if self._parse is None:
-            self._pieces = pieces
-            self._parse = parse
-        return self._parse
 
     @property
     def plan(self):
@@ -2253,20 +1874,6 @@ class Appeal:
         for era in self._precommands:
             plans.append(self._build(era))
         return plans
-
-    def parse(self, args=None, config=None):
-        """
-        Stage 1 only: scan args (default: sys.argv[1:]) into a
-        Processor.  The structural parse runs--zero user code; a
-        malformed line raises here--and nothing executes.  Call the
-        Processor's execute() for stage 2; printing it is a dry
-        run.  config, if given, is ONE mapping layering the global
-        command's options: defaults < config < args (see the
-        grammar's config layering section).
-        """
-        processor = Processor(self)
-        return processor.parse(
-            _sys.argv[1:] if args is None else list(args), config)
 
     def process(self, args=None, config=None):
         """

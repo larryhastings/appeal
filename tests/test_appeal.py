@@ -4370,10 +4370,7 @@ def test_command_name_override():
         ran.append('drop-all')
     app2.process(['base', 'drop-all'])
     assert ran[-2:] == ['base', 'drop-all'], ran
-    # emitted identifiers sanitize; the visible word keeps dashes
-    from appeal import emit
-    source, refs = emit(app.plan_for('add-item'))
-    assert 'def scan_add_item(' in source
+    # the visible word keeps its dashes in usage
     assert 'add-item' in app.plan_for('add-item').usage()
 
 
