@@ -3168,6 +3168,10 @@ class Converter:
                                         # instance to pass as self (class-as-app)
     constructs = None                   # a class command: the env key to stash
                                         # the instance it builds under
+    _window = False                     # set on an instance built as one element
+                                        # of a *args window; a starved required
+                                        # operand of a window is "left over", not
+                                        # a plain missing argument
 
     @classmethod
     def fixup_converters(cls, converter):
@@ -3381,6 +3385,10 @@ class Processor:
                 and issubclass(arg.converter, Converter)):
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
+                    if arg.owner._window and arg.owner.args:
+                        raise UsageError(
+                            f"wrong number of arguments: "
+                            f"{len(arg.owner.args)} left over", None)
                     raise UsageError(f"missing argument {arg.name!r}", None)
                 self.queue.popleft()
                 if self.queue and isinstance(self.queue[0], RepeatInstruction):
@@ -3395,22 +3403,26 @@ class Processor:
             return
         # a converter slot: a conjured instance, or a fresh one from an operand
         obj = self.conjured.pop(arg.slot, None)
-        if (obj is not None and not arg.converter.conjurable
-                and (tok is None or self._is_option(tok))):
-            # an option summoned a non-conjurable group, but no operands arrived.
-            # queue[0] is THIS Argument; a *args window has the Repeat behind it.
+        if obj is not None and (tok is None or self._is_option(tok)):
+            # an option summoned a group but no operand arrived to start a fresh
+            # element.  queue[0] is THIS Argument; a *args window has the Repeat
+            # behind it.
             if len(self.queue) > 1 and isinstance(self.queue[1], RepeatInstruction):
                 # a *args window: an option past the last operand binds to the
-                # NEAREST built instance, not a new window that can't be filled.
+                # NEAREST built instance, not a new window (never-rejects rule).
                 for built in reversed(arg.owner.args):
                     if isinstance(built, arg.converter):
                         built.kwargs.update(obj.kwargs)
                         self.queue.popleft()        # the Argument
                         self.queue.popleft()        # the Repeat -- end the *args
                         return
-                self.queue.popleft(); self.queue.popleft()
-                raise UsageError(f"expected at least one {arg.name!r}", None)
-            raise UsageError(f"option requires {arg.name!r}", None)
+                # no built instance to bind to: a conjurable group becomes the
+                # sole element (falls through); a non-conjurable one can't.
+                if not arg.converter.conjurable:
+                    self.queue.popleft(); self.queue.popleft()
+                    raise UsageError(f"expected at least one {arg.name!r}", None)
+            elif not arg.converter.conjurable:
+                raise UsageError(f"option requires {arg.name!r}", None)
         if obj is None and (tok is None or self._is_option(tok)):
             if tok is None and arg.required and arg.converter.conjurable:
                 obj = arg.converter()                # required slot: invoke from
@@ -3428,6 +3440,10 @@ class Processor:
                 return
         if obj is None:
             obj = arg.converter()
+        if len(self.queue) > 1 and isinstance(self.queue[1], RepeatInstruction):
+            obj._window = True                      # a *args window element: a
+                                                    # starved required operand of
+                                                    # it is a leftover shortfall
         arg.owner.args.append(obj)
         self.queue.popleft()
         self.enter(obj)                             # pocket + front-splice
