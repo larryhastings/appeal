@@ -1113,6 +1113,22 @@ def _build(callable, name, memo, stack, top, skip_first=False,
             f"such options need a **kwargs to land in)")
 
     slots = slots + trailing_slots
+    # uniform end-reservation: a required leaf operand that FOLLOWS an
+    # absorbing converter (one that consumes unboundedly -- its own *args) is
+    # reserved from the END, so the absorber leaves room for it.  It's a named
+    # param, so it's delivered by keyword like any other trailing operand.
+    absorbing = False
+    for slot in slots:
+        if slot.trailing:
+            continue
+        if (absorbing and slot.required
+                and isinstance(slot.child, Terminal)):
+            slot.trailing = True
+            continue
+        if slot.repeat or (not isinstance(slot.child, Terminal)
+                           and any(getattr(s, 'repeat', False)
+                                   for s in slot.child.slots)):
+            absorbing = True
     plan = Plan(callable, name, slots, options, 0, 0, None)
     plan.var_keyword = has_kwargs or None
     _analyze(plan)
