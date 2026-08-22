@@ -219,7 +219,7 @@ def _build_class(plan, classes):
             # a converter group -- reference the child class
             childcls = classes[_converter_key(slot.child)]
             preopts = []
-            for o in slot.child.options:        # flat recognition (see emit_source)
+            for o in slot.child.options:        # flat recognition
                 if o.kind == 'flag':
                     for s in o.strings:
                         if s in own_strings:    # shadowed: the command owns it
@@ -373,128 +373,6 @@ def _leaf_expr(o, constructor, i, leaf):
     return f'annotations[{o.name!r}].__annotations__[{inner!r}]'
 
 
-def emit_source(plan, names, is_command):
-    """
-    Emit one Converter subclass as source text, mirroring _build_class:
-    options first, then leaf/group operands with conjuring PreOptions, *args
-    windows, and trailing pockets, plus a fixup_converters classmethod that
-    wires child callables.  `names` maps a converter's callable to its class
-    name; `is_command` decorates the class with @Appeal._converter.
-    """
-    items = []                                  # source for each work item
-
-    for o in plan.options:                      # options first
-        if o.kind == 'flag':
-            conv = 'bool'
-        elif o.kind == 'value':                 # one leaf, or a multi-oparg tuple
-            conv = _value_option_expr(plan, o)
-        elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
-            conv = _fold_expr(plan, o)
-        elif o.kind == 'group':                 # sibling converter-group option
-            conv = names[_converter_key(o.child)]   # the child Converter class
-        else:                                   # nullary and the rest: later
-            continue
-        strings = ', '.join(repr(s) for s in o.strings)
-        items.append(f'self.Option({o.name!r}, {conv}, {strings})')
-
-    boundary = len(items)
-    for slot in plan.slots:
-        # intrinsic requiredness (has no default), NOT slot.required -- v1's
-        # promotion inflates the latter, but the compiled engine fills greedily
-        # (minimum governs operands), so a defaulted operand stays optional.
-        req = slot.default is NO_DEFAULT
-        if isinstance(slot.child, Terminal):
-            conv = _converter_expr(plan, slot.name, slot.child.converter)
-            if slot.repeat:                         # *args of a leaf
-                items.append(f'self.Repeat([self.Argument({slot.name!r}, '
-                             f'{conv}, required=False)])')
-                boundary = len(items)
-                continue
-            extra = ', trailing=True' if slot.trailing else ''
-            items.append(f'self.Argument({slot.name!r}, {conv}, '
-                         f'required={req!r}{extra})')
-            if req:
-                boundary = len(items)
-            continue
-        # a converter group -- reference the child class
-        childcls = names[_converter_key(slot.child)]
-        preopts = []
-        for o in slot.child.options:            # flat recognition: a group's flag
-            if o.kind == 'flag':                # is known anywhere on the line;
-                for s in o.strings:             # firing it forces the group (a
-                    preopts.append(f'self.PreOption({s!r}, {o.name!r}, '  # conjurable
-                                   f'{slot.name!r}, {childcls})')      # from defaults,
-                continue                        # non-conjurable must get operands)
-            if slot.repeat and o.kind == 'value' and len(o.converters) == 1:
-                # a windowed group's VALUE option binds forward at a boundary
-                # (--label up): carry its oparg converter as a source expr
-                c = o.converters[0]
-                conv = (c.__name__ if c in _BUILTIN_CONVERTERS else
-                        f'{childcls}.converter.__annotations__'
-                        f'.get({o.name!r}, str)')
-                for s in o.strings:
-                    preopts.append(f'self.PreOption({s!r}, {o.name!r}, '
-                                   f'{slot.name!r}, {childcls}, {conv})')
-        if slot.repeat:                             # windowed *args
-            inner = ', '.join(preopts +
-                              [f'self.Argument({slot.name!r}, {childcls}, required=False)'])
-            items.append(f'self.Repeat([{inner}])')
-            boundary = len(items)
-            continue
-        for k, pre in enumerate(preopts):           # leap over optionals
-            items.insert(boundary + k, pre)
-        items.append(f'self.Argument({slot.name!r}, {childcls}, '
-                     f'required={req!r})')
-        boundary = len(items)
-
-    lines = []
-    if is_command:
-        # the registry key is the command word (function name, _->-); the
-        # class name keeps underscores (a dash is an invalid identifier)
-        lines.append(f'@Appeal._converter({plan.name.replace("_", "-")!r})')
-    lines.append(f'class {names[_converter_key(plan)]}(Converter):')
-    # a group built on a code-less builtin (tuple/list/...) has no signature of
-    # its own to drift; its shape is already covered structurally by the parent
-    # command's fingerprint (the tuple[int, int] annotation token).  Bake None so
-    # fixup skips verification rather than fingerprinting a callable with no code.
-    fp = (signature_fingerprint(plan.callable)
-          if _params_host(plan.callable) is not None else None)
-    lines.append(f'    _fingerprint = {fp!r}')
-    if plan.callable in (tuple, list):      # iterable constructor: build, don't splat
-        lines.append('    _iterable = True')
-    if plan.binds is not None:              # class-as-app: method binds to an instance
-        lines.append(f'    binds = {plan.binds!r}')
-    if plan.constructs is not None:         # class command: stash the instance built
-        lines.append(f'    constructs = {plan.constructs!r}')
-    if _n_trailing(plan):
-        lines.append(f'    trailing = {_n_trailing(plan)}')
-    lines.append('    def register(self, processor):')
-    joined = '\n'.join(items)
-    need_converter = ('converter.__defaults__' in joined
-                      or 'converter.__kwdefaults__' in joined)
-    need_annotations = 'annotations[' in joined
-    if need_converter:
-        lines.append('        converter = type(self).converter')
-    if need_annotations:
-        source = 'converter' if need_converter else 'type(self).converter'
-        lines.append(f'        annotations = {source}.__annotations__')
-    lines.append('        processor.prepend([')
-    for it in items:
-        lines.append(f'            {it},')
-    lines.append('        ])')
-
-    children = _child_converters(plan)
-    if children:                                # wire child callables at @command
-        lines.append('    @classmethod')
-        lines.append('    def _fixup_children(cls, converter):')
-        lines.append('        annotations = converter.__annotations__')
-        for child_key, param in children.items():
-            cname = names[child_key]
-            lines.append(f'        if not {cname}.converter:')
-            lines.append(f'            {cname}.fixup_converters(annotations[{param!r}])')
-    return '\n'.join(lines)
-
-
 _MODULE_HEADER = '''\
 #
 # Generated by Appeal's emitter (appeal/compile.py).
@@ -508,25 +386,3 @@ from appeal.runtime import (
     )
 '''
 
-
-def emit_module(plans, baked_fingerprint=None, default_mappings_fp=None,
-                default_options_fp=None):
-    """
-    Emit a complete, runnable compiled parser module for a list of plans.
-    baked_fingerprint (from runtime.config_fingerprint at compile time) is the
-    configuration identity the compiled Appeal verifies against at __init__;
-    default_mappings_fp/default_options_fp are the compile-time policy
-    fingerprints the sentinel default falls back to.
-    """
-    converters = _converters(plans)
-    names = _class_names(converters)
-    commands = {_converter_key(plan) for plan in plans}
-    parts = [_MODULE_HEADER,
-             f'Appeal = appeal_class(baked_fingerprint={baked_fingerprint!r},\n'
-             f'                      default_mappings_fp={default_mappings_fp!r},\n'
-             f'                      default_options_fp={default_options_fp!r})',
-             '']
-    for key, plan in converters.items():        # children first; commands self-register
-        parts.append(emit_source(plan, names, is_command=key in commands))
-        parts.append('')
-    return '\n'.join(parts)

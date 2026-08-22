@@ -20,23 +20,22 @@ import sys
 import appeal
 from appeal import (
     Appeal, AppealConfigurationError, AppealDataError, AppealError,
-    UsageError, build_plan, compile_plan, interpreter_parse,
+    UsageError, build_plan,
     )
 from appeal import runtime
 
 
 def both(fn, argv, decorations=None):
-    "rung parity, returning outcome; errors compare by text."
+    "One engine: build the Converter in memory and run it; errors as text."
+    from appeal import runtime
+    from appeal.compile import build_converters, _converter_key
     plan = build_plan(fn, decorations=decorations)
-    results = []
-    for drive in (lambda: interpreter_parse(plan, list(argv)),
-                  lambda: compile_plan(plan)(list(argv))):
-        try:
-            results.append(('ok', drive()))
-        except AppealDataError as e:
-            results.append(('usage', str(e)))
-    assert results[0] == results[1], results
-    return results[0]
+    word = plan.name.replace('_', '-')
+    cls = build_converters([plan])[_converter_key(plan)]
+    try:
+        return ('ok', runtime.execute({word: cls}, [word] + list(argv)))
+    except AppealDataError as e:
+        return ('usage', str(e))
 
 
 # ---------------------------------------------------------------------
@@ -362,30 +361,6 @@ def test_run_main_branches():
 # ---------------------------------------------------------------------
 # rung 1's scoped-overlay kinds: every kind through a window
 
-def test_interpreter_scoped_overlay_kinds():
-    # a converter reused across sibling slots declares each option
-    # kind in two windows; announce-first drives the values in
-    def pt(x: int, y: int):
-        return (x, y)
-    def child(p, *, flag=False, level: int = 0,
-              tags: appeal.accumulator[str] = (),
-              env: appeal.mapping[str, str] = None,
-              spot: pt = None):
-        return (p, flag, level, tuple(tags), env, spot)
-    def two(a: child = None, b: child = None):
-        return (a, b)
-    got = both(two, ['--flag', '--level', '3', '--tags', 't',
-                     '--env', 'k=v', '--spot', '1', '2', 'A'])
-    assert got[0] == 'ok', got
-    a, b = got[1]
-    assert a == ('A', True, 3, ('t',), {'k': 'v'}, (1, 2)), a
-    assert b is None
-
-
-
-# ---------------------------------------------------------------------
-# batch 2: the small files, to the last line
-
 def test_plan_reprs_and_walkers():
     from appeal.plan import Terminal
     def pt(x: int, y: int):
@@ -523,88 +498,6 @@ def test_man_page_edges():
     assert '\\&.starts' in text            # leading-dot escape
     assert text.count('.PP') >= 2           # paragraph breaks
     assert 'Sub prose paragraph.' in text   # sub DESCRIPTION prose
-
-
-def test_interpreter_class_dispatch():
-    # rung 1 drives class trees too: constructs, binds, and the
-    # nested class's attribute-access construction
-    from appeal import interpreter_dispatch
-    out = []
-    class Db:
-        def __init__(self, label):
-            self.label = label
-            out.append(('db', label))
-        def add(self, x: int):
-            out.append(('add', self.label, x))
-    db_plan = build_plan(Db, name='db')
-    add_plan = build_plan(Db.add, name='add', method_of=db_plan.constructs)
-    got = interpreter_dispatch({'db': db_plan, 'add': add_plan},
-                               None, ['db', 'main', 'add', '3'],
-                               prog='t', repeat=True)
-    assert out == [('db', 'main'), ('add', 'main', 3)], out
-
-
-def test_interpreter_scoped_overlay_more_kinds():
-    # the overlay branches my first scoped test missed: nullary,
-    # fold1 (StrictOption), and a group with operands
-    from appeal.build import Decorations
-
-    class Where(appeal.StrictOption):
-        def init(self, default):
-            self.spot = default
-        def option(self, x: int, y: int):
-            self.spot = (x, y)
-        def render(self):
-            return self.spot
-
-    def pt(x: int, y: int):
-        return (x, y)
-    def child(p, *, mode='', where: Where = None, spot: pt = None):
-        return (p, where, spot)
-    d = Decorations()
-    d.add_option(child, 'mode', ('--north',),
-                 annotation=lambda: 'north')
-    def two(a: child = None, b: child = None):
-        return (a, b)
-    got = both(two, ['--north', '--where', '1', '2',
-                     '--spot', '3', '4', 'A'], decorations=d)
-    assert got[0] == 'ok', got
-    a, b = got[1]
-    assert a[0] == 'A' and a[1] == (1, 2) and a[2] == (3, 4)
-    assert b is None
-
-
-def test_interpreter_inner_option_requires():
-    # a group option's inner option given without the outer:
-    # "requires" fires on BOTH rungs (rung 1's branch was bare)
-    def inner(v, *, deep=False):
-        return (v, deep)
-    def cmd(x, *, outer: inner = None):
-        return (x, outer)
-    got = both(cmd, ['a', '--deep'])
-    assert got[0] == 'usage' and 'requires' in got[1], got
-
-
-def test_interpreter_help_paths():
-    # rung 1's help-topic branches (describe help; unknown topic)
-    from appeal import interpreter_dispatch
-    def go(x: int):
-        return x
-    plans = {'go': build_plan(go)}
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        interpreter_dispatch(plans, None, ['help', 'help'], prog='t')
-    assert 'Print usage documentation' in out.getvalue()
-    try:
-        interpreter_dispatch(plans, None, ['help', 'zzz'], prog='t')
-        assert False, 'expected UsageError'
-    except UsageError as e:
-        assert 'zzz' in str(e)
-
-
-# ---------------------------------------------------------------------
-# batch 3: the read driver's shapes and errors, and the last
-# interpreter/help/describe/plan stragglers
 
 
 def test_read_bool_flag_nullary():
@@ -838,132 +731,6 @@ def test_read_sequence_shapes():
         assert "'Z'" in str(e), e
 
 
-def test_interpreter_nested_class_run():
-    # rung 1's nested-class construction: attribute access on the
-    # parent instance (binds AND constructs)
-    from appeal.interpreter import scan, run
-    class Outer:
-        def __init__(self, tag):
-            self.tag = tag
-        class Inner:
-            def __init__(self, n: int):
-                self.n = n
-            def go(self, word):
-                return (word, self.n)
-    env = {}
-    outer_plan = build_plan(Outer, name='Outer')
-    operands, given, rest, positions = scan(outer_plan, ['T'])
-    run(outer_plan, operands, given, positions, env=env)
-    inner_plan = build_plan(Outer.Inner, name='Inner',
-                       method_of=outer_plan.constructs)
-    operands, given, rest, positions = scan(inner_plan, ['5'])
-    inst = run(inner_plan, operands, given, positions, env=env)
-    assert isinstance(inst, Outer.Inner) and inst.n == 5
-    go_plan = build_plan(Outer.Inner.go, name='go',
-                    method_of=inner_plan.constructs)
-    operands, given, rest, positions = scan(go_plan, ['w'])
-    assert run(go_plan, operands, given, positions, env=env) == ('w', 5)
-
-
-def test_interpreter_option_gate():
-    # a skippable group's option can't appear before the certain
-    # group to its left has fed (the gate rule; the certain
-    # group's own options float free)
-    def pairfn(a: int, b: int):
-        return (a, b)
-    def sub(x: int, *, verbose=False):
-        return (x, verbose)
-    def cmd(g: pairfn, s: sub = None):
-        return (g, s)
-    got = both(cmd, ['1', '2', '5', '--verbose'])
-    assert got == ('ok', ((1, 2), (5, True))), got
-    got = both(cmd, ['--verbose', '1', '2', '5'])
-    assert got[0] == 'usage' and 'too early' in got[1], got
-
-
-def test_interpreter_gate_skips_scoped():
-    # the gate loop leaves scoped options to the interval model
-    def pairfn(x: int, y: int):
-        return (x, y)
-    def sub(x: int, *, verbose=False):
-        return (x, verbose)
-    def cmd(g: pairfn, a: sub = None, b: sub = None):
-        return (g, a, b)
-    got = both(cmd, ['1', '2', '5', '--verbose'])
-    assert got == ('ok', ((1, 2), (5, True), None)), got
-
-
-def test_interpreter_parse_command_split():
-    # the fused parse in command mode returns (result, rest)
-    def g(x):
-        return x
-    plan = build_plan(g)
-    result, rest = interpreter_parse(plan, ['A', 'sub', 'more'],
-                                     command_split=(1, 1, frozenset(('sub',))))
-    assert result == 'A' and rest == ['sub', 'more'], (result, rest)
-
-
-def test_interpreter_toplevel_scoped_overlay():
-    # options shared between the top level and a child window:
-    # occurrences after the child's window bind to the top, and
-    # rung 1 converts them through the overlay (every kind)
-    class Bump(appeal.Option):
-        def init(self, default):
-            self.n = 0
-        def option(self):
-            self.n += 1
-        def render(self):
-            return self.n
-
-    class Once(appeal.StrictOption):
-        def init(self, default):
-            self.v = default
-        def option(self, v: int):
-            self.v = v
-        def render(self):
-            return self.v
-
-    def loud():
-        return 'LOUD'
-    def pt(x: int, y: int):
-        return (x, y)
-    def box(w: int, h: int = 0):
-        return (w, h)
-    def child(p, *, flag=False, lvl: int = 0,
-              tags: appeal.accumulator[str] = (),
-              env: appeal.mapping[str, str] = None, spot: pt = None,
-              corner: box = None, bump: Bump = 0, once: Once = None,
-              mode: loud = 'quiet'):
-        return p
-    def cmd(a: child = None, *, flag=False, lvl: int = 0,
-            tags: appeal.accumulator[str] = (),
-            env: appeal.mapping[str, str] = None, spot: pt = None,
-            corner: box = None, bump: Bump = 0, once: Once = None,
-            mode: loud = 'quiet'):
-        return (a, flag, lvl, tuple(tags), env, spot, corner, bump,
-                once, mode)
-    argv = ['A', '--flag', '--lvl', '2', '--tags', 't',
-            '--env', 'k=v', '--spot', '1', '2', '--bump',
-            '--once', '9', '--mode', '--corner', '3']
-    got = both(cmd, argv)
-    assert got[0] == 'ok', got
-    assert got[1] == ('A', True, 2, ('t',), {'k': 'v'}, (1, 2),
-                      (3, 0), 1, 9, 'LOUD'), got[1]
-
-
-def test_interpreter_inner_requires_option_group():
-    # the OTHER "requires" site: an option group that wasn't given,
-    # while one of its inner options was
-    def wh(x: int, *, deep: int = 0):
-        return (x, deep)
-    def child(p, *, where: wh = None):
-        return (p, where)
-    def two(a: child = None, b: child = None):
-        return (a, b)
-    got = both(two, ['A', '--deep', '1'])
-    assert got[0] == 'usage' and 'requires' in got[1], got
-
-
 def test_help_dedent_blank_lines():
     # _dedent_lines wears kid gloves: blank lines don't count
     # toward the margin (the docstring parser never sends any,
@@ -1054,15 +821,6 @@ def test_plan_body_valid_counts_none():
     assert plan.body_valid_counts is None
 
 
-def test_interpreter_list_default_group():
-    # v1's corpus: b=[0, 0.0] infers a group from its element types
-    # and produces a LIST--rung 1 constructs, doesn't call
-    def f(b=[0, 0.0]):
-        return b
-    got = both(f, ['1', '2.5'])
-    assert got == ('ok', [1, 2.5]), got
-
-
 def test_completion_repeat_group_carries_completions():
     # a *args GROUP converter (it has an option, so each occurrence
     # is windowed) with completions and a sole terminal: the repeat
@@ -1098,7 +856,6 @@ def test_config_vet_refusals():
     @app.command()
     def broken(z: 42):
         return z
-    P = appeal.Processor
     cases = (
         ({'deep': True}, AppealConfigurationError, 'scoped'),
         ({'go': 1}, AppealDataError, 'is a command'),
@@ -1109,7 +866,7 @@ def test_config_vet_refusals():
         )
     for config, exc, complaint in cases:
         try:
-            P(app).parse(['go', 'd'], config)
+            app.process(['go', 'd'], config=config)
             assert False, 'expected %s for %r' % (exc.__name__, config)
         except exc as e:
             assert complaint in str(e), (config, str(e))
@@ -1141,7 +898,6 @@ def test_config_inject_shapes():
         def go():
             seen.append('go')
         return app
-    P = appeal.Processor
 
     def drive(config):
         seen[:] = []
@@ -1181,27 +937,6 @@ def test_refuse_orphan_uninspectable():
         app.plan_for('ga')
     except Exception:
         pass
-
-
-def test_processor_repr_and_stage_errors():
-    app = Appeal(name='pr')
-    @app.command()
-    def go(x: int):
-        return x
-    P = appeal.Processor
-    p = P(app)
-    assert repr(p) == '<Processor (unparsed)>'
-    try:
-        p.execute()
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert "hasn't parsed" in str(e)
-    p.parse([])
-    assert '(bare)' in repr(p)
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        p.execute()
-    assert 'usage' in out.getvalue()
 
 
 def test_registration_errors():
@@ -1408,33 +1143,6 @@ def test_man_page_trailing_blank():
     text = man_page('prog', corpus, 'prog [x]')
     assert 'First.' in text
     assert not text.rstrip().endswith('.PP')
-
-
-def test_interpreter_defense_branches():
-    # run() re-checks what scan() already enforced (the two-stage
-    # contract: run must not trust a stale `given`)
-    from appeal.interpreter import run
-    def wh(x: int, *, deep: int = 0):
-        return (x, deep)
-    def cmd(a, *, where: wh = None):
-        return (a, where)
-    try:
-        run(build_plan(cmd), ['a'], {'--deep': True}, {})
-        assert False, 'expected UsageError'
-    except UsageError as e:
-        assert 'requires' in str(e)
-    def pairfn(x: int, y: int):
-        return (x, y)
-    def sub(x: int, *, verbose=False):
-        return (x, verbose)
-    def gated(g: pairfn, s: sub = None):
-        return (g, s)
-    try:
-        run(build_plan(gated), ['1', '2', '5'], {'--verbose': True},
-            {'--verbose': 0})
-        assert False, 'expected UsageError'
-    except UsageError as e:
-        assert 'too early' in str(e)
 
 
 def test_read_group_option_and_nesting_shapes():
@@ -2126,10 +1834,6 @@ def test_parse_tokens_edges():
         return x
     got = both(neg, ['-2'])
     assert got == ('ok', '-2'), got
-    # ...and at a saturated command boundary it belongs to the rest
-    result, rest = interpreter_parse(build_plan(neg), ['a', '-2'],
-                                     command_split=(1, 1, frozenset()))
-    assert result == 'a' and rest == ['-2'], (result, rest)
     # a nullary option refuses '=' by name
     def loud():
         return 'LOUD'
@@ -2913,39 +2617,6 @@ def test_schema_degenerate_group_transparent():
     assert 'anyOf' in entry, entry
 
 
-def test_branch_interpreter_edges():
-    from appeal.interpreter import parse as iparse
-
-    # winner scan: a multi-rule parameter plus an UNRELATED given
-    # option (the scan iterates past the foreign key)
-    def f(z, *, direction='n', verbose=False):
-        return (z, direction, verbose)
-    d = appeal.Decorations()
-    d.add_option(f, 'direction', ('--north',),
-                 annotation=str, default='n')
-    d.add_option(f, 'direction', ('--south',),
-                 annotation=str, default='s')
-    got = iparse(build_plan(f, decorations=d),
-                 ['--verbose', '--north', 'up', 'Z'])
-    assert got == ('Z', 'up', True), got
-
-    # an absent option group whose child declares TWO options: the
-    # owner-entry sweep iterates them all without raising
-    def grp(v: int = 0, *, alpha=False, beta=False):
-        return (v, alpha, beta)
-    def g(x, *, opts: grp = None):
-        return (x, opts)
-    assert iparse(build_plan(g), ['X']) == ('X', None)
-
-    # a class command through the bare interpreter (no execution
-    # environment): the instance is returned, not stashed
-    class K:
-        def __init__(self, x):
-            self.x = x
-    got = iparse(build_plan(K), ['5'])
-    assert isinstance(got, K) and got.x == '5'
-
-
 def test_branch_run_main_error_edges():
     from appeal.runtime import run_main
 
@@ -3041,25 +2712,6 @@ def test_branch_completion_edges():
     sets2 = {'db': {'commands': {'mig': build_plan(mig)}, 'repeat': False}}
     completions_set(commands2, None, ['db', 'mig', 'X', 'rootcmd'], '',
                  repeat=True, sets=sets2)
-
-
-def test_branch_scoped_forced_claim_skips_taken():
-    # the same scoped key in two windows with DIFFERENT key sets:
-    # --flag forces b's window (claiming flag's occurrence); --extra
-    # then forces c's window, whose forced open re-scans flag's
-    # occurrences--skipping the claimed one and running dry
-    from appeal.interpreter import parse as iparse
-    def cb(p=0, *, flag=False):
-        return ('b', p, flag)
-    def cc(r=0, *, flag=False, extra=False):
-        return ('c', r, flag, extra)
-    def cd(s=0, *, extra=False):
-        return ('d', s, extra)
-    def mgy(a, b: cb = None, c: cc = None, d: cd = None):
-        return (a, b, c, d)
-    got = both(mgy, ['A', '--flag', '--extra'])
-    assert got == ('ok', ('A', ('b', 0, True), ('c', 0, False, True),
-                          None)), got
 
 
 def test_branch_text_formatter_edges():

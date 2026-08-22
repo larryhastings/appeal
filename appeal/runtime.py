@@ -3475,7 +3475,14 @@ class Processor:
         tok = self.argv[self.pos]; self.pos += 1; return tok
 
     def _is_option(self, tok):
-        return tok.startswith('-') and tok not in ('-', '--')
+        if not tok.startswith('-') or tok in ('-', '--'):
+            return False
+        # a negative number ('-2', '-2.5') is an OPERAND, not an option --
+        # unless a matching short option is actually registered (v1's rule,
+        # parse_tokens)
+        if tok[1].isdigit() and ('-' + tok[1]) not in self.handlers:
+            return False
+        return True
 
     def _owns_option(self, tok):
         "Does this option token name one of the converter's registered options?"
