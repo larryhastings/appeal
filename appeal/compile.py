@@ -252,11 +252,16 @@ def _build_class(plan, classes):
     children = _child_converters(plan)
 
     def fixup_children(cls, converter):
-        annotations = converter.__annotations__
-        for child_key, param in children.items():
+        # a child's callable IS its converter key: a plain callable, or
+        # (tuple/list, shape) for a builtin iterable group.  (Reading it off
+        # converter.__annotations__ crashed on a tuple[...] group -- tuple has
+        # none -- and wouldn't honor build's Annotated dereferencing anyway.)
+        for child_key in children:
             child_cls = classes[child_key]
             if not child_cls.converter:
-                child_cls.fixup_converters(annotations[param])
+                child_conv = (child_key[0] if isinstance(child_key, tuple)
+                              else child_key)
+                child_cls.fixup_converters(child_conv)
 
     dct = {'register': register, 'trailing': _n_trailing(plan),
            'binds': plan.binds, '_iterable': plan.callable in (tuple, list),

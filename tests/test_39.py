@@ -61,14 +61,18 @@ def test_tuple_slots():
 
 
 def test_tuple_slot_distribution():
-    # the automaton sees a tuple slot as arity (2, 2); the counting
-    # decision skips the optional to keep the count completable
+    # fill strictly left-to-right, greedily, no completability search
+    # ([[fill-left-to-right]], Larry 2026-08-20): a scalar optional is never
+    # blanked to let a later tuple slot complete
     def g(a='A', p: tuple[int, str] = ()):
         return (a, p)
     got = run_both(g, [])
     assert got == ('ok', ('A', ())), got
+    # two operands: 'a' greedily takes '1', leaving the lone 'x' -- which can't
+    # complete p's 2, and 'a' is NOT rescued back to 'A'.  An arity error, not
+    # the old completability-search ('A', (1, 'x')).
     got = run_both(g, ['1', 'x'])
-    assert got == ('ok', ('A', (1, 'x'))), got
+    assert got[0] == 'usage', got
     got = run_both(g, ['hello', '1', 'x'])
     assert got == ('ok', ('hello', (1, 'x'))), got
     got = run_both(g, ['only'])          # one operand: a takes it, p skips
