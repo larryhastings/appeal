@@ -2947,7 +2947,7 @@ class OptionInstruction:
         if conv is bool:
             binding = LiveBinding(self.owner, self.name)
         elif isinstance(conv, type) and issubclass(conv, Converter):
-            binding = GroupBinding(self.owner, self.name, conv)
+            binding = GroupBinding(self.owner, self.name, conv, self.strings)
         elif isinstance(conv, type) and issubclass(conv, MultiOption):
             binding = MultiBinding(self.owner, self.name, conv)
         else:
@@ -3025,6 +3025,42 @@ def _group_capacity(converter_cls):
         n = sum(1 for it in coll.items if isinstance(it, ArgumentInstruction))
         _capacity_cache[converter_cls] = n
     return n
+
+
+def _valid_counts(converter_cls):
+    """
+    The set of valid TOTAL operand counts for a group option's converter --
+    v1's "judge the count after grabbing".  A required leaf adds exactly 1; an
+    optional leaf adds 0 or 1; a required group adds its own valid counts; an
+    optional group adds those or 0.  grp2(a, i: inner=(p, q)) -> {1, 3}.
+    """
+    coll = _Collector()
+    converter_cls().register(coll)
+    counts = {0}
+    for item in coll.items:
+        if not isinstance(item, ArgumentInstruction):
+            continue
+        if isinstance(item.converter, type) and issubclass(item.converter,
+                                                            Converter):
+            sub = _valid_counts(item.converter)
+            if not item.required:
+                sub = sub | {0}
+        elif item.required:
+            sub = {1}
+        else:
+            sub = {0, 1}
+        counts = {c + s for c in counts for s in sub}
+    return counts
+
+
+def _count_list(counts):
+    "Render valid counts as '1 or 3' / '1, 2, or 4'."
+    nums = sorted(counts)
+    if len(nums) == 1:
+        return str(nums[0])
+    if len(nums) == 2:
+        return f"{nums[0]} or {nums[1]}"
+    return ', '.join(map(str, nums[:-1])) + f", or {nums[-1]}"
 
 
 def _takes_many(binding):
@@ -3147,15 +3183,17 @@ def _oparg_converters(factory):
     parameters -- read off __code__/__annotations__ (no `inspect`, which
     costs ~7ms to import) and cached ONCE per type, not every parse.
     """
-    converters = _oparg_converters_cache.get(factory)
-    if converters is None:
+    cached = _oparg_converters_cache.get(factory)
+    if cached is None:
         option = factory.option
         code = option.__code__
         names = code.co_varnames[1:code.co_argcount]    # skip self
         annotations = option.__annotations__
         converters = tuple(annotations.get(name, str) for name in names)
-        _oparg_converters_cache[factory] = converters
-    return converters
+        minimum = len(names) - len(option.__defaults__ or ())   # optional tail
+        cached = (converters, minimum)
+        _oparg_converters_cache[factory] = cached
+    return cached
 
 
 class MultiBinding:
@@ -3165,12 +3203,12 @@ class MultiBinding:
     option leaves the parameter's default untouched), init()'d with that
     default, and fed once per occurrence.  render() happens at finalize.
     """
-    __slots__ = ('owner', 'name', 'factory', 'converters')
+    __slots__ = ('owner', 'name', 'factory', 'converters', 'minimum')
     def __init__(self, owner, name, factory):
         self.owner = owner
         self.name = name
         self.factory = factory
-        self.converters = _oparg_converters(factory)
+        self.converters, self.minimum = _oparg_converters(factory)
     def invoke(self, processor, value=None):
         instance = self.owner.multis.get(self.name)
         if instance is None:
@@ -3184,12 +3222,19 @@ class MultiBinding:
                     f"option {self.name!r} doesn't take a value", None)
             opargs = [convert(self.converters[0], value, self.name)]
         else:
-            for converter in self.converters:
-                if processor.peek() is None:
-                    n = len(self.converters)
-                    raise UsageError(
-                        f"option {self.name!r} expects {n} "
-                        f"value{'s' if n != 1 else ''}", None)
+            # grab the required opargs; then any OPTIONAL ones greedily, so long
+            # as a token exists (an Option subclass's `option(x, y='Y')` -- y is
+            # taken if present, defaulted if not).  -- and end-of-line decline.
+            for k, converter in enumerate(self.converters):
+                tok = processor.peek()
+                if tok is None or tok == '--':
+                    if k < self.minimum:
+                        need = self.minimum
+                        raise UsageError(
+                            f"option {self.name!r} requires "
+                            f"{'a value' if need == 1 else f'{need} values'}",
+                            None)
+                    break                               # optional tail: stop
                 opargs.append(convert(converter, processor.advance(), self.name))
         try:
             instance.option(*opargs)
@@ -3204,17 +3249,22 @@ class GroupBinding:
     Siblings fall out of the flat table: --e2 re-registers them at e2.  No
     summon -- a shared option before any --e1/--e2 has no handler (error).
     """
-    __slots__ = ('owner', 'name', 'converter_cls')
-    def __init__(self, owner, name, converter_cls):
+    __slots__ = ('owner', 'name', 'converter_cls', 'strings')
+    def __init__(self, owner, name, converter_cls, strings=()):
         self.owner = owner
         self.name = name
         self.converter_cls = converter_cls
+        self.strings = strings
     def invoke(self, processor, value=None):
         instance = self.converter_cls()
         instance._optarg = True                     # its operands are option
         if value is not None:                       # opargs (grab greedily); an
             instance._attached = value              # attached -j5/--jobs=5 feeds
-        self.owner.kwargs[self.name] = instance     # the first operand directly
+        instance._optarg_root = self.converter_cls  # the first operand directly
+        instance._opt_display = next(               # name the short form for the
+            (s for s in self.strings if not s.startswith('--')),
+            self.strings[0] if self.strings else self.name)
+        self.owner.kwargs[self.name] = instance
         processor.enter(instance)                   # register its options
 
 class ConjureBinding:
@@ -3299,6 +3349,10 @@ class Converter:
                                         # only end-of-line or `--` declining
     _attached = None                    # an attached oparg value (-j5 / --jobs=5):
                                         # feeds the group's first operand directly
+    _opt_display = None                 # the option string that summoned an oparg
+                                        # group ('-g'), for its count-error message
+    _optarg_root = None                 # the top oparg group's class, for computing
+                                        # the valid operand counts (nested groups)
 
     @classmethod
     def fixup_converters(cls, converter):
@@ -3551,7 +3605,12 @@ class Processor:
                     return
                 if tok is None or tok == '--':
                     if arg.required:
-                        raise UsageError(f"option {arg.name!r} needs a value", None)
+                        # a required oparg starved mid-group: the grabbed count
+                        # isn't a valid one -- name the option and its counts
+                        raise UsageError(
+                            f"option {arg.owner._opt_display} takes "
+                            f"{_count_list(_valid_counts(arg.owner._optarg_root))}",
+                            None)
                     self.queue.popleft()
                     arg.owner.args.append(
                         _positional_default(arg.owner, arg.name))
@@ -3622,6 +3681,10 @@ class Processor:
             obj._window = True                      # a *args window element: a
                                                     # starved required operand of
                                                     # it is a leftover shortfall
+        if arg.owner._optarg:                       # a nested group under an
+            obj._optarg = True                      # option's oparg is part of the
+            obj._optarg_root = arg.owner._optarg_root   # same greedy grab; a starve
+            obj._opt_display = arg.owner._opt_display   # names the top option/counts
         arg.owner.args.append(obj)
         self.queue.popleft()
         self.enter(obj)                             # pocket + front-splice
