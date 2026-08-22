@@ -58,7 +58,7 @@ def _oparg_names(o):
         return [o.name]
     if o.converters[0] is tuple:
         return [getattr(c, '__name__', o.name) for c in o.converters[1:]]
-    import inspect
+    from . import cheapsig as inspect
     try:
         params = inspect.signature(o.converters[0]).parameters.values()
         return [p.name for p in params]

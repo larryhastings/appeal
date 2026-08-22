@@ -27,7 +27,8 @@ def _converter_name(converter):
 
 def _default(value):
     "Defaults appear in the schema only when JSON can carry them."
-    if value is NO_DEFAULT or value is _inspect.Parameter.empty:
+    from . import cheapsig
+    if value is NO_DEFAULT or value is cheapsig.empty:
         return None
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value

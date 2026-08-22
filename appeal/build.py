@@ -14,7 +14,10 @@
 # absorbing subtree), and trailing arguments (the uniform
 # end-reservation rule) all work at depth.
 
-import inspect
+from . import cheapsig as inspect        # a microsecond stand-in for the real
+                                         # inspect (which costs ~7ms to import);
+                                         # exposes the signature/Parameter slice
+                                         # build.py uses.  See appeal/cheapsig.py.
 
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
 from .runtime import (
@@ -35,18 +38,18 @@ _default_type_converters = {str, int, float}
 # on older Pythons Appeal limps along without it (the annotation
 # passes through untouched--and since you can't *write* Annotated
 # there, nothing is lost).  This is v1's pattern, kept verbatim.
-try:
-    from typing import Annotated as _Annotated
-    _AnnotatedType = type(_Annotated[int, str])
-    del _Annotated
-
-    def dereference_annotated(annotation):
-        if isinstance(annotation, _AnnotatedType):
-            return annotation.__metadata__[-1]
+def dereference_annotated(annotation):
+    # Annotated lives in `typing`.  If the user never imported typing, they
+    # could not have written an Annotated annotation -- so a mere sys.modules
+    # probe (nanoseconds) settles it without importing typing ourselves.  When
+    # typing IS loaded, the local import is free (already in sys.modules).
+    import sys
+    typing = sys.modules.get('typing')
+    if typing is None:
         return annotation
-except ImportError:   # pragma: no cover -- Python 3.8 and earlier
-    def dereference_annotated(annotation):
-        return annotation
+    if type(annotation) is type(typing.Annotated[int, str]):
+        return annotation.__metadata__[-1]
+    return annotation
 
 
 def _generic_origin(annotation):
@@ -202,12 +205,26 @@ def _validate_completions(plan):
                 f"{where}.completions must be callable "
                 f"(a (prefix) -> tuple of str), not "
                 f"{completions!r}")
+        # completions must accept exactly the one positional prefix: at least
+        # one positional slot must exist (or *args), and none beyond the first
+        # may be required.
         try:
-            inspect.signature(completions).bind('')
-        except TypeError:
-            raise AppealConfigurationError(
-                f"{where}.completions must accept one positional "
-                f"argument (the prefix)") from None
+            params = list(inspect.signature(completions).parameters.values())
+        except (ValueError, TypeError):
+            params = None
+        if params is not None:
+            positional = [p for p in params
+                          if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                                        inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+            has_varargs = any(p.kind is inspect.Parameter.VAR_POSITIONAL
+                              for p in params)
+            required = sum(1 for p in positional
+                           if p.default is inspect.Parameter.empty)
+            fits = required <= 1 and (has_varargs or len(positional) >= 1)
+            if not fits:
+                raise AppealConfigurationError(
+                    f"{where}.completions must accept one positional "
+                    f"argument (the prefix)")
 
     def terminal_count(p):
         n = 0

@@ -1394,13 +1394,13 @@ class Appeal:
         parameter.  Stack several to accumulate strings; each call
         is its own rule.
         """
-        # build's "not specified" marker is inspect.Parameter.empty;
-        # convert here (call time), so the signature default stayed
-        # inspect-free at import
+        # build's "not specified" marker is cheapsig.empty (the same singleton
+        # build compares against); convert here at call time.
+        from . import cheapsig
         if default is _UNSET:
-            default = _inspect.Parameter.empty
+            default = cheapsig.empty
         if annotation is None:
-            annotation = _inspect.Parameter.empty
+            annotation = cheapsig.empty
         def decorator(callable):
             if (_inspect.ismethod(callable)
                     and isinstance(callable.__self__, Appeal)
