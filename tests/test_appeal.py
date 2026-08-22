@@ -1625,14 +1625,16 @@ def test_command_listings_are_definition_order():
 
 
 def test_sibling_option_groups():
-    # Larry's ruling (2026-07-18, review item 8): two keyword-only
-    # parameters sharing a converter (e1: extras, e2: extras) are
-    # SIBLING option groups.  Their shared child options bind by
-    # announcement (--e1/--e2): each occurrence belongs to the
-    # nearest announced parent before it.  With NO announcement
-    # they summon the FIRST declared sibling with defaults--and
-    # never cascade: there is no way to say which sibling an
-    # unannounced option means, so e2 exists only when announced.
+    # Larry's ruling (2026-08-20, superseding the 2026-07-18 review
+    # item 8 elaboration): options are ALWAYS summoned explicitly by
+    # name.  Two keyword-only parameters sharing a converter (e1:
+    # extras, e2: extras) are SIBLING option groups; each is born
+    # only when its OWN name (--e1/--e2) is spoken.  A shared child
+    # option (--fiddle) NEVER conjures a sibling into existence--with
+    # no --e1/--e2 there is no home for it, so it's an error, not a
+    # birth.  Once announced, a shared child option binds to the
+    # nearest announced parent before it.  ("summon the first" is
+    # ARGUMENTS-only; see [[options-never-summoned]].)
     def extras(a='', *, fiddle=False, booper=False):
         return ('e', a, fiddle, booper)
     def cmd(x, *, e1: extras = None, e2: extras = None):
@@ -1640,14 +1642,12 @@ def test_sibling_option_groups():
 
     # nothing: both default
     assert run_both(cmd, ['x']) == ('ok', ('x', None, None))
-    # a bare child option summons e1
+    # a bare child option with NO --e1/--e2 has no home: an error,
+    # not a summon (options are never conjured into being)
     got = run_both(cmd, ['--fiddle', 'x'])
-    assert got == ('ok', ('x', ('e', '', True, False), None)), got
-    # repetition stays in e1--it NEVER cascades to e2
-    got = run_both(cmd, ['--fiddle', '--fiddle', 'x'])
-    assert got == ('ok', ('x', ('e', '', True, False), None)), got
+    assert got[0] == 'usage' and 'fiddle' in got[1], got
     got = run_both(cmd, ['--fiddle', '--booper', 'x'])
-    assert got == ('ok', ('x', ('e', '', True, True), None)), got
+    assert got[0] == 'usage' and 'fiddle' in got[1], got
     # e2 announced alone: e1 stays None
     got = run_both(cmd, ['x', '--e2', 'A2'])
     assert got == ('ok', ('x', None, ('e', 'A2', False, False))), got
@@ -1659,22 +1659,23 @@ def test_sibling_option_groups():
                          '--e2', 'A2', '--booper'])
     assert got == ('ok', ('x', ('e', 'A1', True, False),
                           ('e', 'A2', False, True))), got
-    # announced out of declaration order: fine while no shared
-    # option was spoken (nothing to misbind)...
+    # announced out of declaration order: each shared option binds to
+    # the nearest announced parent before it, in command-line order
     got = run_both(cmd, ['x', '--e2', 'A2', '--e1', 'A1'])
     assert got == ('ok', ('x', ('e', 'A1', False, False),
                           ('e', 'A2', False, False))), got
-    # ...but a loud refusal once one was
     got = run_both(cmd, ['x', '--e2', 'A2', '--booper', '--e1', 'A1'])
-    assert got[0] == 'usage' and 'declaration order' in got[1], got
+    assert got == ('ok', ('x', ('e', 'A1', False, False),
+                          ('e', 'A2', False, True))), got
 
-    # a first sibling with a REQUIRED argument can't be summoned
+    # a shared child option still has no home without an announcement,
+    # even when the first sibling has a required argument
     def needy(a, *, fiddle=False):
         return ('n', a, fiddle)
     def cmd2(x, *, e1: needy = None, e2: needy = None):
         return (x, e1, e2)
     got = run_both(cmd2, ['--fiddle', 'x'])
-    assert got[0] == 'usage' and 'requires' in got[1], got
+    assert got[0] == 'usage' and 'fiddle' in got[1], got
 
 
 def test_options_repeat_semantics():
