@@ -3735,11 +3735,14 @@ def execute(commands, argv, *, precommands=(), repeat=False):
         pos += 1
         processor = Processor(argv[pos:], converter_cls(), commands)
         result = processor.run()
-        if _halts(result):
-            return result
         pos += processor.consumed
+        # validate leftover BEFORE the early-exit contract: a command that
+        # returns a truthy int (an exit code -- or just an int result, like a
+        # verbosity level) must not mask an unclaimed trailing token.
         if not repeat and pos < len(argv):
             raise _unexpected(argv[pos])
+        if _halts(result):
+            return result
     return result
 
 
