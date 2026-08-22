@@ -2167,24 +2167,21 @@ def run_both(command, argv, decorations=None):
 
 def run_both_set(commands, global_command, argv):
     """
-    run_both for a multi-command program: the interpreter dispatch and
-    the generated dispatcher must agree exactly.
+    A multi-command program through 1.0's one engine (a throwaway Appeal, run
+    via process): commands keep their LITERAL function names (no dash-mangling),
+    no auto help/version.  Returns ('ok', result) or ('usage', message); a bare
+    line prints the listing and yields 1 (orientation).
     """
-    from appeal import compile_command_set, interpreter_dispatch
-    plans = {c.__name__: build_plan(c) for c in commands}
-    global_plan = build_plan(global_command) if global_command else None
-    parse = compile_command_set(plans, global_plan, prog='prog')
-
-    def run(fn):
-        try:
-            return ('ok', fn())
-        except UsageError as e:
-            return ('usage', str(e))
-
-    a = run(lambda: interpreter_dispatch(plans, global_plan, list(argv), prog='prog'))
-    b = run(lambda: parse(list(argv)))
-    assert a == b, f'dispatch parity failure on {argv!r}:\n  interpreter: {a!r}\n  rung 3: {b!r}'
-    return a
+    import appeal as _ap
+    app = _ap.Appeal(name='prog', default_mappings=None)
+    for c in commands:
+        app.command(c.__name__)(c)
+    if global_command is not None:
+        app.global_command()(global_command)
+    try:
+        return ('ok', app.process(list(argv)))
+    except UsageError as e:
+        return ('usage', str(e))
 
 PARITY_CASES = [
     (hello, ['world'],                      ('ok', 'hello, world!')),
@@ -2274,8 +2271,7 @@ def test_global_command_dispatch():
     assert got == ('ok', ('run', 'x')), got
     got = run_both_set([run], config, ['proj', 'run', 'x'])
     assert got == ('ok', ('run', 'x')), got
-    assert calls == [('proj', True), ('proj', True),     # run_both_set runs both rungs
-                     ('proj', False), ('proj', False)], calls
+    assert calls == [('proj', True), ('proj', False)], calls
     # a global option after the command word belongs to nobody (v1 agrees)
     got = run_both_set([run], config, ['proj', 'run', '--verbose', 'x'])
     assert got[0] == 'usage' and '--verbose' in got[1], got
@@ -2294,7 +2290,7 @@ def test_global_command_truthy_return_halts():
     assert ran == [], ran
     got = run_both_set([go], gate, ['go', 'x'])
     assert got == ('ok', 0), got
-    assert ran == ['x', 'x'], ran      # both rungs
+    assert ran == ['x'], ran
 
 def test_greedy_global_operands():
     # deterministic (Larry, 2026-08-21): the global fills its arguments
@@ -2311,7 +2307,7 @@ def test_greedy_global_operands():
     assert got[0] == 'usage' and 'unknown command' in got[1], got
     got = run_both_set([run], g2, ['proj', 'run', 'x'])  # spell it -> dispatches run
     assert got == ('ok', ('run', 'x')), got
-    assert seen[-2:] == ['proj', 'proj'], seen           # both rungs ran g2('proj')
+    assert seen[-1:] == ['proj'], seen
     got = run_both_set([run], g2, ['a', 'b', 'x'])       # 'a' fills, 'b' isn't a command
     assert got[0] == 'usage' and 'unknown command' in got[1], got
 
