@@ -2431,17 +2431,10 @@ class Appeal:
             _sys.exit(completion_reentry(
                 lambda words, prefix: self.complete(words, prefix),
                 self._prog()))
-        if config is not None:
-            # config layering isn't ported to the Processor yet -- old path
-            def parse(args, _config=config):
-                processor = Processor(self)
-                processor.parse(list(args), _config)
-                return processor.execute()
-        else:
-            # the one engine (2026-08-22): main() drives the same in-memory
-            # dispatch process() does.  A help/version precommand prints then
-            # sys.exit()s; run_main catches that and converts it to a code.
-            parse = lambda argv: self._compiled_dispatch(list(argv))
+        # the one engine (2026-08-22): main() drives the same in-memory dispatch
+        # process() does (config layering included).  A help/version precommand
+        # prints then sys.exit()s; run_main catches that and converts to a code.
+        parse = lambda argv: self._compiled_dispatch(list(argv), config=config)
         _sys.exit(run_main(parse, args, stylesheet=self.stylesheet,
                            errors=self.errors, margin=self.margin))
 
@@ -2491,98 +2484,6 @@ class Appeal:
             # parent instance's attribute (BIC composes)
             return self._build(getattr(instance, plan.name), name=plan.name)
         return self._build(plan.callable.__get__(instance), name=plan.name)
-
-    def precompile(self, path=None, *, argv0=None):
-        """
-        The text of a compiled parser MODULE implementing this
-        program: an importable file WEARING THE APPEAL API (ruled
-        2026-08-09), so the program that imports it--
-
-            try:
-                import compiled as appeal
-            except ImportError:
-                import appeal
-
-        --runs unchanged, decorators and all.  The module does
-        `import appeal` for the runtime (the stdlib-only core; no
-        inspect/build/render on the fast path), bakes its parser
-        tables and fingerprints, and its Appeal() matches the live
-        functions to the precompiled bits by fingerprint.  Any
-        drift (an edited signature, docstring, decoration, or
-        converter, on ANY registered function) raises a loud
-        regenerate error at main().  path, if given, also writes
-        the text there.  Necessarily eager: the module is a
-        whole-program artifact, so every command is built and every
-        ref rendered (refusals included--the north star's teeth
-        bite here).
-        """
-        from .runtime import _stable_repr
-        from .codegen import emit_precompiled_module
-        self._finalize()
-        table = self._table()
-        # the stock help/version commands are covered by the
-        # emitter's auto commands; those words step aside here
-        cls = Appeal
-        defaults = {w for w, fn in table.items()
-                    if getattr(fn, '__func__', None) in
-                    (cls.help, cls.print_version)}
-        words = [w for w in table if w not in defaults]
-        def sub_plan(name, fn):
-            # nested parents are fine: self._subs is flat (every
-            # parent maps its own children), and the emitter
-            # reassembles the tree, deepest first.  argv0 matches
-            # _plan_for_node's: error usage says `tool add <X>`
-            plan = self._build(fn, name=name,
-                               method_of=self._method_owner.get(id(fn)))
-            plan.argv0 = self._prog()
-            return plan
-        subs = {parent: {name: sub_plan(name, fn)
-                         for name, fn in entries}
-                for parent, entries in self._subs.items()}
-        # the baked knobs, each stored ONCE as its real value: the
-        # shim compares them for staleness (repr'ing both sides at
-        # compare time) AND replays them to reconstruct a real
-        # Appeal for help/errors--no repr-string/value split
-        config = {
-            'name': self.name,
-            'version': self.version,
-            'repeat': self.repeat,
-            'margin': self.margin,
-            'positional_argument_usage_format':
-                self.positional_argument_usage_format,
-            'doc': self.doc,
-            'templates': self.templates,
-        }
-        if words:
-            text = emit_precompiled_module(
-                {w: self.plan_for(w) for w in words},
-                self.global_plan,
-                argv0=argv0 or self._prog(),
-                templates=self.templates, repeat=self.repeat,
-                subs=subs or None,
-                sub_repeat=dict(self._sub_repeat) or None,
-                version=self.version, max_columns=self.margin,
-                help=self._help_enabled,
-                doc=self._program_doc_override(),
-                default=(self._build(self._default)
-                         if self._default is not None else None),
-                sub_defaults={w: self._build(fn)
-                              for w, fn in self._sub_defaults.items()}
-                             or None,
-                config=config, decorations=self._decorations,
-                global_is_user=(self._impl is not None))
-        else:
-            text = emit_precompiled_module(
-                {}, self.global_plan,
-                argv0=argv0 or self._prog(),
-                templates=self.templates,
-                version=self.version, max_columns=self.margin,
-                config=config, decorations=self._decorations,
-                global_is_user=True)
-        if path is not None:
-            with open(path, 'wt', encoding='utf-8') as f:
-                f.write(text)
-        return text
 
     def mcp(self, *, config=None, version=None):
         """
