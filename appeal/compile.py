@@ -175,6 +175,12 @@ def _build_class(plan, classes):
             continue
         option_specs.append((o.name, kind, extra, o.strings))
 
+    # spellings the enclosing command owns: a sub-converter option with the
+    # same spelling is SHADOWED -- the command's own option is used, and it
+    # never conjures the sub (conjuring is only for UNBOUND options, ruled
+    # 2026-08-22).  The sub still gets the option once it's entered by an operand.
+    own_strings = {s for o in plan.options for s in o.strings}
+
     def register(self, processor):
         # a tuple[...]/list[...] group's converter is the builtin tuple/list,
         # which has no __annotations__ (and no options to look up anyway)
@@ -216,12 +222,16 @@ def _build_class(plan, classes):
             for o in slot.child.options:        # flat recognition (see emit_source)
                 if o.kind == 'flag':
                     for s in o.strings:
+                        if s in own_strings:    # shadowed: the command owns it
+                            continue
                         preopts.append(
                             self.PreOption(s, o.name, slot.name, childcls))
                 elif slot.repeat and o.kind == 'value' and len(o.converters) == 1:
                     # a windowed group's VALUE option binds forward at a window
                     # boundary (--label up): carry its oparg converter
                     for s in o.strings:
+                        if s in own_strings:
+                            continue
                         preopts.append(self.PreOption(
                             s, o.name, slot.name, childcls, o.converters[0]))
             if slot.repeat:                             # windowed *args

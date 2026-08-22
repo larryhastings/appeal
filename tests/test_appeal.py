@@ -4103,25 +4103,25 @@ def test_scoped_options():
     def mg(a, b: child = None, c: child = None):
         return (a, b, c)
 
-    got = run_both(mg, ['A', '--flag'])
+    # forward-riding windows (ruled 2026-08-22, superseding the 2026-07-09
+    # scoped rules): --flag rides the currently-open child window and
+    # advances to the next slot only when the current one FILLS; repeating
+    # it hits the same window (idempotent flag).  See [[streaming-dispatch]].
+    got = run_both(mg, ['A', '--flag'])       # conjures b
     assert got == ('ok', ('A', (0, 1, True), None)), got
-    # forcing happens at most once per key per line (ruled: chain-
-    # conjuring only ever made all-defaults husks); the second
-    # unbindable occurrence rebinds the forced window--last
-    # wins (ruled 2026-07-09), never a second conjured window
-    got = run_both(mg, ['A', '--flag', '--flag'])
+    got = run_both(mg, ['A', '--flag', '--flag'])   # same window, idempotent
     assert got == ('ok', ('A', (0, 1, True), None)), got
-    got = run_both(mg, ['A', '1', '2', '--flag'])
-    assert got == ('ok', ('A', (1, 2, True), None)), got
+    got = run_both(mg, ['A', '1', '2', '--flag'])   # b full -> advance to c
+    assert got == ('ok', ('A', (1, 2, False), (0, 1, True))), got
 
-    # required windows: binding follows position; a bare
-    # occurrence forces and starves, loudly
+    # required windows: once b fills, --flag advances to c; c needs its
+    # operands and has none, so it starves loudly (can't reach back to b)
     def child2(p, q, *, flag=False):
         return (p, q, flag)
     def mg2(a, b: child2 = None, c: child2 = None):
         return (a, b, c)
     got = run_both(mg2, ['A', 'x', 'y', '--flag'])
-    assert got == ('ok', ('A', ('x', 'y', True), None)), got
+    assert got[0] == 'usage', got
     got = run_both(mg2, ['A', '--flag'])
     assert got[0] == 'usage', got
     # one occurrence per entered window binds positionally, and a
@@ -4133,22 +4133,20 @@ def test_scoped_options():
     got = run_both(mg2, ['A', 'x', 'y', '--flag', 'w', 'z'])
     assert got == ('ok', ('A', ('x', 'y', False), ('w', 'z', True))), got
 
-    # nested windows: an enclosing declarer claims what its
-    # position covers; the inner window is not forced
+    # nested shadowing (ruled 2026-08-22): conjuring only happens for
+    # UNBOUND options.  f owns --verbose, so it's never conjured into sub --
+    # `f --verbose` is f's own flag, sub stays None.  But once an OPERAND
+    # enters sub, sub is the open window and --verbose binds to IT, not f.
     def sub(x=1, *, verbose=False):
         return (x, verbose)
     def f(a: sub = None, *, verbose=False):
         return (a, verbose)
-    got = run_both(f, ['--verbose'])
+    got = run_both(f, ['--verbose'])       # f's own flag; sub not built
     assert got == ('ok', (None, True)), got
-    got = run_both(f, ['5', '--verbose'])
-    # a nested window closes strictly--the enclosing command
-    # absorbs everything past it (the interval model)
-    assert got == ('ok', ((5, False), True)), got
-    got = run_both(f, ['5', '--verbose', '--verbose'])
-    # both land on the enclosing window; last wins (ruled
-    # 2026-07-09)--for a flag, True twice
-    assert got == ('ok', ((5, False), True)), got
+    got = run_both(f, ['5', '--verbose'])  # 5 entered sub; --verbose -> sub
+    assert got == ('ok', ((5, True), False)), got
+    got = run_both(f, ['5', '--verbose', '--verbose'])   # sub's flag, idempotent
+    assert got == ('ok', ((5, True), False)), got
 
 
 def test_scoped_help_presentation():
