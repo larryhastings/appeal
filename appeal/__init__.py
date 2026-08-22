@@ -2177,8 +2177,7 @@ class Appeal:
         "Dispatch one set node's eras + command words; recurse for subcommands."
         if env is None:
             env = {}                                # class-as-app instance store
-        from .compile import (emit_module, _converters, _class_names,
-                              _converter_key)
+        from .compile import build_converters, _converter_key
         from . import runtime
         self._finalize()
         table = self._table()
@@ -2190,22 +2189,15 @@ class Appeal:
                 _refuse_orphan_method(c)            # that claimed it: refuse by name
             cmd_plans[word] = self._build(c, method_of=owner)  # method_of -> binds
         all_plans = list(cmd_plans.values()) + list(era_plans)
-        # look classes up by their UNIQUE emitted class name, not the name-keyed
-        # registry: a precommand era named for the program can share a name with
-        # a command (app 'kw' + command 'kw'), which collides in the registry.
-        names = _class_names(_converters(all_plans))
-        ns = {}
-        exec(emit_module(all_plans, baked_fingerprint=None), ns)  # `compile` is the submodule
-        def wire(plan):
-            cls = ns[names[_converter_key(plan)]]
-            cls._fingerprint = None             # fresh compile: no staleness check
-            cls.fixup_converters(plan.callable)
-            return cls
+        # build the Converter classes IN MEMORY (the one engine): build_converters
+        # constructs one class per converter, sharing children, and wires the tree
+        # via fixup_converters -- no source emission, no exec.
+        classes = build_converters(all_plans)
         commands, callables = {}, {}
         for word, plan in cmd_plans.items():
-            commands[word] = wire(plan)
+            commands[word] = classes[_converter_key(plan)]
             callables[word] = plan.callable
-        precommands = [wire(p) for p in era_plans]
+        precommands = [classes[_converter_key(p)] for p in era_plans]
 
         result = None
         for cls in precommands:                     # head eras, in order
