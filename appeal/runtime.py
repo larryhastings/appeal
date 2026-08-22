@@ -3203,18 +3203,22 @@ class MultiBinding:
     option leaves the parameter's default untouched), init()'d with that
     default, and fed once per occurrence.  render() happens at finalize.
     """
-    __slots__ = ('owner', 'name', 'factory', 'converters', 'minimum')
+    __slots__ = ('owner', 'name', 'factory', 'converters', 'minimum', 'strict')
     def __init__(self, owner, name, factory):
         self.owner = owner
         self.name = name
         self.factory = factory
         self.converters, self.minimum = _oparg_converters(factory)
+        self.strict = is_strict_option(factory)     # at most once, loudly
     def invoke(self, processor, value=None):
         instance = self.owner.multis.get(self.name)
         if instance is None:
             instance = self.factory()
             instance.init(_default(self.owner, self.name))
             self.owner.multis[self.name] = instance
+        elif self.strict:                           # a second occurrence of a
+            raise UsageError(                       # StrictOption is an error
+                f"option {self.name!r} specified more than once", None)
         opargs = []
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)
