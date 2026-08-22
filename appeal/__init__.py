@@ -51,7 +51,6 @@ from .runtime import Command as _Command
 
 import os as _os
 import sys as _sys
-import threading as _threading
 
 
 # LAZY RE-EXPORTS: appeal.build / appeal.compile_plan / appeal.appeal_theme
@@ -731,7 +730,6 @@ class Appeal:
             self._finalized = True      # the ROOT runs the pass
             self._precommand_options = {}
             self._decorations = parent.root._decorations
-            self._lock = _threading.Lock()
             self._method_owner = parent._method_owner
             self._init_caches()
             if name is not None:
@@ -846,12 +844,9 @@ class Appeal:
         # Markdown, yours to replace.  Loaded lazily (it lives in render, which
         # pulls big/markdown) so a successful dispatch never imports render.
         self._templates = None
-        # concurrency (ruled 2026-07-11): compilation runs LOCK-
-        # FREE (it inspects user code, and we never hold a lock
-        # over foreign code); this plain Lock guards only the
-        # test-and-set installs into the caches below, so racing
-        # first parses each build, one wins, the rest discard
-        self._lock = _threading.Lock()
+        # NO lock (ruled 2026-08-22): builds are idempotent and cache installs
+        # are atomic (setdefault / attribute assignment), so racing first-parses
+        # each build and one install wins -- see _init_caches.
         self._method_owner = {}   # id(callable) -> owning class's env key
         self._init_caches()
 
@@ -868,13 +863,19 @@ class Appeal:
         self._templates = value
 
     def _init_caches(self):
-        self._parse = None
-        self._pieces = None       # what a Processor drives, per shape
-        self._set_entries = None  # nested set dicts, built per parent
+        # lock-free lazy caches (ruled 2026-08-22: no Lock).  Builds are
+        # idempotent (same callable -> equivalent artifact), and dict.setdefault
+        # / attribute assignment are atomic (GIL, and PEP 703 free-threaded), so
+        # racing first-parses each build and one install wins -- the rest
+        # harmlessly discard.  The dict caches are eager-{} so there's no
+        # None-then-{} check-and-set to race.
+        self._parse = None        # scalar: the single-command parse fn
+        self._pieces = None       # scalar: what a Processor drives, paired w/parse
+        self._set_entries = {}    # nested set dicts, built per parent node
         self._last_processor = None   # app.instances reads this
-        self._plans = None        # {command word: Plan}, filled per word
-        self._parses = None       # {command word: parse fn}, ditto
-        self._global_plan = None
+        self._plans = {}          # {id(node): Plan}, filled per word
+        self._parses = {}         # {id(node): parse fn}, ditto
+        self._global_plan = None  # scalar
 
     def _invalidate(self):
         # registration under a node changes every ancestor's
@@ -883,13 +884,12 @@ class Appeal:
         # the tree nothing staling
         node = self
         while node is not None:
-            with node._lock:
-                node._parse = None
-                node._pieces = None
-                node._set_entries = None
-                node._plans = None
-                node._parses = None
-                node._global_plan = None
+            node._parse = None
+            node._pieces = None
+            node._set_entries = {}
+            node._plans = {}
+            node._parses = {}
+            node._global_plan = None
             node = node.parent
 
     # ------------------------------------------------------------
@@ -1772,8 +1772,7 @@ class Appeal:
 
     def _plan_for_node(self, node, word):
         "The node's Plan, cached by NODE (words can repeat)."
-        with self._lock:
-            plan = (self._plans or {}).get(id(node))
+        plan = self._plans.get(id(node))
         if plan is None:
             callable = node._command_callable()
             if callable is None:
@@ -1784,10 +1783,7 @@ class Appeal:
                 _refuse_orphan_method(callable)
             plan = self._build(callable, name=word, method_of=owner)
             plan.argv0 = self.root._prog()
-            with self._lock:
-                if self._plans is None:
-                    self._plans = {}
-                plan = self._plans.setdefault(id(node), plan)
+            plan = self._plans.setdefault(id(node), plan)
         return plan
 
     def plan_for(self, word):
@@ -1804,8 +1800,7 @@ class Appeal:
         node = self._node_for(word)
         if node is None:
             raise AppealConfigurationError(f"no command named {word!r}")
-        with self._lock:
-            parse = (self._parses or {}).get(id(node))
+        parse = self._parses.get(id(node))
         if parse is None:
             if node._children:
                 # a parent with subcommands is a nested command set:
@@ -1829,10 +1824,7 @@ class Appeal:
                                      templates=self.templates,
                                      stylesheet=self.stylesheet,
                                      max_columns=self.margin)
-            with self._lock:
-                if self._parses is None:
-                    self._parses = {}
-                parse = self._parses.setdefault(id(node), parse)
+            parse = self._parses.setdefault(id(node), parse)
         return parse
 
     def _program_doc(self):
@@ -1905,8 +1897,7 @@ class Appeal:
         from .codegen import compile_plan
         if node is None:
             node = self._children.get(word)
-        with self._lock:
-            entry = (self._set_entries or {}).get(id(node))
+        entry = self._set_entries.get(id(node))
         if entry is not None:
             return entry
         from .plan import command_set_usage
@@ -1953,17 +1944,13 @@ class Appeal:
                          subcommands=subs, words=frozenset(subs),
                          repeat=node._node_repeat, usage=sub_usage,
                          default=sub_default)
-        with self._lock:
-            if self._set_entries is None:
-                self._set_entries = {}
-            entry = self._set_entries.setdefault(id(node), entry)
+        entry = self._set_entries.setdefault(id(node), entry)
         return entry
 
     def _compile(self):
         from .codegen import compile_plan
-        with self._lock:
-            if self._parse is not None:
-                return self._parse
+        if self._parse is not None:
+            return self._parse
         table = self._table()
         if not table:
             # a global command and nothing else: it owns the whole
@@ -1980,11 +1967,10 @@ class Appeal:
             parse.source = fused.source
             single = _Command(callable=self.global_plan.callable,
                               scan=fused.scan, run=fused.run)
-            with self._lock:
-                if self._parse is None:
-                    self._pieces = ('single', single)
-                    self._parse = parse
-                return self._parse
+            if self._parse is None:
+                self._pieces = ('single', single)
+                self._parse = parse
+            return self._parse
 
         from .plan import command_set_usage
         from .runtime import run_command_set
@@ -2030,11 +2016,10 @@ class Appeal:
             processor = Processor(self)
             processor.parse(argv)
             return processor.execute()
-        with self._lock:
-            if self._parse is None:
-                self._pieces = pieces
-                self._parse = parse
-            return self._parse
+        if self._parse is None:
+            self._pieces = pieces
+            self._parse = parse
+        return self._parse
 
     @property
     def plan(self):
@@ -2113,8 +2098,7 @@ class Appeal:
     @property
     def global_plan(self):
         self._finalize()
-        with self._lock:
-            plan = self._global_plan
+        plan = self._global_plan
         if plan is None:
             pre = self._precommand_plan() if self.parent is None else None
             if self._global is not None:
@@ -2126,10 +2110,9 @@ class Appeal:
                 # it runs (a no-op when nothing was given) first
                 plan = pre
             if plan is not None:
-                with self._lock:
-                    if self._global_plan is None:
-                        self._global_plan = plan
-                    plan = self._global_plan
+                if self._global_plan is None:
+                    self._global_plan = plan
+                plan = self._global_plan
         return plan
 
     def global_plans(self):
