@@ -14,7 +14,6 @@
 # guarded one just below.
 
 import collections
-import enum
 import operator
 import sys
 
