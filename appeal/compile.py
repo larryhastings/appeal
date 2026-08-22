@@ -226,9 +226,12 @@ def _build_class(plan, classes):
                             continue
                         preopts.append(
                             self.PreOption(s, o.name, slot.name, childcls))
-                elif slot.repeat and o.kind == 'value' and len(o.converters) == 1:
-                    # a windowed group's VALUE option binds forward at a window
-                    # boundary (--label up): carry its oparg converter
+                elif o.kind == 'value' and len(o.converters) == 1:
+                    # a single-oparg VALUE option that conjures its group: the
+                    # "mix-in" pattern (--log-level debug on a converter that
+                    # consumes no operands), and a windowed group's forward-
+                    # binding option at a window boundary (--label up).  Carry
+                    # the oparg converter so the PreOption grabs and converts it.
                     for s in o.strings:
                         if s in own_strings:
                             continue
