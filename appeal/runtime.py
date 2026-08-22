@@ -3014,6 +3014,28 @@ def _own_shape(converter_cls):
     return options, operands
 
 
+_capacity_cache = {}
+
+def _group_capacity(converter_cls):
+    "How many operands a group option's converter takes (dry-run its register)."
+    n = _capacity_cache.get(converter_cls)
+    if n is None:
+        coll = _Collector()
+        converter_cls().register(coll)
+        n = sum(1 for it in coll.items if isinstance(it, ArgumentInstruction))
+        _capacity_cache[converter_cls] = n
+    return n
+
+
+def _takes_many(binding):
+    "Does this option take more than one oparg (so it can't be attached)?"
+    if isinstance(binding, GroupBinding):
+        return _group_capacity(binding.converter_cls) > 1
+    if isinstance(binding, ValueBinding) and isinstance(binding.converter, tuple):
+        return len(binding.converter) - 1 > 1       # (constructor, *leaves)
+    return False
+
+
 def _operand_list(names):
     "Render required operand names as '<A> <B> and <C>' (usage's default form)."
     toks = [f'<{n.upper()}>' for n in names]
@@ -3189,7 +3211,10 @@ class GroupBinding:
         self.converter_cls = converter_cls
     def invoke(self, processor, value=None):
         instance = self.converter_cls()
-        self.owner.kwargs[self.name] = instance     # rendered at finalize
+        instance._optarg = True                     # its operands are option
+        if value is not None:                       # opargs (grab greedily); an
+            instance._attached = value              # attached -j5/--jobs=5 feeds
+        self.owner.kwargs[self.name] = instance     # the first operand directly
         processor.enter(instance)                   # register its options
 
 class ConjureBinding:
@@ -3268,6 +3293,12 @@ class Converter:
                                         # of its options (not started by an
                                         # operand); if it then starves for lack of
                                         # operands, the option wasn't yet available
+    _optarg = False                     # set on a group entered as an OPTION's
+                                        # oparg (make -j): its operands grab the
+                                        # next token unconditionally (even -5/-v),
+                                        # only end-of-line or `--` declining
+    _attached = None                    # an attached oparg value (-j5 / --jobs=5):
+                                        # feeds the group's first operand directly
 
     @classmethod
     def fixup_converters(cls, converter):
@@ -3414,6 +3445,15 @@ class Processor:
                 self.prepend(front.items + [front])       # re-lay for one element
                 continue
 
+            # an option's greedy oparg (make -j): fill it directly, so a
+            # dash-looking token (-5, -v) becomes its value instead of being
+            # parsed as an option.  _fill_argument declines on `--`/end-of-line.
+            if (isinstance(front, ArgumentInstruction) and front.owner._optarg
+                    and not (isinstance(front.converter, type)
+                             and issubclass(front.converter, Converter))):
+                self._fill_argument(front)
+                continue
+
             tok = self.peek()
             if tok == '--' and not self.force_positional:
                 self.advance(); self.force_positional = True; continue
@@ -3443,6 +3483,10 @@ class Processor:
             binding = self.handlers.get(tok)
             if binding is None:
                 raise UsageError(f"unknown option {tok}", None)
+            if value is not None and _takes_many(binding):
+                raise UsageError(
+                    f"option {tok!r} takes several values; separate them with "
+                    f"spaces, not '='", None)
             binding.invoke(self, value)
             return
         # short: -x, a flag bundle -vd, or an attached value -uF
@@ -3454,11 +3498,19 @@ class Processor:
             if binding is None:
                 raise UsageError(f"unknown option {opt}", None)
             if chars[i + 1:i + 2] == '=':               # -v=false / -n=5: explicit
+                if _takes_many(binding):
+                    raise UsageError(
+                        f"option {opt!r} takes several values; separate them "
+                        f"with spaces, not '='", None)
                 binding.invoke(self, chars[i + 2:])      # value for THIS option
                 return
             if self._nullary(binding):                  # no oparg: keep bundling
                 binding.invoke(self)
                 i += 1
+            elif chars[i + 1:] and _takes_many(binding):  # -gp: an attached value,
+                raise UsageError(                         # but this option needs
+                    f"option {opt!r} takes several values; it must be last in "  # several -- it must
+                    f"a bundle with its values as separate words", None)         # be last, words apart
             else:                                       # takes a value: rest is it
                 binding.invoke(self, chars[i + 1:] or None)
                 return
@@ -3487,6 +3539,27 @@ class Processor:
         # ...); a group is a Converter subclass (a nested command tree)
         if not (isinstance(arg.converter, type)
                 and issubclass(arg.converter, Converter)):
+            if arg.owner._optarg:
+                # an option's operand (make -j): an attached value feeds it; else
+                # grab the next token unconditionally -- only end-of-line or `--`
+                # declines it ("optional" just means running out is legal).
+                if arg.owner._attached is not None:
+                    raw = arg.owner._attached
+                    arg.owner._attached = None
+                    self.queue.popleft()
+                    arg.owner.args.append(convert(arg.converter, raw, arg.name))
+                    return
+                if tok is None or tok == '--':
+                    if arg.required:
+                        raise UsageError(f"option {arg.name!r} needs a value", None)
+                    self.queue.popleft()
+                    arg.owner.args.append(
+                        _positional_default(arg.owner, arg.name))
+                    return
+                self.advance()
+                self.queue.popleft()
+                arg.owner.args.append(convert(arg.converter, tok, arg.name))
+                return
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
                     if arg.owner._summoned and not arg.owner.args:
