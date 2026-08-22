@@ -817,10 +817,13 @@ class Appeal:
                 f"errors= must be a writable file object "
                 f"(sys.stderr, sys.stdout, ...), not {errors!r}")
         self.errors = errors
-        # cycling: when a command's arguments are satisfied--all of
-        # them, optional included--the next token may name another
-        # command, and the line starts over (v1's repeat, rebuilt)
+        # cycling is PER NODE (ruled 2026-08-22): `repeat` on a node means its
+        # own set may cycle -- run more than one command from it.  The root's
+        # set is the top-level commands; a command's set is its subcommands.
+        # Not inherited: each node's repeat governs only its own set.  The root
+        # seeds its _node_repeat from the program-level repeat= here.
         self.repeat = repeat
+        self._node_repeat = repeat
         # None = auto (appeal_theme when the stream wants color),
         # False = never any color, or a complete composed
         # StyleSheet, used VERBATIM (ruled 2026-08-06); the
@@ -2248,9 +2251,12 @@ class Appeal:
             child = self._children.get(word)
             if child is not None and child._commands and pos < len(argv):
                 result, pos = child._run_node(argv, pos, holder, top=False, env=env)
-            if not self.repeat and pos < len(argv):
+            if not self._node_repeat and pos < len(argv):
+                # this set doesn't cycle: pop the leftover word up to an
+                # ancestor whose set does (the parent's loop re-dispatches it);
+                # at the top with nothing to claim it, it's unexpected
                 if not top:
-                    return result, pos          # non-cycling child: pop leftover back
+                    return result, pos
                 tok = argv[pos]
                 pool = proc.handlers if tok.startswith('-') else table
                 raise runtime._unexpected(tok, pool)

@@ -1047,15 +1047,13 @@ def test_same_word_at_different_depths():
     x.command('X')(axx)
     app.process(['A', 'X', 'X'])
     assert calls == ['A', 'AX', 'XX'], calls
-    # a fourth X pops back to A's cycling set and re-enters X the
-    # PARENT--which, dangling at end of line, demands a subcommand
+    # a fourth X can't re-enter X's set (no repeat there), so it pops back
+    # to A's cycling set and re-runs X the PARENT (AX); subcommands are not
+    # required (ruled 2026-08-22), so AX dangling at end is fine, not an error
     calls.clear()
-    try:
-        app.process(['A', 'X', 'X', 'X'])
-        assert False, 'expected a dangling-parent refusal'
-    except _appeal.AppealUsageError as e:
-        assert 'no command specified' in str(e), e
-    # ...and a fifth X satisfies it: the cycle breathes in and out
+    app.process(['A', 'X', 'X', 'X'])
+    assert calls == ['A', 'AX', 'XX', 'AX'], calls
+    # and a fifth X descends again: the cycle breathes in and out
     calls.clear()
     app.process(['A', 'X', 'X', 'X', 'X'])
     assert calls == ['A', 'AX', 'XX', 'AX', 'XX'], calls
@@ -6080,14 +6078,11 @@ def test_nested_cycling_and_popup():
     assert ran == [('db', False), ('add', 1), 'status',
                    ('db', True), ('remove', 2)], ran
 
-    # a parent whose set never got a command
+    # a parent run with no subcommand: subcommands are NOT required
+    # (ruled 2026-08-22) -- db has a body, so it just runs, no error
     ran.clear()
-    try:
-        app.process(['db'])
-        assert False, 'expected UsageError'
-    except UsageError as e:
-        assert 'no command specified' in str(e)
-    assert ran == [], ran
+    app.process(['db'])
+    assert ran == [('db', False)], ran
 
     # without the parent's repeat, its set doesn't cycle...
     app2 = _appeal.Appeal(name='s2', repeat=True)
