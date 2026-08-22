@@ -5809,10 +5809,13 @@ def test_version():
     assert main(app4, ['--version']) == (0, '4.5\n')
 
 
-def test_parse_before_execute():
-    # the Appeal rule (ruled 2026-07-08): a malformed line does NO
-    # work.  The global command must not run when the command
-    # portion of the line fails to scan.
+def test_streaming_dispatch_runs_as_it_parses():
+    # STREAMING (ruled 2026-08-22, superseding the 2026-07-08
+    # parse-before-execute rule): commands run as they're parsed,
+    # left to right; a mistake later on the line does NOT un-run an
+    # earlier command.  Reordering/deferring user converters (which
+    # may have side effects) would be surprising -- see
+    # [[streaming-dispatch]].
     import appeal as _appeal
     ran = []
     app = _appeal.Appeal(name='ms')
@@ -5827,8 +5830,10 @@ def test_parse_before_execute():
         assert False, 'expected UsageError'
     except UsageError:
         pass
-    assert ran == [], ran
+    # the global era already ran before add's error surfaced
+    assert ran == ['top'], ran
     # a well-formed line still executes left to right
+    ran.clear()
     app2 = _appeal.Appeal(name='ms2')
     @app2.global_command()
     def top2(*, trace=False):
@@ -5935,9 +5940,11 @@ def test_cycling():
         assert False, 'expected UsageError'
     except UsageError as e:
         assert "unknown command '1'" in str(e), e
-    assert ran == [], ran   # parse-before-execute: nothing ran
+    # streaming: greet already ran (greeting='add') before '1' errored
+    assert ran == [('greet', 'bob', 'add')], ran
 
     # spelled, it cycles
+    ran.clear()
     app.process(['greet', 'bob', 'hi', 'add', '1', '2'])
     assert ran == [('greet', 'bob', 'hi'), ('add', 1, 2)], ran
 
@@ -5952,14 +5959,14 @@ def test_cycling():
     app.process(['add', '1', '2', 'total', '3', '4', '5'])
     assert ran == [('add', 1, 2), ('total', 3, 4, 5)], ran
 
-    # a malformed later command means NO work (the Appeal rule)
+    # streaming: a malformed LATER command doesn't un-run the earlier one
     ran.clear()
     try:
         app.process(['add', '1', '2', 'mul', '3'])
         assert False, 'expected UsageError'
     except UsageError:
         pass
-    assert ran == [], ran
+    assert ran == [('add', 1, 2)], ran
 
     # the early-exit contract, every command in a cycle: a nonzero
     # int halts
@@ -5968,8 +5975,9 @@ def test_cycling():
     assert result == 7
     assert ran == [('bail', 7)], ran
 
-    # the gate rule fires in stage 1, even mid-cycle: a violation
-    # in the SECOND command means the first never runs
+    # gate rule DROPPED (flat recognition): --dashed is recognized before
+    # board's operands just as after them; both spellings accept, and
+    # streaming runs add first
     def _pair(x, y):
         return f'{x}+{y}'
     def stroke(width: float = 1.0, *, dashed=False):
@@ -5978,12 +5986,9 @@ def test_cycling():
     def board(f: _pair, s: stroke = 'none'):
         ran.append(('board', f, s))
     ran.clear()
-    try:
-        app.process(['add', '1', '2', 'board', '--dashed', 'a', 'b', '1.5'])
-        assert False, 'expected UsageError'
-    except UsageError as e:
-        assert 'too early' in str(e), e
-    assert ran == [], ran
+    app.process(['add', '1', '2', 'board', '--dashed', 'a', 'b', '1.5'])
+    assert ran == [('add', 1, 2), ('board', 'a+b', '1.5~')], ran
+    ran.clear()
     app.process(['add', '1', '2', 'board', 'a', 'b', '1.5', '--dashed'])
     assert ran == [('add', 1, 2), ('board', 'a+b', '1.5~')], ran
 
