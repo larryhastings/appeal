@@ -365,14 +365,18 @@ def _config_apply(conv, table, global_plan, config, plan_for):
                 raise AppealDataError(
                     f"config: {provenance!r} repeats; give it a sequence", usage)
             toks = []
-            for v in value:
-                toks += [spelling, str(v)]
+            for v in value:                     # one occurrence per element; a
+                if isinstance(v, (list, tuple)): # sequence element is a multi-arg
+                    toks.append(spelling)        # occurrence (--adds 2 3)
+                    toks += [str(x) for x in v]
+                else:
+                    toks += [spelling, str(v)]
             return toks
         # value: one occurrence, single- or multi-oparg
         if len(rule.converters) > 1:
             if not isinstance(value, (list, tuple)):
                 raise AppealDataError(
-                    f"config: {provenance!r} takes {len(rule.converters)} "
+                    f"config: {provenance!r} takes {len(rule.converters) - 1} "
                     f"values; give it a sequence", usage)
             return [spelling] + [str(v) for v in value]
         return [spelling, str(value)]

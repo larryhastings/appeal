@@ -236,11 +236,10 @@ def test_config_mapping_option():
         def go():
             pass
         return app
-    P = appeal.Processor
-    P(make_app()).parse(['go'], {'env': {'k': 'v'}}).execute()
+    make_app().process(['go'], config={'env': {'k': 'v'}})
     assert seen == [{'k': 'v'}], seen
     try:
-        P(make_app()).parse(['go'], {'env': 5}).execute()
+        make_app().process(['go'], config={'env': 5})
         assert False, 'expected AppealDataError'
     except appeal.AppealDataError as e:
         assert 'mapping' in str(e), e

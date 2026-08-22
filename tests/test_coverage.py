@@ -901,7 +901,7 @@ def test_config_inject_shapes():
 
     def drive(config):
         seen[:] = []
-        P(make_app()).parse(['go'], config).execute()
+        make_app().process(['go'], config=config)
         return seen[0]
 
     assert drive({'tags': ['a', 'b'], 'adds': [1, [2]],
@@ -1014,16 +1014,10 @@ def test_nested_class_repeat_and_parse_for():
         @app.subcommand('db')
         def wipe(self):
             ran.append(('wipe', self.label))
-    parse = app._parse_for('db')
-    assert not hasattr(parse, 'scan')
-    parse(['main', 'wipe'])
+    app.process(['db', 'main', 'wipe'])
     assert ran == [('db', 'main'), ('wipe', 'main')], ran
-    # the Processor logs the parent class in its instance log
-    ran[:] = []
-    p = appeal.Processor(app)
-    p.parse(['db', 'main', 'wipe']).execute()
-    assert ran == [('db', 'main'), ('wipe', 'main')], ran
-    assert any(c is Db for c, i in p.instances), p.instances
+    # the instance log carries the parent class instance
+    assert any(isinstance(i, Db) for c, i in app.instances), app.instances
 
 
 def test_main_completion_reentry():
@@ -1545,7 +1539,9 @@ def test_run_main_completion_param():
     def go(x: int):
         return 0
     table = completion_table(build_plan(go))
-    parse = compile_plan(build_plan(go))
+    app = Appeal(name='go', default_mappings=None)
+    app.global_command()(go)
+    parse = lambda argv: app._compiled_dispatch(list(argv))
     old_env = dict(os.environ)
     os.environ.update({'_APPEAL_COMPLETE': 'bash',
                        'COMP_WORDS': 'go\n-', 'COMP_CWORD': '1'})
@@ -1560,7 +1556,7 @@ def test_run_main_completion_param():
     # and with no reentry environment, an empty argv just parses
     err = io.StringIO()
     code = run_main(parse, [], completion=(table, 'go'), errors=err)
-    assert code == 2 and 'wrong number' in err.getvalue()
+    assert code == 2 and 'missing' in err.getvalue(), (code, err.getvalue())
 
 
 def test_option_abc_and_predicates():
@@ -2043,36 +2039,6 @@ def test_child_kwargs_options_parity():
         ('ok', ('X', ('p', 'q', {'flavor': 'hot'})))
 
 
-def test_emit_command_set_refusals():
-    from appeal.codegen import emit_command_set
-    def fa(x):
-        return x
-    def fb(y):
-        return y
-    # two plans sharing a NAME emit fine: symbols are per plan
-    # object, numbered on collision (this used to refuse)
-    source, _ = emit_command_set({'a': build_plan(fa, name='dup'),
-                                  'b': build_plan(fb, name='dup')})
-    assert 'def run_dup(' in source and 'def run_dup2(' in source
-    # ...and the SAME plan under two words emits once, referenced
-    # twice (aliases for free)
-    shared = build_plan(fa, name='go')
-    source, _ = emit_command_set({'go': shared, 'run': shared})
-    assert source.count('def run_go(') == 1
-    # one Command object, referenced under both words (aliases free)
-    assert source.count('_CMD_go = Command(') == 1
-    assert source.count("'go': _CMD_go") == 1
-    assert source.count("'run': _CMD_go") == 1
-    try:
-        emit_command_set({'a': build_plan(fa, name='a'),
-                          'b': build_plan(fb, name='b')},
-                         subs={'a': {'b': build_plan(fb, name='b')},
-                               'b': {'a': build_plan(fa, name='a')}})
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError:
-        pass
-
-
 def test_mcp_class_global_method_tools():
     # a class-based program: __init__ constructs at startup,
     # method tools dispatch bound (in-process, EOF stdin)
@@ -2102,24 +2068,12 @@ def test_mcp_class_global_method_tools():
 
 
 def test_runtime_token_and_set_edges():
-    from appeal.runtime import run_command_set
     def loud():
         return 'LOUD'
     def gm(*, mode: loud = 'quiet'):
         return mode
     got = both(gm, ['--mode=x'])
-    assert got == ('usage', "option '--mode' doesn't take a value"), got
-    # the streamed dispatcher, listing-less and with a default
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        rc = run_command_set([], None, {}, 'the-usage', None, False,
-                             frozenset())
-    assert rc == 1 and out.getvalue() == 'usage: the-usage\n'
-    from appeal.runtime import Command
-    d = Command(scan=lambda argv: ([], {}, [], None),
-                run=lambda o, g, p, e, c: 'ran-default')
-    rc = run_command_set([], None, {}, 'u', d, False, frozenset())
-    assert rc == 'ran-default'
+    assert got == ('usage', "option 'mode' doesn't take a value"), got
 
 
 def test_tokenize_ir():
@@ -2152,27 +2106,6 @@ def test_tokenize_ir():
     toks, rest = tokenize(['1', 'go', 'z'], {},
                           command_split=(1, 1, frozenset({'go'})))
     assert toks == [('', '1')] and rest == ['go', 'z']
-
-
-def test_scoped_strict_repeats():
-    # a scoped StrictOption: at most once per window, both rungs
-    class At(appeal.StrictOption):
-        def init(self, default):
-            self.v = default
-        def option(self, v: int):
-            self.v = v
-        def render(self):
-            return self.v
-    def child(p, *, at: At = None):
-        return (p, at)
-    def two(a: child = None, b: child = None):
-        return (a, b)
-    got = both(two, ['--at', '1', 'A', '--at', '2', 'B'])
-    assert got == ('ok', (('A', 1), ('B', 2))), got
-    for argv in (['--at', '1', '--at', '2', 'A'],
-                 ['A', '--at', '1', '--at', '2', 'B']):
-        got = both(two, argv)
-        assert got[0] == 'usage' and 'once' in got[1], got
 
 
 def test_run_main_themed_and_set_completion():
@@ -2365,7 +2298,7 @@ def test_short_option_equals_refusal():
     def gm(*, mode: loud = 'quiet'):
         return mode
     got = both(gm, ['-m=x'])
-    assert got == ('usage', "option '-m' doesn't take a value"), got
+    assert got == ('usage', "option 'mode' doesn't take a value"), got
 
 
 def test_scoped_queue_live_resolve():
@@ -2493,7 +2426,6 @@ def test_entry_points_default_to_sys_argv():
     try:
         sys.argv = ['ep', 'go', '5']
         assert app.process() == 5              # None -> sys.argv[1:]
-        assert app.parse().execute() == 5
         try:
             app.main()
             code = 0

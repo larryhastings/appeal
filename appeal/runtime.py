@@ -3177,7 +3177,14 @@ class ValueBinding:
             texts.append(processor.advance())           # raw grab
         args = [convert(leaf, text, self.name)
                 for leaf, text in zip(leaves, texts)]
-        return tuple(args) if constructor is tuple else constructor(*args)
+        if constructor is tuple:
+            return tuple(args)
+        try:                                        # the converter body's own
+            return constructor(*args)               # ValueError/TypeError is a
+        except (ValueError, TypeError) as e:        # polite usage error
+            name = getattr(constructor, '__name__', 'converter')
+            raise UsageError(f"not a valid {name}: {str(e) or name}",
+                             None) from None
 
 _oparg_converters_cache = {}
 
@@ -3411,12 +3418,23 @@ class Converter:
 
     def __call__(self):
         "Render: finalize MultiOptions, resolve child converters, call."
+        def render(child):
+            # a nested converter's constructor body that raises ValueError/
+            # TypeError is a POLITE usage error ('not a valid spot'), the same
+            # contract convert() gives a leaf -- the top command's own body
+            # (called below, un-wrapped) still raises honestly.
+            try:
+                return child()
+            except (ValueError, TypeError) as e:
+                name = getattr(type(child).converter, '__name__', 'converter')
+                detail = str(e) or f'not a valid {name}'
+                raise UsageError(f"not a valid {name}: {detail}", None) from None
         for name, instance in self.multis.items():
             self.kwargs[name] = instance.render()
         for name, value in self.kwargs.items():         # group-option values
             if isinstance(value, Converter):
-                self.kwargs[name] = value()
-        args = [a() if isinstance(a, Converter) else a for a in self.args]
+                self.kwargs[name] = render(value)
+        args = [render(a) if isinstance(a, Converter) else a for a in self.args]
         conv = type(self).converter
         if type(self)._iterable:            # tuple[...]/list[...]: build from the iterable
             return conv(args)
