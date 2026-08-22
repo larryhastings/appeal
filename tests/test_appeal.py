@@ -2429,19 +2429,25 @@ def test_command_sys_exit_message():
     assert err2.getvalue() == ''
 
 def run_both_stdout(command, argv, decorations=None):
-    "run_both for parses that print (--help): compare text too."
+    """
+    A printing parse (e.g. --help) through 1.0's one engine, via a throwaway
+    Appeal: returns (result, text).  -h/--help is a precommand option that
+    prints then sys.exit(0)s; that clean exit maps back to None (the old
+    interpreter's help-returns-None), so callers read `result is None`.
+    """
     import contextlib, io
-    plan = build_plan(command, decorations=decorations)
-    parse = compile_plan(plan)
-    results = []
-    for fn in (lambda: interpreter_parse(plan, list(argv)),
-               lambda: parse(list(argv))):
-        out = io.StringIO()
+    import appeal as _ap
+    app = _ap.Appeal(name=command.__name__.replace('_', '-'))
+    if decorations is not None:
+        app._decorations = decorations
+    app.global_command()(command)
+    out = io.StringIO()
+    try:
         with contextlib.redirect_stdout(out):
-            result = fn()
-        results.append((result, out.getvalue()))
-    assert results[0] == results[1], f'help parity failure on {argv!r}'
-    return results[0]
+            result = app.process(list(argv))
+    except SystemExit as e:
+        result = None if e.code in (0, None) else e.code
+    return result, out.getvalue()
 
 def test_help_flag():
     # automatic -h/--help (v1, probed): usage line first, then the
@@ -2459,7 +2465,9 @@ def test_help_flag():
             indented code paragraphs pass through intact
         """
         return (shape, width, verbose)
-    for argv in (['--help'], ['-h'], ['--help', 'ignored', 'operands']):
+    # ('--help TOPIC' is topic help now -- the option takes an optional topic,
+    # like the `help` command; the bare flag shows the whole page)
+    for argv in (['--help'], ['-h']):
         result, text = run_both_stdout(draw, argv)
         assert result is None
         # the page opens with usage (0.6.4's order, ruled
