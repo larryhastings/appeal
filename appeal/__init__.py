@@ -1040,21 +1040,37 @@ class Appeal:
                 f"unknown command {topic!r}"
                 f"{did_you_mean(topic, table)}",
                 command_set_usage(root._prog(), root._display_global()))
-        if not suppress:
-            # the compiled path: byte-identical to `prog topic
-            # --help`
-            root._parse_for(topic)(['--help'])
-            return
-        # a knob is off: render the page directly, same corpus
-        # and template the compiled path bakes
-        from .help import merge_docs
+        # render the topic's page directly from plans (the one engine has no
+        # baked-help compile step).  A topic that is itself a command SET shows
+        # its subcommand listing (like `prog topic --help`); a leaf shows its
+        # command page.
+        node = root._node_for(topic)
         from .render import help_margin, render_help_page
-        plan = root.plan_for(topic)
-        text = render_help_page(
-            plan.usage(), merge_docs(plan), root.templates,
-            margin=help_margin(root.margin),
-            file=_sys.stdout, stylesheet=root.stylesheet,
-            suppress=suppress).rstrip('\n')
+        if node is not None and node._table():
+            from .plan import command_set_usage
+            from .help import summary as _summary, command_set_corpus
+            node_table = node._table()
+            entries = [(w, _summary(c)) for w, c in node_table.items()]
+            # add the auto `help` row unless the set already registers one (the
+            # codegen listing did this via auto_help; the bare-root path gets it
+            # from the root's own table instead)
+            auto_help = node._help_enabled and 'help' not in node_table
+            corpus = command_set_corpus(
+                node.global_plan, entries, auto_help, auto_version=False,
+                doc=node._program_doc_override())
+            text = render_help_page(
+                command_set_usage(node._prog(), node._display_global()),
+                corpus, node.templates, margin=help_margin(node.margin),
+                file=_sys.stdout, stylesheet=node.stylesheet,
+                suppress=suppress).rstrip('\n')
+        else:
+            from .help import merge_docs
+            plan = root.plan_for(topic)
+            text = render_help_page(
+                plan.usage(), merge_docs(plan), root.templates,
+                margin=help_margin(root.margin),
+                file=_sys.stdout, stylesheet=root.stylesheet,
+                suppress=suppress).rstrip('\n')
         print(text)
 
     def help_and_version_precommand(self, *, help: optional[str] = None,
