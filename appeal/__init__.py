@@ -2198,26 +2198,16 @@ class Appeal:
         self._finalize()
         table = self._table()
         era_plans = self.global_plans()             # carries the global as a head era
-        cmd_plans = {}
-        for word, c in table.items():
-            owner = self._method_owner.get(id(c))
-            if owner is None:                       # a self-method with no class
-                _refuse_orphan_method(c)            # that claimed it: refuse by name
-            cmd_plans[word] = self._build(c, method_of=owner)  # method_of -> binds
-        all_plans = list(cmd_plans.values()) + list(era_plans)
-        # build the Converter classes IN MEMORY (the one engine): build_converters
-        # constructs one class per converter, sharing children, and wires the tree
-        # via fixup_converters -- no source emission, no exec.
-        classes = build_converters(all_plans)
-        commands, callables = {}, {}
-        for word, plan in cmd_plans.items():
-            commands[word] = classes[_converter_key(plan)]
-            callables[word] = plan.callable
-        precommands = [classes[_converter_key(p)] for p in era_plans]
+        # laziness is per command (build_converters compiles independently): the
+        # head eras always run, so build them now; each command word builds ITS
+        # OWN converter only when dispatched -- a broken sibling costs nothing
+        # until it's used.
+        era_classes = build_converters(era_plans) if era_plans else {}
+        precommands = [era_classes[_converter_key(p)] for p in era_plans]
 
         result = None
         for cls in precommands:                     # head eras, in order
-            proc = runtime.Processor(argv[pos:], cls(), commands)
+            proc = runtime.Processor(argv[pos:], cls(), table)
             result = proc.run()
             if cls.constructs is not None:          # a global class-as-app: its
                 env[cls.constructs] = result        # methods bind to this instance
@@ -2230,20 +2220,25 @@ class Appeal:
             raise UsageError("no command given", None)
         while pos < len(argv):
             word = argv[pos]
-            cls = commands.get(word)
-            if cls is None:
+            if word not in table:
                 if not top:
                     return result, pos          # pop back: a parent may own it
-                raise runtime._unexpected(word, commands)
+                raise runtime._unexpected(word, table)
+            c = table[word]
+            owner = self._method_owner.get(id(c))
+            if owner is None:                       # a self-method with no class
+                _refuse_orphan_method(c)            # that claimed it: refuse by name
+            plan = self._build(c, method_of=owner)  # method_of -> binds
+            cls = build_converters([plan])[_converter_key(plan)]  # this cmd only
             pos += 1
             conv = cls()
             if cls.binds is not None:               # a method command: self is the
                 conv.bound = env.get(cls.binds)     # instance a parent constructed
-            proc = runtime.Processor(argv[pos:], conv, commands)
+            proc = runtime.Processor(argv[pos:], conv, table)
             result = proc.run()
             if cls.constructs is not None:          # a class command: stash instance
                 env[cls.constructs] = result
-            instance = result if _is_class_command(callables[word]) else None
+            instance = result if _is_class_command(c) else None
             holder.instances.append((holder._command_for(word), instance))
             if runtime._halts(result):
                 return result, pos
@@ -2257,7 +2252,7 @@ class Appeal:
                 if not top:
                     return result, pos          # non-cycling child: pop leftover back
                 tok = argv[pos]
-                pool = proc.handlers if tok.startswith('-') else commands
+                pool = proc.handlers if tok.startswith('-') else table
                 raise runtime._unexpected(tok, pool)
         return result, pos
 
