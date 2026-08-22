@@ -113,6 +113,12 @@ class _LazyInspect:
 
 _inspect = _LazyInspect()
 
+# featherweight stand-ins for the fast path: cheapsig (microsecond signature)
+# and MethodType (types is always already loaded), so registration + dispatch
+# never trip the lazy real-inspect proxy.  getdoc etc. stay on _inspect (help).
+from . import cheapsig as _cheapsig
+from types import MethodType as _MethodType
+
 
 def _config_vet(plan, table_words, config, command_plan_for=None):
     """
@@ -317,7 +323,7 @@ def _refuse_orphan_method(callable):
     if _is_class_command(callable):
         return
     try:
-        parameters = list(_inspect.signature(callable).parameters)
+        parameters = list(_cheapsig.signature(callable).parameters)
     except (ValueError, TypeError):
         return
     qualname = getattr(callable, '__qualname__', '')
@@ -717,8 +723,10 @@ class Appeal:
                          'default_mappings',
                          'positional_argument_usage_format',
                          'script', 'errors', 'repeat', 'stylesheet',
-                         'margin', 'templates'):
-                setattr(self, attr, getattr(parent, attr))
+                         'margin', '_templates'):    # the BACKING field, not the
+                setattr(self, attr, getattr(parent, attr))  # `templates` property
+                                                    # -- copying the property would
+                                                    # force render's lazy import
             self.version = None
             self._finalized = True      # the ROOT runs the pass
             self._precommand_options = {}
@@ -834,11 +842,10 @@ class Appeal:
             raise AppealConfigurationError(
                 f"margin must be a positive int, not {margin!r}")
         self.margin = margin
-        # the help template: ONE string, six {sections}, its
-        # headings Markdown, yours to replace (see
-        # runtime.default_template; the pivot, ruled 2026-08-05)
-        from .render import default_template
-        self.templates = default_template
+        # the help template: ONE string, six {sections}, its headings
+        # Markdown, yours to replace.  Loaded lazily (it lives in render, which
+        # pulls big/markdown) so a successful dispatch never imports render.
+        self._templates = None
         # concurrency (ruled 2026-07-11): compilation runs LOCK-
         # FREE (it inspects user code, and we never hold a lock
         # over foreign code); this plain Lock guards only the
@@ -847,6 +854,18 @@ class Appeal:
         self._lock = _threading.Lock()
         self._method_owner = {}   # id(callable) -> owning class's env key
         self._init_caches()
+
+    @property
+    def templates(self):
+        "The help template; loaded from render lazily (off the fast path)."
+        if self._templates is None:
+            from .render import default_template
+            self._templates = default_template
+        return self._templates
+
+    @templates.setter
+    def templates(self, value):
+        self._templates = value
 
     def _init_caches(self):
         self._parse = None
@@ -1402,7 +1421,7 @@ class Appeal:
         if annotation is None:
             annotation = cheapsig.empty
         def decorator(callable):
-            if (_inspect.ismethod(callable)
+            if (isinstance(callable, _MethodType)
                     and isinstance(callable.__self__, Appeal)
                     and callable.__func__
                         is type(callable.__self__).help_and_version_precommand):
@@ -1417,7 +1436,7 @@ class Appeal:
                     tuple(options)
                 callable.__self__.root._invalidate()
                 return callable
-            if (_inspect.ismethod(callable)
+            if (isinstance(callable, _MethodType)
                     and isinstance(callable.__self__, Appeal)):
                 # a bound app method registered as a command
                 # (help's knobs, ruled 2026-08-05): bound methods
