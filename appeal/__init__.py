@@ -664,10 +664,13 @@ def default_mappings(*options):
                 app.option('usage')(app.help)
                 app.option('summary')(app.help)
                 app.option('doc')(app.help)
-            free = [s for s in ('-h', '--help')
-                    if s in requested and s not in app.options]
-            if free:
-                app.option('help', *free)(app.help_and_version_precommand)
+        # the -h/--help OPTION rides for EVERY app, global-only included
+        # (like --version above): a program with no commands still answers
+        # -h/--help through its precommand.
+        free = [s for s in ('-h', '--help')
+                if s in requested and s not in app.options]
+        if free:
+            app.option('help', *free)(app.help_and_version_precommand)
 
     # _finalize reads this to drive the legacy help machinery
     # (per-command --help, bare-app -h) until the era unification
@@ -2219,8 +2222,7 @@ class Appeal:
             if runtime._halts(result):
                 return result, pos
             pos += proc.consumed
-        if top and not precommands and not argv:
-            raise UsageError("no command given", None)
+        dispatched = False              # did a command word of THIS node run?
         while pos < len(argv):
             word = argv[pos]
             if word not in table:
@@ -2243,14 +2245,20 @@ class Appeal:
                 env[cls.constructs] = result
             instance = result if _is_class_command(c) else None
             holder.instances.append((holder._command_for(word), instance))
+            dispatched = True
             if runtime._halts(result):
                 return result, pos
             pos += proc.consumed
-            # a child node exists for every command (for lazy subcommand
-            # registration); only recurse when it actually HAS subcommands.
+            # recurse into the command's subcommand node: it may dispatch a
+            # subcommand OR (the line stops at the parent) run that node's
+            # default command -- so recurse even at end-of-line when a default
+            # is waiting.  Every command has a child node (lazy registration);
+            # only enter one that actually has subcommands or a default.
             child = self._children.get(word)
-            if child is not None and child._commands and pos < len(argv):
-                result, pos = child._run_node(argv, pos, holder, top=False, env=env)
+            if child is not None and (child._commands
+                                      or child._default is not None):
+                result, pos = child._run_node(argv, pos, holder,
+                                              top=False, env=env)
             if not self._node_repeat and pos < len(argv):
                 # this set doesn't cycle: pop the leftover word up to an
                 # ancestor whose set does (the parent's loop re-dispatches it);
@@ -2260,6 +2268,26 @@ class Appeal:
                 tok = argv[pos]
                 pool = proc.handlers if tok.startswith('-') else table
                 raise runtime._unexpected(tok, pool)
+
+        if not dispatched:
+            # the line stopped at this node without naming a subcommand of it.
+            # Run this node's default command; or, for a top-level set with no
+            # default, print the listing for orientation and exit 1 (git-style,
+            # ruled 2026-07-09).  A global command runs as a head era regardless
+            # -- it processes pre-command options; it doesn't answer a bare line.
+            if self._default is not None:
+                d_plan = self._build(self._default)
+                dcls = build_converters([d_plan])[_converter_key(d_plan)]
+                dconv = dcls()
+                if dcls.binds is not None:
+                    dconv.bound = env.get(dcls.binds)
+                dproc = runtime.Processor(argv[pos:], dconv, table)
+                result = dproc.run()
+                holder.instances.append((None, None))
+                pos += dproc.consumed
+            elif top and self._commands:
+                self.help()                         # the set listing, to stdout
+                result = 1
         return result, pos
 
     @property
@@ -2291,13 +2319,17 @@ class Appeal:
             _sys.exit(completion_reentry(
                 lambda words, prefix: self.complete(words, prefix),
                 self._prog()))
-        parse = self._compile()
         if config is not None:
-            fused = parse
+            # config layering isn't ported to the Processor yet -- old path
             def parse(args, _config=config):
                 processor = Processor(self)
                 processor.parse(list(args), _config)
                 return processor.execute()
+        else:
+            # the one engine (2026-08-22): main() drives the same in-memory
+            # dispatch process() does.  A help/version precommand prints then
+            # sys.exit()s; run_main catches that and converts it to a code.
+            parse = lambda argv: self._compiled_dispatch(list(argv))
         _sys.exit(run_main(parse, args, stylesheet=self.stylesheet,
                            errors=self.errors, margin=self.margin))
 

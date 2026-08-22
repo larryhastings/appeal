@@ -3526,6 +3526,13 @@ class Processor:
 
             tok = self.peek()
             if tok == '--' and not self.force_positional:
+                if not self.queue:
+                    # saturated: a `--` is only meaningful to a consumer with
+                    # operands left to force positional.  An options-only era
+                    # (a help/version precommand) must leave it for the command
+                    # that follows, or the `--` is lost and its operands parse
+                    # as options (test_double_dash_state_never_leaks).
+                    return
                 self.advance(); self.force_positional = True; continue
 
             if (tok is not None and not self.force_positional
