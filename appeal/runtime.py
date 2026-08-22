@@ -3164,6 +3164,11 @@ class ValueBinding:
         self.instance.kwargs[self.name] = convert(conv, value, self.name)
     def _multi(self, processor, conv, value):
         constructor, leaves = conv[0], conv[1:]
+        if not leaves:                                  # a nullary converter
+            if value is not None:                       # (--north): presence IS
+                raise UsageError(                       # the value; '=' is refused
+                    f"option {self.name!r} doesn't take a value", None)
+            return constructor()
         texts = [value] if value is not None else []    # =value/attached is first
         while len(texts) < len(leaves):
             if processor.peek() is None:

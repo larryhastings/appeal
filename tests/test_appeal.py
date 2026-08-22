@@ -2150,38 +2150,22 @@ def needs_39(what):
 
 def run_both(command, argv, decorations=None):
     """
-    Run argv through 1.0's parser built TWO ways from the same plan: the
-    Converter classes constructed in memory, and the same classes emitted
-    as source and exec'd.  Both run the one runtime.Processor (the compiled
-    path just skips class construction -- "the difference is speed"), so this
-    is a codegen-fidelity check.  Returns ('ok', result) or ('usage', message)
-    and asserts the two agree.  decorations: the app-side @option/@parameter
-    registry (ruled 2026-08-09, nothing rides the functions).
+    Run argv through 1.0's one engine: build the Converter classes in memory
+    (compile.build_converters) and run runtime.Processor.  Returns
+    ('ok', result) or ('usage', message).  (Named run_both from when it
+    cross-checked an in-memory vs an emitted-source rung; the pivot to
+    interpreter-only retired source emission, so there's one rung now.)
+    decorations: the app-side @option/@parameter registry.
     """
     from appeal import runtime
-    from appeal.compile import build_converters, emit_module, _converter_key
+    from appeal.compile import build_converters, _converter_key
     plan = build_plan(command, decorations=decorations)
     word = plan.name.replace('_', '-')
-
-    classes = build_converters([plan])              # rung A: built in memory
-    cls = classes[_converter_key(plan)]
-
-    ns = {}                                         # rung B: from emitted source
-    exec(compile(emit_module([plan]), '<compiled>', 'exec'), ns)
-    app = ns['Appeal']()
-    app.command()(command)
-
-    def run(fn):
-        try:
-            return ('ok', fn())
-        except UsageError as e:
-            return ('usage', str(e))
-
-    a = run(lambda: runtime.execute({word: cls}, [word] + list(argv)))
-    b = run(lambda: app.process([word] + list(argv)))
-    assert a == b, (f'codegen parity failure on {command.__name__} {argv!r}:\n'
-                    f'  in-memory: {a!r}\n  compiled:  {b!r}')
-    return a
+    cls = build_converters([plan])[_converter_key(plan)]
+    try:
+        return ('ok', runtime.execute({word: cls}, [word] + list(argv)))
+    except UsageError as e:
+        return ('usage', str(e))
 
 def run_both_set(commands, global_command, argv):
     """
