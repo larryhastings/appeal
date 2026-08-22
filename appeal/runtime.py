@@ -2983,6 +2983,66 @@ class RepeatInstruction:
         self.items = items
 
 
+class _Collector:
+    "A stand-in processor that just records a converter's laid instructions."
+    __slots__ = ('items',)
+    def __init__(self):
+        self.items = []
+    def prepend(self, items):
+        self.items.extend(items)
+
+
+def _own_shape(converter_cls):
+    """
+    A converter's own options and required leaf operands, read by dry-running
+    its register (the SAME instructions the parser runs -- no plan needed).
+    Returns (name -> option strings, [required operand name, ...]).
+    """
+    coll = _Collector()
+    converter_cls().register(coll)
+    options = {}
+    operands = []
+    for item in coll.items:
+        if isinstance(item, RepeatInstruction):     # a *args template: its lone
+            continue                                # element isn't THIS converter
+        if isinstance(item, OptionInstruction):
+            options[item.name] = list(item.strings)
+        elif isinstance(item, PreOptionInstruction):
+            options.setdefault(item.name, []).append(item.string)
+        elif isinstance(item, ArgumentInstruction) and item.required:
+            operands.append(item.name)
+    return options, operands
+
+
+def _operand_list(names):
+    "Render required operand names as '<A> <B> and <C>' (usage's default form)."
+    toks = [f'<{n.upper()}>' for n in names]
+    if len(toks) <= 1:
+        return ''.join(toks)
+    return ' '.join(toks[:-1]) + ' and ' + toks[-1]
+
+
+def _availability_message(owner):
+    """
+    A summoned converter starved for operands: the option that summoned it
+    isn't available until its group's required operands are supplied.  Built
+    from the starved converter itself -- it knows its own options and operands.
+    """
+    options, operands = _own_shape(type(owner))
+    spoken = None                                   # the option string the user
+    for name in owner.kwargs:                       # actually typed (set a kwarg)
+        strings = options.get(name)
+        if strings:
+            spoken = next((s for s in strings if s.startswith('--')), strings[0])
+            break
+    ops = _operand_list(operands)
+    if spoken and ops:
+        return f"{spoken} only becomes available if you specify {ops}"
+    if spoken:
+        return f"{spoken} isn't available here"
+    return f"expected {ops}" if ops else "expected an argument"
+
+
 def _presence(instance, name):
     "A flag's presence value: `not default`, read live off the callable."
     host = _params_host(type(instance).converter)   # a class: its __init__
@@ -3143,6 +3203,7 @@ class ConjureBinding:
         obj = processor.conjured.get(self.slot)
         if obj is None:
             obj = self.converter_cls()
+            obj._summoned = True
             processor.conjured[self.slot] = obj
         obj.kwargs[self.name] = (_presence(obj, self.name) if value is None
                                  else value == 'true')
@@ -3165,6 +3226,7 @@ class ConjureValueBinding:
         obj = processor.conjured.get(self.slot)
         if obj is None:
             obj = self.converter_cls()
+            obj._summoned = True
             processor.conjured[self.slot] = obj
         if value is None:
             if processor.peek() is None:
@@ -3190,9 +3252,6 @@ class Converter:
                                         # trailing operands (emitter sets it)
     _iterable = False                   # tuple[...]/list[...] group: build from
                                         # the args iterable, don't splat them
-    conjurable = False                  # no required operand: a required slot
-                                        # invokes it from defaults when operands
-                                        # run out (mix-ins, all-defaulted groups)
     converter = None                    # the user's callable, wired by
                                         # fixup_converters at @command time
     _fingerprint = None                 # signature hash the emitter bakes;
@@ -3205,6 +3264,10 @@ class Converter:
                                         # of a *args window; a starved required
                                         # operand of a window is "left over", not
                                         # a plain missing argument
+    _summoned = False                   # set on an instance CONJURED by naming one
+                                        # of its options (not started by an
+                                        # operand); if it then starves for lack of
+                                        # operands, the option wasn't yet available
 
     @classmethod
     def fixup_converters(cls, converter):
@@ -3426,6 +3489,10 @@ class Processor:
                 and issubclass(arg.converter, Converter)):
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
+                    if arg.owner._summoned and not arg.owner.args:
+                        # an option summoned this converter but no operand ever
+                        # arrived: the option wasn't available yet (Case A/B)
+                        raise UsageError(_availability_message(arg.owner), None)
                     if arg.owner._window and arg.owner.args:
                         raise UsageError(
                             f"wrong number of arguments: "
@@ -3457,18 +3524,15 @@ class Processor:
                         self.queue.popleft()        # the Argument
                         self.queue.popleft()        # the Repeat -- end the *args
                         return
-                # no built instance to bind to: a conjurable group becomes the
-                # sole element (falls through); a non-conjurable one can't.
-                if not arg.converter.conjurable:
-                    self.queue.popleft(); self.queue.popleft()
-                    raise UsageError(f"expected at least one {arg.name!r}", None)
-            elif not arg.converter.conjurable:
-                raise UsageError(f"option requires {arg.name!r}", None)
+            # no instance to bind to: the summoned shell falls through and becomes
+            # the element.  If it needs operands and none arrive, its own fill
+            # reports it (invoke-always; no conjurable flag).
         if obj is None and (tok is None or self._is_option(tok)):
-            if tok is None and arg.required and arg.converter.conjurable:
-                obj = arg.converter()                # required slot: invoke from
-                                                     # defaults (its operands, all
-                                                     # optional, will default too)
+            if tok is None and arg.required:
+                obj = arg.converter()                # invoke-always (ruled): a
+                                                     # required slot builds its
+                                                     # shell; a starved required
+                                                     # operand surfaces in its fill
             else:
                 self.queue.popleft()                 # nothing to build here
                 if arg.required:

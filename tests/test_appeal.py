@@ -662,9 +662,11 @@ def test_star_args_option_windows():
     assert got == ('ok', ('a', (('s', 1.0, False), ('s', 2.0, False), ('s', 3.0, True)))), got
     got = run_both(draw, ['a', '1', '--bold'])       # only size: it
     assert got == ('ok', ('a', (('s', 1.0, True),))), got
-    # ...but an option with NO sizes at all has nothing to bind to
+    # ...but an option with NO sizes at all has nothing to bind to: --bold
+    # summoned a size that never got its <WIDTH>, so it wasn't available yet
     got = run_both(draw, ['a', '--bold'])
-    assert got[0] == 'usage' and 'at least one' in got[1], got
+    assert got[0] == 'usage'
+    assert got[1] == '--bold only becomes available if you specify <WIDTH>', got
     # two occurrences on one instance: idempotent store-not-
     # default (Larry's ruling, 2026-07-18)--bold twice is bold
     got = run_both(draw, ['a', '1', '--bold', '--bold', '2'])
@@ -2019,15 +2021,18 @@ def test_options_inside_converters():
     # ...but the *parent's* options don't force anything
     got = run_both(draw, ['dot', '--verbose'])
     assert got == ('ok', ('dot', None, True)), got
-    # a forced group that NEEDS operands it can't have is still an
-    # error, named after the option (v1 errors here too)
+    # naming a group's option with no operands to complete it: the option
+    # isn't available until you supply the group's required operands.  The
+    # message is built from the summoned converter itself (its option + the
+    # operands it's missing), the same fact the usage bracket shows.
     def rgbstroke(r: int, g: int, b: int, *, dashed=False):
         return (r, g, b, dashed)
     def draw2(shape, s: rgbstroke=None):
         return (shape, s)
     got = run_both(draw2, ['dot', '--dashed'])
     assert got[0] == 'usage'
-    assert "'s'" in got[1], got
+    assert got[1] == ('--dashed only becomes available if you '
+                      'specify <R> <G> and <B>'), got
 
 def test_plan_trailing_does_not_promote():
     # reservation is not promotion: z is filled from the end, so

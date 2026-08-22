@@ -238,7 +238,7 @@ def _build_class(plan, classes):
                 child_cls.fixup_converters(annotations[param])
 
     dct = {'register': register, 'trailing': _n_trailing(plan),
-           'conjurable': _conjurable(plan), 'binds': plan.binds,
+           'binds': plan.binds,
            'constructs': plan.constructs, '__module__': __name__}
     if children:                                # else the base no-op suffices
         dct['_fixup_children'] = classmethod(fixup_children)
@@ -440,8 +440,6 @@ def emit_source(plan, names, is_command):
     lines.append(f'    _fingerprint = {fp!r}')
     if plan.callable in (tuple, list):      # iterable constructor: build, don't splat
         lines.append('    _iterable = True')
-    if _conjurable(plan):                   # invoked from defaults when operands run out
-        lines.append('    conjurable = True')
     if plan.binds is not None:              # class-as-app: method binds to an instance
         lines.append(f'    binds = {plan.binds!r}')
     if plan.constructs is not None:         # class command: stash the instance built
