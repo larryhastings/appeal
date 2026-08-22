@@ -2218,7 +2218,7 @@ class Appeal:
             if cls is None:
                 if not top:
                     return result, pos          # pop back: a parent may own it
-                raise runtime._unexpected(word)
+                raise runtime._unexpected(word, commands)
             pos += 1
             conv = cls()
             if cls.binds is not None:               # a method command: self is the
@@ -2240,7 +2240,9 @@ class Appeal:
             if not self.repeat and pos < len(argv):
                 if not top:
                     return result, pos          # non-cycling child: pop leftover back
-                raise runtime._unexpected(argv[pos])
+                tok = argv[pos]
+                pool = proc.handlers if tok.startswith('-') else commands
+                raise runtime._unexpected(tok, pool)
         return result, pos
 
     @property

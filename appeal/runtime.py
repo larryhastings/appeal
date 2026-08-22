@@ -3539,7 +3539,9 @@ class Processor:
                 tok, _, value = tok.partition('=')
             binding = self.handlers.get(tok)
             if binding is None:
-                raise UsageError(f"unknown option {tok}", None)
+                longs = [k for k in self.handlers if k.startswith('--')]
+                raise UsageError(
+                    f"unknown option {tok}{did_you_mean(tok, longs)}", None)
             if value is not None and _takes_many(binding):
                 raise UsageError(
                     f"option {tok!r} takes several values; separate them with "
@@ -3698,15 +3700,20 @@ def _halts(result):
     return isinstance(result, int) and not isinstance(result, bool) and result
 
 
-def _unexpected(token):
+def _unexpected(token, candidates=()):
     """
     Diagnose a token nobody claimed.  Commands never start with a dash, so a
     leading-dash leftover is a mistyped option (--verison), not a mystery
     command -- a friendlier, truthful error than "unknown command".
+    `candidates` is the pool to suggest from: option strings for a dash token
+    (long ones only), command words otherwise.
     """
     if token.startswith('-') and token not in ('-', '--'):
-        return UsageError(f"unknown option {token}", None)
-    return UsageError(f"unknown command {token!r}", None)
+        longs = [c for c in candidates if c.startswith('--')]
+        return UsageError(
+            f"unknown option {token}{did_you_mean(token, longs)}", None)
+    return UsageError(
+        f"unknown command {token!r}{did_you_mean(token, candidates)}", None)
 
 
 def execute(commands, argv, *, precommands=(), repeat=False):
@@ -3734,7 +3741,7 @@ def execute(commands, argv, *, precommands=(), repeat=False):
         word = argv[pos]
         converter_cls = commands.get(word)
         if converter_cls is None:
-            raise _unexpected(word)
+            raise _unexpected(word, commands)
         pos += 1
         processor = Processor(argv[pos:], converter_cls(), commands)
         result = processor.run()
@@ -3743,7 +3750,11 @@ def execute(commands, argv, *, precommands=(), repeat=False):
         # returns a truthy int (an exit code -- or just an int result, like a
         # verbosity level) must not mask an unclaimed trailing token.
         if not repeat and pos < len(argv):
-            raise _unexpected(argv[pos])
+            # a leftover option suggests from this command's options; a leftover
+            # word from the command table
+            tok = argv[pos]
+            pool = processor.handlers if tok.startswith('-') else commands
+            raise _unexpected(tok, pool)
         if _halts(result):
             return result
     return result
