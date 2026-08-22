@@ -29,7 +29,7 @@ import appeal
 from appeal import (
     Appeal, AppealConfigurationError, AppealDataError, AppealError,
     UsageError,
-    build_plan, compile_plan, interpreter_parse,
+    build_plan,
     )
 
 
@@ -2649,9 +2649,11 @@ def test_help_composes_through_option_converters():
 
 
 def test_command_set_help():
+    # help through 1.0's one engine (the app facade): the listing, a topic
+    # page, an unknown topic, and a user `help` command overriding the auto one
     import contextlib, io
-    from appeal import compile_command_set, interpreter_dispatch
-
+    app = Appeal(name='pile')
+    @app.command()
     def add_item(name, count: int = 1):
         """
         Adds an item to the pile.
@@ -2661,60 +2663,57 @@ def test_command_set_help():
         : what to call it.
         """
         return ('add', name, count)
+    @app.command()
     def remove(name):
         "Removes an item."
         return ('remove', name)
 
-    plans = {'add_item': build_plan(add_item), 'remove': build_plan(remove)}
-    parse = compile_command_set(plans, None, prog='pile')
-
-    def grab(fn):
+    def grab(argv):
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            result = fn()
+        try:
+            with contextlib.redirect_stdout(out):
+                result = app.process(list(argv))
+        except SystemExit as e:
+            result = None if e.code in (0, None) else e.code
         return result, out.getvalue()
 
     # `help`: the listing, with summaries and the help row (v1's shape)
-    result, listing = grab(lambda: parse(['help']))
+    result, listing = grab(['help'])
     assert result is None
-    oresult, olisting = grab(lambda: interpreter_dispatch(plans, None, ['help'], prog='pile'))
-    assert (result, listing) == (oresult, olisting)
     assert listing.startswith('usage: pile command')
-    assert 'add_item  Adds an item to the pile.' in listing
+    assert 'add-item  Adds an item to the pile.' in listing
     assert 'remove    Removes an item.' in listing
     assert 'help      Print usage documentation on a specific command.' in listing
 
-    # `help CMD` == `CMD --help`
-    _, by_help = grab(lambda: parse(['help', 'add_item']))
-    _, by_flag = grab(lambda: parse(['add_item', '--help']))
-    assert by_help == by_flag
-    # usage first (0.6.4's order, ruled 2026-07-19), with
-    # the prog prefix restored
+    # `help CMD`: the command's page -- usage first (0.6.4's order), the prog
+    # prefix on an app-built plan, and the renamed argument table
+    _, by_help = grab(['help', 'add-item'])
     assert by_help.startswith('usage: '), by_help
     assert 'Adds an item to the pile.' in by_help
-    assert 'usage: add_item' in by_help   # direct-built plans
-    # carry no prog prefix; app-built ones do (ruled 2026-07-19)
+    assert 'usage: pile add-item' in by_help
     assert '<NAME>   what to call it.' in by_help
-    _, interpreter_help = grab(lambda: interpreter_dispatch(plans, None, ['help', 'add_item'], prog='pile'))
-    assert interpreter_help == by_help
 
     # `help BOGUS`
     try:
-        parse(['help', 'bogus'])
+        app.process(['help', 'bogus'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert 'bogus' in str(e)
 
     # a user-defined help command wins: no automatic anything
-    def help(topic=''):
+    app2 = Appeal(name='pile', default_mappings=None)
+    @app2.command()
+    def add_item2(name):
+        return name
+    @app2.command('help')
+    def user_help(topic=''):
         return ('user help', topic)
-    plans2 = {'add_item': build_plan(add_item), 'help': build_plan(help)}
-    parse2 = compile_command_set(plans2, None, prog='pile')
-    assert parse2(['help', 'x']) == ('user help', 'x')
+    assert app2.process(['help', 'x']) == ('user help', 'x')
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        assert parse2([]) == 1
+        assert app2.process([]) == 1
     assert 'Print usage documentation' not in out.getvalue()
+
 
 def test_command_set_help_facade():
     import contextlib, io
@@ -2737,43 +2736,34 @@ def test_command_set_help_facade():
     assert 'usage: pile add-item' in out.getvalue()
 
 def test_set_level_help_flag():
-    # `tool --help` (or -h) at position 0: the command listing,
-    # exactly like the `help` command; user options win as usual
+    # `tool --help` (or -h) at position 0: the command listing, exactly like the
+    # `help` command.  -h/--help is a precommand OPTION now (2026-07-19); it
+    # prints then sys.exit(0)s -- raw process() propagates it, main() converts.
     import contextlib, io
-    from appeal import compile_command_set, interpreter_dispatch
+    app = Appeal(name='pile')
+    @app.command()
     def add_item(name):
         "Adds an item."
         return ('add', name)
-    plans = {'add_item': build_plan(add_item)}
-    parse = compile_command_set(plans, None, prog='pile')
-    def grab(fn):
+
+    def grab(argv):
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            result = fn()
-        return result, out.getvalue()
-    result, text = grab(lambda: parse(['--help']))
-    assert result is None and text.startswith('usage: pile command')
-    assert 'add_item  Adds an item.' in text
-    oresult, otext = grab(lambda: interpreter_dispatch(plans, None, ['--help'], prog='pile'))
-    assert (oresult, otext) == (result, text)
-    _, htext = grab(lambda: parse(['help']))
-    assert htext == text                              # same listing
-    # facade: -h is a precommand option now (2026-07-19) and the
-    # precommand EXITS--sys.exit(0)--after printing the listing;
-    # main() converts that to a return code, raw process()
-    # propagates it honestly
-    app = Appeal(name='pile')
-    @app.command()
-    def add_item2(name):
-        return name
-    out = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(out):
-            app.process(['-h'])
-        assert False, 'expected SystemExit(0)'
-    except SystemExit as e:
-        assert (e.code or 0) == 0
-    assert 'add-item2' in out.getvalue()            # _ -> - in the command word
+        try:
+            with contextlib.redirect_stdout(out):
+                app.process(list(argv))
+            code = 'returned'
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 0
+        return code, out.getvalue()
+
+    code, text = grab(['--help'])
+    assert code == 0 and text.startswith('usage: pile command'), text
+    assert 'add-item  Adds an item.' in text        # _ -> - in the command word
+    hcode, htext = grab(['help'])                    # the `help` command: same listing
+    assert hcode == 'returned' and htext == text
+    scode, stext = grab(['-h'])
+    assert scode == 0 and stext == text
+
 
 def test_completion():
     from appeal import completions, completions_set
@@ -3287,35 +3277,6 @@ def test_help_disabled():
     # completion no longer offers the help word
     assert 'help' not in app3.complete([], '')
     assert set(app3.complete([], '')) == {'add', 'sub'}
-
-def test_help_disabled_parity():
-    # rung-1 and rung-3 agree with help=False
-    from appeal import compile_command_set, interpreter_dispatch
-    def add(x: int, y: int):
-        "Add."
-        return x + y
-    def neg(x: int):
-        "Negate."
-        return -x
-    plans = {'add': build_plan(add), 'neg': build_plan(neg)}
-
-    def grab(fn):
-        import io, contextlib
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            try:
-                r = fn()
-            except UsageError as e:
-                return ('usage', str(e))
-        return (r, out.getvalue())
-
-    parse = compile_command_set(plans, None, prog='p', help=False)
-    a = grab(lambda: interpreter_dispatch(plans, None, ['help'],
-                                          prog='p', help=False))
-    b = grab(lambda: parse(['help']))
-    assert a[0] == b[0] == 'usage', (a, b)
-    assert 'unknown command' in a[1] and 'unknown command' in b[1]
-
 
 def test_generated_code_name_collisions():
     # the corpus caught this: a converter parameter named `i`
@@ -4613,17 +4574,6 @@ def test_bundled_flags():
     got = run_both(g, ['-na'])
     assert got[0] == 'usage', got
 
-def test_generated_source_is_readable():
-    plan = build_plan(serve)
-    parse = compile_plan(plan)
-    # the generated source is the disassembly
-    assert 'def parse_serve(argv):' in parse.source
-    assert 'check_count' in parse.source
-
-
-# ---------------------------------------------------------------------
-# THE NORTH STAR: standalone emission
-
 def sub_run(argv, capture_output=True, text=True, **kw):
     """
     subprocess.run for every Python we support: 3.6 has neither
@@ -4716,33 +4666,25 @@ def test_file_converter():
     # nor click (misnamed wrapper) actually delivers.
     import appeal as _appeal
     import contextlib, io
-    from appeal import build_plan, compile_plan, interpreter_parse
 
     def cat(inp: _appeal.file()):
         data = inp.read()
         inp.close()
         return (type(inp).__name__, data)
-    plan = build_plan(cat)
 
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, 'x.txt')
         with open(path, 'wt', encoding='utf-8') as f:
             f.write('from disk')
-        assert interpreter_parse(plan, [path]) == \
-            ('TextIOWrapper', 'from disk')
-        assert compile_plan(plan)([path]) == \
-            ('TextIOWrapper', 'from disk')
+        assert run_both(cat, [path]) == ('ok', ('TextIOWrapper', 'from disk'))
 
-    # '-' with a reading mode is stdin (fresh stream per rung:
-    # reading consumes it)
-    for drive in (lambda: interpreter_parse(plan, ['-']),
-                  lambda: compile_plan(plan)(['-'])):
-        old = sys.stdin
-        sys.stdin = io.StringIO('from stdin')
-        try:
-            assert drive() == ('_ProcessStream', 'from stdin')
-        finally:
-            sys.stdin = old
+    # '-' with a reading mode is stdin
+    old = sys.stdin
+    sys.stdin = io.StringIO('from stdin')
+    try:
+        assert run_both(cat, ['-']) == ('ok', ('_ProcessStream', 'from stdin'))
+    finally:
+        sys.stdin = old
 
     # '-' with a writing mode is stdout; close()/with flush and
     # go inert--the real stream survives
@@ -4751,18 +4693,15 @@ def test_file_converter():
             f.write('written')
         dest.close()                     # double-close: also fine
         return dest.closed
-    eplan = build_plan(emit)
-    for drive in (lambda: interpreter_parse(eplan, ['-']),
-                  lambda: compile_plan(eplan)(['-'])):
-        old = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            assert drive() is True
-            captured = sys.stdout.getvalue()
-            sys.stdout.write('still alive')     # not closed!
-        finally:
-            sys.stdout = old
-        assert captured == 'written'
+    old = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        assert run_both(emit, ['-']) == ('ok', True)
+        captured = sys.stdout.getvalue()
+        sys.stdout.write('still alive')     # not closed!
+    finally:
+        sys.stdout = old
+    assert captured == 'written'
 
     # loud refusals: unopenable path (with strerror), '-' on a
     # read-write mode
@@ -4896,21 +4835,13 @@ def test_did_you_mean():
     got = run_both(cmd, ['--verbos'])
     assert got[0] == 'usage' and "did you mean '--verbose'" in got[1]
 
-    # the emitted dispatcher's unknown-command site
-    import contextlib, io
-    out = io.StringIO()
+    # the command set's unknown-command site suggests too
     def alpha():
         return 'a'
     def beta():
         return 'b'
-    from appeal import compile_command_set
-    parse = compile_command_set({'alpha': build_plan(alpha),
-                                 'beta': build_plan(beta)}, prog='t')
-    try:
-        parse(['alhpa'])
-        assert False, 'expected UsageError'
-    except UsageError as e:
-        assert "did you mean 'alpha'" in str(e), e
+    got = run_both_set([alpha, beta], None, ['alhpa'])
+    assert got[0] == 'usage' and "did you mean 'alpha'" in got[1], got
 
 
 def test_keyboard_interrupt():
@@ -5633,60 +5564,6 @@ def test_streaming_dispatch_runs_as_it_parses():
         ran.append(('add2', x, y))
     app2.process(['--trace', 'add2', '1', '2'])
     assert ran == ['top2', ('add2', 1, 2)], ran
-
-
-def test_processor():
-    # the Appeal/Processor divorce: Appeal is the registry and
-    # compiler; a Processor is one trip through one command line
-    import appeal as _appeal
-    ran = []
-    app = _appeal.Appeal(name='pr')
-    @app.global_command()
-    def top(*, trace=False):
-        ran.append('top')
-    @app.command()
-    def add(x: int, y: int):
-        ran.append(('add', x, y))
-    # stage 1 only: nothing executes, and the artifact is readable
-    processor = app.parse(['--trace', 'add', '1', '2'])
-    assert ran == []
-    assert processor.result is None and processor.instances == []
-    text = repr(processor)
-    assert '(global)' in text and 'add' in text, text
-    # stage 2: left to right, and the mechanical execution log
-    processor.execute()
-    assert ran == ['top', ('add', 1, 2)]
-    # a leading (None, None) is the help/version precommand era (it runs first,
-    # logged like any invocation), then the global, then add
-    assert processor.instances == [(None, None), (None, None), (add, None)]
-    assert app.instances == [(None, None), (None, None), (add, None)]
-    # a malformed line dies at parse time
-    try:
-        app.parse(['add', '1'])
-        assert False, 'expected UsageError'
-    except UsageError:
-        pass
-    # app.instances reads the most recent run
-    app.process(['add', '3', '4'])
-    assert ran[-1] == ('add', 3, 4)
-    assert app.instances == [(None, None), (None, None), (add, None)]
-    # v1 compat: an unparsed Processor is a callable execution object
-    p2 = app.processor()
-    p2(['add', '5', '6'])
-    assert ran[-1] == ('add', 5, 6)
-
-
-def test_processor_single_command():
-    import appeal as _appeal
-    app = _appeal.Appeal(name='one')
-    @app.global_command()
-    def top(a: int, b: int = 0):
-        return a + b
-    processor = app.parse(['3', '4'])
-    assert processor.instances == []
-    assert processor.execute() == 7
-    assert processor.result == 7
-    assert app.instances == [(None, None)]
 
 
 def test_cycling():
@@ -6749,7 +6626,6 @@ def test_colorized_help_paints_after_layout():
 # shell completion (the completion rulings, 1-5)
 
 def test_value_completion():
-    from appeal import interpreter_parse
     from appeal.complete import completions
 
     def color(name):
