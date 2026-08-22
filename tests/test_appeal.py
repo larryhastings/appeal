@@ -4271,8 +4271,10 @@ def test_config_layering():
     layer = {'verbose': 'yes', 'jobs': '4', 'include': ['a', 'b']}
     if GENERIC_SPELLINGS:
         layer['define'] = {'x': 1}
+    # instances[0] is the help/version precommand era; the global
+    # class-as-app Config is the next invocation (new-engine logging)
     app.process(['src'], config=layer)
-    c = app.instances[0][1]
+    c = app.instances[1][1]
     assert (c.source, c.verbose, c.jobs) == ('src', True, 4)
     assert c.include == ['a', 'b']
     if GENERIC_SPELLINGS:
@@ -4280,12 +4282,12 @@ def test_config_layering():
 
     # argv wins, whole: repeatables REPLACE, never append
     app.process(['src', '--jobs', '9', '-i', 'z'], config=layer)
-    c = app.instances[0][1]
+    c = app.instances[1][1]
     assert c.jobs == 9 and c.include == ['z']
 
     # absent from both: the default fills
     app.process(['src'], config={})
-    assert app.instances[0][1].jobs == 1
+    assert app.instances[1][1].jobs == 1
 
     # strict keys, each flavor loud and saying why
     @app.command()

@@ -302,6 +302,106 @@ def _config_inject(vetted, config, given, usage, scoped_keys=frozenset()):
     return injected
 
 
+def _config_apply(conv, table, global_plan, config, plan_for):
+    """
+    Layer a config mapping onto the global command's already-parsed converter
+    (the one engine): defaults < config < argv, atomic per option.  Keys are
+    vetted strictly (reuse _config_vet).  Each vetted option argv did NOT set
+    is replayed as the synthetic command-line tokens it would have produced,
+    run through a fresh converter of the same class and merged in -- so config
+    rides the ordinary conversion pipeline.  Conversion failures carry
+    'config:' provenance (an option argv already gave wins whole).
+    """
+    from .read import _read_bool
+    from .runtime import (Processor, UsageError, AppealError)
+    vetted = _config_vet(global_plan, frozenset(table), config, plan_for)
+    given = set(conv.kwargs) | set(conv.multis)
+    usage = global_plan.usage()
+
+    def tokens_for(rule, value, provenance):
+        kind = rule.kind
+        spelling = rule.key                     # the long option string
+        if kind in ('flag', 'nullary'):
+            try:
+                wanted = _read_bool(value, f'config: {provenance}')
+            except AppealError as e:            # config is end-user input
+                raise AppealDataError(str(e), usage) from None
+            return [spelling] if wanted else []
+        if kind == 'group':
+            if not isinstance(value, dict):
+                seq = value if isinstance(value, (list, tuple)) else (value,)
+                return [spelling] + [str(v) for v in seq]
+            slot_names = {s.name for s in rule.child.slots}
+            option_rules = {o.name: o for o in rule.child.options}
+            extra = set(value) - slot_names - set(option_rules)
+            if extra:
+                raise AppealDataError(
+                    f"config: {provenance!r}: unknown group argument(s) "
+                    f"{sorted(extra)}", usage)
+            toks = [spelling]
+            for s in rule.child.slots:          # child operands, by name, in order
+                if s.name not in value:
+                    break
+                toks.append(str(value[s.name]))
+            for oname, orule in option_rules.items():   # child options, recursively
+                if oname not in value:
+                    continue
+                if orule.key in global_plan.scoped_keys:
+                    # a scoped option's essence is position; a mapping has none
+                    # (same ruling as a scoped top-level key, _config_vet)
+                    raise AppealConfigurationError(
+                        f"config: {provenance!r}.{oname!r} names a scoped "
+                        f"option (several windows declare it, and position "
+                        f"decides which); set it on the command line")
+                toks += tokens_for(orule, value[oname], f'{provenance}.{oname}')
+            return toks
+        if kind == 'fold':
+            if getattr(rule.converters[0], '__appeal_mapping__', False):
+                if not isinstance(value, dict):
+                    raise AppealDataError(
+                        f"config: {provenance!r} collects KEY=VALUE pairs; "
+                        f"give it a mapping", usage)
+                toks = []
+                for k, v in value.items():
+                    toks += [spelling, f'{k}={v}']
+                return toks
+            if not isinstance(value, (list, tuple)):
+                raise AppealDataError(
+                    f"config: {provenance!r} repeats; give it a sequence", usage)
+            toks = []
+            for v in value:
+                toks += [spelling, str(v)]
+            return toks
+        # value: one occurrence, single- or multi-oparg
+        if len(rule.converters) > 1:
+            if not isinstance(value, (list, tuple)):
+                raise AppealDataError(
+                    f"config: {provenance!r} takes {len(rule.converters)} "
+                    f"values; give it a sequence", usage)
+            return [spelling] + [str(v) for v in value]
+        return [spelling, str(value)]
+
+    synth = []
+    for name, rule in vetted.items():
+        if name in given:                       # argv wins, whole
+            continue
+        synth += tokens_for(rule, config[name], name)
+    if not synth:
+        return
+    cfg_conv = type(conv)()
+    proc = Processor(synth, cfg_conv, table)
+    try:
+        proc.enter(cfg_conv)
+        proc._loop()
+        for mname, inst in cfg_conv.multis.items():
+            cfg_conv.kwargs[mname] = inst.render()
+    except UsageError as e:                     # provenance: it came from config
+        raise AppealDataError(f"config: {e}", getattr(e, 'usage', None) or usage,
+                              param=getattr(e, 'param', None)) from None
+    for k, v in cfg_conv.kwargs.items():
+        conv.kwargs.setdefault(k, v)
+
+
 def _is_class_command(obj):
     """
     A class, or a wrapped class (e.g. big's BoundInnerClass): the
@@ -2174,14 +2274,9 @@ class Appeal:
         returns its return value.
         """
         argv = _sys.argv[1:] if args is None else list(args)
-        if config is not None:
-            # config layering isn't ported to the Processor yet -- old path
-            processor = Processor(self)
-            processor.parse(argv, config)
-            return processor.execute()
-        return self._compiled_dispatch(argv)
+        return self._compiled_dispatch(argv, config=config)
 
-    def _compiled_dispatch(self, argv):
+    def _compiled_dispatch(self, argv, config=None):
         """
         The one path (Larry, 2026-08-21): compile the parser in memory (same as
         a precompiled module, minus the fingerprint check) and run the Processor.
@@ -2191,11 +2286,11 @@ class Appeal:
         """
         holder = Processor(self)
         self._last_processor = holder
-        result, _ = self._run_node(list(argv), 0, holder, top=True)
+        result, _ = self._run_node(list(argv), 0, holder, top=True, config=config)
         holder.result = result
         return result
 
-    def _run_node(self, argv, pos, holder, top, env=None):
+    def _run_node(self, argv, pos, holder, top, env=None, config=None):
         "Dispatch one set node's eras + command words; recurse for subcommands."
         if env is None:
             env = {}                                # class-as-app instance store
@@ -2203,6 +2298,13 @@ class Appeal:
         from . import runtime
         self._finalize()
         table = self._table()
+        if config and self._global is None:
+            # config layers only the global command's options; a commands-only
+            # program has nowhere for it to land (an empty config is a no-op)
+            key = next(iter(config))
+            raise AppealDataError(
+                f"config: {key!r} isn't an option of this program (it has no "
+                f"global command)")
         era_plans = self.global_plans()             # carries the global as a head era
         # laziness is per command (build_converters compiles independently): the
         # head eras always run, so build them now; each command word builds ITS
@@ -2212,9 +2314,19 @@ class Appeal:
         precommands = [era_classes[_converter_key(p)] for p in era_plans]
 
         result = None
-        for cls in precommands:                     # head eras, in order
-            proc = runtime.Processor(argv[pos:], cls(), table)
-            result = proc.run()
+        for cls, era_plan in zip(precommands, era_plans):   # head eras, in order
+            conv = cls()
+            proc = runtime.Processor(argv[pos:], conv, table)
+            if config is not None and era_plan.callable is self._global:
+                # layer config onto the global command: parse argv, merge config
+                # for options argv didn't set, THEN invoke (argv wins, whole)
+                proc.enter(conv)
+                proc._loop()
+                _config_apply(conv, table, self.global_plan, config,
+                              self.plan_for)
+                result = proc.root()
+            else:
+                result = proc.run()
             if cls.constructs is not None:          # a global class-as-app: its
                 env[cls.constructs] = result        # methods bind to this instance
             holder.instances.append(               # eras log (None, instance-or-None)
