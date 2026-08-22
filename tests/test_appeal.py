@@ -632,8 +632,10 @@ def test_gate_and_windows():
         return (p, segs)
     got = run_both(path, ['1', '2', '3', '--dashed'])
     assert got == ('ok', ((1.0, 2.0), ((3.0, True),))), got
-    got = run_both(path, ['--dashed', '1', '2', '3'])  # before the wall
-    assert got[0] == 'usage' and 'too early' in got[1], got
+    # gate rule DROPPED (Larry, 2026-08-21): flat recognition wins, so
+    # --dashed before the pair "wall" is now recognized, not "too early"
+    got = run_both(path, ['--dashed', '1', '2', '3'])
+    assert got == ('ok', ((1.0, 2.0), ((3.0, True),))), got
 
 def test_star_args_option_windows():
     # v1 semantics, probed: a converter group on *args gets one

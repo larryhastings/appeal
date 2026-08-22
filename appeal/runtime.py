@@ -3261,6 +3261,13 @@ class Processor:
         for item in items:
             if isinstance(item, (OptionInstruction, PreOptionInstruction)):
                 item.register(self)
+            elif isinstance(item, RepeatInstruction):
+                # a *args window's options live inside its Repeat; register them
+                # too so `--dashed 1 2 3` knows --dashed before the window lays.
+                for inner in item.items:
+                    if isinstance(inner, (OptionInstruction,
+                                          PreOptionInstruction)):
+                        inner.register(self)
         self.queue.extendleft(reversed(items))
 
     def peek(self):
