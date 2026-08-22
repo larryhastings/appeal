@@ -3561,7 +3561,7 @@ class Processor:
             if binding is None:
                 longs = [k for k in self.handlers if k.startswith('--')]
                 raise UsageError(
-                    f"unknown option {tok}{did_you_mean(tok, longs)}", None)
+                    f"unknown option {tok!r}{did_you_mean(tok, longs)}", None)
             if value is not None and _takes_many(binding):
                 raise UsageError(
                     f"option {tok!r} takes several values; separate them with "
@@ -3575,7 +3575,7 @@ class Processor:
             opt = '-' + chars[i]
             binding = self.handlers.get(opt)
             if binding is None:
-                raise UsageError(f"unknown option {opt}", None)
+                raise UsageError(f"unknown option {opt!r}", None)
             if chars[i + 1:i + 2] == '=':               # -v=false / -n=5: explicit
                 if _takes_many(binding):
                     raise UsageError(
@@ -3731,7 +3731,7 @@ def _unexpected(token, candidates=()):
     if token.startswith('-') and token not in ('-', '--'):
         longs = [c for c in candidates if c.startswith('--')]
         return UsageError(
-            f"unknown option {token}{did_you_mean(token, longs)}", None)
+            f"unknown option {token!r}{did_you_mean(token, longs)}", None)
     return UsageError(
         f"unknown command {token!r}{did_you_mean(token, candidates)}", None)
 

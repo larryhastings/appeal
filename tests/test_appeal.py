@@ -3245,9 +3245,16 @@ def test_help_disabled():
     @app2.global_command()
     def g(a, *, verbose=False):
         "Do g."
+    # -h/--help is a precommand OPTION now: it prints then sys.exit(0)s;
+    # raw process() propagates the exit, main() converts it (ruled
+    # 2026-07-19, test_set_level_help_flag)
     out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        assert app2.process(['--help']) is None
+    try:
+        with contextlib.redirect_stdout(out):
+            app2.process(['--help'])
+        assert False, 'expected SystemExit(0)'
+    except SystemExit as e:
+        assert (e.code or 0) == 0
     assert out.getvalue().startswith('usage: '), out.getvalue()
     assert 'Do g.' in out.getvalue()
 
