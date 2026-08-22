@@ -5548,12 +5548,14 @@ def test_version():
     assert main(app, ['version']) == (0, '1.2.3\n')
     # no -v short: the user's verbose keeps it, unambiguously
     assert main(app, ['work', '-v']) == (0, 'work True\n')
-    # the version command takes no arguments, loudly
+    # the version command takes no arguments, loudly: it saturates at zero
+    # operands and yields 'extra', which names no command (streaming dispatch,
+    # run-as-you-go -- a leaf command doesn't reject trailing tokens, the set
+    # diagnoses the unclaimed word)
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         code, out = main(app, ['version', 'extra'])
-    assert code == 2 and ('takes no arguments' in err.getvalue()
-                          or 'expected 0' in err.getvalue())
+    assert code == 2 and 'extra' in err.getvalue(), err.getvalue()
     # the listing documents it (before help, v1's order)
     code, out = main(app, ['help'])
     assert code == 0
