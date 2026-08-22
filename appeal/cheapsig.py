@@ -71,11 +71,17 @@ class Signature:
         self.parameters = parameters
 
 
+class _Uninspectable(Exception):
+    "No __code__ to read -- signature() falls back to the real inspect."
+
+
 def _resolve(callable):
     """
     Find the __code__-bearing function behind a callable and whether its first
     positional (self/cls) should be dropped -- mirroring what inspect.signature
     does for classes, methods, and callable instances.  Returns (func, skip).
+    Raises _Uninspectable for code-less callables (builtins), which signature()
+    hands to the real inspect (Argument Clinic gives most builtins signatures).
     """
     # a plain function / lambda
     if hasattr(callable, '__code__'):
@@ -99,14 +105,14 @@ def _resolve(callable):
             return new, True
         if init is object.__init__ and new is object.__new__:
             return None, False                  # a plain class: no parameters
-        raise ValueError(f'no signature found for builtin type {callable!r}')
+        raise _Uninspectable                    # a builtin type: real inspect
 
     # a callable instance: its __call__ (drop self)
     call = getattr(type(callable), '__call__', None)
     if call is not None and hasattr(call, '__code__'):
         return call, True
 
-    raise ValueError(f'no signature found for {callable!r}')
+    raise _Uninspectable                        # a builtin/uninspectable callable
 
 
 def signature(callable):
@@ -118,7 +124,14 @@ def signature(callable):
         import inspect
         return inspect.signature(callable)
 
-    func, skip = _resolve(callable)
+    try:
+        func, skip = _resolve(callable)
+    except _Uninspectable:
+        # a builtin / C callable: hand it to the real inspect, which knows the
+        # Argument Clinic signatures most builtins now carry (and raises the
+        # same ValueError we would when there genuinely isn't one).
+        import inspect
+        return inspect.signature(callable)
     if func is None:
         return Signature({})
 
