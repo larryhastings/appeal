@@ -2223,10 +2223,12 @@ PARITY_CASES = [
             ('ok', ('dot', (('a', 'b'), ('c', 'd')), ((9, 8, 7), 2.5)))),
     (draw,  ['dot', 'a', 'b', 'c', 'd', '9'], None),
     (draw,  ['dot', 'a', 'b', 'c', 'd', '9', 'x', '7'], None),  # conversion error inside child
-    # ---- the automaton's ambiguity resolution ----
+    # ---- fill left to right, no completability search (the retired
+    # automaton skipped optional `a` to complete `p`; the ruled greedy
+    # engine fills `a='x'` and lets `p` starve -- [[fill-left-to-right]])
     (ambig, [],                             ('ok', ('A', 'P'))),
     (ambig, ['q'],                          ('ok', ('q', 'P'))),
-    (ambig, ['x', 'y'],                     ('ok', ('A', ('x', 'y')))),
+    (ambig, ['x', 'y'],                     None),   # a='x', p wants 2, y left
     (ambig, ['q', 'x', 'y'],                ('ok', ('q', ('x', 'y')))),
     (ambig, ['1', '2', '3', '4'],           None),
 ]
