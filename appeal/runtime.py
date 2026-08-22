@@ -3160,7 +3160,7 @@ class ValueBinding:
             return
         if value is None:
             if processor.peek() is None:
-                raise UsageError(f"option {self.name!r} needs a value", None)
+                raise UsageError(f"option {self.name!r} requires a value", None)
             value = processor.advance()                 # raw: no option check
         self.instance.kwargs[self.name] = convert(conv, value, self.name)
     def _multi(self, processor, conv, value):
@@ -3305,7 +3305,7 @@ class ConjureValueBinding:
             processor.conjured[self.slot] = obj
         if value is None:
             if processor.peek() is None:
-                raise UsageError(f"option {self.name!r} needs a value", None)
+                raise UsageError(f"option {self.name!r} requires a value", None)
             value = processor.advance()             # raw: no option check
         obj.kwargs[self.name] = convert(self.converter, value, self.name)
 
