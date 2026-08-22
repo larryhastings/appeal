@@ -304,8 +304,7 @@ def _read_fold(cls, data):
     """
     An Option subclass as the callable: the protocol, read-side--
     init(default) once, option() per occurrence (an Option reads
-    a sequence of occurrences; a StrictOption reads exactly one),
-    render() produces the value.
+    a sequence of occurrences), render() produces the value.
     """
     plan = build_plan(cls.option, name=cls.__name__, method_of=cls.__name__)
     if is_multioption(cls):
@@ -340,7 +339,7 @@ def read_mapping(callable, mapping):
     a sub-mapping under their parameter's name, or flat keys at the
     same level; defaults fill absent keys; extra keys are ignored.
     An Option subclass folds: it reads a sequence of occurrences,
-    option() per element (a StrictOption reads one occurrence).
+    option() per element.
     """
     if is_option(callable):
         return _read_fold(callable, mapping)

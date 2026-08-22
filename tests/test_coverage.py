@@ -560,31 +560,12 @@ def test_read_fold_options():
         def render(self):
             return self.spots
 
-    class Once(appeal.StrictOption):
-        def init(self, default):
-            self.v = default
-        def option(self, v: int):
-            self.v = v
-        def render(self):
-            return self.v
-
-    class Loud(appeal.StrictOption):
-        def init(self, default):
-            self.on = False
-        def option(self):
-            self.on = True
-        def render(self):
-            return self.on
-
-    def cmd(*, bump: Bump = 0, where: Where = None,
-            once: Once = None, loud: Loud = False):
-        return (bump, where, once, loud)
-    # arity 0 folds read a count; arity-k folds a sequence of
-    # k-sequences; fold1 reads ONE occurrence (arity 0: a boolean)
-    got = read_mapping(cmd, {'bump': 3, 'where': [[1, 2], [3, 4]],
-                             'once': 9, 'loud': True})
-    assert got == (3, [(1, 2), (3, 4)], 9, True), got
-    assert read_mapping(cmd, {'loud': False}) == (0, None, None, False)
+    def cmd(*, bump: Bump = 0, where: Where = None):
+        return (bump, where)
+    # arity 0 folds read a count; arity-k folds a sequence of k-sequences
+    got = read_mapping(cmd, {'bump': 3, 'where': [[1, 2], [3, 4]]})
+    assert got == (3, [(1, 2), (3, 4)]), got
+    assert read_mapping(cmd, {}) == (0, None)
     for bad, complaint in (({'bump': 'x'}, 'count'),
                            ({'where': 9}, 'sequence of occurrences'),
                            ({'where': [[1]]}, 'sequence of 2')):
@@ -606,20 +587,10 @@ def test_read_fold_top_level():
         def render(self):
             return self.rows
 
-    class Only(appeal.StrictOption):
-        def init(self, default):
-            self.v = default
-        def option(self, v: int):
-            self.v = v
-        def render(self):
-            return self.v
-
     # an Option as the callable itself: occurrences read as
-    # mappings OR sequences (defaults fill), a StrictOption reads
-    # exactly one occurrence
+    # mappings OR sequences (defaults fill)
     got = read_mapping(Where, [[1, 2], [3], {'x': 5, 'y': 6}])
     assert got == [(1, 2), (3, 0), (5, 6)], got
-    assert read_mapping(Only, [7]) == 7
     try:
         read_mapping(Where, 5)
         assert False, 'expected AppealDataError'
@@ -1560,7 +1531,6 @@ def test_run_main_completion_param():
 
 
 def test_option_abc_and_predicates():
-    from appeal.runtime import is_strict_option
     o = appeal.Option()
     assert o.init(None) is None
     for method in (o.option, o.render):
@@ -1569,12 +1539,11 @@ def test_option_abc_and_predicates():
             assert False, 'expected NotImplementedError'
         except NotImplementedError:
             pass
-    assert is_strict_option(42) is False
 
 
 def test_windowed_option_kinds():
-    # per-window merging: fold1 at most once, flags, accumulation
-    class At(appeal.StrictOption):
+    # per-window merging: an Option (last-wins), flags, accumulation
+    class At(appeal.Option):
         def init(self, default):
             self.v = default
         def option(self, v: int):
@@ -1590,8 +1559,8 @@ def test_windowed_option_kinds():
     got = both(f, ['a', '--at', '1', '--flag',
                    '--tags', 't1', '--tags', 't2'])
     assert got == ('ok', (('a', 1, True, ('t1', 't2')),)), got
-    got = both(f, ['a', '--at', '1', '--at', '2'])
-    assert got[0] == 'usage', got
+    got = both(f, ['a', '--at', '1', '--at', '2'])   # repeatable: last wins
+    assert got == ('ok', (('a', 2, False, ()),)), got
 
 
 def test_converter_body_errors():

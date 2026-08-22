@@ -29,7 +29,7 @@ from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
 from .plan import _validate_arg_format
 from .runtime import (
     AppealConfigurationError, AppealDataError, AppealError,
-    CommandError, MultiOption, Option, StrictOption,
+    CommandError, MultiOption, Option,
     UsageError, accumulator, counter, file, mapping, optional,
     run_main, split,
     validate, validate_range,

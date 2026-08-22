@@ -814,9 +814,8 @@ class Option:
       * render()      -- the final value passed to the command.
 
     An Option may be given any number of times (ruled 2026-07-09:
-    repetition is the norm--getopt, argparse, click; subclass
-    StrictOption to declare "at most once").  If the option is
-    never given, the class is never instantiated: the parameter's
+    repetition is the norm--getopt, argparse, click).  If the option
+    is never given, the class is never instantiated: the parameter's
     default passes through untouched.
     """
     def init(self, default):
@@ -832,13 +831,12 @@ class Option:
 # v1's name for a repeatable Option--which is now every Option
 MultiOption = Option
 
-
-class StrictOption(Option):
-    """
-    An Option that may be given AT MOST ONCE: a second occurrence
-    is "specified more than once", loudly.  (v1 called this
-    Option; strictness is opt-in now, so it gets the louder name.)
-    """
+# NOTE: StrictOption (an Option given AT MOST ONCE, else "specified more than
+# once") was removed 2026-08-22 -- no demonstrable demand, no precedent in
+# argparse/click (both last-wins by default).  To restore: re-add the
+# `class StrictOption(Option)` + `is_strict_option`, make is_multioption exclude
+# it, and set kind='fold1' in build for a strict Option (the fold1 handling
+# downstream is still in place).
 
 
 def _foreign_option(annotation, protocol):
@@ -860,16 +858,9 @@ def is_option(annotation):
             or _foreign_option(annotation, 'Option'))
 
 
-def is_strict_option(annotation):
-    if not isinstance(annotation, type):
-        return False
-    return (issubclass(annotation, StrictOption)
-            or _foreign_option(annotation, 'StrictOption'))
-
-
 def is_multioption(annotation):
-    "A repeatable option class: any Option that isn't strict."
-    return is_option(annotation) and not is_strict_option(annotation)
+    "A repeatable option class -- now every Option (StrictOption removed)."
+    return is_option(annotation)
 
 
 def fold(cls, converters, occurrences, default, name, usage=None):
@@ -3214,22 +3205,18 @@ class MultiBinding:
     option leaves the parameter's default untouched), init()'d with that
     default, and fed once per occurrence.  render() happens at finalize.
     """
-    __slots__ = ('owner', 'name', 'factory', 'converters', 'minimum', 'strict')
+    __slots__ = ('owner', 'name', 'factory', 'converters', 'minimum')
     def __init__(self, owner, name, factory):
         self.owner = owner
         self.name = name
         self.factory = factory
         self.converters, self.minimum = _oparg_converters(factory)
-        self.strict = is_strict_option(factory)     # at most once, loudly
     def invoke(self, processor, value=None):
         instance = self.owner.multis.get(self.name)
-        if instance is None:
-            instance = self.factory()
-            instance.init(_default(self.owner, self.name))
+        if instance is None:                        # every Option is repeatable
+            instance = self.factory()               # (StrictOption removed
+            instance.init(_default(self.owner, self.name))  # 2026-08-22)
             self.owner.multis[self.name] = instance
-        elif self.strict:                           # a second occurrence of a
-            raise UsageError(                       # StrictOption is an error
-                f"option {self.name!r} specified more than once", None)
         opargs = []
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)

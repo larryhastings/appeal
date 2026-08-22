@@ -822,10 +822,10 @@ def test_multiparam_option_converters():
 def test_option_class_repetition():
     # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09): Option
     # is repeatable--option() called once per occurrence, exactly
-    # as you'd think.  StrictOption is the one way to declare
-    # "at most once"; v1 spelled that Option.  MultiOption is an
-    # alias of Option now.
-    from appeal import MultiOption, Option, StrictOption
+    # as you'd think.  MultiOption is an alias of Option now.  (v1's
+    # at-most-once StrictOption was removed 2026-08-22: no demand, no
+    # precedent in argparse/click.)
+    from appeal import MultiOption, Option
     assert MultiOption is Option
 
     class Where(Option):
@@ -846,21 +846,6 @@ def test_option_class_repetition():
     # repetition: option() ran twice; render() decided
     got = run_both(f, ['--where', '1', '2', '--where', '5', '6'])
     assert got == ('ok', (5, 6)), got
-
-    class StrictWhere(StrictOption):
-        def init(self, default):
-            self.x = self.y = None
-        def option(self, x: int, y: int):
-            self.x, self.y = x, y
-        def render(self):
-            return (self.x, self.y)
-
-    def g(*, where: StrictWhere = 'nowhere'):
-        return where
-    got = run_both(g, ['--where', '3', '4'])
-    assert got == ('ok', (3, 4)), got
-    got = run_both(g, ['--where', '1', '2', '--where', '5', '6'])
-    assert got[0] == 'usage' and 'more than once' in got[1], got
 
 def test_flag_presence_stores_not_default():
     # v1 semantics, restored 2026-07-18 (Larry's break #1): a
@@ -2822,7 +2807,7 @@ def test_completion():
     assert app.complete([], '--l') == ['--loud']
 
 def test_read_mapping_option_classes():
-    from appeal import MultiOption, StrictOption, read_mapping
+    from appeal import MultiOption, read_mapping
     class Tags(MultiOption):
         def init(self, default):
             self.values = list(default) if default else []
@@ -2830,15 +2815,6 @@ def test_read_mapping_option_classes():
             self.values.append(tag)
         def render(self):
             return tuple(self.values)
-    class Where(StrictOption):
-        # a StrictOption reads ONE occurrence (v1 Option's shape);
-        # a plain Option reads a sequence of occurrences
-        def init(self, default):
-            self.x = self.y = None
-        def option(self, x: int, y: int):
-            self.x, self.y = x, y
-        def render(self):
-            return (self.x, self.y)
     class Verbosity(MultiOption):
         def init(self, default):
             self.level = default
@@ -2846,14 +2822,12 @@ def test_read_mapping_option_classes():
             self.level += 1
         def render(self):
             return self.level
-    def f(name, *, tag: Tags = ('seed',), where: Where = 'nowhere',
-          v: Verbosity = 0):
-        return (name, tag, where, v)
-    got = read_mapping(f, {'name': 'n', 'tag': ['a', 'b'],
-                           'where': ['3', '4'], 'v': 2})
-    assert got == ('n', ('seed', 'a', 'b'), (3, 4), 2), got
+    def f(name, *, tag: Tags = ('seed',), v: Verbosity = 0):
+        return (name, tag, v)
+    got = read_mapping(f, {'name': 'n', 'tag': ['a', 'b'], 'v': 2})
+    assert got == ('n', ('seed', 'a', 'b'), 2), got
     got = read_mapping(f, {'name': 'n'})
-    assert got == ('n', ('seed',), 'nowhere', 0), got
+    assert got == ('n', ('seed',), 0), got
 
 def test_split_matches_v1_multisplit_semantics():
     # v1's split is big.multisplit, and now so is v2's: one pass,
@@ -5669,28 +5643,6 @@ def test_cycling():
         pass
 
 
-MULTIOPT_MODULE = """\
-from appeal import MultiOption, StrictOption
-
-class Tags(MultiOption):
-    def init(self, default):
-        self.values = list(default) if default else []
-    def option(self, tag):
-        self.values.append(tag)
-    def render(self):
-        return tuple(self.values)
-
-class Where(StrictOption):
-    def init(self, default):
-        self.x = self.y = None
-    def option(self, x: int, y: int):
-        self.x, self.y = x, y
-    def render(self):
-        return f'{self.x}x{self.y}'
-
-def label(thing, *, tag: Tags = (), where: Where = 'nowhere'):
-    print('label', thing, '+'.join(tag), where)
-"""
 
 NESTED_MODULE = """\
 def db(*, verbose=False):
