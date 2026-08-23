@@ -99,6 +99,16 @@ EXPECTED_FAILURES = frozenset((
     'SmokeTests.test_two_or_more_files_1',
     'SmokeTests.test_two_or_more_files_2',
     'SmokeTests.test_two_or_more_files_usage',
+    # more dash-mangled command names (str_i_f -> str-i-f); these were
+    # migrated to assert v2 messages but never reach them, blocked on the
+    # command word.
+    'SmokeTests.test_str_i_f_1',
+    'SmokeTests.test_str_i_f_2',
+    'SmokeTests.test_str_i_f_4',
+    # v2 deliberately diverges: a parent command does NOT require a
+    # subcommand -- there's no synthesized dispatcher, a parent runs its own
+    # body ([[no-pure-dispatcher]]).  v1 rejected a bare parent.
+    'SubcommandTests.test_parent_command_without_subcommand_rejected',
 ))
 
 
