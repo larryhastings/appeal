@@ -1534,7 +1534,7 @@ def test_toy_multisplit_and_bytes_iter():
     # _toy_multisplit is snipped into the appeal core (stdlib-only, so
     # the core imports nothing from big); _iterate_over_bytes still
     # rides in for the render side
-    from appeal import _toy_multisplit
+    from appeal.converters import _toy_multisplit
     from appeal.presentation import _iterate_over_bytes
     assert list(_iterate_over_bytes('ab')) == ['a', 'b']
     assert _toy_multisplit('a,b', ',') == [('a', ','), ('b', '')]
@@ -1717,7 +1717,7 @@ def test_vocabulary_validation():
 
 
 def test_process_stream_edges():
-    from appeal import _ProcessStream
+    from appeal.converters import _ProcessStream
     class Cranky(io.StringIO):
         def flush(self):
             raise OSError('nope')
