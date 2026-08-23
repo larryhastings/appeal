@@ -1712,7 +1712,7 @@ class SmokeTests(AppealTestsBase):
             def option(self, value:int=0):
                 self.value = value
 
-            def render(self):
+            def __call__(self):
                 return self.value
 
         @command
@@ -2975,7 +2975,7 @@ class ConfigFileReadingTests(AppealTestsBase):
                 self.results = []
             def option(self, x:int, y:int):
                 self.results.append((x, y))
-            def render(self):
+            def __call__(self):
                 return self.results
         def cfg(pairs:TwoParam):
             return pairs

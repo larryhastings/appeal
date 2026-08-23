@@ -394,7 +394,7 @@ def _config_apply(conv, table, global_plan, config, plan_for):
         proc.enter(cfg_conv)
         proc._loop()
         for mname, inst in cfg_conv.multis.items():
-            cfg_conv.kwargs[mname] = inst.render()
+            cfg_conv.kwargs[mname] = inst()
     except UsageError as e:                     # provenance: it came from config
         raise AppealDataError(f"config: {e}", getattr(e, 'usage', None) or usage,
                               param=getattr(e, 'param', None)) from None

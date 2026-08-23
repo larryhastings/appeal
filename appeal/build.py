@@ -546,7 +546,7 @@ def _fold_leaf(cls, converters):
                         f"{len(elements)} values")
             instance.option(*[convert(v) for convert, v
                               in zip(elements, row)])
-        return instance.render()
+        return instance()
     fold_positional.__name__ = cls.__name__
     return fold_positional
 

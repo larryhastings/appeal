@@ -811,7 +811,10 @@ class Option:
         command-line order; its signature defines the option's
         operands (each parameter one operand, converted per its
         annotation);
-      * render()      -- the final value passed to the command.
+      * __call__()    -- (zero args) the final value passed to the
+        command; renders the accumulated occurrences.  (1.0 renamed
+        this from v1's render(); everything Appeal defers is rendered
+        by calling it.)
 
     An Option may be given any number of times (ruled 2026-07-09:
     repetition is the norm--getopt, argparse, click).  If the option
@@ -824,7 +827,7 @@ class Option:
     def option(self):
         raise NotImplementedError
 
-    def render(self):
+    def __call__(self):
         raise NotImplementedError
 
 
@@ -878,7 +881,7 @@ def fold(cls, converters, occurrences, default, name, usage=None):
         except (ValueError, TypeError) as e:
             raise UsageError(f"{name}: {e}", usage,
                              param=name) from None
-    return instance.render()
+    return instance()
 
 
 def greedy_sizes(take, minimum, maximum, name, usage=None):
@@ -2623,7 +2626,7 @@ def counter(*, max=None, step=1):
         def option(self):
             self.value += step
 
-        def render(self):
+        def __call__(self):
             if ceiling is not None and self.value > ceiling:
                 return ceiling
             return self.value
@@ -2823,7 +2826,7 @@ class accumulator(MultiOption, metaclass=_Subscriptable):
     def option(self, value):
         self.values.append(value)
 
-    def render(self):
+    def __call__(self):
         return self.values
 
     @classmethod
@@ -2869,7 +2872,7 @@ class mapping(MultiOption, metaclass=_Subscriptable):
             raise ValueError(f"key {key_text!r} defined more than once")
         self.values[key] = self._value_converter(value_text)
 
-    def render(self):
+    def __call__(self):
         return self.values
 
     @classmethod
@@ -3417,7 +3420,7 @@ class Converter:
                 detail = str(e) or f'not a valid {name}'
                 raise UsageError(f"not a valid {name}: {detail}", None) from None
         for name, instance in self.multis.items():
-            self.kwargs[name] = instance.render()
+            self.kwargs[name] = instance()
         for name, value in self.kwargs.items():         # group-option values
             if isinstance(value, Converter):
                 self.kwargs[name] = render(value)

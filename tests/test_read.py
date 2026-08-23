@@ -80,7 +80,7 @@ class TestReadMapping(unittest.TestCase):
                 self.values = []
             def option(self, a, b, c, d, e:darth_vader, f:platformer):
                 self.values.append((self.__class__, a, b, c, d, e, f))
-            def render(self):
+            def __call__(self):
                 return self.values
 
         mapping = perky.load("read_corpus/multiperky1.pky", root=[])
@@ -134,7 +134,7 @@ class TestReadMapping(unittest.TestCase):
                 self.values = []
             def option(self, spyro, sparx):
                 self.values.append((self.__class__, spyro, sparx))
-            def render(self):
+            def __call__(self):
                 return self.values
 
 
@@ -173,7 +173,7 @@ class TestReadMapping(unittest.TestCase):
                 self.values = []
             def option(self, i:int):
                 self.values.append((self.__class__, i))
-            def render(self):
+            def __call__(self):
                 return self.values
 
         class platformer(appeal.MultiOption):
@@ -181,7 +181,7 @@ class TestReadMapping(unittest.TestCase):
                 self.values = []
             def option(self, ints:array_of_ints):
                 self.values.append((self.__class__, ints))
-            def render(self):
+            def __call__(self):
                 return self.values
 
 

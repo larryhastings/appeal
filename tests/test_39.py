@@ -269,16 +269,21 @@ def test_generic_refusals():
 
 
 def test_generic_scoped_overlay():
-    # scoped list[T]/dict[K,V] options: rung 1 converts the top
-    # window's occurrences through the overlay's accumulate and
-    # mapping branches
+    # scoped list[T]/dict[K,V] options shared between cmd and its converter
+    # group `a`: POSITION decides the window ([[options-never-summoned]] --
+    # an option can't conjure `a` past its required `p`).  --tags/--env BEFORE
+    # the operand that fills p bind to cmd (a's window isn't open yet), and run
+    # through the accumulate/mapping overlays.
     def child(p, *, tags: list[str] = (), env: dict[str, str] = None):
         return p
     def cmd(a: child = None, *, tags: list[str] = (),
             env: dict[str, str] = None):
         return (a, tuple(tags), env)
-    got = run_both(cmd, ['A', '--tags', 't', '--env', 'k=v'])
+    got = run_both(cmd, ['--tags', 't', '--env', 'k=v', 'A'])
     assert got == ('ok', ('A', ('t',), {'k': 'v'})), got
+    # AFTER the operand, the child's window is open, so they bind there instead
+    got = run_both(cmd, ['A', '--tags', 't', '--env', 'k=v'])
+    assert got == ('ok', ('A', (), None)), got
 
 
 def run_tests(run=None):

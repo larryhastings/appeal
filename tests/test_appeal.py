@@ -518,7 +518,7 @@ def test_multioption_fold():
             self.values = list(default) if default else []
         def option(self, tag):
             self.values.append(tag)
-        def render(self):
+        def __call__(self):
             return tuple(self.values)
 
     class Points(MultiOption):
@@ -526,7 +526,7 @@ def test_multioption_fold():
             self.pts = []
         def option(self, x: int, y: int):
             self.pts.append((x, y))
-        def render(self):
+        def __call__(self):
             return self.pts
 
     def f(x, *, tag: Tags = ('seed',), pt: Points = None):
@@ -557,7 +557,7 @@ def test_multioption_zero_arity():
             self.level = default
         def option(self):
             self.level += 1
-        def render(self):
+        def __call__(self):
             return self.level
     def f(*, v: Verbosity = 0):
         return v
@@ -833,7 +833,7 @@ def test_option_class_repetition():
             self.calls = []
         def option(self, x: int, y: int):
             self.calls.append((x, y))
-        def render(self):
+        def __call__(self):
             return self.calls[-1] if self.calls else None
 
     def f(*, where: Where = 'nowhere'):
@@ -1823,7 +1823,7 @@ def test_multioption_refusals_are_named():
     class Tags(MultiOption):
         def init(self, default): pass
         def option(self, tag): pass
-        def render(self): pass
+        def __call__(self): pass
     # single-arity Option classes work positionally (v1's corpus:
     # mapping readers feed them sequences of occurrences)
     class Collect(MultiOption):
@@ -1831,7 +1831,7 @@ def test_multioption_refusals_are_named():
             self.values = []
         def option(self, tag):
             self.values.append(tag)
-        def render(self):
+        def __call__(self):
             return tuple(self.values)
     def positional(t: Collect):
         return t
@@ -1846,7 +1846,7 @@ def test_multioption_refusals_are_named():
             self.values = []
         def option(self, x: int, y: int):
             self.values.append((x, y))
-        def render(self):
+        def __call__(self):
             return tuple(self.values)
     def positional2(p: Pairs):
         return p
@@ -1859,7 +1859,7 @@ def test_multioption_refusals_are_named():
     class Fancy(MultiOption):
         def init(self, default): pass
         def option(self, tag='x'): pass
-        def render(self): pass
+        def __call__(self): pass
     def f(*, t: Fancy = None):
         pass
     # an optional option() parameter is legal as an option--its
@@ -1966,7 +1966,7 @@ def test_greedy_opargs():
             self.value = default
         def option(self, x, y='Y'):
             self.value = (x, y)
-        def render(self):
+        def __call__(self):
             return self.value
     def locate(a='A', *, where: Where = None):
         return (a, where)
@@ -2813,14 +2813,14 @@ def test_read_mapping_option_classes():
             self.values = list(default) if default else []
         def option(self, tag):
             self.values.append(tag)
-        def render(self):
+        def __call__(self):
             return tuple(self.values)
     class Verbosity(MultiOption):
         def init(self, default):
             self.level = default
         def option(self):
             self.level += 1
-        def render(self):
+        def __call__(self):
             return self.level
     def f(name, *, tag: Tags = ('seed',), v: Verbosity = 0):
         return (name, tag, v)
@@ -4423,7 +4423,7 @@ def test_nested_completion():
         ['db', 'help', 'status']
 
 
-MCP_MODULE = 'from appeal import MultiOption, accumulator\n\nclass Marks(MultiOption):\n    def init(self, default):\n        self.values = list(default) if default else []\n    def option(self, mark):\n        self.values.append(mark)\n    def render(self):\n        return tuple(self.values)\n\ndef add(x: int, y: int):\n    """\n    Adds two integers.\n    """\n    return x + y\n\ndef shout(text, *, times: int = 1, tags: accumulator[str] = (),\n          marks: Marks = ()):\n    return (\' \'.join([text.upper()] * times)\n            + \'\'.join(f\' #{t}\' for t in tags)\n            + \'\'.join(f\' !{m}\' for m in marks))\n'
+MCP_MODULE = 'from appeal import MultiOption, accumulator\n\nclass Marks(MultiOption):\n    def init(self, default):\n        self.values = list(default) if default else []\n    def option(self, mark):\n        self.values.append(mark)\n    def __call__(self):\n        return tuple(self.values)\n\ndef add(x: int, y: int):\n    """\n    Adds two integers.\n    """\n    return x + y\n\ndef shout(text, *, times: int = 1, tags: accumulator[str] = (),\n          marks: Marks = ()):\n    return (\' \'.join([text.upper()] * times)\n            + \'\'.join(f\' #{t}\' for t in tags)\n            + \'\'.join(f\' !{m}\' for m in marks))\n'
 
 
 def _drive_mcp(script_path, requests):

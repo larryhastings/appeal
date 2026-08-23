@@ -164,7 +164,7 @@ def _option_value(o, value, path):
     instance.init(o.default)
     for occurrence in occurrences:
         instance.option(*occurrence_args(occurrence, path))
-    return instance.render()
+    return instance()
 
 
 def _subtree_names(plan):
@@ -328,7 +328,7 @@ def _read_fold(cls, data):
             _fail(f"expected a mapping or a sequence, got "
                   f"{occurrence!r}", path)
         instance.option(*args, **kwargs)
-    return instance.render()
+    return instance()
 
 
 def read_mapping(callable, mapping):

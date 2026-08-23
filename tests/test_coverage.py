@@ -412,7 +412,7 @@ def test_schema_branches():
             self.value = default
         def option(self, x: int):
             self.value = x
-        def render(self):
+        def __call__(self):
             return self.value
 
     def sub(host, port: int = 8080):
@@ -549,7 +549,7 @@ def test_read_fold_options():
             self.n = 0
         def option(self):
             self.n += 1
-        def render(self):
+        def __call__(self):
             return self.n
 
     class Where(appeal.Option):
@@ -557,7 +557,7 @@ def test_read_fold_options():
             self.spots = []
         def option(self, x: int, y: int):
             self.spots.append((x, y))
-        def render(self):
+        def __call__(self):
             return self.spots
 
     def cmd(*, bump: Bump = 0, where: Where = None):
@@ -584,7 +584,7 @@ def test_read_fold_top_level():
             self.rows = []
         def option(self, x: int, y: int = 0):
             self.rows.append((x, y))
-        def render(self):
+        def __call__(self):
             return self.rows
 
     # an Option as the callable itself: occurrences read as
@@ -851,7 +851,7 @@ def test_config_inject_shapes():
             self.total = 0
         def option(self, v: int):
             self.total += v
-        def render(self):
+        def __call__(self):
             return self.total
 
     def pt(x: int, y: int):
@@ -1221,7 +1221,7 @@ def test_build_fold_leaf_shapes():
             self.n = 0
         def option(self):
             self.n += 1
-        def render(self):
+        def __call__(self):
             return self.n
 
     class Move(appeal.Option):
@@ -1229,7 +1229,7 @@ def test_build_fold_leaf_shapes():
             self.spot = None
         def option(self, x: int, y: int):
             self.spot = (x, y)
-        def render(self):
+        def __call__(self):
             return self.spot
 
     def f(b: Bump):
@@ -1256,7 +1256,7 @@ def test_build_fold_element_multiparam_refused():
             pass
         def option(self, spot: pairfn):
             pass
-        def render(self):
+        def __call__(self):
             return None
 
     def f(*, w: W = None):
@@ -1357,7 +1357,7 @@ def test_build_var_positional_option_class_refused():
             pass
         def option(self):
             pass
-        def render(self):
+        def __call__(self):
             return None
     def f(*occ: Bump):
         return occ
@@ -1533,7 +1533,7 @@ def test_run_main_completion_param():
 def test_option_abc_and_predicates():
     o = appeal.Option()
     assert o.init(None) is None
-    for method in (o.option, o.render):
+    for method in (o.option, o):        # render is __call__ now
         try:
             method()
             assert False, 'expected NotImplementedError'
@@ -1548,7 +1548,7 @@ def test_windowed_option_kinds():
             self.v = default
         def option(self, v: int):
             self.v = v
-        def render(self):
+        def __call__(self):
             return self.v
 
     def rep(x, *, at: At = None, flag=False,
@@ -2784,7 +2784,7 @@ class PtOpt(appeal.Option):
         self.v = dict(default) if default else {}
     def option(self, k, v):
         self.v[k] = v
-    def render(self):
+    def __call__(self):
         return self.v
 
 def sneaky_default(x, *, pt: PtOpt = Sneaky({'a': 1})):
