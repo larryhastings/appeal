@@ -196,7 +196,7 @@ def test_generic_kind_reads_and_schema():
     # 'object' for dict[K,V]--the generic spellings own these
     # kinds (accumulator()/mapping() are folds)
     from appeal import read_mapping
-    from appeal.schema import mcp_input_schema
+    from appeal.mcp import mcp_input_schema
     def cmd(*, env: dict[str, int] = None, tags: list[str] = ()):
         return (env, tuple(tags))
     got = read_mapping(cmd, {'env': {'k': '1'}, 'tags': ['a', 'b']})

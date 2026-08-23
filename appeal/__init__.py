@@ -705,7 +705,7 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         # render is imported lazily--only when an error actually
         # prints, so the success path (and `import appeal`)
         # never pays big's ~40ms
-        from .render import resolve_stylesheet, style
+        from .presentation import resolve_stylesheet, style
         sheet = resolve_stylesheet(stylesheet, error_stream())
         return sheet.render(style('error', 'error:'))
 
@@ -714,7 +714,7 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         # (pieces), finished here--at the real margin, styled for
         # the error stream (errors ride the pipeline too, ruled
         # 2026-08-06)
-        from .render import render_baked_help, help_margin
+        from .presentation import render_baked_help, help_margin
         if isinstance(usage, tuple):
             print(render_baked_help(usage, margin=help_margin(margin),
                                     file=error_stream(),
@@ -1220,79 +1220,6 @@ def completion_reentry(completer, prog):
     return 0
 
 
-def run_mcp(tools, name, version='0'):
-    """
-    Serve this program's commands as MCP tools: JSON-RPC 2.0 over
-    stdio, newline-delimited--the Model Context Protocol's stdio
-    transport, stdlib only.  tools maps a tool name to
-    (description, input_schema, call) where call takes the
-    arguments mapping and returns the result.
-
-    Runs until stdin closes.  Returns 0.
-    """
-    import json
-    import sys
-
-    def reply(id, result=None, error=None):
-        message = {'jsonrpc': '2.0', 'id': id}
-        if error is not None:
-            message['error'] = error
-        else:
-            message['result'] = result
-        sys.stdout.write(json.dumps(message) + '\n')
-        sys.stdout.flush()
-
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-        except ValueError:
-            continue
-        method = request.get('method', '')
-        id = request.get('id')
-        if method == 'initialize':
-            reply(id, {
-                'protocolVersion':
-                    request.get('params', {}).get('protocolVersion',
-                                                  '2024-11-05'),
-                'capabilities': {'tools': {}},
-                'serverInfo': {'name': name, 'version': version},
-            })
-        elif method == 'notifications/initialized':
-            pass
-        elif method == 'ping':
-            reply(id, {})
-        elif method == 'tools/list':
-            reply(id, {'tools': [
-                {'name': tool, 'description': description,
-                 'inputSchema': schema}
-                for tool, (description, schema, call)
-                in sorted(tools.items())]})
-        elif method == 'tools/call':
-            params = request.get('params', {})
-            tool = tools.get(params.get('name'))
-            if tool is None:
-                reply(id, error={'code': -32602,
-                                 'message': f"unknown tool "
-                                            f"{params.get('name')!r}"})
-                continue
-            description, schema, call = tool
-            try:
-                result = call(params.get('arguments') or {})
-            except AppealDataError as e:
-                reply(id, {'content': [{'type': 'text',
-                                        'text': str(e)}],
-                           'isError': True})
-                continue
-            reply(id, {'content': [{'type': 'text',
-                                    'text': '' if result is None
-                                            else str(result)}]})
-        elif id is not None:
-            reply(id, error={'code': -32601,
-                             'message': f'unknown method {method!r}'})
-    return 0
 
 
 ##
@@ -2800,14 +2727,14 @@ _LAZY_REEXPORTS = {
     'default_short_option': 'build',
     'strip_first_argument_from_signature': 'build',
     'strip_self_from_signature': 'build',
-    'appeal_markdown_defaults': 'render', 'appeal_theme': 'render',
-    'uncolored_theme': 'render', 'plain_theme': 'render',
-    'dark_cool_theme': 'render', 'dark_warm_theme': 'render',
-    'light_cool_theme': 'render', 'light_warm_theme': 'render',
-    'resolve_stylesheet': 'render', 'help_stylesheet': 'render',
-    'completions': 'complete', 'completions_set': 'complete',
-    'read_csv': 'read', 'read_iterable': 'read', 'read_mapping': 'read',
-    'describe': 'schema', 'describe_set': 'schema',
+    'appeal_markdown_defaults': 'presentation', 'appeal_theme': 'presentation',
+    'uncolored_theme': 'presentation', 'plain_theme': 'presentation',
+    'dark_cool_theme': 'presentation', 'dark_warm_theme': 'presentation',
+    'light_cool_theme': 'presentation', 'light_warm_theme': 'presentation',
+    'resolve_stylesheet': 'presentation', 'help_stylesheet': 'presentation',
+    'completions': 'completion', 'completions_set': 'completion',
+    'read_csv': 'load', 'read_iterable': 'load', 'read_mapping': 'load',
+    'describe': 'mcp', 'describe_set': 'mcp', 'run_mcp': 'mcp',
 }
 
 
@@ -2934,7 +2861,7 @@ def _config_inject(vetted, config, given, usage, scoped_keys=frozenset()):
     read_mapping style--its parameters by name AND its own options,
     recursively.  Returns the injected keys.
     """
-    from .read import _read_bool
+    from .load import _read_bool
     injected = {}
 
     def shape(name, rule, value):
@@ -3044,7 +2971,7 @@ def _config_apply(conv, table, global_plan, config, plan_for):
     rides the ordinary conversion pipeline.  Conversion failures carry
     'config:' provenance (an option argv already gave wins whole).
     """
-    from .read import _read_bool
+    from .load import _read_bool
     vetted = _config_vet(global_plan, frozenset(table), config, plan_for)
     given = set(conv.kwargs)            # options (folds included) all live here now
     usage = global_plan.usage()
@@ -3509,7 +3436,7 @@ class Appeal:
     def templates(self):
         "The help template; loaded from render lazily (off the fast path)."
         if self._templates is None:
-            from .render import default_template
+            from .presentation import default_template
             self._templates = default_template
         return self._templates
 
@@ -3697,10 +3624,10 @@ class Appeal:
         # its subcommand listing (like `prog topic --help`); a leaf shows its
         # command page.
         node = root._node_for(topic)
-        from .render import help_margin, render_help_page
+        from .presentation import help_margin, render_help_page
         if node is not None and node._table():
             from .plan import command_set_usage
-            from .help import summary as _summary, command_set_corpus
+            from .presentation import summary as _summary, command_set_corpus
             node_table = node._table()
             entries = [(w, _summary(c)) for w, c in node_table.items()]
             # add the auto `help` row unless the set already registers one
@@ -3715,7 +3642,7 @@ class Appeal:
                 file=_sys.stdout, stylesheet=node.stylesheet,
                 suppress=suppress).rstrip('\n')
         else:
-            from .help import merge_docs
+            from .presentation import merge_docs
             plan = root.plan_for(topic)
             text = render_help_page(
                 plan.usage(), merge_docs(plan), root.templates,
@@ -4134,7 +4061,7 @@ class Appeal:
         this; an empty list means "no opinion" (operand values are
         the shell's business).
         """
-        from .complete import completions, completions_set
+        from .completion import completions, completions_set
         table = self._table()
         if not table:
             return completions(self.plan, words, prefix)
@@ -4187,13 +4114,13 @@ class Appeal:
         table = self._table()
         if table:
             from .plan import command_set_usage
-            from .help import summary, command_set_corpus
-            from .render import render_help_page
+            from .presentation import summary, command_set_corpus
+            from .presentation import render_help_page
             entries = [(w, summary(c)) for w, c in table.items()]
             corpus = command_set_corpus(
                 self.global_plan, entries, False, auto_version=False,
                 doc=self._program_doc_override())
-            from .render import help_margin
+            from .presentation import help_margin
             text = render_help_page(
                 command_set_usage(self._prog(), self._display_global()),
                 corpus, self.templates,
@@ -4201,8 +4128,8 @@ class Appeal:
                 file=_sys.stdout, stylesheet=self.stylesheet,
                 suppress=suppress).rstrip('\n')
         else:
-            from .help import merge_docs, parse_docstring
-            from .render import help_margin, render_help_page
+            from .presentation import merge_docs, parse_docstring
+            from .presentation import help_margin, render_help_page
             plan = self.plan
             corpus = merge_docs(plan)
             override = self.root.doc
@@ -4239,7 +4166,7 @@ class Appeal:
         yourself if you want one.
         """
         if format in ('gfm', 'commonmark'):
-            from .markdown import to_commonmark, to_github
+            from .presentation import to_commonmark, to_github
             transform = (to_github if format == 'gfm'
                          else to_commonmark)
             prog = self._prog()
@@ -4264,7 +4191,7 @@ class Appeal:
             raise AppealConfigurationError(
                 f"documentation format {format!r} isn't supported "
                 f"(only 'gfm', 'commonmark', and 'troff', for now)")
-        from .help import command_set_corpus, man_page, merge_docs, summary
+        from .presentation import command_set_corpus, man_page, merge_docs, summary
         from .plan import command_set_usage
         prog = self._prog()
         version = str(self.version) if self.version is not None else None
@@ -4291,7 +4218,7 @@ class Appeal:
         readable twin of --help.  Pairs with read_mapping() to run
         a command from a JSON object.
         """
-        from .schema import describe, describe_set
+        from .mcp import describe, describe_set
         table = self._table()
         if not table:
             return describe(self.plan)
@@ -4299,19 +4226,19 @@ class Appeal:
 
     def read_mapping(self, callable, mapping):
         "v1's API: call `callable` with values pulled from `mapping`."
-        from .read import read_mapping
+        from .load import read_mapping
         self._finalize()
         return read_mapping(callable, mapping)
 
     def read_iterable(self, callable, iterable):
         "v1's API: call `callable` once per row; returns the results."
-        from .read import read_iterable
+        from .load import read_iterable
         self._finalize()
         return read_iterable(callable, iterable)
 
     def read_csv(self, callable, reader, *, first_row_map=None):
         "v1's API: read_iterable for csv.reader input (see read_csv)."
-        from .read import read_csv
+        from .load import read_csv
         self._finalize()
         return read_csv(callable, reader, first_row_map=first_row_map)
 
@@ -4846,7 +4773,7 @@ class Appeal:
         no coverage (config supplies only options), so it refuses
         here--at startup, not mid-call.
         """
-        from .read import read_mapping
+        from .load import read_mapping
         table = self._table()
         global_plan = self.global_plan
         if not (table and global_plan is not None
@@ -4895,9 +4822,9 @@ class Appeal:
         (the layering rules), and method tools dispatch bound.
         Runs until stdin closes.
         """
-        from .read import read_mapping
-        from .schema import mcp_input_schema
-        from .help import summary
+        from .load import read_mapping
+        from .mcp import mcp_input_schema, run_mcp
+        from .presentation import summary
         table = self._table()
         if self._subs:
             raise AppealConfigurationError(

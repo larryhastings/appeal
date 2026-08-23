@@ -17,8 +17,9 @@
 import inspect as _inspect
 
 from .build import build_plan
-from .help import parse_docstring
+from .presentation import parse_docstring
 from .plan import Terminal, NO_DEFAULT, Plan
+from . import AppealDataError
 
 
 def _converter_name(converter):
@@ -257,3 +258,78 @@ def mcp_input_schema(plan):
     read driver converts anyway).
     """
     return _mcp_object_schema(describe(plan))
+
+
+def run_mcp(tools, name, version='0'):
+    """
+    Serve this program's commands as MCP tools: JSON-RPC 2.0 over
+    stdio, newline-delimited--the Model Context Protocol's stdio
+    transport, stdlib only.  tools maps a tool name to
+    (description, input_schema, call) where call takes the
+    arguments mapping and returns the result.
+
+    Runs until stdin closes.  Returns 0.
+    """
+    import json
+    import sys
+
+    def reply(id, result=None, error=None):
+        message = {'jsonrpc': '2.0', 'id': id}
+        if error is not None:
+            message['error'] = error
+        else:
+            message['result'] = result
+        sys.stdout.write(json.dumps(message) + '\n')
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+        except ValueError:
+            continue
+        method = request.get('method', '')
+        id = request.get('id')
+        if method == 'initialize':
+            reply(id, {
+                'protocolVersion':
+                    request.get('params', {}).get('protocolVersion',
+                                                  '2024-11-05'),
+                'capabilities': {'tools': {}},
+                'serverInfo': {'name': name, 'version': version},
+            })
+        elif method == 'notifications/initialized':
+            pass
+        elif method == 'ping':
+            reply(id, {})
+        elif method == 'tools/list':
+            reply(id, {'tools': [
+                {'name': tool, 'description': description,
+                 'inputSchema': schema}
+                for tool, (description, schema, call)
+                in sorted(tools.items())]})
+        elif method == 'tools/call':
+            params = request.get('params', {})
+            tool = tools.get(params.get('name'))
+            if tool is None:
+                reply(id, error={'code': -32602,
+                                 'message': f"unknown tool "
+                                            f"{params.get('name')!r}"})
+                continue
+            description, schema, call = tool
+            try:
+                result = call(params.get('arguments') or {})
+            except AppealDataError as e:
+                reply(id, {'content': [{'type': 'text',
+                                        'text': str(e)}],
+                           'isError': True})
+                continue
+            reply(id, {'content': [{'type': 'text',
+                                    'text': '' if result is None
+                                            else str(result)}]})
+        elif id is not None:
+            reply(id, error={'code': -32601,
+                             'message': f'unknown method {method!r}'})
+    return 0

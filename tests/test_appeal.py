@@ -1191,7 +1191,7 @@ def test_markdown_scanner():
     # Options/Arguments/Commands sections by ANY heading kind
     # (ATX or setext), any level, case-insensitive; each section
     # must be exactly one definition list; terms unformatted.
-    from appeal.markdown import scan_docstring
+    from appeal.presentation import scan_docstring
     r = scan_docstring(
         "Update the item.\n"
         "\n"
@@ -1251,7 +1251,7 @@ def test_markdown_transforms():
     # Markdown inside still renders); strikethrough and alerts
     # ride through.  CommonMark: bold term + blockquote,
     # strikethrough stripped, alerts -> bold labels.
-    from appeal.markdown import to_commonmark, to_github
+    from appeal.presentation import to_commonmark, to_github
     doc = ("Intro with ~~old~~ new text.\n"
            "\n"
            "> [!WARNING]\n"
@@ -1282,7 +1282,7 @@ def test_markdown_transforms():
 def test_markdown_renderer():
     # render_markdown_help runs big's whole pipeline: parse ->
     # style -> split -> layout -> join -> StyleSheet.render.
-    from appeal.markdown import render_markdown_help
+    from appeal.presentation import render_markdown_help
     from big.stylesheet import plain_stylesheet
     from big.markdown import markdown_defaults
     text = render_markdown_help(
@@ -1330,7 +1330,7 @@ def test_renderer_injects_line():
     # clip/fill.  The RENDERER injects it (only the renderer
     # knows the margin), underneath the sheet so a sheet's own
     # `line` wins (the stylesheet= verbatim rule).
-    from appeal.render import render_baked_help
+    from appeal.presentation import render_baked_help
     from big.markdown import markdown_defaults
     from big.stylesheet import StyleSheet, plain_stylesheet, transforms
     layout = ('⦃heading3⦙Deeds⦄',)
@@ -1365,7 +1365,7 @@ def test_wrapped_heading_fuses():
     # span_linebreaks=True), so the structural entry fires once:
     # rules above and below the BLOCK, sized by clip-to-line,
     # not a sandwich per line.
-    from appeal.render import default_template, help_page_pieces, render_baked_help
+    from appeal.presentation import default_template, help_page_pieces, render_baked_help
     corpus = {'summary': [], 'documentation':
               ["# Heading One which by the way is super duper long "
                "almost excessively so and it's kind of pointless "
@@ -1390,7 +1390,7 @@ def test_heading_with_inline_formatting():
     # --nested content included (big's fix, 2026-08-08)--so the
     # structural entry fires ONCE.  Before the fix this garbled:
     # three rule sandwiches sharing lines.
-    from appeal.render import default_template, help_page_pieces, render_baked_help
+    from appeal.presentation import default_template, help_page_pieces, render_baked_help
     corpus = {'summary': [], 'documentation':
               ['# Heading with `code` inside'],
               'arguments': [], 'options': [], 'commands': []}
@@ -3054,7 +3054,7 @@ def test_positional_argument_usage_format():
         assert app.plan.usage('frob') == expected, (fmt, app.plan.usage('frob'))
 
     # the format decorates option operands in help tables, too
-    from appeal.help import merge_docs
+    from appeal.presentation import merge_docs
     app = Appeal(positional_argument_usage_format='<{name}>')
     app.global_command()(frob)
     options = dict(merge_docs(app.plan)['options'])
@@ -3247,7 +3247,7 @@ def test_mcp_schema_agrees_with_read_mapping():
     # properties used the presentation-only usage rename (describe
     # required COUNT, reader wanted count), and converter groups
     # were advertised as opaque strings.
-    from appeal.schema import mcp_input_schema
+    from appeal.mcp import mcp_input_schema
 
     def pt(x: int, y: int):
         return (x, y)
@@ -3265,7 +3265,7 @@ def test_mcp_schema_agrees_with_read_mapping():
     # usage rename; the rename rides in describe() as 'usage'
     assert set(s['properties']) == {'count', 'spot', 'where'}
     assert s['required'] == ['count', 'spot']
-    from appeal.schema import describe as describe
+    from appeal.mcp import describe as describe
     op = describe(plan)['operands'][0]
     assert (op['name'], op['usage']) == ('count', 'COUNT')
     # a strict group (min 2) advertises its real structure...
@@ -4180,7 +4180,7 @@ def test_scoped_help_presentation():
     # qualifiers on duplicated displays, sub-option indentation,
     # and the equidistant-ambiguity refusal
     import appeal as _appeal
-    from appeal.help import merge_docs
+    from appeal.presentation import merge_docs
 
     def child(p, q=1, *, flag=False):
         """
@@ -6261,7 +6261,7 @@ def test_parse_docstring():
     # THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05;
     # Markdown ONLY--the 'Arguments:' + 'name: desc' grammar died
     # unshipped, this test converted the same day).
-    from appeal.help import parse_docstring
+    from appeal.presentation import parse_docstring
 
     # the docstring is input, never output: sections are slurped
     # out, prose coalesces in source order.
@@ -6349,7 +6349,7 @@ def test_parse_docstring():
 
 
 def test_parse_docstring_errors():
-    from appeal.help import parse_docstring
+    from appeal.presentation import parse_docstring
     def refuses(doc, *needles):
         try:
             parse_docstring(doc, "f")
@@ -6374,7 +6374,7 @@ def test_parse_docstring_errors():
 
 
 def test_merge_docs():
-    from appeal.help import merge_docs
+    from appeal.presentation import merge_docs
 
     def int_float(i: int, f: float):
         """
@@ -6452,7 +6452,7 @@ def test_merge_docs():
 
 
 def test_merge_docs_errors():
-    from appeal.help import merge_docs
+    from appeal.presentation import merge_docs
 
     def refuses(f, *needles, command_names=None):
         try:
@@ -6527,7 +6527,7 @@ def test_theme():
     # resolve_stylesheet: None auto, False never, a composed
     # sheet verbatim
     import io
-    from appeal.render import appeal_theme, plain_theme, resolve_stylesheet, uncolored_theme, usage_markup
+    from appeal.presentation import appeal_theme, plain_theme, resolve_stylesheet, uncolored_theme, usage_markup
 
     # every theme speaks the same vocabulary
     for theme in (plain_theme, uncolored_theme, appeal_theme):
@@ -6569,7 +6569,7 @@ def test_theme():
 
 def test_can_colorize_precedence():
     import io
-    from appeal.render import can_colorize
+    from appeal.presentation import can_colorize
 
     class Tty(io.StringIO):
         def isatty(self):
@@ -6625,8 +6625,8 @@ def test_colorized_help_paints_after_layout():
         """
     import io, contextlib
     from appeal.build import build_plan
-    from appeal.help import merge_docs
-    from appeal.render import appeal_theme, default_template, render_help_page
+    from appeal.presentation import merge_docs
+    from appeal.presentation import appeal_theme, default_template, render_help_page
     from big.markdown import markdown_defaults
     from big.stylesheet import (StyleSheet, ansi_16_color_palette,
                                 transforms)
@@ -6665,7 +6665,7 @@ def test_colorized_help_paints_after_layout():
 # shell completion (the completion rulings, 1-5)
 
 def test_value_completion():
-    from appeal.complete import completions
+    from appeal.completion import completions
 
     def color(name):
         return name
@@ -6724,7 +6724,7 @@ def test_completions_validation():
     c3.completions = lambda prefix='': ['red']      # list, not tuple
     def f3(x: c3):
         return x
-    from appeal.complete import completions
+    from appeal.completion import completions
     plan = build_plan(f3)
     try:
         completions(plan, [], '')
@@ -6765,7 +6765,7 @@ def test_single_terminal_transparency():
     # operand is transparent to naming--the annotated parameter's
     # name flows through to usage, the help table, and the
     # docstring grammar.
-    from appeal.help import merge_docs
+    from appeal.presentation import merge_docs
 
     def flavor(name):
         """

@@ -43,7 +43,7 @@ def both(fn, argv, decorations=None):
 # script, so their edge branches get behavior pins here
 
 def test_merge_columns_strategies():
-    from appeal.render import merge_columns, OverflowStrategy as OS
+    from appeal.presentation import merge_columns, OverflowStrategy as OS
 
     # a mid-column overflow distinguishes the strategies: INTRUDE
     # resumes the neighbors immediately after the wide line;
@@ -91,7 +91,7 @@ def test_merge_columns_strategies():
 
 
 def test_wrap_words_edges():
-    from appeal.render import wrap_words
+    from appeal.presentation import wrap_words
 
     # no words at all refuses
     try:
@@ -116,7 +116,7 @@ def test_wrap_words_edges():
 
 
 def test_normalize_indents_validation():
-    from appeal.render import wrap_words
+    from appeal.presentation import wrap_words
 
     # indents: single str, tuple of str, and refusals by type
     assert wrap_words(['a', 'b'], margin=20, indent='  ').startswith('  a')
@@ -146,7 +146,7 @@ def test_normalize_indents_validation():
 
 
 def test_split_text_with_code_edges():
-    from appeal.render import split_text_with_code
+    from appeal.presentation import split_text_with_code
 
     # code blocks survive; blank-heavy input; trailing code
     text = 'Prose here.\n\n    code line one\n    code line two\n\nMore.'
@@ -161,7 +161,7 @@ def test_split_text_with_code_edges():
 
 
 def test_format_definition_list_edges():
-    from appeal.render import format_definition_list
+    from appeal.presentation import format_definition_list
 
     # empty pairs; a definition with its own paragraphs; a term
     # wider than its column (hang rule)
@@ -382,7 +382,7 @@ def test_plan_reprs_and_walkers():
 def test_completion_table_repeat_group_completions():
     # a *args group whose converter carries completions: the
     # repeat position offers the converter's candidates
-    from appeal.complete import completion_table
+    from appeal.completion import completion_table
     def color(hue):
         return hue
     color.completions = lambda prefix: ('red', 'green')
@@ -405,7 +405,7 @@ def test_completion_table_repeat_group_completions():
 
 
 def test_schema_branches():
-    from appeal.schema import mcp_input_schema
+    from appeal.mcp import mcp_input_schema
 
     class Fancy(appeal.Option):
         def init(self, default):
@@ -706,7 +706,7 @@ def test_help_dedent_blank_lines():
     # _dedent_lines wears kid gloves: blank lines don't count
     # toward the margin (the docstring parser never sends any,
     # but the helper honors them)
-    from appeal.help import _dedent_lines
+    from appeal.presentation import _dedent_lines
     assert _dedent_lines(['  a', '', '    b']) == ['a', '', '  b']
 
 
@@ -724,7 +724,7 @@ def test_help_ambiguous_three_ways():
         return n
     def cmd(a: red, b: green, c: blue):
         return (a, b, c)
-    from appeal.help import merge_docs
+    from appeal.presentation import merge_docs
     merged = merge_docs(build_plan(cmd))
     assert merged is not None
 
@@ -752,7 +752,7 @@ def test_schema_leaf_fallbacks():
     # multi-operand value option: 'array' (dict[K,V]'s 'object'
     # is pinned in test_39's territory)
     import pathlib
-    from appeal.schema import mcp_input_schema
+    from appeal.mcp import mcp_input_schema
     def pairfn(a: int, b: int):
         return (a, b)
     def cmd(p: pathlib.Path, *, spot: pairfn = None):
@@ -765,7 +765,7 @@ def test_schema_leaf_fallbacks():
     assert props['spot']['type'] == 'array'
     # an option metavar rename rides along as 'usage'
     from appeal.build import Decorations
-    from appeal.schema import describe as describe
+    from appeal.mcp import describe as describe
     def q(*, level: int = 0):
         return level
     d = Decorations()
@@ -796,7 +796,7 @@ def test_completion_repeat_group_carries_completions():
     # a *args GROUP converter (it has an option, so each occurrence
     # is windowed) with completions and a sole terminal: the repeat
     # position offers the converter's candidates
-    from appeal.complete import completion_table
+    from appeal.completion import completion_table
     def color(hue, *, bright=False):
         return hue
     color.completions = lambda prefix: ('red', 'green')
@@ -1102,7 +1102,7 @@ def _importable_global_app(directory, name):
 def test_man_page_trailing_blank():
     # prose whose lines end with blanks: the empty chunk is
     # skipped, not rendered as an empty paragraph
-    from appeal.help import man_page
+    from appeal.presentation import man_page
     corpus = {'summary': ['S.'], 'documentation': ['First.', '', ''],
               'arguments': [], 'options': [], 'commands': []}
     text = man_page('prog', corpus, 'prog [x]')
@@ -1463,7 +1463,7 @@ def test_codegen_option_group_counts():
 
 def test_run_main_completion_param():
     from appeal import run_main
-    from appeal.complete import completion_table
+    from appeal.completion import completion_table
     def go(x: int):
         return 0
     table = completion_table(build_plan(go))
@@ -1543,14 +1543,14 @@ def test_toy_multisplit_and_bytes_iter():
     # the core imports nothing from big); _iterate_over_bytes still
     # rides in for the render side
     from appeal import _toy_multisplit
-    from appeal.render import _iterate_over_bytes
+    from appeal.presentation import _iterate_over_bytes
     assert list(_iterate_over_bytes('ab')) == ['a', 'b']
     assert _toy_multisplit('a,b', ',') == [('a', ','), ('b', '')]
     assert _toy_multisplit(b'a,b', [b',']) == [(b'a', b','), (b'b', b'')]
 
 
 def test_expand_tabs_pins():
-    from appeal.render import expand_tabs
+    from appeal.presentation import expand_tabs
     assert expand_tabs('a\tb') == 'a       b'
     assert expand_tabs('nope') == 'nope'
     assert expand_tabs(b'a\tb') == b'a       b'
@@ -1565,7 +1565,7 @@ def test_expand_tabs_pins():
 
 
 def test_wrap_words_tabs_and_code():
-    from appeal.render import split_text_with_code, wrap_words
+    from appeal.presentation import split_text_with_code, wrap_words
     # tabs inside code lines expand at render time, on the page's
     # tab stops; prose tabs are word breaks that die on wrap
     s = 'first para\n\n    code\tline\n    x\ty\n\nlast para'
@@ -1589,7 +1589,7 @@ def test_wrap_words_tabs_and_code():
 
 
 def test_merge_columns_more():
-    from appeal.render import merge_columns, OverflowStrategy
+    from appeal.presentation import merge_columns, OverflowStrategy
     # a plain string column splits itself; tabs expand in place
     got = merge_columns(('ab\tc\nx', 6, 10), ('p\nq', 3, 5))
     assert got == 'ab      c  p\nx          q', repr(got)
@@ -1605,7 +1605,7 @@ def test_merge_columns_more():
 
 
 def test_format_definition_list_more():
-    from appeal.render import format_definition_list
+    from appeal.presentation import format_definition_list
     got = format_definition_list([(b'term', b'def')], margin=40)
     assert b'term' in got and b'def' in got
     got = format_definition_list([('t', 'a\tb')], margin=40)
@@ -1633,7 +1633,7 @@ def test_format_definition_list_more():
 
 
 def test_theme_resolution_and_markup():
-    from appeal.render import can_colorize, resolve_stylesheet, usage_markup
+    from appeal.presentation import can_colorize, resolve_stylesheet, usage_markup
     from big.stylesheet import strip_styles
     assert can_colorize(file=object()) is False
     class FakeTTY(io.StringIO):
@@ -1668,7 +1668,7 @@ def test_section_template_validation():
     # the single-template model (ruled 2026-08-01; {summary}
     # split out 2026-08-05): six sections, each exactly once,
     # nothing else in braces
-    from appeal.render import parse_help_template
+    from appeal.presentation import parse_help_template
     cases = (
         'no placeholders at all',
         '{usage}\n{summary}\n{doc}\n{options}\n{arguments}',  # missing commands
@@ -1979,7 +1979,7 @@ def test_runtime_token_and_set_edges():
 
 def test_run_main_themed_and_set_completion():
     from appeal import UsageError, run_main
-    from appeal.complete import completion_set_table
+    from appeal.completion import completion_set_table
     class FakeTTY(io.StringIO):
         def isatty(self):
             return True
@@ -2019,7 +2019,7 @@ def test_run_main_themed_and_set_completion():
 
 
 def test_wrap_words_variants():
-    from appeal.render import split_text_with_code, wrap_words
+    from appeal.presentation import split_text_with_code, wrap_words
     w = split_text_with_code('p one\n\n    c\td\n    e', code_indent=4)
     got = wrap_words(w, margin=24, code_indent='   ', indent='  ',
                      left_column=3)
@@ -2040,7 +2040,7 @@ def test_wrap_words_variants():
 
 
 def test_merge_columns_overflow_shapes():
-    from appeal.render import merge_columns, OverflowStrategy
+    from appeal.presentation import merge_columns, OverflowStrategy
     # adjacent overflows merge into one region
     c1 = ['loooooooooooong1', 'x', 'loooooooooooong2']
     got = merge_columns((c1, 4, 6), (['r1', 'r2', 'r3'], 4, 6),
@@ -2056,7 +2056,7 @@ def test_merge_columns_overflow_shapes():
 
 
 def test_format_definition_list_tab_definition():
-    from appeal.render import format_definition_list
+    from appeal.presentation import format_definition_list
     got = format_definition_list(
         [('t', 'alpha\tbeta gamma delta epsilon zeta')], margin=30)
     assert got == ('  t  alpha   beta gamma delta\n'
@@ -2117,7 +2117,7 @@ def test_run_mcp_ping():
 def test_section_template_more_fails():
     # a custom template reorders the page; suppression still
     # holds (no commands -> no Cmds: section)
-    from appeal.render import render_help_page
+    from appeal.presentation import render_help_page
     template = ('usage: {usage}\n\nOpts:\n  {options}\n\n'
                 '{summary}\n\n{doc}\n\nArgs:\n  {arguments}\n\n'
                 'Cmds:\n  {commands}')
@@ -2180,7 +2180,7 @@ def test_scoped_queue_live_resolve():
 
 def test_completion_internals_direct():
     from appeal import complete_command, complete_command_set
-    from appeal.complete import completion_table, completion_set_table
+    from appeal.completion import completion_table, completion_set_table
     def go(x, *, level: int = 0):
         return x
     t = completion_table(build_plan(go))
@@ -2199,7 +2199,7 @@ def test_completion_internals_direct():
 
 
 def test_wrap_words_final_pins():
-    from appeal.render import split_text_with_code, wrap_words
+    from appeal.presentation import split_text_with_code, wrap_words
     # empty words are skipped; a prose tab wraps and dies
     assert wrap_words(['a', '', 'b'], margin=10) == 'a b'
     assert wrap_words(['aaaaaaa', '\t', 'bbbb'], margin=10) == \
@@ -2217,7 +2217,7 @@ def test_wrap_words_final_pins():
 
 
 def test_definition_list_fussy_tab():
-    from appeal.render import format_definition_list
+    from appeal.presentation import format_definition_list
     got = format_definition_list(
         [('t', 'aa\tbb cc dd ee ff gg')], margin=24,
         definition_left_column=8)
@@ -2231,7 +2231,7 @@ def test_definition_list_fussy_tab():
 def test_wrap_words_leading_tab_stream():
     # tabs at the start of a line: only a hand-built stream gets
     # here--the stop advances from the line's start, no wrap check
-    from appeal.render import wrap_words
+    from appeal.presentation import wrap_words
     got = wrap_words(['\t', 'x'], margin=20)
     assert got == '        x', repr(got)
 
@@ -2266,7 +2266,7 @@ def test_windowed_option_before_first_window():
 
 def test_completion_boundary_and_help():
     from appeal import complete_command_set
-    from appeal.complete import completion_set_table
+    from appeal.completion import completion_set_table
     def go(x, *, level: int = 0):
         return x
     def gtop2(g1, g2=None, *, trace=False):
@@ -2323,8 +2323,8 @@ def test_entry_points_default_to_sys_argv():
 #                          not-VAR_KEYWORD fall-through is dead
 
 def test_branch_schema_and_read_edges():
-    from appeal.schema import mcp_input_schema
-    from appeal.read import read_mapping
+    from appeal.mcp import mcp_input_schema
+    from appeal.load import read_mapping
 
     # a *args converter with parameters is a per-instance GROUP,
     # exactly as the non-*args path treats it (single-parameter
@@ -2374,7 +2374,7 @@ def test_branch_schema_and_read_edges():
 
 
 def test_schema_degenerate_group_transparent():
-    from appeal.schema import mcp_input_schema
+    from appeal.mcp import mcp_input_schema
     # a single-operand chain collapses to the innermost leaf (0.6.4's
     # degenerate annotation tree; ruled 2026-08-16): a: mything ->
     # otherthing -> int schemas as a plain integer, not an object
@@ -2427,7 +2427,7 @@ def test_branch_negative_number_global_operand():
 
 
 def test_branch_completion_edges():
-    from appeal.complete import completions_set
+    from appeal.completion import completions_set
     from appeal import completion_reentry
 
     # a repeatable option already on the line still completes
@@ -2470,7 +2470,7 @@ def test_branch_completion_edges():
 
 
 def test_branch_text_formatter_edges():
-    from appeal.render import wrap_words, split_text_with_code, usage_units, format_definition_list, merge_columns, OverflowStrategy, render_help_page, default_template, appeal_theme
+    from appeal.presentation import wrap_words, split_text_with_code, usage_units, format_definition_list, merge_columns, OverflowStrategy, render_help_page, default_template, appeal_theme
 
     # code_indent=0 turns code detection off entirely
     split_text_with_code('para one\n\n    indented, not code\n',
@@ -2498,7 +2498,7 @@ def test_branch_text_formatter_edges():
 
     # themed table painting walks PAST a wrapped description's
     # continuation lines to find the next row
-    from appeal.help import merge_docs
+    from appeal.presentation import merge_docs
     def draw(shape, *, verbose=False, times: int = 1):
         """
         Draws.
@@ -2524,7 +2524,7 @@ def test_branch_text_formatter_edges():
 def test_branch_help_qualifier_with_empty_format():
     # positional_argument_usage_format='' renders operand names to
     # nothing--the position qualifier's anchors both come up falsy
-    from appeal.help import merge_docs
+    from appeal.presentation import merge_docs
     def child(p, *, flag=False):
         return (p, flag)
     app = Appeal(name='f', positional_argument_usage_format='')
