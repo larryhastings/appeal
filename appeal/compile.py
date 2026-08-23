@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 #
 # appeal/compile.py
-# Part of Appeal -- the emitter for the data-driven processor
-# (2026-08-20).  Turns a program's command Plans into the Converter
-# subclasses the runtime engine runs.  The engine (Processor, the
-# converters, dispatch) lives in appeal/__init__.py.
+# Part of Appeal -- builds a program's command Plans into the live
+# Converter subclasses the engine runs (in memory).  The engine
+# (Processor, the converters, dispatch) lives in appeal/__init__.py.
 #
 # The unit of compilation is the CONVERTER (identified by its callable):
 # `_converters()` enumerates the distinct converters reachable from the
@@ -12,9 +11,8 @@
 # converter x.  A group operand/option references its child by class; the
 # callable is wired onto each class once, by a generated fixup_converters
 # classmethod called from @command (never at parse time).  Per-parameter
-# leaf/option converters are hard-coded per the rule (builtin literal, else
-# annotations['x'], else the default's type).  NOT YET: multi-oparg value
-# options, mapping KEY=VALUE, global command + cycling.
+# leaf/option converters follow the rule (builtin literal, else
+# annotations['x'], else the default's type).
 
 from .plan import Terminal, NO_DEFAULT
 from . import Converter, _params_host
@@ -24,24 +22,6 @@ from .build import dereference_annotated
 # builtins we hard-code as a literal (the fingerprint guarantees the shape,
 # so there's no need to read them off the callable at runtime)
 _BUILTIN_CONVERTERS = (str, bool, int, float, complex)
-
-
-def _conjurable(child_plan):
-    """
-    Can this converter be invoked with ZERO operands (so a required slot summons
-    it from its defaults when the line runs out)?  Every slot must be skippable:
-    optional (has a default), a *args (contributes nothing), or a required slot
-    whose own converter is RECURSIVELY conjurable (a required g1 whose g0 needs
-    no operands still builds from nothing).  Read from slot.default, NOT
-    plan.minimum: v1's promotion inflates minimum for nested groups, but the
-    compiled engine fills greedily, so it wants the intrinsic shape.
-    """
-    for slot in child_plan.slots:
-        if slot.repeat or slot.default is not NO_DEFAULT:
-            continue                            # *args / optional: skippable
-        if isinstance(slot.child, Terminal) or not _conjurable(slot.child):
-            return False                        # a required leaf, or a required
-    return True                                 # non-conjurable group: needs input
 
 
 def _converter_key(plan):
@@ -89,22 +69,6 @@ def _converters(plans):
     for plan in plans:
         visit(plan)
     return found
-
-
-def _class_names(converters):
-    "Assign each converter its class name (Converter_<name>), unique per program."
-    names, used = {}, set()
-    for key, plan in converters.items():
-        # a plan name can carry dots/dashes (a precommand named for the program,
-        # a dashed command word) -- sanitize into a valid Python identifier.
-        ident = ''.join(c if c.isalnum() or c == '_' else '_' for c in plan.name)
-        base = name = f'Converter_{ident}'
-        n = 2
-        while name in used:                     # two distinct converters, one name
-            name, n = f'{base}_{n}', n + 1
-        names[key] = name
-        used.add(name)
-    return names
 
 
 def _child_converters(plan):
@@ -277,103 +241,3 @@ def _n_trailing(plan):
     return sum(1 for slot in plan.slots if slot.trailing)
 
 
-# ====================================================================
-#  source emission -- the same shapes as build, as text
-# ====================================================================
-def _converter_expr(plan, param, converter):
-    """
-    Source for parameter `param`'s converter, hard-coded per Larry's rule:
-    a builtin (str/bool/int/float/complex) as its literal name; otherwise the
-    value the user passed -- annotations['param'] for an annotation, or
-    type(converter.__defaults__[i]) for a default's type.  The fingerprint
-    guarantees the shape, so hard-coding here is safe.
-    """
-    if converter in _BUILTIN_CONVERTERS:
-        return converter.__name__               # str, int, float, ...
-    if param in plan.callable.__annotations__:
-        return f'annotations[{param!r}]'        # the user's own supplied type
-    return _default_type_expr(plan.callable, param)
-
-
-def _default_type_expr(fn, param):
-    "type(converter.__defaults__[i]) / __kwdefaults__['p'] -- the default's type."
-    code = fn.__code__
-    positional = code.co_varnames[:code.co_argcount]
-    if param in positional:
-        i = positional.index(param) - (code.co_argcount - len(fn.__defaults__ or ()))
-        return f'type(converter.__defaults__[{i}])'
-    return f'type(converter.__kwdefaults__[{param!r}])'
-
-
-def _fold_expr(plan, o):
-    """
-    Source for a counter/accumulator/mapping option.  The explicit spellings
-    (counter(), accumulator[T], mapping[K, V]) ARE the annotation, reused as
-    annotations['name'].  The dict[K, V]/list[T] sugar is canonicalized to
-    mapping[...]/accumulator[...] -- both subscript portably (they're Appeal's
-    own _Subscriptable, not the builtins) -- since the raw generic isn't a
-    usable converter.
-    """
-    annotation = plan.callable.__annotations__.get(o.name)
-    origin = getattr(annotation, '__origin__', None)
-    if origin is list:
-        return f'accumulator[{_arg_expr(o, annotation, 0)}]'
-    if origin is dict:
-        return (f'mapping[{_arg_expr(o, annotation, 0)}, '
-                f'{_arg_expr(o, annotation, 1)}]')
-    if o.name in plan.callable.__annotations__:
-        return _converter_expr(plan, o.name, o.converters[0])
-    # a decoration-supplied fold (delivered via **kwargs, so the parameter isn't
-    # in the signature): reconstruct it from o.converters -- the fold class plus
-    # its value converters -- instead of reading annotations['name'].
-    fold = o.converters[0]
-    values = o.converters[1:]
-    if not values:                              # counter(): a nullary fold
-        return f'{fold.__name__}()'
-    return f'{fold.__name__}[{", ".join(_type_literal(v) for v in values)}]'
-
-
-def _type_literal(converter):
-    "A converter as a bare literal (builtins by name); the reconstruction case."
-    if converter in _BUILTIN_CONVERTERS:
-        return converter.__name__
-    return converter.__name__                   # a named class, imported or global
-
-
-def _arg_expr(o, annotation, i):
-    "The i-th type argument of a sugar generic, hard-coded per the rule."
-    arg = annotation.__args__[i]
-    if arg in _BUILTIN_CONVERTERS:
-        return arg.__name__
-    return f'annotations[{o.name!r}].__args__[{i}]'
-
-
-def _value_option_expr(plan, o):
-    """
-    Source for a value option's converter: one leaf (`--units F`), or a
-    multi-oparg `(constructor, leaf, ...)` tuple (`--where X Y`, `--coord 3 4`).
-    The constructor is `tuple` for a tuple[...] option, else the inner
-    callable (annotations['name']); each operand leaf follows the usual rule.
-    """
-    if len(o.converters) == 1:
-        return _converter_expr(plan, o.name, o.converters[0])
-    constructor = o.converters[0]
-    head = 'tuple' if constructor is tuple else _converter_expr(
-        plan, o.name, constructor)
-    parts = [head] + [_leaf_expr(o, constructor, i, leaf)
-                      for i, leaf in enumerate(o.converters[1:])]
-    return '(' + ', '.join(parts) + ')'
-
-
-def _leaf_expr(o, constructor, i, leaf):
-    """
-    Source for a multi-oparg option's i-th operand converter: a builtin as a
-    literal, else read live off the inner callable -- a tuple[...] element from
-    its __args__, a multi-param converter's operand from its __annotations__.
-    """
-    if leaf in _BUILTIN_CONVERTERS:
-        return leaf.__name__
-    if constructor is tuple:                    # tuple[...] element type
-        return f'annotations[{o.name!r}].__args__[{i}]'
-    inner = constructor.__code__.co_varnames[i]  # the converter's own parameter
-    return f'annotations[{o.name!r}].__annotations__[{inner!r}]'
