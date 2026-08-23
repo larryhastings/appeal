@@ -261,13 +261,14 @@ class LiveBinding:
     def __init__(self, instance, name):
         self.instance = instance
         self.name = name
-    def invoke(self, processor, value=None):
+    def invoke(self, processor, value=None, spelling=None):
         if value is None:
             self.instance.kwargs[self.name] = _presence(self.instance, self.name)
             return
         if value not in ('true', 'false'):          # ruled: only these two
             raise UsageError(
-                f"option {self.name!r} expected 'true' or 'false'", None)
+                f"option {(spelling or self.name)!r} expected 'true' or 'false'",
+                None)
         self.instance.kwargs[self.name] = (value == 'true')
 
 
@@ -283,31 +284,33 @@ class ValueBinding:
         self.instance = instance
         self.name = name
         self.converter = converter
-    def invoke(self, processor, value=None):
+    def invoke(self, processor, value=None, spelling=None):
         conv = self.converter
+        name = spelling or self.name
         if isinstance(conv, tuple):
-            self.instance.kwargs[self.name] = self._multi(processor, conv, value)
+            self.instance.kwargs[self.name] = self._multi(processor, conv, value,
+                                                          name)
             return
         if value is None:
             if processor.peek() is None:
-                raise UsageError(f"option {self.name!r} requires a value", None)
+                raise UsageError(f"option {name!r} requires a value", None)
             value = processor.advance()                 # raw: no option check
         # value options convert eagerly, per occurrence: a repeated option
         # validates EVERY value (ruled 2026-08-16, "not called validate for
         # nothing"), last wins.  (Positional leaves defer; options don't.)
         self.instance.kwargs[self.name] = processor._cv(conv, value, self.name)
-    def _multi(self, processor, conv, value):
+    def _multi(self, processor, conv, value, name):
         constructor, leaves = conv[0], conv[1:]
         if not leaves:                                  # a nullary converter
             if value is not None:                       # (--north): presence IS
                 raise UsageError(                       # the value; '=' is refused
-                    f"option {self.name!r} doesn't take a value", None)
+                    f"option {name!r} doesn't take a value", None)
             return constructor()
         texts = [value] if value is not None else []    # =value/attached is first
         while len(texts) < len(leaves):
             if processor.peek() is None:
                 raise UsageError(
-                    f"option {self.name!r} requires {len(leaves)} values", None)
+                    f"option {name!r} requires {len(leaves)} values", None)
             texts.append(processor.advance())           # raw grab
         args = [processor._cv(leaf, text, self.name)
                 for leaf, text in zip(leaves, texts)]
@@ -358,7 +361,8 @@ class MultiBinding:
         self.name = name
         self.factory = factory
         self.converters, self.minimum = _oparg_converters(factory)
-    def invoke(self, processor, value=None):
+    def invoke(self, processor, value=None, spelling=None):
+        name = spelling or self.name
         instance = self.owner.kwargs.get(self.name)     # MultiOptions live in
         if instance is None:                            # kwargs now, rendered
             instance = self.factory()                   # like any deferred value
@@ -369,7 +373,7 @@ class MultiBinding:
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)
                 raise UsageError(
-                    f"option {self.name!r} doesn't take a value", None)
+                    f"option {name!r} doesn't take a value", None)
             opargs = [processor._cv(self.converters[0], value, self.name)]
         else:
             # grab the required opargs; then any OPTIONAL ones greedily, so long
@@ -381,7 +385,7 @@ class MultiBinding:
                     if k < self.minimum:
                         need = self.minimum
                         raise UsageError(
-                            f"option {self.name!r} requires "
+                            f"option {name!r} requires "
                             f"{'a value' if need == 1 else f'{need} values'}",
                             None)
                     break                               # optional tail: stop
@@ -409,15 +413,15 @@ class GroupBinding:
         self.name = name
         self.converter_cls = converter_cls
         self.strings = strings
-    def invoke(self, processor, value=None):
+    def invoke(self, processor, value=None, spelling=None):
         instance = self.converter_cls()
         instance._optarg = True                     # its operands are option
         if value is not None:                       # opargs (grab greedily); an
             instance._attached = value              # attached -j5/--jobs=5 feeds
         instance._optarg_root = self.converter_cls  # the first operand directly
-        instance._opt_display = next(               # name the short form for the
-            (s for s in self.strings if not s.startswith('--')),
-            self.strings[0] if self.strings else self.name)
+        instance._opt_display = spelling or next(   # name what the user typed;
+            (s for s in self.strings if not s.startswith('--')),  # else fall back
+            self.strings[0] if self.strings else self.name)       # to a short form
         self.owner.kwargs[self.name] = instance
         processor.enter(instance)                   # register its options
 
@@ -429,7 +433,7 @@ class ConjureBinding:
         self.name = name
         self.slot = slot
         self.converter_cls = converter_cls
-    def invoke(self, processor, value=None):
+    def invoke(self, processor, value=None, spelling=None):
         obj = processor.conjured.get(self.slot)
         if obj is None:
             obj = self.converter_cls()
@@ -453,7 +457,7 @@ class ConjureValueBinding:
         self.slot = slot
         self.converter_cls = converter_cls
         self.converter = converter
-    def invoke(self, processor, value=None):
+    def invoke(self, processor, value=None, spelling=None):
         obj = processor.conjured.get(self.slot)
         if obj is None:
             obj = self.converter_cls()
@@ -461,7 +465,8 @@ class ConjureValueBinding:
             processor.conjured[self.slot] = obj
         if value is None:
             if processor.peek() is None:
-                raise UsageError(f"option {self.name!r} requires a value", None)
+                raise UsageError(
+                    f"option {(spelling or self.name)!r} requires a value", None)
             value = processor.advance()             # raw: no option check
         obj.kwargs[self.name] = processor._cv(self.converter, value, self.name)
 
@@ -809,7 +814,7 @@ class Processor:
                 raise UsageError(
                     f"option {tok!r} takes several values; separate them with "
                     f"spaces, not '='", None)
-            binding.invoke(self, value)
+            binding.invoke(self, value, tok)
             return
         # short: -x, a flag bundle -vd, or an attached value -uF
         chars = tok[1:]
@@ -824,17 +829,17 @@ class Processor:
                     raise UsageError(
                         f"option {opt!r} takes several values; separate them "
                         f"with spaces, not '='", None)
-                binding.invoke(self, chars[i + 2:])      # value for THIS option
+                binding.invoke(self, chars[i + 2:], opt)  # value for THIS option
                 return
             if self._nullary(binding):                  # no oparg: keep bundling
-                binding.invoke(self)
+                binding.invoke(self, spelling=opt)
                 i += 1
             elif chars[i + 1:] and _takes_many(binding):  # -gp: an attached value,
                 raise UsageError(                         # but this option needs
                     f"option {opt!r} takes several values; it must be last in "  # several -- it must
                     f"a bundle with its values as separate words", None)         # be last, words apart
             else:                                       # takes a value: rest is it
-                binding.invoke(self, chars[i + 1:] or None)
+                binding.invoke(self, chars[i + 1:] or None, opt)
                 return
 
     @staticmethod

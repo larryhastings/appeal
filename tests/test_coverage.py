@@ -1966,7 +1966,7 @@ def test_runtime_token_and_set_edges():
     def gm(*, mode: loud = 'quiet'):
         return mode
     got = both(gm, ['--mode=x'])
-    assert got == ('usage', "option 'mode' doesn't take a value"), got
+    assert got == ('usage', "option '--mode' doesn't take a value"), got
 
 
 def test_run_main_themed_and_set_completion():
@@ -2159,7 +2159,7 @@ def test_short_option_equals_refusal():
     def gm(*, mode: loud = 'quiet'):
         return mode
     got = both(gm, ['-m=x'])
-    assert got == ('usage', "option 'mode' doesn't take a value"), got
+    assert got == ('usage', "option '-m' doesn't take a value"), got
 
 
 def test_completion_internals_direct():

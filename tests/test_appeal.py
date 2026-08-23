@@ -349,6 +349,22 @@ def test_app_option_errors_are_named():
     except AppealConfigurationError as e:
         assert 'nonesuch' in str(e)
 
+def test_option_errors_name_the_typed_spelling():
+    # an option error names the spelling the user actually typed
+    # (--verbose / -v), not the parameter name
+    def flag(name, *, verbose: bool = False):
+        return (name, verbose)
+    assert run_both(flag, ['x', '--verbose=maybe']) == (
+        'usage', "option '--verbose' expected 'true' or 'false'")
+    assert run_both(flag, ['x', '-v=maybe']) == (
+        'usage', "option '-v' expected 'true' or 'false'")
+    def value(*, color: str = None):
+        return color
+    assert run_both(value, ['--color']) == (
+        'usage', "option '--color' requires a value")
+    assert run_both(value, ['-c']) == (
+        'usage', "option '-c' requires a value")
+
 def test_simple_converters_on_star_args_and_trailing():
     def upper(s): return s.upper()
     def f(*src: upper, dst: upper):
