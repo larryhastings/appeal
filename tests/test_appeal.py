@@ -403,6 +403,21 @@ def test_converter_group_contributes_fold_options():
     assert run_both(cmd, ['--verbose', 'nm']) == ('ok', (1, [], 'nm'))
     assert run_both(cmd, ['-t', 'a', '-t', 'b', 'nm']) == ('ok', (0, ['a', 'b'], 'nm'))
 
+def test_nested_group_option_bundling():
+    # a group option whose converter takes NO operands is nullary: firing it
+    # conjures + enters the group, and a short bundle CONTINUES past it
+    # (-iz == -i then -z), reaching both outer options and the ones the
+    # entered group just registered (0.6.4's five_level_stack mixin stack).
+    def inner(*, x=False, y=False):
+        return ('inner', x, y)
+    def outer(*, i: inner = None, z=False):
+        return ('outer', i, z)
+    assert run_both(outer, ['-i']) == ('ok', ('outer', ('inner', False, False), False))
+    # -iz: conjure inner (no operands), bundle continues to outer's -z
+    assert run_both(outer, ['-iz']) == ('ok', ('outer', ('inner', False, False), True))
+    # -ix: -i conjures + enters inner, so its own -x is now recognized
+    assert run_both(outer, ['-ix']) == ('ok', ('outer', ('inner', True, False), False))
+
 def test_option_errors_name_the_typed_spelling():
     # an option error names the spelling the user actually typed
     # (--verbose / -v), not the parameter name

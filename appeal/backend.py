@@ -944,6 +944,12 @@ class Engine:
             return True
         if isinstance(binding, MultiBinding):
             return not binding.converters
+        if isinstance(binding, GroupBinding):
+            # a group option whose converter consumes NO operands (all its
+            # params are options -- the Logging/five_a mixin) is nullary: it
+            # conjures + enters, then the bundle continues (-me == -m then -e,
+            # -e now registered by entering the group)
+            return _group_capacity(binding.converter_cls) == 0
         return False
 
     def _fill_argument(self, arg):
