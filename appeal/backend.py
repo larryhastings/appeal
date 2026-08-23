@@ -83,9 +83,9 @@ class OptionInstruction:
 class PreOptionInstruction:
     "Registers a conjure: fire before the converter exists to summon one."
     __slots__ = ('owner', 'string', 'name', 'slot', 'converter_cls',
-                 'converter')
+                 'converter', 'factory')
     def __init__(self, owner, string, name, slot, converter_cls,
-                 converter=None):
+                 converter=None, factory=None):
         self.owner = owner
         self.string = string
         self.name = name
@@ -93,8 +93,13 @@ class PreOptionInstruction:
         self.converter_cls = converter_cls
         self.converter = converter          # set -> a value option (forward
                                             # oparg); None -> a flag (conjure)
+        self.factory = factory              # set -> a fold option (counter/
+                                            # accumulator/mapping on the group)
     def register(self, processor):
-        if self.converter is not None:
+        if self.factory is not None:
+            processor.handlers[self.string] = ConjureFoldBinding(
+                self.name, self.slot, self.converter_cls, self.factory)
+        elif self.converter is not None:
             processor.handlers[self.string] = ConjureValueBinding(
                 self.name, self.slot, self.converter_cls, self.converter)
         else:
@@ -480,6 +485,63 @@ class ConjureValueBinding:
         obj.kwargs[self.name] = processor._cv(self.converter, value, self.name)
 
 
+class ConjureFoldBinding:
+    """
+    A converter group's FOLD option (counter/accumulator/mapping on a mixin,
+    e.g. -v on a Logging group): conjure the group if needed, then fold this
+    occurrence into a MultiOption living in the conjured group's kwargs --
+    MultiBinding's logic aimed at a conjured forward instance (as
+    ConjureValueBinding is ValueBinding aimed there).  Rendered at group
+    construction like any MultiOption kwarg.
+    """
+    __slots__ = ('name', 'slot', 'converter_cls', 'factory',
+                 'converters', 'minimum')
+    def __init__(self, name, slot, converter_cls, factory):
+        self.name = name
+        self.slot = slot
+        self.converter_cls = converter_cls
+        self.factory = factory
+        self.converters, self.minimum = _oparg_converters(factory)
+    def invoke(self, processor, value=None, spelling=None):
+        obj = processor.conjured.get(self.slot)
+        if obj is None:
+            obj = self.converter_cls()
+            obj._summoned = True
+            processor.conjured[self.slot] = obj
+        instance = obj.kwargs.get(self.name)            # the MultiOption lives
+        if instance is None:                            # in the group's kwargs
+            instance = self.factory()
+            if not processor.dry:                       # init is user code
+                instance.init(_default(obj, self.name))
+            obj.kwargs[self.name] = instance
+        name = spelling or self.name
+        opargs = []
+        if value is not None:                           # =value / attached
+            if not self.converters:
+                raise UsageError(
+                    f"option {name!r} doesn't take a value", None)
+            opargs = [processor._cv(self.converters[0], value, self.name)]
+        else:
+            for k, converter in enumerate(self.converters):
+                tok = processor.peek()
+                if tok is None or tok == '--':
+                    if k < self.minimum:
+                        need = self.minimum
+                        raise UsageError(
+                            f"option {name!r} requires "
+                            f"{'a value' if need == 1 else f'{need} values'}",
+                            None)
+                    break
+                opargs.append(processor._cv(converter, processor.advance(),
+                                            self.name))
+        if processor.dry:                       # opargs counted; folding deferred
+            return
+        try:
+            instance.option(*opargs)
+        except (ValueError, TypeError) as e:
+            raise UsageError(f"{self.name}: {e}", None)
+
+
 class Converter:
     """
     Base for a generated command or converter.  There is a 1:1 mapping
@@ -558,9 +620,10 @@ class Converter:
         return OpargInstruction(self, name, converter)
     def Option(self, name, converter, *strings):
         return OptionInstruction(self, name, converter, strings)
-    def PreOption(self, string, name, slot, converter_cls, converter=None):
+    def PreOption(self, string, name, slot, converter_cls, converter=None,
+                  factory=None):
         return PreOptionInstruction(self, string, name, slot, converter_cls,
-                                    converter)
+                                    converter, factory)
     def Repeat(self, items):
         return RepeatInstruction(items)
 
@@ -1245,6 +1308,17 @@ def _build_class(plan, classes):
                             continue
                         preopts.append(self.PreOption(
                             s, o.name, slot.name, childcls, o.converters[0]))
+                elif o.kind == 'fold':
+                    # a FOLD option on the group (counter/accumulator/mapping,
+                    # e.g. -v on a Logging mixin): conjure the group and fold the
+                    # occurrence into its MultiOption.  converters[0] is the
+                    # MultiOption class (the factory).
+                    for s in o.strings:
+                        if s in own_strings:
+                            continue
+                        preopts.append(self.PreOption(
+                            s, o.name, slot.name, childcls,
+                            factory=o.converters[0]))
             if slot.repeat:                             # windowed *args
                 items.append(self.Repeat(
                     preopts + [self.Argument(slot.name, childcls, required=False)]))

@@ -386,6 +386,23 @@ def test_negative_number_heuristic():
     except UsageError as e:
         assert str(e) == "unknown option '-5'", e
 
+def test_converter_group_contributes_fold_options():
+    # a converter GROUP used as a positional exposes its keyword-only options
+    # on the command line -- including FOLD options (counter/accumulator),
+    # conjured and folded into the group instance (ConjureFold).  v1's
+    # "Logging mixin" pattern: eric2(l: Logging, s) with -v/--tag on Logging.
+    from appeal import counter, accumulator
+    class Logging:
+        def __init__(self, *, verbose: counter() = 0, tag: accumulator = []):
+            self.verbose = verbose
+            self.tag = tag
+    def cmd(log: Logging, name='x'):
+        return (log.verbose, list(log.tag), name)
+    assert run_both(cmd, []) == ('ok', (0, [], 'x'))
+    assert run_both(cmd, ['-v', '-v', '-v']) == ('ok', (3, [], 'x'))
+    assert run_both(cmd, ['--verbose', 'nm']) == ('ok', (1, [], 'nm'))
+    assert run_both(cmd, ['-t', 'a', '-t', 'b', 'nm']) == ('ok', (0, ['a', 'b'], 'nm'))
+
 def test_option_errors_name_the_typed_spelling():
     # an option error names the spelling the user actually typed
     # (--verbose / -v), not the parameter name
