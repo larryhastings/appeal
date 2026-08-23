@@ -8,8 +8,8 @@
 # tables the engine answers from.  The engine itself--and the
 # reentry protocol--live in appeal/__init__.py.
 
-from .build import all_options, help_option_strings
-from .plan import Terminal
+from .frontend import all_options, help_option_strings
+from .frontend import Terminal
 from . import complete_command, complete_command_set
 
 

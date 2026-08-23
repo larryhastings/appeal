@@ -976,7 +976,7 @@ plain_theme['oparg'] = ('T', '⦃argument⦙T⦄')
 import inspect as _inspect
 import re as _re
 
-from .plan import Terminal, format_arg, _oparg_names
+from .frontend import Terminal, format_arg, _oparg_names
 from . import AppealConfigurationError
 
 

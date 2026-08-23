@@ -362,7 +362,7 @@ def test_run_main_branches():
 # rung 1's scoped-overlay kinds: every kind through a window
 
 def test_plan_reprs_and_walkers():
-    from appeal.plan import Terminal
+    from appeal.frontend import Terminal
     def pt(x: int, y: int):
         return (x, y)
     def cmd(a, spot: pt = None, *, verbose=False):
@@ -764,7 +764,7 @@ def test_schema_leaf_fallbacks():
     assert props['p']['anyOf'][0] == {'type': 'string'}
     assert props['spot']['type'] == 'array'
     # an option metavar rename rides along as 'usage'
-    from appeal.build import Decorations
+    from appeal.frontend import Decorations
     from appeal.mcp import describe as describe
     def q(*, level: int = 0):
         return level
@@ -1150,7 +1150,7 @@ def test_build_uninspectable_converters():
     def f(x: getattr):
         return x
     plan = build_plan(f)
-    from appeal.plan import Terminal
+    from appeal.frontend import Terminal
     assert isinstance(plan.slots[0].child, Terminal)
     def g(*a: getattr):
         return a
@@ -1165,7 +1165,7 @@ def test_build_kwargs_converter_is_group():
     # parameters are operands, and its @app.option declarations
     # deliver options into the kwargs sink (the sink is empty when
     # no options are declared)
-    from appeal.plan import Terminal
+    from appeal.frontend import Terminal
     def kw(a, **kws):
         return (a, kws)
     child = build_plan(lambda x: x, name='outer')  # sanity: a plain leaf
@@ -1331,7 +1331,7 @@ def test_build_repeat_group_refusals():
 
 
 def test_build_override_validation_and_names():
-    from appeal.build import Decorations
+    from appeal.frontend import Decorations
     import functools
     def f(x, *, mode=''):
         return (x, mode)
@@ -1400,7 +1400,7 @@ def test_codegen_forcing_and_flag_default():
     # a skippable group with options: giving one FORCES the group
     # (emitted both dry and live); an overridden flag keeps its
     # own default when absent
-    from appeal.build import Decorations
+    from appeal.frontend import Decorations
     def g(a=1, *, deep=False):
         return (a, deep)
     def f(x, s: g = None, *, mode=''):
@@ -1432,7 +1432,7 @@ def test_codegen_scoped_forcing():
 def test_codegen_kwargs_options():
     # @app.option declarations without matching parameters land in
     # **kwargs--and stay out of the call when absent (v1)
-    from appeal.build import Decorations
+    from appeal.frontend import Decorations
     def f(x, **extras):
         return (x, extras)
     d = Decorations()
@@ -1916,7 +1916,7 @@ def test_child_kwargs_options_parity():
     # used as a group: the option is recognized and delivered into
     # the sink, v1-style, on both rungs (regression: v2 once made
     # these converters terminals and dropped the option)
-    from appeal.build import Decorations
+    from appeal.frontend import Decorations
     def kg(a, **kws):
         return (a, kws)
     d = Decorations()
@@ -2149,7 +2149,7 @@ def test_codegen_absorbing_nonzero_minimum():
 def test_windowed_group_kwargs_options():
     # a *args group carrying **kwargs declarations: windowed
     # delivery works (unlike a plain group's--see the parity pin)
-    from appeal.build import Decorations
+    from appeal.frontend import Decorations
     def rep(x, *, deep=False, **kws):
         return (x, deep, kws)
     d = Decorations()

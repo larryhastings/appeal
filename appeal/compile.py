@@ -14,9 +14,9 @@
 # leaf/option converters follow the rule (builtin literal, else
 # annotations['x'], else the default's type).
 
-from .plan import Terminal, NO_DEFAULT
+from .frontend import Terminal, NO_DEFAULT
 from . import Converter, _params_host
-from .build import dereference_annotated
+from .frontend import dereference_annotated
 
 
 # builtins we hard-code as a literal (the fingerprint guarantees the shape,

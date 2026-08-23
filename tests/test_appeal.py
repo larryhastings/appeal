@@ -3169,7 +3169,7 @@ def test_help_disabled():
         assert '--help' in str(e), e
     # and the option truly isn't in the plan
     plan = app.plan
-    from appeal.build import help_option_strings
+    from appeal.frontend import help_option_strings
     assert help_option_strings(plan) == ()
     # help=True (default) still answers --help
     app2 = Appeal(name='solo2')
@@ -3852,7 +3852,7 @@ def test_fuzz_parity():
     # Deterministic seed: a failure here reproduces exactly.
     import random
     rng = random.Random(20260703)
-    from appeal.build import all_options
+    from appeal.frontend import all_options
 
     LEAVES = ['str', 'int', 'float']
 
@@ -4044,7 +4044,7 @@ def test_converter_restrictions_named():
     # it fed the whole remaining line--the old "degrades to a
     # terminal" reading was a mis-pin), unbounded above its floor
     named = {s.name: s for s in plan.slots}
-    from appeal.plan import Terminal
+    from appeal.frontend import Terminal
     assert not isinstance(named['a'].child, Terminal)
     assert named['a'].child.maximum is None
     assert plan.valid_counts is None and plan.minimum == 2
@@ -6624,7 +6624,7 @@ def test_colorized_help_paints_after_layout():
         : how many times.
         """
     import io, contextlib
-    from appeal.build import build_plan
+    from appeal.frontend import build_plan
     from appeal.presentation import merge_docs
     from appeal.presentation import appeal_theme, default_template, render_help_page
     from big.markdown import markdown_defaults
@@ -6653,7 +6653,7 @@ def test_colorized_help_paints_after_layout():
     # angle-bracketed operands (positional_argument_usage_format=
     # '<{name}>') wear oparg inside brackets--which defaults to
     # argument (ruled), italic under appeal_theme
-    from appeal.plan import DEFAULT_ARG_FORMAT
+    from appeal.frontend import DEFAULT_ARG_FORMAT
     plan.arg_format = '<{name}>'
     bracketed = render_help_page(plan.usage(), merge_docs(plan),
                                  default_template, stylesheet=sheet)

@@ -16,9 +16,9 @@
 
 import inspect as _inspect
 
-from .build import build_plan
+from .frontend import build_plan
 from .presentation import parse_docstring
-from .plan import Terminal, NO_DEFAULT, Plan
+from .frontend import Terminal, NO_DEFAULT, Plan
 from . import AppealDataError
 
 
@@ -28,8 +28,8 @@ def _converter_name(converter):
 
 def _default(value):
     "Defaults appear in the schema only when JSON can carry them."
-    from . import cheapsig
-    if value is NO_DEFAULT or value is cheapsig.empty:
+    from .frontend import empty
+    if value is NO_DEFAULT or value is empty:
         return None
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value

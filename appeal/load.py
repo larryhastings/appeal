@@ -21,8 +21,8 @@
 
 from collections.abc import Mapping, Sequence
 
-from .build import build_plan
-from .plan import Terminal, NO_DEFAULT, Plan
+from .frontend import build_plan
+from .frontend import Terminal, NO_DEFAULT, Plan
 from . import (
     AppealConfigurationError, AppealDataError, is_multioption, is_option,
     )

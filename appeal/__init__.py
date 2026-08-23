@@ -22,8 +22,6 @@ __version__ = '1.0'
 # pulls in only the stdlib-only core, so it's near bare-Python speed;
 # big and inspect load only when you actually build or render (Larry's
 # ruling 2026-08-16).
-from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
-from .plan import _validate_arg_format
 
 # ============================================================
 # The parse / convert / dispatch / execute core.  Everything
@@ -2722,11 +2720,11 @@ import sys as _sys
 # access, so plain `import appeal` stays stdlib-only.  (Internal uses
 # take a local import at the call site.)
 _LAZY_REEXPORTS = {
-    'Decorations': 'build', 'build_plan': 'build',
-    'default_options': 'build', 'default_long_option': 'build',
-    'default_short_option': 'build',
-    'strip_first_argument_from_signature': 'build',
-    'strip_self_from_signature': 'build',
+    'Decorations': 'frontend', 'build_plan': 'frontend',
+    'default_options': 'frontend', 'default_long_option': 'frontend',
+    'default_short_option': 'frontend',
+    'strip_first_argument_from_signature': 'frontend',
+    'strip_self_from_signature': 'frontend',
     'appeal_markdown_defaults': 'presentation', 'appeal_theme': 'presentation',
     'uncolored_theme': 'presentation', 'plain_theme': 'presentation',
     'dark_cool_theme': 'presentation', 'dark_warm_theme': 'presentation',
@@ -2772,10 +2770,9 @@ class _LazyInspect:
 
 _inspect = _LazyInspect()
 
-# featherweight stand-ins for the fast path: cheapsig (microsecond signature)
+# featherweight stand-ins for the fast path: signature (microsecond)
 # and MethodType (types is always already loaded), so registration + dispatch
 # never trip the lazy real-inspect proxy.  getdoc etc. stay on _inspect (help).
-from . import cheapsig as _cheapsig
 from types import MethodType as _MethodType
 
 
@@ -2786,8 +2783,8 @@ def _config_vet(plan, table_words, config, command_plan_for=None):
     Returns {key: the OptionRule}, or raises naming the offender--
     a config file is end-user input, so loudness is UsageError.
     """
-    from .build import all_options
-    from .plan import Terminal
+    from .frontend import all_options
+    from .frontend import Terminal
     options = {}
     scoped = set()
     for owner, o in all_options(plan):
@@ -3098,7 +3095,8 @@ def _refuse_orphan_method(callable):
     if _is_class_command(callable):
         return
     try:
-        parameters = list(_cheapsig.signature(callable).parameters)
+        from .frontend import signature
+        parameters = list(signature(callable).parameters)
     except (ValueError, TypeError):
         return
     qualname = getattr(callable, '__qualname__', '')
@@ -3278,7 +3276,7 @@ class Appeal:
                  positional_argument_usage_format='<{name.upper()}>',
                  default_options=_DEFAULT_OPTIONS,
                  default_mappings=default_mappings(), doc=None):
-        from .build import Decorations
+        from .frontend import Decorations
         self.name = name
         # the command tree (v1's model, restored 2026-07-18 by
         # Larry's ruling): a tree of Appeal instances, one per
@@ -3337,7 +3335,7 @@ class Appeal:
         if default_options is _DEFAULT_OPTIONS:
             # not supplied -> the stock policy (lazy: importing build
             # is deferred until an Appeal is actually constructed)
-            from .build import default_options as default_options
+            from .frontend import default_options as default_options
         if default_options is not None and not callable(default_options):
             raise AppealConfigurationError(
                 f"default_options must be callable or None, "
@@ -3375,6 +3373,7 @@ class Appeal:
         # Applies to positional operands AND option operands
         # (opargs) alike; an explicit @app.parameter usage= wins
         # outright over the format.
+        from .frontend import _validate_arg_format
         _validate_arg_format(positional_argument_usage_format)
         self.positional_argument_usage_format = \
             positional_argument_usage_format
@@ -3545,7 +3544,7 @@ class Appeal:
         like .plan and .plans.
         """
         import types as _types
-        from .build import all_options
+        from .frontend import all_options
         table = {}
         plan = None
         if self._impl is not None:
@@ -3614,7 +3613,7 @@ class Appeal:
             print(_inspect.getdoc(fn))
             return
         if topic not in table:
-            from .plan import command_set_usage
+            from .frontend import command_set_usage
             raise UsageError(
                 f"unknown command {topic!r}"
                 f"{did_you_mean(topic, table)}",
@@ -3626,7 +3625,7 @@ class Appeal:
         node = root._node_for(topic)
         from .presentation import help_margin, render_help_page
         if node is not None and node._table():
-            from .plan import command_set_usage
+            from .frontend import command_set_usage
             from .presentation import summary as _summary, command_set_corpus
             node_table = node._table()
             entries = [(w, _summary(c)) for w, c in node_table.items()]
@@ -4003,13 +4002,13 @@ class Appeal:
         parameter.  Stack several to accumulate strings; each call
         is its own rule.
         """
-        # build's "not specified" marker is cheapsig.empty (the same singleton
+        # build's "not specified" marker is frontend.empty (the same singleton
         # build compares against); convert here at call time.
-        from . import cheapsig
+        from .frontend import empty
         if default is _UNSET:
-            default = cheapsig.empty
+            default = empty
         if annotation is None:
-            annotation = cheapsig.empty
+            annotation = empty
         def decorator(callable):
             if (isinstance(callable, _MethodType)
                     and isinstance(callable.__self__, Appeal)
@@ -4113,7 +4112,7 @@ class Appeal:
             return self._help_topic_page(topic, suppress)
         table = self._table()
         if table:
-            from .plan import command_set_usage
+            from .frontend import command_set_usage
             from .presentation import summary, command_set_corpus
             from .presentation import render_help_page
             entries = [(w, summary(c)) for w, c in table.items()]
@@ -4192,7 +4191,7 @@ class Appeal:
                 f"documentation format {format!r} isn't supported "
                 f"(only 'gfm', 'commonmark', and 'troff', for now)")
         from .presentation import command_set_corpus, man_page, merge_docs, summary
-        from .plan import command_set_usage
+        from .frontend import command_set_usage
         prog = self._prog()
         version = str(self.version) if self.version is not None else None
         table = self._table()
@@ -4320,7 +4319,7 @@ class Appeal:
         top plan the app renders funnels through here; child plans
         read the format off their root at render time.
         """
-        from .build import build_plan
+        from .frontend import build_plan
         # the policy registers via the registrar-proxy's
         # app.option() (arglet style, Larry's design 2026-07-22);
         # build constructs the proxy around the real app
