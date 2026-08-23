@@ -3319,23 +3319,6 @@ class ConjureValueBinding:
 
 
 # ---- the converter base --------------------------------------------
-class LeafConverter:
-    """
-    A deferred leaf conversion (Larry's two-phase, 2026-08-23): the parse phase
-    stores the raw operand and its converter here without running it; the render
-    phase (Converter.__call__) finalizes it by calling this.  So no leaf
-    converter runs until the whole command line has been parsed and its
-    structure validated -- a malformed line raises before any side effect.
-    """
-    __slots__ = ('name', 'raw', 'converter')
-    def __init__(self, name, raw, converter):
-        self.name = name
-        self.raw = raw
-        self.converter = converter
-    def __call__(self):
-        return convert(self.converter, self.raw, self.name)
-
-
 class Converter:
     """
     Base for a generated command or converter.  There is a 1:1 mapping
@@ -3404,13 +3387,13 @@ class Converter:
         "Wire this converter's child converters (generated override; base no-op)."
 
     def __init__(self):
-        self.args = []                  # positional operands, as deferred
-                                        # renderables (LeafConverter / child
-                                        # Converter); finalized in __call__
+        self.args = []                  # positional operands (eagerly converted),
+                                        # plus child Converters for group slots;
+                                        # groups/folds finalized in __call__
         self.kwargs = {}                # options by name -- the SOLE memory for
                                         # options (a MultiOption lives here too,
                                         # rendered like everything else)
-        self.reserve = []               # this converter's end-pocket
+        self.reserve = []               # this converter's end-pocket (trailing)
         self.bound = None               # a method command's instance (self)
 
     # work-item factories -- owner is self, bound implicitly.  A group
@@ -3432,11 +3415,11 @@ class Converter:
     def __call__(self):
         "Render (phase 2): finalize every deferred value, then call the callable."
         def render(v):
-            # everything Appeal defers is a zero-arg callable: a LeafConverter
-            # (a raw operand + its converter), a child Converter (a group), or a
-            # MultiOption (a fold, living in kwargs).  A group's constructor body
-            # that raises ValueError/TypeError is a POLITE usage error ('not a
-            # valid spot'); anything else is a final value, passed through.
+            # the deferred values are zero-arg callables: a child Converter (a
+            # group) or a MultiOption (a fold, living in kwargs); leaves were
+            # converted eagerly and are already final.  A group's constructor
+            # body raising ValueError/TypeError is a POLITE usage error ('not a
+            # valid spot'); anything else passes through.
             if isinstance(v, Converter):
                 try:
                     return v()
@@ -3444,7 +3427,7 @@ class Converter:
                     name = getattr(type(v).converter, '__name__', 'converter')
                     raise UsageError(
                         f"not a valid {name}: {e or name}", None) from None
-            if isinstance(v, (Option, LeafConverter)):
+            if isinstance(v, Option):
                 return v()
             return v
         for name in list(self.kwargs):
@@ -3526,8 +3509,8 @@ class Processor:
     def enter(self, converter):
         "Pocket the converter's trailing operands from the end, then register."
         for _ in range(converter.trailing):
-            if self.end <= self.pos:            # too few tokens for the pocket;
-                break                           # the trailing fill reports it
+            if self.end <= self.pos:
+                break
             self.end -= 1
             converter.reserve.insert(0, self.argv[self.end])
         converter.register(self)
@@ -3535,7 +3518,7 @@ class Processor:
     @property
     def consumed(self):
         "Tokens this processor claimed: the front it advanced through, plus the"
-        " trailing operands it pocketed off the end (which never touched `pos`)."
+        " trailing operands it took off the end (which never touched `pos`)."
         return self.pos + (len(self.argv) - self.end)
 
     def run(self):
@@ -3644,14 +3627,14 @@ class Processor:
         return False
 
     def _fill_argument(self, arg):
-        if arg.trailing:                            # drawn from the end-pocket,
-            self.queue.popleft()                    # delivered as a keyword arg
-            if not arg.owner.reserve:               # pocket ran short: too few args
+        if arg.trailing:                            # a required trailing operand
+            self.queue.popleft()                    # reserved off the end, keyword
+            if not arg.owner.reserve:               # too few operands
                 if arg.required:
                     raise UsageError(f"missing argument {arg.name!r}", None)
-                return                              # optional: signature default fills
+                return
             raw = arg.owner.reserve.pop(0)
-            arg.owner.kwargs[arg.name] = LeafConverter(arg.name, raw, arg.converter)
+            arg.owner.kwargs[arg.name] = convert(arg.converter, raw, arg.name)
             return
         tok = self.peek()
         # a leaf converter is any one-string-in callable (str, int, split(':'),
@@ -3666,7 +3649,7 @@ class Processor:
                     raw = arg.owner._attached
                     arg.owner._attached = None
                     self.queue.popleft()
-                    arg.owner.args.append(LeafConverter(arg.name, raw, arg.converter))
+                    arg.owner.args.append(convert(arg.converter, raw, arg.name))
                     return
                 if tok is None or tok == '--':
                     if arg.required:
@@ -3682,7 +3665,7 @@ class Processor:
                     return
                 self.advance()
                 self.queue.popleft()
-                arg.owner.args.append(LeafConverter(arg.name, tok, arg.converter))
+                arg.owner.args.append(convert(arg.converter, tok, arg.name))
                 return
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
@@ -3703,7 +3686,7 @@ class Processor:
                         _positional_default(arg.owner, arg.name))
                 return
             self.advance()
-            arg.owner.args.append(LeafConverter(arg.name, tok, arg.converter))
+            arg.owner.args.append(convert(arg.converter, tok, arg.name))
             self.queue.popleft()
             return
         # a converter slot: a conjured instance, or a fresh one from an operand
