@@ -2280,9 +2280,16 @@ class Appeal:
         while pos < len(argv):
             word = argv[pos]
             if word not in table:
-                if not top:
+                # command names are dash-form (my_cmd -> my-cmd); accept the
+                # underscore spelling too, exact match first so an explicitly
+                # underscore-named command still wins.
+                alt = word.replace('_', '-')
+                if alt != word and alt in table:
+                    word = alt
+                elif not top:
                     return result, pos          # pop back: a parent may own it
-                raise _unexpected(word, table)
+                else:
+                    raise _unexpected(word, table)
             c = table[word]
             if dry:
                 owner = self._method_owner.get(id(c))
