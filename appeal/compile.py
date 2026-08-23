@@ -19,6 +19,7 @@
 
 from .plan import Terminal, NO_DEFAULT
 from .runtime import Converter, signature_fingerprint, _params_host
+from .build import dereference_annotated
 
 
 # builtins we hard-code as a literal (the fingerprint guarantees the shape,
@@ -196,7 +197,7 @@ def _build_class(plan, classes):
             elif kind == 'fold':
                 conv = extra                            # the MultiOption (build's rewrite)
             else:                                       # value(single)
-                conv = annotations.get(name, extra)
+                conv = dereference_annotated(annotations.get(name, extra))
             items.append(self.Option(name, conv, *strings))
         boundary = len(items)   # a conjurable slot's PreOption inserts here:
                                 # after the last required-or-group slot (so it
@@ -204,7 +205,8 @@ def _build_class(plan, classes):
         for slot in plan.slots:
             req = slot.default is NO_DEFAULT        # intrinsic, not promoted
             if isinstance(slot.child, Terminal):
-                conv = annotations.get(slot.name, slot.child.converter)
+                conv = dereference_annotated(
+                    annotations.get(slot.name, slot.child.converter))
                 if slot.repeat:                         # *args of a leaf
                     items.append(self.Repeat([
                         self.Argument(slot.name, conv, required=False)]))

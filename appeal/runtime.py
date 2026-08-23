@@ -3463,6 +3463,9 @@ class Processor:
         self.handlers = {}
         self.conjured = {}
         self.force_positional = False
+        self.reserved = 0               # trailing operands lifted out of the
+                                        # stream (option-aware pocket); counted
+                                        # in `consumed` since they never hit pos
         self.root = root
         self.commands = commands        # command words: the saturation boundary
 
@@ -3506,20 +3509,87 @@ class Processor:
             return tok.partition('=')[0] in self.handlers
         return len(tok) > 1 and ('-' + tok[1]) in self.handlers
 
+    def _span_arity(self, binding):
+        "How many space-separated opargs an option consumes (for the pocket scan)."
+        if binding is None:
+            return None
+        if isinstance(binding, (LiveBinding, ConjureBinding)):
+            return 0
+        if isinstance(binding, MultiBinding):
+            return len(binding.converters)
+        if isinstance(binding, GroupBinding):
+            return _group_capacity(binding.converter_cls)
+        if isinstance(binding, ValueBinding) and isinstance(binding.converter,
+                                                            tuple):
+            return len(binding.converter) - 1
+        return 1                        # ValueBinding leaf / ConjureValueBinding
+
+    def _option_span(self, i):
+        """
+        How many argv tokens the option at index i occupies (itself plus its
+        space-separated opargs), or None when it's an option we don't own (a
+        boundary).  Used only by the trailing-reservation scan to tell operands
+        apart from option machinery, so an attached/bundled approximation is
+        fine -- the live loop still does the real parse.
+        """
+        tok = self.argv[i]
+        if tok.startswith('--'):
+            name, eq, _ = tok.partition('=')
+            binding = self.handlers.get(name)
+            if binding is None:
+                return None
+            if eq:
+                return 1                # --opt=value: no following opargs
+            return 1 + self._span_arity(binding)
+        binding = self.handlers.get('-' + tok[1])
+        if binding is None:
+            return None
+        arity = self._span_arity(binding)
+        if arity == 0 or len(tok) > 2:
+            return 1                    # a flag bundle (-vd) or attached (-j5)
+        return 1 + arity
+
     def enter(self, converter):
-        "Pocket the converter's trailing operands from the end, then register."
-        for _ in range(converter.trailing):
-            if self.end <= self.pos:
-                break
-            self.end -= 1
-            converter.reserve.insert(0, self.argv[self.end])
+        """
+        Register the converter's options, then reserve its trailing operands:
+        the LAST N OPERANDS still in the stream, skipping options and their
+        opargs.  Operand-aware (unlike a blind end-pocket), so `cp a b dst
+        --verbose` reserves `dst`, not `--verbose`.  Reserved operands are
+        lifted out of the [pos:end) window (the front/*args fill skips them)
+        and delivered to the trailing Arguments by keyword.
+        """
         converter.register(self)
+        if not converter.trailing:
+            return
+        operand_indices = []
+        i = self.pos
+        forced = self.force_positional
+        while i < self.end:
+            tok = self.argv[i]
+            if not forced and tok == '--':
+                forced = True; i += 1; continue
+            if forced or not self._is_option(tok):
+                operand_indices.append(i); i += 1; continue
+            span = self._option_span(i)
+            if span is None:
+                break                   # an option we don't own: our boundary
+            i += span
+        take = operand_indices[-converter.trailing:]
+        if not take:
+            return
+        reserved = set(take)
+        converter.reserve.extend(self.argv[j] for j in take)
+        middle = [self.argv[j] for j in range(self.pos, self.end)
+                  if j not in reserved]
+        self.argv = self.argv[:self.pos] + middle + self.argv[self.end:]
+        self.end = self.pos + len(middle)
+        self.reserved += len(take)
 
     @property
     def consumed(self):
-        "Tokens this processor claimed: the front it advanced through, plus the"
-        " trailing operands it took off the end (which never touched `pos`)."
-        return self.pos + (len(self.argv) - self.end)
+        "Tokens this processor claimed: the front it advanced through, the"
+        " untouched tail past `end`, and the trailing operands it lifted out."
+        return self.pos + (len(self.argv) - self.end) + self.reserved
 
     def run(self):
         self.enter(self.root)
