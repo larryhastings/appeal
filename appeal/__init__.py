@@ -3117,7 +3117,7 @@ class ValueBinding:
         # value options convert eagerly, per occurrence: a repeated option
         # validates EVERY value (ruled 2026-08-16, "not called validate for
         # nothing"), last wins.  (Positional leaves defer; options don't.)
-        self.instance.kwargs[self.name] = convert(conv, value, self.name)
+        self.instance.kwargs[self.name] = processor._cv(conv, value, self.name)
     def _multi(self, processor, conv, value):
         constructor, leaves = conv[0], conv[1:]
         if not leaves:                                  # a nullary converter
@@ -3131,8 +3131,10 @@ class ValueBinding:
                 raise UsageError(
                     f"option {self.name!r} requires {len(leaves)} values", None)
             texts.append(processor.advance())           # raw grab
-        args = [convert(leaf, text, self.name)
+        args = [processor._cv(leaf, text, self.name)
                 for leaf, text in zip(leaves, texts)]
+        if processor.dry:                           # structural pre-scan: opargs
+            return None                             # counted, converter deferred
         if constructor is tuple:
             return tuple(args)
         try:                                        # the converter body's own
@@ -3180,14 +3182,15 @@ class MultiBinding:
         instance = self.owner.kwargs.get(self.name)     # MultiOptions live in
         if instance is None:                            # kwargs now, rendered
             instance = self.factory()                   # like any deferred value
-            instance.init(_default(self.owner, self.name))
+            if not processor.dry:                       # init is user code
+                instance.init(_default(self.owner, self.name))
             self.owner.kwargs[self.name] = instance
         opargs = []
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)
                 raise UsageError(
                     f"option {self.name!r} doesn't take a value", None)
-            opargs = [convert(self.converters[0], value, self.name)]
+            opargs = [processor._cv(self.converters[0], value, self.name)]
         else:
             # grab the required opargs; then any OPTIONAL ones greedily, so long
             # as a token exists (an Option subclass's `option(x, y='Y')` -- y is
@@ -3202,7 +3205,10 @@ class MultiBinding:
                             f"{'a value' if need == 1 else f'{need} values'}",
                             None)
                     break                               # optional tail: stop
-                opargs.append(convert(converter, processor.advance(), self.name))
+                opargs.append(processor._cv(converter, processor.advance(),
+                                            self.name))
+        if processor.dry:                       # opargs counted; folding deferred
+            return
         try:
             instance.option(*opargs)
         except (ValueError, TypeError) as e:    # match the interpreter's wrap
@@ -3274,7 +3280,7 @@ class ConjureValueBinding:
             if processor.peek() is None:
                 raise UsageError(f"option {self.name!r} requires a value", None)
             value = processor.advance()             # raw: no option check
-        obj.kwargs[self.name] = convert(self.converter, value, self.name)
+        obj.kwargs[self.name] = processor._cv(self.converter, value, self.name)
 
 
 # ---- the converter base --------------------------------------------
@@ -3414,7 +3420,7 @@ class Converter:
 
 # ---- the engine ----------------------------------------------------
 class Processor:
-    def __init__(self, argv, root, commands=()):
+    def __init__(self, argv, root, commands=(), dry=False):
         self.argv = list(argv)
         self.pos = 0
         self.end = len(self.argv)       # exclusive: trailing pockets shrink it
@@ -3427,6 +3433,17 @@ class Processor:
                                         # in `consumed` since they never hit pos
         self.root = root
         self.commands = commands        # command words: the saturation boundary
+        self.dry = dry                  # the whole-line STRUCTURAL pre-scan:
+                                        # parcel + validate arity, running NO
+                                        # converter/fold/callable (so a bad value
+                                        # or a converter side effect is deferred
+                                        # to the live pass).  Structural errors
+                                        # -- counts, unknown options, an option
+                                        # missing its oparg -- still raise here.
+
+    def _cv(self, converter, text, name):
+        "convert(), or a raw passthrough during the dry structural pre-scan."
+        return text if self.dry else convert(converter, text, name)
 
     def prepend(self, items):
         "Push work onto the FRONT, preserving order (a la rextend)."
@@ -3553,6 +3570,8 @@ class Processor:
     def run(self):
         self.enter(self.root)
         self._loop()
+        if self.dry:                    # structural pre-scan: no render, no call
+            return None
         return self.root()
 
     def _loop(self):
@@ -3663,7 +3682,7 @@ class Processor:
                     raise UsageError(f"missing argument {arg.name!r}", None)
                 return
             raw = arg.owner.reserve.pop(0)
-            arg.owner.kwargs[arg.name] = convert(arg.converter, raw, arg.name)
+            arg.owner.kwargs[arg.name] = self._cv(arg.converter, raw, arg.name)
             return
         tok = self.peek()
         # a leaf converter is any one-string-in callable (str, int, split(':'),
@@ -3678,7 +3697,7 @@ class Processor:
                     raw = arg.owner._attached
                     arg.owner._attached = None
                     self.queue.popleft()
-                    arg.owner.args.append(convert(arg.converter, raw, arg.name))
+                    arg.owner.args.append(self._cv(arg.converter, raw, arg.name))
                     return
                 if tok is None or tok == '--':
                     if arg.required:
@@ -3694,7 +3713,7 @@ class Processor:
                     return
                 self.advance()
                 self.queue.popleft()
-                arg.owner.args.append(convert(arg.converter, tok, arg.name))
+                arg.owner.args.append(self._cv(arg.converter, tok, arg.name))
                 return
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
@@ -3715,7 +3734,7 @@ class Processor:
                         _positional_default(arg.owner, arg.name))
                 return
             self.advance()
-            arg.owner.args.append(convert(arg.converter, tok, arg.name))
+            arg.owner.args.append(self._cv(arg.converter, tok, arg.name))
             self.queue.popleft()
             return
         # a converter slot: a conjured instance, or a fresh one from an operand
@@ -5815,11 +5834,28 @@ class Appeal:
         """
         holder = _RunLog(self)
         self._last_processor = holder
-        result, _ = self._run_node(list(argv), 0, holder, top=True, config=config)
+        # whole-line STRUCTURAL pre-scan first (Larry, 2026-08-23): parcel and
+        # validate the ENTIRE command set -- every command's arity, oparg counts,
+        # unknown options -- running NO converter or command body.  A structural
+        # error anywhere aborts here, before the first command runs.  Then the
+        # live pass converts and runs left to right (a later CONVERSION error
+        # doesn't un-run an earlier command; see [[streaming-dispatch]]).
+        # both passes visit the same converters in the same order, so the dry
+        # pass records each built converter class into `built` (traversal order)
+        # and the live pass pops them instead of rebuilding -- no plan or
+        # converter is built twice (Larry's insight, 2026-08-23).  reverse() so
+        # a live pop() off the end yields them front-to-back.
+        built = []
+        self._run_node(list(argv), 0, holder, top=True, config=config,
+                       dry=True, built=built)
+        built.reverse()
+        result, _ = self._run_node(list(argv), 0, holder, top=True,
+                                   config=config, built=built)
         holder.result = result
         return result
 
-    def _run_node(self, argv, pos, holder, top, env=None, config=None):
+    def _run_node(self, argv, pos, holder, top, env=None, config=None,
+                  dry=False, built=None):
         "Dispatch one set node's eras + command words; recurse for subcommands."
         if env is None:
             env = {}                                # class-as-app instance store
@@ -5837,24 +5873,46 @@ class Appeal:
         # laziness is per command (build_converters compiles independently): the
         # head eras always run, so build them now; each command word builds ITS
         # OWN converter only when dispatched -- a broken sibling costs nothing
-        # until it's used.
-        era_classes = build_converters(era_plans) if era_plans else {}
-        precommands = [era_classes[_converter_key(p)] for p in era_plans]
+        # until it's used.  The dry pass builds; the live pass pops what the dry
+        # pass built (same converters, same order).
+        if dry:
+            era_classes = build_converters(era_plans) if era_plans else {}
+            precommands = [era_classes[_converter_key(p)] for p in era_plans]
+            built.extend(precommands)
+        else:
+            precommands = [built.pop() for _ in era_plans]
 
         result = None
         for cls, era_plan in zip(precommands, era_plans):   # head eras, in order
             conv = cls()
-            proc = Processor(argv[pos:], conv, table)
-            if config is not None and era_plan.callable is self._global:
+            # -h/--help/-V/--version is Appeal's own metadata precommand: its
+            # body sys.exit()s the help/version page and outranks parsing, so it
+            # must run even in the dry pre-scan -- otherwise the pre-scan would
+            # validate (and reject) a command portion that help would preempt.
+            # It's a no-op unless help/version was actually requested.
+            is_meta = getattr(era_plan.callable, 'appeal_precommand', False)
+            proc = Processor(argv[pos:], conv, table, dry=dry and not is_meta)
+            if config is not None and era_plan.callable is self._global and not dry:
                 # layer config onto the global command: parse argv, merge config
-                # for options argv didn't set, THEN invoke (argv wins, whole)
+                # for options argv didn't set, THEN invoke (argv wins, whole).
+                # Config only adds OPTION values, never changes structure, so the
+                # dry pre-scan validates argv alone (config is a live-only merge).
                 proc.enter(conv)
                 proc._loop()
                 _config_apply(conv, table, self.global_plan, config,
                               self.plan_for)
                 result = proc.root()
             else:
+                if dry and config is not None and era_plan.callable is self._global:
+                    # config KEY vetting is structural -- fire its refusals in the
+                    # pre-scan, before the command portion is parsed (the value
+                    # merge stays live, above)
+                    _config_vet(self.global_plan, frozenset(table), config,
+                                self.plan_for)
                 result = proc.run()
+            if dry:                                 # pre-scan: no instances, no
+                pos += proc.consumed                # halt (scan the whole line)
+                continue
             if cls.constructs is not None:          # a global class-as-app: its
                 env[cls.constructs] = result        # methods bind to this instance
             holder.instances.append(               # eras log (None, instance-or-None)
@@ -5870,25 +5928,32 @@ class Appeal:
                     return result, pos          # pop back: a parent may own it
                 raise _unexpected(word, table)
             c = table[word]
-            owner = self._method_owner.get(id(c))
-            if owner is None:                       # a self-method with no class
-                _refuse_orphan_method(c)            # that claimed it: refuse by name
-            plan = self._build(c, method_of=owner)  # method_of -> binds
-            cls = build_converters([plan])[_converter_key(plan)]  # this cmd only
+            if dry:
+                owner = self._method_owner.get(id(c))
+                if owner is None:                   # a self-method with no class
+                    _refuse_orphan_method(c)        # that claimed it: refuse by name
+                plan = self._build(c, method_of=owner)  # method_of -> binds
+                cls = build_converters([plan])[_converter_key(plan)]  # this cmd
+                built.append(cls)
+            else:
+                cls = built.pop()                   # the dry pass built this
             pos += 1
             conv = cls()
-            if cls.binds is not None:               # a method command: self is the
+            if cls.binds is not None and not dry:   # a method command: self is the
                 conv.bound = env.get(cls.binds)     # instance a parent constructed
-            proc = Processor(argv[pos:], conv, table)
+            proc = Processor(argv[pos:], conv, table, dry=dry)
             result = proc.run()
-            if cls.constructs is not None:          # a class command: stash instance
-                env[cls.constructs] = result
-            instance = result if _is_class_command(c) else None
-            holder.instances.append((holder._command_for(word), instance))
             dispatched = True
-            if _halts(result):
-                return result, pos
-            pos += proc.consumed
+            if dry:                                 # pre-scan: no instances, no
+                pos += proc.consumed                # halt, but keep recursing
+            else:
+                if cls.constructs is not None:      # a class command: stash instance
+                    env[cls.constructs] = result
+                instance = result if _is_class_command(c) else None
+                holder.instances.append((holder._command_for(word), instance))
+                if _halts(result):
+                    return result, pos
+                pos += proc.consumed
             # recurse into the command's subcommand node: it may dispatch a
             # subcommand OR (the line stops at the parent) run that node's
             # default command -- so recurse even at end-of-line when a default
@@ -5897,8 +5962,8 @@ class Appeal:
             child = self._children.get(word)
             if child is not None and (child._commands
                                       or child._default is not None):
-                result, pos = child._run_node(argv, pos, holder,
-                                              top=False, env=env)
+                result, pos = child._run_node(argv, pos, holder, top=False,
+                                              env=env, dry=dry, built=built)
             if not self._node_repeat and pos < len(argv):
                 # this set doesn't cycle: pop the leftover word up to an
                 # ancestor whose set does (the parent's loop re-dispatches it);
@@ -5916,16 +5981,21 @@ class Appeal:
             # ruled 2026-07-09).  A global command runs as a head era regardless
             # -- it processes pre-command options; it doesn't answer a bare line.
             if self._default is not None:
-                d_plan = self._build(self._default)
-                dcls = build_converters([d_plan])[_converter_key(d_plan)]
+                if dry:
+                    d_plan = self._build(self._default)
+                    dcls = build_converters([d_plan])[_converter_key(d_plan)]
+                    built.append(dcls)
+                else:
+                    dcls = built.pop()
                 dconv = dcls()
-                if dcls.binds is not None:
+                if dcls.binds is not None and not dry:
                     dconv.bound = env.get(dcls.binds)
-                dproc = Processor(argv[pos:], dconv, table)
+                dproc = Processor(argv[pos:], dconv, table, dry=dry)
                 result = dproc.run()
-                holder.instances.append((None, None))
+                if not dry:
+                    holder.instances.append((None, None))
                 pos += dproc.consumed
-            elif top and self._commands:
+            elif top and self._commands and not dry:
                 self.help()                         # the set listing, to stdout
                 result = 1
         return result, pos

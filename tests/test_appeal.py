@@ -5502,12 +5502,12 @@ def test_version():
 
 
 def test_streaming_dispatch_runs_as_it_parses():
-    # STREAMING (ruled 2026-08-22, superseding the 2026-07-08
-    # parse-before-execute rule): commands run as they're parsed,
-    # left to right; a mistake later on the line does NOT un-run an
-    # earlier command.  Reordering/deferring user converters (which
-    # may have side effects) would be surprising -- see
-    # [[streaming-dispatch]].
+    # STREAMING (ruled 2026-08-22, refined 2026-08-23): commands run
+    # as they're parsed, left to right; a later CONVERSION error does
+    # NOT un-run an earlier command (deferring user converters, which
+    # may have side effects, would be surprising).  STRUCTURAL/arity
+    # errors, by contrast, are caught by a whole-line pre-scan before
+    # anything runs.  See [[streaming-dispatch]], [[eager-parse-then-convert]].
     import appeal as _appeal
     ran = []
     app = _appeal.Appeal(name='ms')
@@ -5518,12 +5518,22 @@ def test_streaming_dispatch_runs_as_it_parses():
     def add(x: int, y: int):
         ran.append(('add', x, y))
     try:
-        app.process(['--trace', 'add', '1'])   # add needs 2
+        app.process(['--trace', 'add', '1', 'x'])   # add's y='x' isn't an int
         assert False, 'expected UsageError'
     except UsageError:
         pass
-    # the global era already ran before add's error surfaced
+    # structure was fine (add got two operands); the global era ran, then
+    # add's CONVERSION of 'x' failed -- a late error doesn't un-run top
     assert ran == ['top'], ran
+    # but a STRUCTURAL error (add needs 2, given 1) is caught up front by the
+    # whole-line pre-scan: nothing runs
+    ran.clear()
+    try:
+        app.process(['--trace', 'add', '1'])
+        assert False, 'expected UsageError'
+    except UsageError:
+        pass
+    assert ran == [], ran
     # a well-formed line still executes left to right
     ran.clear()
     app2 = _appeal.Appeal(name='ms2')
@@ -5570,16 +5580,17 @@ def test_cycling():
     assert [getattr(c, '__name__', None) for c, _ in app.instances] == \
         [None, 'add', 'mul', 'add']
 
-    # optionals must be spelled: greedy saturation takes the
-    # would-be command word as greet's greeting
+    # optionals must be spelled: greedy saturation takes the would-be
+    # command word as greet's greeting, leaving '1' with no command -- a
+    # STRUCTURAL error the whole-line pre-scan catches up front, so nothing
+    # runs (structural errors batch; see [[streaming-dispatch]])
     ran.clear()
     try:
         app.process(['greet', 'bob', 'add', '1', '2'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert "unknown command '1'" in str(e), e
-    # streaming: greet already ran (greeting='add') before '1' errored
-    assert ran == [('greet', 'bob', 'add')], ran
+    assert ran == [], ran
 
     # spelled, it cycles
     ran.clear()
@@ -5597,10 +5608,12 @@ def test_cycling():
     app.process(['add', '1', '2', 'total', '3', '4', '5'])
     assert ran == [('add', 1, 2), ('total', 3, 4, 5)], ran
 
-    # streaming: a malformed LATER command doesn't un-run the earlier one
+    # streaming: a later CONVERSION error doesn't un-run the earlier command
+    # (an arity error would be caught up front by the whole-line pre-scan; a
+    # bad value is only found when its converter runs, mid-stream)
     ran.clear()
     try:
-        app.process(['add', '1', '2', 'mul', '3'])
+        app.process(['add', '1', '2', 'mul', '3', 'x'])   # mul's y='x' bad int
         assert False, 'expected UsageError'
     except UsageError:
         pass
