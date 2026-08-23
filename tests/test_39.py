@@ -217,7 +217,7 @@ def test_annotated_via_app_option_override():
     @app.global_command()
     def f(*, level=0):
         return level
-    assert app.process(['--level', '10']) == 5
+    assert app.process(['--level', '10']).result == 5
 
 
 
@@ -270,10 +270,10 @@ def test_config_mapping_option():
         def go():
             pass
         return app
-    make_app().process(['go'], config={'env': {'k': 'v'}})
+    make_app().process(['go'], config={'env': {'k': 'v'}}).result
     assert seen == [{'k': 'v'}], seen
     try:
-        make_app().process(['go'], config={'env': 5})
+        make_app().process(['go'], config={'env': 5}).result
         assert False, 'expected AppealDataError'
     except appeal.AppealDataError as e:
         assert 'mapping' in str(e), e

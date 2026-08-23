@@ -207,9 +207,9 @@ def test_app_option_suppresses_auto_short():
         return quiet
     (option,) = app.plan.options
     assert option.strings == ('--quiet',)      # no -q, nothing else
-    assert app.process(['--quiet']).result is True
+    assert app.process(['--quiet']) is True
     try:
-        app.process(['-q']).result
+        app.process(['-q'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert '-q' in str(e)
@@ -226,14 +226,14 @@ def test_app_option_derives_from_parameter():
     @app.global_command()
     def f(*, verbose=False):
         return verbose
-    assert app.process(['-V']).result is True         # a flag, not a value
-    assert app.process([]).result is False            # parameter's default
+    assert app.process(['-V']) is True         # a flag, not a value
+    assert app.process([]) is False            # parameter's default
     app2 = Appeal()
     @app2.option('level', '-L')
     @app2.global_command()
     def g(*, level: int = 0):
         return level
-    assert app2.process(['-L', '3']).result == 3      # int, from the annotation
+    assert app2.process(['-L', '3']) == 3      # int, from the annotation
 
 def test_app_option_no_strings_unmaps():
     # Ruled 2026-07-25: @app.option('foo') with zero strings means
@@ -245,10 +245,10 @@ def test_app_option_no_strings_unmaps():
     @app.global_command()
     def f(*, loud=False, quiet=False):
         return (loud, quiet)
-    assert app.process(['--loud']).result == (True, False)
+    assert app.process(['--loud']) == (True, False)
     for argv in (['--quiet'], ['-q']):
         try:
-            app.process(list(argv)).result
+            app.process(list(argv))
             assert False, f'{argv} must be unmapped'
         except UsageError:
             pass
@@ -260,7 +260,7 @@ def test_app_option_no_strings_unmaps():
     @app2.global_command()
     def g(*, quiet=False):
         return quiet
-    assert app2.process(['-Q']).result is True
+    assert app2.process(['-Q']) is True
     # a **kwargs-delivered option IS its strings: zero refuses
     app3 = Appeal()
     @app3.option('mystery')
@@ -268,7 +268,7 @@ def test_app_option_no_strings_unmaps():
     def h(**kwargs):
         return kwargs
     try:
-        app3.process([]).result
+        app3.process([])
         assert False, 'expected ConfigurationError'
     except AppealConfigurationError:
         pass
@@ -284,9 +284,9 @@ def test_app_option_overrides_annotation_and_default():
     @app.global_command()
     def f(*, level='low'):
         return level
-    assert app.process([]).result == 'low'                # parameter's default
-    assert app.process(['--level', '5']).result == 5      # @option's annotation
-    assert app.process(['-L', '7']).result == 7
+    assert app.process([]) == 'low'                # parameter's default
+    assert app.process(['--level', '5']) == 5      # @option's annotation
+    assert app.process(['-L', '7']) == 7
     # ...and with no annotation, the converter is inferred from
     # @option's default (type-of-default, v1's rule)
     app2 = Appeal()
@@ -294,8 +294,8 @@ def test_app_option_overrides_annotation_and_default():
     @app2.global_command()
     def g(*, k=None):
         return k
-    assert app2.process([]).result is None
-    assert app2.process(['--kay', '9']).result == 9
+    assert app2.process([]) is None
+    assert app2.process(['--kay', '9']) == 9
 
 def test_app_option_decorators_stack():
     # several strings in ONE call share a declaration...
@@ -306,8 +306,8 @@ def test_app_option_decorators_stack():
         return verbose
     (option,) = app.plan.options
     assert sorted(option.strings) == ['--noisy', '-V']
-    assert app.process(['-V']).result is True
-    assert app.process(['--noisy']).result is True
+    assert app.process(['-V']) is True
+    assert app.process(['--noisy']) is True
     # ...but each @app.option CALL is its own declaration (v1: go2's
     # --north and --south map one parameter through different
     # converters)--including zero-argument converters, which are
@@ -320,9 +320,9 @@ def test_app_option_decorators_stack():
     @app2.global_command()
     def go2(*, direction='none'):
         return direction
-    assert app2.process([]).result == 'none'
-    assert app2.process(['--north']).result == 'north'
-    assert app2.process(['--south']).result == 'south'
+    assert app2.process([]) == 'none'
+    assert app2.process(['--north']) == 'north'
+    assert app2.process(['--south']) == 'south'
     # run_both carries the app's registry (ruled 2026-08-09:
     # decorations live in the app, never on the function)
     got = run_both(go2, ['--north'], decorations=app2._decorations)
@@ -364,24 +364,24 @@ def test_negative_number_heuristic():
             app.option('tri', '-3')(c)
         return app
     # (1) all of -2 -4 -3 mapped: the bundle parses, so it's options
-    assert build().process(['-243']).result == (None, True, True, True)
+    assert build().process(['-243']) == (None, True, True, True)
     # (2) -3 unmapped: bundle fails, float('-243') works -> operand
-    assert build(three=False).process(['-243']).result == (-243.0, False, False, False)
+    assert build(three=False).process(['-243']) == (-243.0, False, False, False)
     # a plain negative number with no digit options at all -> operand
-    assert build(three=False).process(['-5']).result == (-5.0, False, False, False)
+    assert build(three=False).process(['-5']) == (-5.0, False, False, False)
     # a lone mapped digit option still wins as an option
-    assert build().process(['-2']).result == (None, True, False, False)
+    assert build().process(['-2']) == (None, True, False, False)
     # a digit option that takes an oparg: -25 is -2 with attached oparg '5'
     app = Appeal(name='p')
     def v(*, two: str = None):
         return two
     app.global_command()(v)
     app.option('two', '-2')(v)
-    assert app.process(['-25']).result == '5'
+    assert app.process(['-25']) == '5'
     # (3) neither a valid bundle nor a float: the option error, naming the
     # first offending short
     try:
-        build().process(['-5x']).result
+        build().process(['-5x'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert str(e) == "unknown option '-5'", e
@@ -517,7 +517,7 @@ def test_appeal_is_lazy():
     def f(t: 42):    # a non-callable annotation isn't in the grammar
         pass
     try:
-        app.process([]).result
+        app.process([])
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert "isn't callable" in str(e)
@@ -532,10 +532,10 @@ def test_commands_compile_independently():
     @app.command()
     def broken(t: 42):   # not in the grammar
         pass
-    assert app.process(['good', 'hi']).result == ('good', 'hi')
-    assert app.process(['good', 'again']).result == ('good', 'again')
+    assert app.process(['good', 'hi']) == ('good', 'hi')
+    assert app.process(['good', 'again']) == ('good', 'again')
     try:
-        app.process(['broken']).result
+        app.process(['broken'])
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert "isn't callable" in str(e)
@@ -556,7 +556,7 @@ def test_app_option_works_in_either_decorator_order():
         return app
     for order in ('option-on-top', 'command-on-top'):
         app = make(order)
-        assert app.process(['-V']).result is True, order
+        assert app.process(['-V']) is True, order
         (option,) = app.plan.options
         assert option.strings == ('-V',), (order, option.strings)
 
@@ -1002,9 +1002,9 @@ def test_default_mappings_design():
     @app5.command()
     @app5.option('loud', '-L', default=False)
     def go5(*, loud=False, quiet=False): return (loud, quiet)
-    assert app5.process(['go5', '-L']).result == (True, False)
+    assert app5.process(['go5', '-L']) == (True, False)
     try:
-        app5.process(['go5', '-q']).result
+        app5.process(['go5', '-q'])
         assert False, 'unmapped option must be unknown'
     except _appeal.AppealUsageError:
         pass
@@ -1033,10 +1033,10 @@ def test_underscore_parameters_are_private():
     app = _appeal.Appeal(name='p')
     @app.command()
     def go(*, loud=False, _cache=None): return (loud, _cache)
-    assert go and app.process(['go', '--loud']).result == (True, None)
+    assert go and app.process(['go', '--loud']) == (True, None)
     assert '--_cache' not in app.commands['go'].options
     try:
-        app.process(['go', '--_cache', 'x']).result
+        app.process(['go', '--_cache', 'x'])
         assert False, 'private parameter must not map'
     except _appeal.AppealUsageError:
         pass
@@ -1046,7 +1046,7 @@ def test_underscore_parameters_are_private():
     @app2.command()
     @app2.option('_cache', '--cache')
     def go2(*, _cache=''): return _cache
-    assert app2.process(['go2', '--cache', 'hot']).result == 'hot'
+    assert app2.process(['go2', '--cache', 'hot']) == 'hot'
 
     # a custom policy dropping one name by returning []
     def policy(app_, fn, name):
@@ -1056,9 +1056,9 @@ def test_underscore_parameters_are_private():
     app3 = _appeal.Appeal(name='r', default_options=policy)
     @app3.command()
     def go3(*, loud=False, quiet=False): return (loud, quiet)
-    assert app3.process(['go3', '--loud']).result == (True, False)
+    assert app3.process(['go3', '--loud']) == (True, False)
     try:
-        app3.process(['go3', '--quiet']).result
+        app3.process(['go3', '--quiet'])
         assert False
     except _appeal.AppealUsageError:
         pass
@@ -1083,17 +1083,17 @@ def test_same_word_at_different_depths():
     a.command('X')(ax)
     x = a.command('X')
     x.command('X')(axx)
-    app.process(['A', 'X', 'X']).result
+    app.process(['A', 'X', 'X'])
     assert calls == ['A', 'AX', 'XX'], calls
     # a fourth X can't re-enter X's set (no repeat there), so it pops back
     # to A's cycling set and re-runs X the PARENT (AX); subcommands are not
     # required (ruled 2026-08-22), so AX dangling at end is fine, not an error
     calls.clear()
-    app.process(['A', 'X', 'X', 'X']).result
+    app.process(['A', 'X', 'X', 'X'])
     assert calls == ['A', 'AX', 'XX', 'AX'], calls
     # and a fifth X descends again: the cycle breathes in and out
     calls.clear()
-    app.process(['A', 'X', 'X', 'X', 'X']).result
+    app.process(['A', 'X', 'X', 'X', 'X'])
     assert calls == ['A', 'AX', 'XX', 'AX', 'XX'], calls
 
 
@@ -1122,7 +1122,7 @@ def test_main_exits_the_process():
             code = e.code if isinstance(e.code, int) else 0
         assert code == expected, (argv, code)
     # process() still returns, raw
-    assert app.process(['fail']).result == 3
+    assert app.process(['fail']) == 3
 
 
 def test_command_error():
@@ -1166,7 +1166,7 @@ def test_command_error():
     assert code == 1
     # process() is the raw API: the exception propagates
     try:
-        app.process(['grumble']).result
+        app.process(['grumble'])
         raised = False
     except _appeal.CommandError as e:
         raised = True
@@ -1587,23 +1587,23 @@ def test_optional_oparg_subscript():
     def make(*, debug: optional[str] = None, file=None,
              jobs: optional[int] = 1):
         return (debug, file, jobs)
-    assert app.process([]).result == (None, None, 1)
-    assert app.process(['--debug']).result == ('', None, 1)
-    assert app.process(['--debug=vj']).result == ('vj', None, 1)
-    assert app.process(['--jobs']).result == (None, None, 0)
-    assert app.process(['-j', '3']).result == (None, None, 3)
+    assert app.process([]) == (None, None, 1)
+    assert app.process(['--debug']) == ('', None, 1)
+    assert app.process(['--debug=vj']) == ('vj', None, 1)
+    assert app.process(['--jobs']) == (None, None, 0)
+    assert app.process(['-j', '3']) == (None, None, 3)
     # a greedy oparg that eats the wrong token is the USER's
     # error--UsageError, never a raw ValueError traceback
     # (found 2026-08-06 writing the die famous-make docs)
     try:
-        app.process(['-j', 'zork']).result
+        app.process(['-j', 'zork'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert 'zork' in str(e) and 'int' in str(e)
     # a plain (or None-defaulted) str option still REQUIRES its
     # value, exactly as 0.6.4 did
     try:
-        app.process(['--file']).result
+        app.process(['--file'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert 'requires a value' in str(e)
@@ -1613,7 +1613,7 @@ def test_optional_oparg_subscript():
     def g(*, x: optional = None):
         return x
     try:
-        app2.process([]).result
+        app2.process([])
         assert False, 'expected ConfigurationError'
     except AppealConfigurationError as e:
         assert 'optional[str]' in str(e)
@@ -1642,7 +1642,7 @@ def test_command_listings_are_definition_order():
 
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app.process(['help']).result
+        app.process(['help'])
     tail0 = out.getvalue().split('Commands')[-1]
     words = [l.split()[0] for l in tail0.splitlines()
              if l and not l.startswith(' ') and set(l) != {'-'}]
@@ -1650,7 +1650,7 @@ def test_command_listings_are_definition_order():
 
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app.process(['help', 'zebra']).result
+        app.process(['help', 'zebra'])
     tail = out.getvalue().split('Commands')[-1]
     words = [l.split()[0] for l in tail.splitlines()
              if l and not l.startswith(' ') and set(l) != {'-'}]
@@ -2217,7 +2217,7 @@ def run_both_set(commands, global_command, argv):
     if global_command is not None:
         app.global_command()(global_command)
     try:
-        return ('ok', app.process(list(argv)).result)
+        return ('ok', app.process(list(argv)))
     except UsageError as e:
         return ('usage', str(e))
 
@@ -2388,7 +2388,7 @@ def test_repeatable_precommand_eras():
     def run(target):
         return ('run', target)
     ran.clear()
-    assert app.process(['--debug', 'here', 'run', 'x']).result == ('run', 'x')
+    assert app.process(['--debug', 'here', 'run', 'x']) == ('run', 'x')
     assert ran == [('setup', True), ('scope', 'here')], ran
 
     # index=0 inserts at the head; a truthy int from any era halts, the
@@ -2405,10 +2405,10 @@ def test_repeatable_precommand_eras():
     def go(target):
         gated.append(('go', target)); return 0
     gated.clear()
-    assert app2.process(['--fail', 'v', 'go', 'y']).result == 3     # gate halts first
+    assert app2.process(['--fail', 'v', 'go', 'y']) == 3     # gate halts first
     assert gated == [], gated
     gated.clear()
-    assert app2.process(['v', 'go', 'y']).result == 0
+    assert app2.process(['v', 'go', 'y']) == 0
     assert gated == [('base', 'v'), ('go', 'y')], gated
 
 def test_appeal_facade_dispatch():
@@ -2422,8 +2422,8 @@ def test_appeal_facade_dispatch():
     @app.command()
     def add(a: int, b: int):
         return a + b
-    assert app.process(['greet', 'world']).result == 'hi, world'
-    assert app.process(['--trace', 'add', '2', '3']).result == 5
+    assert app.process(['greet', 'world']) == 'hi, world'
+    assert app.process(['--trace', 'add', '2', '3']) == 5
     import contextlib, io
     # errors print to stderr by default (the POSIX diagnostic
     # convention, ruled 2026-07-09); errors='stdout' opts out
@@ -2482,7 +2482,7 @@ def run_both_stdout(command, argv, decorations=None):
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out):
-            result = app.process(list(argv)).result
+            result = app.process(list(argv))
     except SystemExit as e:
         result = None if e.code in (0, None) else e.code
     return result, out.getvalue()
@@ -2710,7 +2710,7 @@ def test_command_set_help():
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out):
-                result = app.process(list(argv)).result
+                result = app.process(list(argv))
         except SystemExit as e:
             result = None if e.code in (0, None) else e.code
         return result, out.getvalue()
@@ -2733,7 +2733,7 @@ def test_command_set_help():
 
     # `help BOGUS`
     try:
-        app.process(['help', 'bogus']).result
+        app.process(['help', 'bogus'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert 'bogus' in str(e)
@@ -2746,10 +2746,10 @@ def test_command_set_help():
     @app2.command('help')
     def user_help(topic=''):
         return ('user help', topic)
-    assert app2.process(['help', 'x']).result == ('user help', 'x')
+    assert app2.process(['help', 'x']) == ('user help', 'x')
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        assert app2.process([]).result == 1
+        assert app2.process([]) == 1
     assert 'Print usage documentation' not in out.getvalue()
 
 
@@ -2762,12 +2762,12 @@ def test_command_set_help_facade():
         return ('add', name)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        result = app.process(['help']).result
+        result = app.process(['help'])
     assert result is None
     assert 'add-item  Adds an item to the pile.' in out.getvalue()  # _ -> -
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app.process(['help', 'add-item']).result
+        app.process(['help', 'add-item'])
     assert out.getvalue().startswith('usage: '), out.getvalue()
     assert 'Adds an item to the pile.' in out.getvalue()
     # app-built plans carry the prog prefix (ruled 2026-07-19)
@@ -2788,7 +2788,7 @@ def test_set_level_help_flag():
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out):
-                app.process(list(argv)).result
+                app.process(list(argv))
             code = 'returned'
         except SystemExit as e:
             code = e.code if isinstance(e.code, int) else 0
@@ -2962,10 +2962,10 @@ def test_kwargs_options():
     @app.global_command()
     def f(x, **kwargs):
         return (x, kwargs)
-    assert app.process(['a']).result == ('a', {})
-    assert app.process(['a', '--zap', '5']).result == ('a', {'zap': 5})
-    assert app.process(['a', '-q']).result == ('a', {'quiet': True})
-    assert app.process(['a', '--zap', '5', '-q']).result == ('a', {'zap': 5, 'quiet': True})
+    assert app.process(['a']) == ('a', {})
+    assert app.process(['a', '--zap', '5']) == ('a', {'zap': 5})
+    assert app.process(['a', '-q']) == ('a', {'quiet': True})
+    assert app.process(['a', '--zap', '5', '-q']) == ('a', {'zap': 5, 'quiet': True})
     # parity between rungs, the app's registry riding along
     fn = f
     got = run_both(fn, ['a', '--zap', '7'],
@@ -2983,11 +2983,11 @@ def test_kwargs_options():
     @app2.global_command()
     def h(x, **kwargs):
         return (x, kwargs)
-    assert app2.process(['a', '-i', 'p', '-i', 'q']).result == \
+    assert app2.process(['a', '-i', 'p', '-i', 'q']) == \
         ('a', {'include': ['p', 'q']})
     # NOT an arbitrary-option sink: undeclared options stay unknown
     try:
-        app2.process(['a', '--bogus']).result
+        app2.process(['a', '--bogus'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert 'unknown option' in str(e)
@@ -2998,7 +2998,7 @@ def test_kwargs_options():
     def nowhere(x):
         return x
     try:
-        app3.process(['a']).result
+        app3.process(['a'])
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert '**kwargs to deliver' in str(e), e
@@ -3018,8 +3018,8 @@ def test_kwargs_options_on_a_converter():
     @app.global_command()
     def cmd(x, s: kg = None):
         return (x, s)
-    assert app.process(['X', 'a']).result == ('X', ('a', {}))
-    assert app.process(['X', 'a', '--flavor', 'spicy']).result == \
+    assert app.process(['X', 'a']) == ('X', ('a', {}))
+    assert app.process(['X', 'a', '--flavor', 'spicy']) == \
         ('X', ('a', {'flavor': 'spicy'}))
     # two positionals: both are operands (v1 refuses a leftover)
     app2 = Appeal()
@@ -3029,7 +3029,7 @@ def test_kwargs_options_on_a_converter():
     @app2.global_command()
     def cmd2(x, s: two = None):
         return (x, s)
-    assert app2.process(['X', 'p', 'q', '--flavor', 'hot']).result == \
+    assert app2.process(['X', 'p', 'q', '--flavor', 'hot']) == \
         ('X', ('p', 'q', {'flavor': 'hot'}))
     # both rungs agree (the converter's decorations live in the
     # app registry, threaded through the build)
@@ -3216,7 +3216,7 @@ def test_help_disabled():
         "Do."
         return a
     try:
-        app.process(['--help']).result
+        app.process(['--help'])
         assert False, 'expected --help to be unknown'
     except UsageError as e:
         assert '--help' in str(e), e
@@ -3235,7 +3235,7 @@ def test_help_disabled():
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out):
-            app2.process(['--help']).result
+            app2.process(['--help'])
         assert False, 'expected SystemExit(0)'
     except SystemExit as e:
         assert (e.code or 0) == 0
@@ -3255,12 +3255,12 @@ def test_help_disabled():
         "Subtract."
         return x - y
     try:
-        app3.process(['help']).result
+        app3.process(['help'])
         assert False, 'expected help command to be gone'
     except UsageError as e:
         assert 'unknown command' in str(e), e
     try:
-        app3.process(['add', '--help']).result
+        app3.process(['add', '--help'])
         assert False, 'expected per-command --help to be gone'
     except UsageError as e:
         assert '--help' in str(e), e
@@ -3564,7 +3564,7 @@ def test_prescan_dry_live_agree():
 
     def dry_alone(app, argv):
         app._finalize()
-        app._run_node(list(argv), 0, _ap.Processor(app), top=True,
+        app._run_node(list(argv), 0, _ap._RunLog(app), top=True,
                       dry=True, built=[])
 
     def outcome(fn):
@@ -3600,7 +3600,7 @@ def test_prescan_dry_live_agree():
             except Exception as e:
                 assert False, f'DRY crashed: {type(e).__name__}: {e}\nargv={argv!r}'
             try:
-                live_kind, live_val = outcome(lambda: app.process(list(argv)).result)
+                live_kind, live_val = outcome(lambda: app.process(list(argv)))
             except Exception as e:
                 assert False, (f'LIVE crashed (dry/live divergence?): '
                                f'{type(e).__name__}: {e}\nargv={argv!r}')
@@ -4052,9 +4052,9 @@ def test_double_dash_state_never_leaks():
         s = ' '.join(words)
         return s.upper() if upper else s
 
-    assert app.process(['--', '--upper', 'x']).result == '--upper x'
+    assert app.process(['--', '--upper', 'x']) == '--upper x'
     # second parse on the same object: options must work again
-    assert app.process(['--upper', 'hello', 'there']).result == 'HELLO THERE'
+    assert app.process(['--upper', 'hello', 'there']) == 'HELLO THERE'
 
 def test_plan_recursion():
     plan = build_plan(draw)
@@ -4347,21 +4347,21 @@ def test_config_layering():
         layer['define'] = {'x': 1}
     # instances[0] is the help/version precommand era; the global
     # class-as-app Config is the next invocation (new-engine logging)
-    proc = app.process(['src'], config=layer)
-    c = proc.instances[1][1]
+    app.process(['src'], config=layer)
+    c = app.instances[1][1]
     assert (c.source, c.verbose, c.jobs) == ('src', True, 4)
     assert c.include == ['a', 'b']
     if GENERIC_SPELLINGS:
         assert c.define == {'x': 1}
 
     # argv wins, whole: repeatables REPLACE, never append
-    proc = app.process(['src', '--jobs', '9', '-i', 'z'], config=layer)
-    c = proc.instances[1][1]
+    app.process(['src', '--jobs', '9', '-i', 'z'], config=layer)
+    c = app.instances[1][1]
     assert c.jobs == 9 and c.include == ['z']
 
     # absent from both: the default fills
-    proc = app.process(['src'], config={})
-    assert proc.instances[1][1].jobs == 1
+    app.process(['src'], config={})
+    assert app.instances[1][1].jobs == 1
 
     # strict keys, each flavor loud and saying why
     @app.command()
@@ -4372,7 +4372,7 @@ def test_config_layering():
             ({'build': {}}, 'is a command'),
             ({'colour': 1}, "isn't an option")):
         try:
-            app.process(['src', 'build', 't'], config=bad).result
+            app.process(['src', 'build', 't'], config=bad)
             assert False, f'expected AppealDataError for {bad}'
         except AppealDataError as e:
             assert not isinstance(e, UsageError)   # data, not usage
@@ -4384,20 +4384,20 @@ def test_config_layering():
     @app2.global_command()
     def solo(*, jobs: int = 1, verbose=False):
         return (jobs, verbose)
-    assert app2.process([], config={'jobs': 4}).result == (4, False)
+    assert app2.process([], config={'jobs': 4}) == (4, False)
     try:
-        app2.process([], config={'jobs': 'banana'}).result
+        app2.process([], config={'jobs': 'banana'})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert str(e).startswith('config:'), e
     try:
-        app2.process([], config={'verbose': 'maybe'}).result
+        app2.process([], config={'verbose': 'maybe'})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert 'boolean' in str(e), e
     # verbose: false means absent: the default fills (and a
     # **kwargs option would stay an absent key)
-    assert app2.process([], config={'verbose': 'off'}).result == (1, False)
+    assert app2.process([], config={'verbose': 'off'}) == (1, False)
 
     # a commands-only program has nowhere for config to land
     app3 = _appeal.Appeal(name='n')
@@ -4405,7 +4405,7 @@ def test_config_layering():
     def go():
         return 'went'
     try:
-        app3.process(['go'], config={'anything': 1}).result
+        app3.process(['go'], config={'anything': 1})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert 'no global command' in str(e), e
@@ -4419,7 +4419,7 @@ def test_command_name_underscores_become_dashes():
     def upload_database():
         return 'up'
     assert 'upload-database' in app.commands, list(app.commands)
-    assert app.process(['upload-database']).result == 'up'
+    assert app.process(['upload-database']) == 'up'
 
 def test_command_name_leading_underscore_rejected():
     # _command -> -command starts with a dash: commands are words, not
@@ -4462,8 +4462,8 @@ def test_command_name_override():
         def wipe(self):
             ran.append(('wipe', self.label))
 
-    app.process(['add-item', '3']).result
-    app.process(['db', 'main', 'wipe']).result
+    app.process(['add-item', '3'])
+    app.process(['db', 'main', 'wipe'])
     assert ran == [('add-item', 3), ('wipe', 'main')], ran
     # the word is the word everywhere: usage and the plan name
     assert app.plan_for('add-item').name == 'add-item'
@@ -4477,7 +4477,7 @@ def test_command_name_override():
     @reg.command(name='drop-all')
     def drop_all():
         ran.append('drop-all')
-    app2.process(['base', 'drop-all']).result
+    app2.process(['base', 'drop-all'])
     assert ran[-2:] == ['base', 'drop-all'], ran
     # the visible word keeps its dashes in usage
     assert 'add-item' in app.plan_for('add-item').usage()
@@ -4734,7 +4734,7 @@ def test_flag_explicit_boolean():
     import io, contextlib
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app.process(['kw', '--extra=false']).result
+        app.process(['kw', '--extra=false'])
     assert out.getvalue().strip() == "[('extra', False)]"
 
     # per-instance (*args-group) flags take it too--spelled
@@ -4756,11 +4756,11 @@ def test_flag_explicit_boolean():
         pass
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app2.process(['--verbose=false', 'work'], config={'verbose': True}).result
+        app2.process(['--verbose=false', 'work'], config={'verbose': True})
     assert out.getvalue().strip() == 'verbose False'
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app2.process(['work'], config={'verbose': True}).result
+        app2.process(['work'], config={'verbose': True})
     assert out.getvalue().strip() == 'verbose True'
 
 
@@ -4968,7 +4968,7 @@ def test_keyboard_interrupt():
 
     # process() propagates raw
     try:
-        app.process(['boom']).result
+        app.process(['boom'])
         assert False, 'expected KeyboardInterrupt'
     except KeyboardInterrupt:
         pass
@@ -5024,7 +5024,7 @@ def test_deep_nested_sets():
                     'down', '1', 'status']
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                app.process(list(argv)).result
+                app.process(list(argv))
             expected = 'db main\nmigrate two\nup 3\ndown 1\nstatus\n'
             assert out.getvalue() == expected
 
@@ -5072,9 +5072,9 @@ def test_appeal_tree_registration():
     @app.command('x')
     def some_function(a):
         return ('x', a)
-    assert app.process(['x', 'hi']).result == ('x', 'hi')
+    assert app.process(['x', 'hi']) == ('x', 'hi')
     try:
-        app.process(['some_function', 'z']).result
+        app.process(['some_function', 'z'])
         assert False, 'function name must not dispatch'
     except _appeal.AppealUsageError:
         pass
@@ -5094,7 +5094,7 @@ def test_appeal_tree_registration():
     @app.command('x')
     def replacement(a):
         return ('replaced', a)
-    assert app.process(['x', 'hi']).result == ('replaced', 'hi')
+    assert app.process(['x', 'hi']) == ('replaced', 'hi')
 
     # Appeal(parent=) hangs a node in the tree directly
     app2 = _appeal.Appeal(name='u')
@@ -5102,7 +5102,7 @@ def test_appeal_tree_registration():
     @child.command()
     def leaf():
         return 'leaf!'
-    assert app2.process(['sub', 'leaf']).result == 'leaf!'
+    assert app2.process(['sub', 'leaf']) == 'leaf!'
 
     # chained .option() works (the child is an Appeal, so every
     # registration method is there)
@@ -5115,7 +5115,7 @@ def test_appeal_tree_registration():
     def start(*, port=80):
         return ('start', port)
     # -p derives int from port=80 (ruled 2026-07-25)
-    assert app3.process(['serve', 'start', '-p', '99']).result == ('start', 99)
+    assert app3.process(['serve', 'start', '-p', '99']) == ('start', 99)
 
 
 def test_appeal_tree_default_commands():
@@ -5145,17 +5145,17 @@ def test_appeal_tree_default_commands():
             # in-process: line stops at the parent -> its default
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                app.process(['db', '--host', 'prod']).result
+                app.process(['db', '--host', 'prod'])
             assert out.getvalue() == 'db prod\ndb-default\n', out.getvalue()
             # a named subcommand still dispatches
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                app.process(['db', 'deploy', '5']).result
+                app.process(['db', 'deploy', '5'])
             assert out.getvalue() == 'db local\ndeploy 5\n', out.getvalue()
             # empty line -> the root default
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                app.process([]).result
+                app.process([])
             assert out.getvalue() == 'root-default\n', out.getvalue()
 
         finally:
@@ -5215,7 +5215,7 @@ def test_subcommands_interacting_with_repeat():
             # in-process
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                app.process(list(line)).result
+                app.process(list(line))
             assert out.getvalue() == expected, out.getvalue()
 
             # a set whose repeat is OFF refuses re-entry: with
@@ -5230,7 +5230,7 @@ def test_subcommands_interacting_with_repeat():
             ax2.command()(repeatmod.AxB)
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
-                    app2.process(['A', 'Ax', 'AxA', 'AxB']).result
+                    app2.process(['A', 'Ax', 'AxA', 'AxB'])
                 assert False, 'expected AppealUsageError'
             except _appeal.AppealUsageError as e:
                 assert 'AxB' in str(e), e
@@ -5351,7 +5351,7 @@ def test_appeal_error_umbrella():
     def work():
         pass
     try:
-        app3.process(['work'], config={'verbose': 'maybe'}).result
+        app3.process(['work'], config={'verbose': 'maybe'})
         assert False, 'expected AppealDataError'
     except _appeal.AppealDataError as e:
         assert "can't read 'maybe'" in str(e)
@@ -5378,9 +5378,9 @@ def test_config_group_options_and_empty_config():
         def go():
             pass
         return app
-    make().process(['go'], config={'where': {'x': 1, 'deep': 3}}).result
+    make().process(['go'], config={'where': {'x': 1, 'deep': 3}})
     assert seen[0] == (1, 3), seen
-    make().process(['go'], config={'where': {'x': 1}}).result
+    make().process(['go'], config={'where': {'x': 1}})
     assert seen[0] == (1, 0), seen
     # atomic per option: argv naming the group wins WHOLE--the
     # config's inner option must not leak in
@@ -5389,7 +5389,7 @@ def test_config_group_options_and_empty_config():
     assert seen[0] == (9, 0), seen
     # unknown keys still refuse, by name
     try:
-        make().process(['go'], config={'where': {'x': 1, 'zz': 2}}).result
+        make().process(['go'], config={'where': {'x': 1, 'zz': 2}})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert 'zz' in str(e)
@@ -5405,7 +5405,7 @@ def test_config_group_options_and_empty_config():
             pass
         return app
     try:
-        top2_factory().process(['go2'], config={'w1': {'x': 1, 'deep': 3}}).result
+        top2_factory().process(['go2'], config={'w1': {'x': 1, 'deep': 3}})
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'scoped' in str(e) and 'deep' in str(e)
@@ -5415,9 +5415,9 @@ def test_config_group_options_and_empty_config():
     @app.command()
     def solo():
         return 'ran'
-    assert app.process(['solo'], config={}).result == 'ran'
+    assert app.process(['solo'], config={}) == 'ran'
     try:
-        app.process(['solo'], config={'x': 1}).result
+        app.process(['solo'], config={'x': 1})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert 'no global command' in str(e)
@@ -5442,7 +5442,7 @@ def test_config_error_provenance_is_structural():
     # a bad ARGV positional stays a usage error, config or not
     for config in (None, {'a': 'x'}):
         try:
-            make().process(['banana', 'go'], config=config).result
+            make().process(['banana', 'go'], config=config)
             assert False, 'expected UsageError'
         except AppealDataError as e:
             # unprefixed canonical (ruled 2026-07-25; matches 0.6.4,
@@ -5451,7 +5451,7 @@ def test_config_error_provenance_is_structural():
             assert not str(e).startswith('config:')
     # a bad CONFIG value converts, and says so
     try:
-        make().process(['1', 'go'], config={'level': 'banana'}).result
+        make().process(['1', 'go'], config={'level': 'banana'})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert type(e) is AppealDataError
@@ -5468,7 +5468,7 @@ def test_config_error_provenance_is_structural():
     def go3():
         pass
     try:
-        app.process(['go3'], config={'where': {'x': 'nope'}}).result
+        app.process(['go3'], config={'where': {'x': 'nope'}})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert str(e).startswith('config:') and e.param == 'x'
@@ -5491,7 +5491,7 @@ def test_config_scoped_refusal():
     def work():
         pass
     try:
-        app.process(['work'], config={'flavor': 'sour'}).result
+        app.process(['work'], config={'flavor': 'sour'})
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'position decides' in str(e)
@@ -5524,7 +5524,7 @@ def test_concurrent_first_parse():
         def race(i):
             barrier.wait()
             try:
-                app.process(['add', str(i), '1', 'mul', str(i), '2']).result
+                app.process(['add', str(i), '1', 'mul', str(i), '2'])
             except Exception as e:      # pragma: no cover
                 errors.append(e)
         threads = [threading.Thread(target=race, args=(i,))
@@ -5649,7 +5649,7 @@ def test_streaming_dispatch_runs_as_it_parses():
     def add(x: int, y: int):
         ran.append(('add', x, y))
     try:
-        app.process(['--trace', 'add', '1', 'x']).result   # add's y='x' isn't an int
+        app.process(['--trace', 'add', '1', 'x'])   # add's y='x' isn't an int
         assert False, 'expected UsageError'
     except UsageError:
         pass
@@ -5660,7 +5660,7 @@ def test_streaming_dispatch_runs_as_it_parses():
     # whole-line pre-scan: nothing runs
     ran.clear()
     try:
-        app.process(['--trace', 'add', '1']).result
+        app.process(['--trace', 'add', '1'])
         assert False, 'expected UsageError'
     except UsageError:
         pass
@@ -5674,7 +5674,7 @@ def test_streaming_dispatch_runs_as_it_parses():
     @app2.command()
     def add2(x: int, y: int):
         ran.append(('add2', x, y))
-    app2.process(['--trace', 'add2', '1', '2']).result
+    app2.process(['--trace', 'add2', '1', '2'])
     assert ran == ['top2', ('add2', 1, 2)], ran
 
 
@@ -5705,10 +5705,10 @@ def test_cycling():
         return code
 
     # sibling cycle, left to right, logged in order
-    proc = app.process(['add', '1', '2', 'mul', '3', '4', 'add', '5', '6'])
+    app.process(['add', '1', '2', 'mul', '3', '4', 'add', '5', '6'])
     assert ran == [('add', 1, 2), ('mul', 3, 4), ('add', 5, 6)], ran
     # leading None is the help/version precommand era (runs once at the head)
-    assert [getattr(c, '__name__', None) for c, _ in proc.instances] == \
+    assert [getattr(c, '__name__', None) for c, _ in app.instances] == \
         [None, 'add', 'mul', 'add']
 
     # optionals must be spelled: greedy saturation takes the would-be
@@ -5717,7 +5717,7 @@ def test_cycling():
     # runs (structural errors batch; see [[streaming-dispatch]])
     ran.clear()
     try:
-        app.process(['greet', 'bob', 'add', '1', '2']).result
+        app.process(['greet', 'bob', 'add', '1', '2'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert "unknown command '1'" in str(e), e
@@ -5725,18 +5725,18 @@ def test_cycling():
 
     # spelled, it cycles
     ran.clear()
-    app.process(['greet', 'bob', 'hi', 'add', '1', '2']).result
+    app.process(['greet', 'bob', 'hi', 'add', '1', '2'])
     assert ran == [('greet', 'bob', 'hi'), ('add', 1, 2)], ran
 
     # the window rule: a post-saturation option binds to the
     # finished command; the next command word closes the window
     ran.clear()
-    app.process(['scale', '3', '--double', 'add', '1', '2']).result
+    app.process(['scale', '3', '--double', 'add', '1', '2'])
     assert ran == [('scale', 3, True), ('add', 1, 2)], ran
 
     # *args never saturates: a cycle terminator
     ran.clear()
-    app.process(['add', '1', '2', 'total', '3', '4', '5']).result
+    app.process(['add', '1', '2', 'total', '3', '4', '5'])
     assert ran == [('add', 1, 2), ('total', 3, 4, 5)], ran
 
     # streaming: a later CONVERSION error doesn't un-run the earlier command
@@ -5744,7 +5744,7 @@ def test_cycling():
     # bad value is only found when its converter runs, mid-stream)
     ran.clear()
     try:
-        app.process(['add', '1', '2', 'mul', '3', 'x']).result   # mul's y='x' bad int
+        app.process(['add', '1', '2', 'mul', '3', 'x'])   # mul's y='x' bad int
         assert False, 'expected UsageError'
     except UsageError:
         pass
@@ -5753,7 +5753,7 @@ def test_cycling():
     # the early-exit contract, every command in a cycle: a nonzero
     # int halts
     ran.clear()
-    result = app.process(['bail', '7', 'add', '1', '2']).result
+    result = app.process(['bail', '7', 'add', '1', '2'])
     assert result == 7
     assert ran == [('bail', 7)], ran
 
@@ -5768,10 +5768,10 @@ def test_cycling():
     def board(f: _pair, s: stroke = 'none'):
         ran.append(('board', f, s))
     ran.clear()
-    app.process(['add', '1', '2', 'board', '--dashed', 'a', 'b', '1.5']).result
+    app.process(['add', '1', '2', 'board', '--dashed', 'a', 'b', '1.5'])
     assert ran == [('add', 1, 2), ('board', 'a+b', '1.5~')], ran
     ran.clear()
-    app.process(['add', '1', '2', 'board', 'a', 'b', '1.5', '--dashed']).result
+    app.process(['add', '1', '2', 'board', 'a', 'b', '1.5', '--dashed'])
     assert ran == [('add', 1, 2), ('board', 'a+b', '1.5~')], ran
 
     # without repeat, a leftover word is leftover (one command per
@@ -5781,7 +5781,7 @@ def test_cycling():
     def add2(x: int, y: int):
         ran.append(('add2', x, y))
     try:
-        app2.process(['add2', '1', '2', 'add2', '3', '4']).result
+        app2.process(['add2', '1', '2', 'add2', '3', '4'])
         assert False, 'expected UsageError'
     except UsageError:
         pass
@@ -5824,27 +5824,27 @@ def test_nested_cycling_and_popup():
         ran.append(('remove', x))
 
     # cycling within db's set
-    proc = app.process(['db', 'add', '3', 'remove', '4'])
+    app.process(['db', 'add', '3', 'remove', '4'])
     assert ran == [('db', False), ('add', 3), ('remove', 4)], ran
-    assert [getattr(c, '__name__', c) for c, _ in proc.instances] == \
+    assert [getattr(c, '__name__', c) for c, _ in app.instances] == \
         [None, 'db', 'add', 'remove']    # leading None = precommand era
 
     # pop-up: add's set has no 'status'; db's set doesn't either;
     # the root's repeat resolves it
     ran.clear()
-    app.process(['db', 'add', '3', 'status']).result
+    app.process(['db', 'add', '3', 'status'])
     assert ran == [('db', False), ('add', 3), 'status'], ran
 
     # and back down: a second db runs again, fresh options
     ran.clear()
-    app.process(['db', 'add', '1', 'status', 'db', '-v', 'remove', '2']).result
+    app.process(['db', 'add', '1', 'status', 'db', '-v', 'remove', '2'])
     assert ran == [('db', False), ('add', 1), 'status',
                    ('db', True), ('remove', 2)], ran
 
     # a parent run with no subcommand: subcommands are NOT required
     # (ruled 2026-08-22) -- db has a body, so it just runs, no error
     ran.clear()
-    app.process(['db']).result
+    app.process(['db'])
     assert ran == [('db', False)], ran
 
     # without the parent's repeat, its set doesn't cycle...
@@ -5862,7 +5862,7 @@ def test_nested_cycling_and_popup():
     # ...but the root's repeat still resolves root words (pop-up
     # skips the non-repeat level, it doesn't stop there)
     ran.clear()
-    app2.process(['db2', 'add2', '1', 'status2']).result
+    app2.process(['db2', 'add2', '1', 'status2'])
     assert ran == ['db2', ('add2', 1), 'status2'], ran
 
 
@@ -5891,12 +5891,11 @@ def test_two_classes_same_method_name():
         def run(self):
             return 'beta-run'
 
-    assert app.process(['alpha', 'run']).result == 'alpha-run'
-    proc = app.process(['beta', 'run'])
-    assert proc.result == 'beta-run'
+    assert app.process(['alpha', 'run']) == 'alpha-run'
+    assert app.process(['beta', 'run']) == 'beta-run'
     # the instances log can't tell WHICH `run` from the bare word,
     # so it answers None rather than guess wrong
-    assert proc.instances[-1] == (None, None)
+    assert app.instances[-1] == (None, None)
     # plan_for on the ambiguous bare word refuses, naming parents
     try:
         app.plan_for('run')
@@ -5975,13 +5974,13 @@ def test_app_class_compat_layer():
 
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app.process(['--verbose', 'add', '1', '2']).result
+        app.process(['--verbose', 'add', '1', '2'])
     assert out.getvalue() == 'init verbose=True\nadd 3 verbose=True\n', \
         out.getvalue()
     # a fresh instance per parse, defaults refilled
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app.process(['add', '4', '5']).result
+        app.process(['add', '4', '5'])
     assert out.getvalue() == 'init verbose=False\nadd 9 verbose=False\n', \
         out.getvalue()
 
@@ -5997,9 +5996,9 @@ def test_app_class_compat_layer():
         def list_(self):
             return 'listed'
 
-    assert app2.process(['list']).result == 'listed'
+    assert app2.process(['list']) == 'listed'
     try:
-        app2.process(['list_']).result
+        app2.process(['list_'])
         assert False, 'the method name must not dispatch'
     except _appeal.AppealUsageError:
         pass
@@ -6025,23 +6024,23 @@ def test_class_as_app():
         def helper(self):
             pass    # undecorated: not a command
 
-    proc = app.process(['-v', 'fgrep', 'patt', 'file', '-c', '33'])
+    app.process(['-v', 'fgrep', 'patt', 'file', '-c', '33'])
     assert out == [('init', True),
                    ('fgrep', True, 'patt', 'file', 33)], out
     # the log: instances[0] is the help/version precommand era (None, None);
     # then the global class logs (None, instance); the method logs (fn, None)
-    command, instance = proc.instances[1]
+    command, instance = app.instances[1]
     assert command is None and isinstance(instance, MyApp)
     assert instance.verbose is True
-    assert proc.instances[2] == (MyApp.fgrep, None)
+    assert app.instances[2] == (MyApp.fgrep, None)
     # undecorated methods aren't commands
     try:
-        app.process(['helper']).result
+        app.process(['helper'])
         assert False, 'expected UsageError'
     except UsageError as e:
         assert 'unknown command' in str(e)
     # the instance is never mistaken for an exit status
-    assert app.process(['fgrep', 'a', 'b']).result is None
+    assert app.process(['fgrep', 'a', 'b']) is None
 
 
 def test_class_as_app_nested():
@@ -6071,17 +6070,17 @@ def test_class_as_app_nested():
             def add(self, x: int):
                 out.append(('add', self.name, x))
 
-    app.process(['-v', 'Db', 'mydb', 'add', '3']).result
+    app.process(['-v', 'Db', 'mydb', 'add', '3'])
     assert out == [('db', 'mydb'), ('add', 'mydb', 3)], out
     # cycling pops from the inner set back to a root method
     out.clear()
-    proc = app.process(['Db', 'mydb', 'add', '1', 'top', '9'])
+    app.process(['Db', 'mydb', 'add', '1', 'top', '9'])
     assert out == [('db', 'mydb'), ('add', 'mydb', 1),
                    ('top', False, 9)], out
     # the log carries every constructed instance, in order
     kinds = [(getattr(c, '__name__', None),
               type(i).__name__ if i is not None else None)
-             for c, i in proc.instances]
+             for c, i in app.instances]
     # a leading (None, None) is the help/version precommand era
     assert kinds == [(None, None), (None, 'Outer'), ('Db', 'Db'),
                      ('add', None), ('top', None)], kinds
@@ -6107,10 +6106,10 @@ def test_class_as_app_bic():
             def __init__(self, host, label, *, dry=False):
                 out.append(('job', host.verbose, label, dry))
 
-    proc = app.process(['-v', 'Job', 'nightly', '--dry'])
+    app.process(['-v', 'Job', 'nightly', '--dry'])
     assert out == [('job', True, 'nightly', True)], out
     # [0] precommand era, [1] the Host global, [2] the Job command
-    command, instance = proc.instances[2]
+    command, instance = app.instances[2]
     assert type(instance).__name__ == 'Job'
 
 
@@ -6139,9 +6138,9 @@ def test_subcommand():
     def drop():
         ran.append('drop')
 
-    app.process(['db', 'add', '1']).result
-    app.process(['db', 'remove', '2']).result
-    app.process(['db', 'drop']).result
+    app.process(['db', 'add', '1'])
+    app.process(['db', 'remove', '2'])
+    app.process(['db', 'drop'])
     assert ran == [('db', False), ('add', 1), ('db', False),
                    ('remove', 2), ('db', False), 'drop'], ran
 
@@ -6174,7 +6173,7 @@ def test_subcommand():
     @app3.subcommand(None)
     def solo(x):
         return ('solo', x)
-    assert app3.process(['solo', 'a']).result == ('solo', 'a')
+    assert app3.process(['solo', 'a']) == ('solo', 'a')
 
 
 def test_subcommand_same_world():
@@ -6245,7 +6244,7 @@ def test_subcommand_same_world():
             return ('stamp', self.tag, x)
     tool = Tool('mine')
     free.subcommand('anywhere')(tool.stamp)
-    assert free.process(['anywhere', 'stamp', 'hi']).result == \
+    assert free.process(['anywhere', 'stamp', 'hi']) == \
         ('stamp', 'mine', 'hi')
 
     # refused: a method under ANOTHER METHOD (Larry's
@@ -6282,7 +6281,7 @@ def test_class_as_app_refusals():
             pass
     # the class was never decorated: its method is an orphan
     try:
-        app.process(['method', 'a']).result
+        app.process(['method', 'a'])
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'forget to decorate the class' in str(e), e
@@ -7094,9 +7093,9 @@ def test_readme_examples():
             try:
                 with contextlib.redirect_stdout(out):
                     if config is None:
-                        app.process(list(argv)).result
+                        app.process(list(argv))
                     else:
-                        app.process(list(argv), config=dict(config)).result
+                        app.process(list(argv), config=dict(config))
             except Exception as e:
                 raise AssertionError(
                     f'{where} {argv!r} raised: {e}') from e

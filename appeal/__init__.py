@@ -709,7 +709,7 @@ def _config_apply(conv, table, global_plan, config, plan_for):
         return
     _Conv = Converter; _Opt = Option
     cfg_conv = type(conv)()
-    proc = Processor(synth, cfg_conv, table)
+    proc = backend.Engine(synth, cfg_conv, table)
     proc.enter(cfg_conv)
     try:
         proc._loop()
@@ -767,60 +767,59 @@ def _refuse_orphan_method(callable):
             f"class?")
 
 
-class _RunLog:
+class Processor:
     """
-    One trip through one command line--v1's Processor returns,
-    leaner.  app.parse(argv) builds one having run stage 1 only
-    (the structural scan: zero user code, a malformed line dies
-    there); execute() runs stage 2, the conversions and the
-    commands themselves, left to right.  app.process() is both
-    stages, fused.
+    One execution of one command line--the object app.process() hands
+    back (like a subprocess.Popen: not reusable, it represents a run).
+    Construct it with the app and call it with an argv to run the line
+    (streaming: parse, convert, and dispatch left to right); afterward
+    it carries the outcome.  app.process() is the shortcut that builds
+    one, calls it, and returns it.
 
-    instances is the run's execution log, appended mechanically in
-    execution order: one (command, instance) pair per command run.
-    command is the registered callable--None for the global
-    command--and instance is the object it constructed (None until
-    class-based commands land).
-
-    v1 compat: app.processor() returns an unparsed Processor;
-    calling it with an argv runs both stages and returns the
-    result (v1's callable execution object).
+    result is the invoked command's return value.  instances is the
+    run's execution log, appended mechanically in execution order: one
+    (command, instance) pair per command run.  command is the
+    registered callable--None for the global command--and instance is
+    the object it constructed (None for a plain function command; the
+    built instance for a class-based one).
     """
     def __init__(self, app):
         self.app = app
-        self.invocations = None    # stage 1's artifact: what would run
-        self._tail = None
-        self.instances = []
         self.result = None
-        self._config = None        # vetted config layer, if any
+        self.instances = []
+
+    def __call__(self, args=None, config=None):
+        argv = _sys.argv[1:] if args is None else list(args)
+        # whole-line STRUCTURAL pre-scan first (Larry, 2026-08-23): parcel and
+        # validate the ENTIRE command set -- every command's arity, oparg
+        # counts, unknown options -- running NO converter or command body.  A
+        # structural error anywhere aborts here, before the first command runs.
+        # Then the live pass converts and runs left to right (a later CONVERSION
+        # error doesn't un-run an earlier command; see [[streaming-dispatch]]).
+        # both passes visit the same converters in the same order, so the dry
+        # pass records each built converter class into `built` (traversal order)
+        # and the live pass pops them instead of rebuilding -- no plan or
+        # converter is built twice.  reverse() so a live pop() off the end
+        # yields them front-to-back.
+        built = []
+        self.app._run_node(list(argv), 0, self, top=True, config=config,
+                           dry=True, built=built)
+        built.reverse()
+        self.result, _ = self.app._run_node(list(argv), 0, self, top=True,
+                                            config=config, built=built)
+        return self.result
 
     def __repr__(self):
-        if self.invocations is None:
-            return '<Processor (unparsed)>'
-        parts = []
-        for word, run, operands, handoff, positions in self.invocations:
-            name = '(global)' if word is None else word
-            text = f'{name} {" ".join(operands)}'.rstrip()
-            # the handoff is either the mature `given` dict or the
-            # eager IR (a token list); show the option keys either way
-            if isinstance(handoff, dict):
-                keys = sorted(handoff)
-            else:
-                keys = sorted({t[0] for t in handoff if t and t[0]})
-            if keys:
-                text += ' [' + ' '.join(keys) + ']'
-            parts.append(text)
-        if self._tail is not None:
-            parts.append(f'({self._tail[0]})')
-        return '<Processor: ' + '; '.join(parts) + '>'
+        return (f'<Processor result={self.result!r} '
+                f'({len(self.instances)} commands run)>')
 
     def _command_for(self, word):
         """
         The registered callable behind a word, for the instances
         log (None: the global).  A bare word naming DIFFERENT
         callables under different parents is ambiguous from here
-        (invocations don't carry their parent), so the log
-        answers None rather than guess wrong.
+        (the log doesn't carry their parent), so it answers None
+        rather than guess wrong.
         """
         if word is None:
             return None
@@ -1112,7 +1111,6 @@ class Appeal:
         # None-then-{} check-and-set to race.
         self._parse = None        # scalar: the single-command parse fn
         self._set_entries = {}    # nested set dicts, built per parent node
-        self._last_processor = None   # app.instances reads this
         self._plans = {}          # {id(node): Plan}, filled per word
         self._parses = {}         # {id(node): parse fn}, ditto
         self._global_plan = None  # scalar
@@ -2204,41 +2202,14 @@ class Appeal:
 
     def process(self, args=None, config=None):
         """
-        Parse args (default: sys.argv[1:]) and invoke the command;
-        returns its return value.
+        Parse args (default: sys.argv[1:]) and invoke the command.
+        Returns the Processor for this run: its .result is the command's
+        return value, .instances the execution log.  (A shortcut for
+        Processor(app)(args); see Processor.)
         """
-        argv = _sys.argv[1:] if args is None else list(args)
-        return self._compiled_dispatch(argv, config=config)
-
-    def _compiled_dispatch(self, argv, config=None):
-        """
-        The one path (Larry, 2026-08-21): compile the parser in memory and
-        run the Processor.
-        Dispatches the head eras then the command words -- recursing into a
-        command's subcommand node when it has one -- and logs the instances the
-        old two-stage execute() did (app.instances reads _last_processor).
-        """
-        holder = _RunLog(self)
-        self._last_processor = holder
-        # whole-line STRUCTURAL pre-scan first (Larry, 2026-08-23): parcel and
-        # validate the ENTIRE command set -- every command's arity, oparg counts,
-        # unknown options -- running NO converter or command body.  A structural
-        # error anywhere aborts here, before the first command runs.  Then the
-        # live pass converts and runs left to right (a later CONVERSION error
-        # doesn't un-run an earlier command; see [[streaming-dispatch]]).
-        # both passes visit the same converters in the same order, so the dry
-        # pass records each built converter class into `built` (traversal order)
-        # and the live pass pops them instead of rebuilding -- no plan or
-        # converter is built twice (Larry's insight, 2026-08-23).  reverse() so
-        # a live pop() off the end yields them front-to-back.
-        built = []
-        self._run_node(list(argv), 0, holder, top=True, config=config,
-                       dry=True, built=built)
-        built.reverse()
-        result, _ = self._run_node(list(argv), 0, holder, top=True,
-                                   config=config, built=built)
-        holder.result = result
-        return result
+        processor = Processor(self)
+        processor(args, config)
+        return processor
 
     def _run_node(self, argv, pos, holder, top, env=None, config=None,
                   dry=False, built=None):
@@ -2276,7 +2247,7 @@ class Appeal:
             # validate (and reject) a command portion that help would preempt.
             # It's a no-op unless help/version was actually requested.
             is_meta = getattr(era_plan.callable, 'precommand', False)
-            proc = Processor(argv[pos:], conv, table, dry=dry and not is_meta)
+            proc = backend.Engine(argv[pos:], conv, table, dry=dry and not is_meta)
             if config is not None and era_plan.callable is self._global and not dry:
                 # layer config onto the global command: parse argv, merge config
                 # for options argv didn't set, THEN invoke (argv wins, whole).
@@ -2326,7 +2297,7 @@ class Appeal:
             conv = cls()
             if cls.binds is not None and not dry:   # a method command: self is the
                 conv.bound = env.get(cls.binds)     # instance a parent constructed
-            proc = Processor(argv[pos:], conv, table, dry=dry)
+            proc = backend.Engine(argv[pos:], conv, table, dry=dry)
             result = proc.run()
             dispatched = True
             if dry:                                 # pre-scan: no instances, no
@@ -2375,7 +2346,7 @@ class Appeal:
                 dconv = dcls()
                 if dcls.binds is not None and not dry:
                     dconv.bound = env.get(dcls.binds)
-                dproc = Processor(argv[pos:], dconv, table, dry=dry)
+                dproc = backend.Engine(argv[pos:], dconv, table, dry=dry)
                 result = dproc.run()
                 if not dry:
                     holder.instances.append((None, None))
@@ -2384,15 +2355,6 @@ class Appeal:
                 self.help()                         # the set listing, to stdout
                 result = 1
         return result, pos
-
-    @property
-    def instances(self):
-        """
-        The most recent run's execution log: (command, instance)
-        pairs in execution order (see Processor).
-        """
-        processor = self._last_processor
-        return processor.instances if processor is not None else []
 
     def main(self, args=None, config=None):
         """
@@ -2417,7 +2379,7 @@ class Appeal:
         # the one engine (2026-08-22): main() drives the same in-memory dispatch
         # process() does (config layering included).  A help/version precommand
         # prints then sys.exit()s; run_main catches that and converts to a code.
-        parse = lambda argv: self._compiled_dispatch(list(argv), config=config)
+        parse = lambda argv: Processor(self)(list(argv), config)
         _sys.exit(run_main(parse, args, stylesheet=self.stylesheet,
                            errors=self.errors, margin=self.margin))
 
@@ -2582,10 +2544,12 @@ class Appeal:
 
 
 # the back end (appeal/backend.py): the Plan consumer -- build_converters
-# and the Processor engine.  Imported here at the end so its `from . import`
+# and the Engine.  Imported here at the end so its `from . import`
 # of the exceptions/vocabulary above resolves; gives the dispatch methods
-# their names.
+# their names.  The Engine is NOT re-exported (it's internal machinery, not
+# public API); the dispatch methods reach it as backend.Engine.
+from . import backend
 from .backend import (
-    Processor, execute, build_converters, _converter_key,
+    execute, build_converters, _converter_key,
     _halts, _unexpected, Converter,
     )

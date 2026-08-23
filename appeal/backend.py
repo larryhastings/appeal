@@ -4,7 +4,7 @@
 # Part of Appeal v2.
 #
 # The back end: consumes the Plan.  build_converters turns Plans into the
-# live Converter subclasses; the Processor engine runs a command line
+# live Converter subclasses; the Engine runs a command line
 # through them (parcel + convert + dispatch).  The front end
 # (appeal/frontend.py) produces the Plan.
 
@@ -605,7 +605,7 @@ class Converter:
         return conv(*args, **self.kwargs)
 
 
-class Processor:
+class Engine:
     def __init__(self, argv, root, commands=(), dry=False):
         self.argv = list(argv)
         self.pos = 0
@@ -1030,7 +1030,7 @@ def execute(commands, argv, *, precommands=(), repeat=False):
     result = None
     pos = 0
     for era_cls in precommands:                 # the head eras, in order
-        processor = Processor(argv[pos:], era_cls(), commands)
+        processor = Engine(argv[pos:], era_cls(), commands)
         result = processor.run()
         if _halts(result):
             return result
@@ -1043,7 +1043,7 @@ def execute(commands, argv, *, precommands=(), repeat=False):
         if converter_cls is None:
             raise _unexpected(word, commands)
         pos += 1
-        processor = Processor(argv[pos:], converter_cls(), commands)
+        processor = Engine(argv[pos:], converter_cls(), commands)
         result = processor.run()
         pos += processor.consumed
         # validate leftover BEFORE the early-exit contract: a command that

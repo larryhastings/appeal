@@ -837,7 +837,7 @@ def test_config_vet_refusals():
         )
     for config, exc, complaint in cases:
         try:
-            app.process(['go', 'd'], config=config)
+            app.process(['go', 'd'], config=config).result
             assert False, 'expected %s for %r' % (exc.__name__, config)
         except exc as e:
             assert complaint in str(e), (config, str(e))
@@ -872,7 +872,7 @@ def test_config_inject_shapes():
 
     def drive(config):
         seen[:] = []
-        make_app().process(['go'], config=config)
+        make_app().process(['go'], config=config).result
         return seen[0]
 
     assert drive({'tags': ['a', 'b'], 'adds': [1, [2]],
@@ -916,7 +916,7 @@ def test_registration_errors():
     app = Appeal(name='dup')
     app.command(name='x')(lambda: 'first')
     app.command(name='x')(lambda: 'second')
-    assert app.process(['x']) == 'second'
+    assert app.process(['x']).result == 'second'
     app2 = Appeal(name='clash')
     @app2.global_command()
     def go():
@@ -985,10 +985,10 @@ def test_nested_class_repeat_and_parse_for():
         @app.subcommand('db')
         def wipe(self):
             ran.append(('wipe', self.label))
-    app.process(['db', 'main', 'wipe'])
+    proc = app.process(['db', 'main', 'wipe'])
     assert ran == [('db', 'main'), ('wipe', 'main')], ran
     # the instance log carries the parent class instance
-    assert any(isinstance(i, Db) for c, i in app.instances), app.instances
+    assert any(isinstance(i, Db) for c, i in proc.instances), proc.instances
 
 
 def test_main_completion_reentry():
@@ -1469,7 +1469,7 @@ def test_run_main_completion_param():
     table = completion_table(build_plan(go))
     app = Appeal(name='go', default_mappings=None)
     app.global_command()(go)
-    parse = lambda argv: app._compiled_dispatch(list(argv))
+    parse = lambda argv: appeal.Processor(app)(list(argv))
     old_env = dict(os.environ)
     os.environ.update({'_APPEAL_COMPLETE': 'bash',
                        'COMP_WORDS': 'go\n-', 'COMP_CWORD': '1'})
@@ -2278,7 +2278,7 @@ def test_entry_points_default_to_sys_argv():
     saved = sys.argv
     try:
         sys.argv = ['ep', 'go', '5']
-        assert app.process() == 5              # None -> sys.argv[1:]
+        assert app.process().result == 5              # None -> sys.argv[1:]
         try:
             app.main()
             code = 0
@@ -2286,7 +2286,7 @@ def test_entry_points_default_to_sys_argv():
             code = e.code
         assert code == 5                    # go's nonzero int IS the code
         sys.argv = ['ep']                      # a different command line
-        assert app.process(['go', '9']) == 9   # explicit wins, no sys.argv
+        assert app.process(['go', '9']).result == 9   # explicit wins, no sys.argv
     finally:
         sys.argv = saved
 
@@ -2407,7 +2407,7 @@ def test_branch_negative_number_global_operand():
     @app.command()
     def addc(x: int):
         return x
-    assert app.process(['-5', '-6', 'addc', '7']) == 7
+    assert app.process(['-5', '-6', 'addc', '7']).result == 7
 
 
 def test_branch_completion_edges():
@@ -2572,7 +2572,7 @@ def test_branch_first_parse_race_losers():
         results, errors = [], []
         def runner():
             try:
-                results.append(app.process(list(argv)))
+                results.append(app.process(list(argv)).result)
             except Exception as e:      # pragma: no cover
                 errors.append(e)
         threads = [threading.Thread(target=runner) for _ in range(2)]
