@@ -88,6 +88,36 @@ def test_tuple_slot_element_converters():
     assert got == ('ok', (1, 'a+b')), got
 
 
+def test_star_args_tuple_chunks_operands():
+    # *args: tuple[X, Y, Z] chunks the flat operand stream by the tuple's
+    # arity: six operands become two 3-tuples; a count that doesn't divide
+    # evenly is a "left over" shortfall (the operand-count taxonomy,
+    # [[eager-parse-then-convert]]).
+    def b(*rows: tuple[int, int, int]):
+        return rows
+    assert run_both(b, ['1', '2', '3']) == ('ok', ((1, 2, 3),))
+    assert run_both(b, ['1', '2', '3', '4', '5', '6']) == (
+        'ok', ((1, 2, 3), (4, 5, 6)))
+    assert run_both(b, []) == ('ok', ())            # zero-or-more
+    got = run_both(b, ['1', '2', '3', '4', '5'])    # 5 % 3 != 0
+    assert got[0] == 'usage', got
+
+    # mixed element types, each element's converter runs
+    def m(*rows: tuple[int, str]):
+        return rows
+    assert run_both(m, ['1', 'a', '2', 'b']) == ('ok', ((1, 'a'), (2, 'b')))
+
+    # a multi-operand converter element rides the ordinary child logic:
+    # tuple[_pair, int] is three operands per element (two for _pair, one
+    # for int), chunked in twos here
+    def _pair(x, y):
+        return f'{x}+{y}'
+    def c(*rows: tuple[_pair, int]):
+        return rows
+    assert run_both(c, ['a', 'b', '7', 'c', 'd', '9']) == (
+        'ok', (('a+b', 7), ('c+d', 9)))
+
+
 def test_tuple_refusals_are_named():
     def variadic(t: tuple[int, ...]):
         pass

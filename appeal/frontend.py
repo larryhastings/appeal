@@ -1653,7 +1653,16 @@ def _build(callable, name, memo, stack, top, skip_first=False,
                     raise AppealConfigurationError(
                         f"{context}: {annotation.__name__} is an Option "
                         f"class; those are only meaningful on options")
-                if _is_repeat_group(annotation):
+                if getattr(annotation, '__origin__', None) is tuple:
+                    # *args: tuple[X, Y, Z] -- each command-line instance
+                    # consumes N operands and builds a tuple, so the flat
+                    # operand stream chunks by N (six operands -> two
+                    # (X, Y, Z) tuples; five -> a "left over" shortfall).
+                    # A repeat of the fixed-arity tuple group; converter
+                    # and nested-tuple elements ride the ordinary child
+                    # logic and just work.
+                    child = _tuple_plan(annotation, parameter.name, memo, stack)
+                elif _is_repeat_group(annotation):
                     if not top:
                         raise AppealConfigurationError(
                             f"converter {name!r}: {context} takes a "
