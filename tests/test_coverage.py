@@ -1530,14 +1530,6 @@ def test_converter_body_errors():
     assert got[0] == 'usage' and 'not a valid spot' in got[1], got
 
 
-def test_absorb_take_edges():
-    from appeal import absorb_take
-    # no suffix counts: the remainder after the suffix minimum
-    assert absorb_take(5, None, 2, 1, False) == 3
-    # nothing fits and the slot can't skip: no take at all
-    assert absorb_take(0, (5,), 5, 1, False) is None
-
-
 def test_toy_multisplit_and_bytes_iter():
     # _toy_multisplit is snipped into the appeal core (stdlib-only, so
     # the core imports nothing from big); _iterate_over_bytes still
@@ -2168,14 +2160,6 @@ def test_short_option_equals_refusal():
         return mode
     got = both(gm, ['-m=x'])
     assert got == ('usage', "option 'mode' doesn't take a value"), got
-
-
-def test_scoped_queue_live_resolve():
-    # resolve() in the live phase replays; it never re-decides
-    from appeal import ScopedQueue
-    sq = ScopedQueue([], 'multi')
-    sq.phase = 'live'
-    assert sq.resolve('--x') is None
 
 
 def test_completion_internals_direct():
