@@ -311,7 +311,7 @@ def _config_apply(conv, table, global_plan, config, plan_for):
     from .read import _read_bool
     from .runtime import (Processor, UsageError, AppealError)
     vetted = _config_vet(global_plan, frozenset(table), config, plan_for)
-    given = set(conv.kwargs) | set(conv.multis)
+    given = set(conv.kwargs)            # options (folds included) all live here now
     usage = global_plan.usage()
 
     def tokens_for(rule, value, provenance):
@@ -388,13 +388,27 @@ def _config_apply(conv, table, global_plan, config, plan_for):
         synth += tokens_for(rule, config[name], name)
     if not synth:
         return
+    from .runtime import Converter as _Conv, Option as _Opt, LeafConverter as _Leaf
     cfg_conv = type(conv)()
     proc = Processor(synth, cfg_conv, table)
+    proc.enter(cfg_conv)
     try:
-        proc.enter(cfg_conv)
         proc._loop()
-        for mname, inst in cfg_conv.multis.items():
-            cfg_conv.kwargs[mname] = inst()
+    except UsageError as e:
+        # config supplies only options (vetted); its synth carries no operands,
+        # so once the option tokens are consumed cfg_conv's required POSITIONALS
+        # report "missing argument" -- expected and irrelevant.  Any OTHER error
+        # is about a config value (options validate eagerly) -> config: provenance.
+        if not str(e).startswith('missing argument'):
+            raise AppealDataError(f"config: {e}", getattr(e, 'usage', None) or usage,
+                                  param=getattr(e, 'param', None)) from None
+    try:
+        # render the config VALUES here (not at conv()) so a conversion failure
+        # carries 'config:' provenance; then merge the finished values in
+        for k in list(cfg_conv.kwargs):
+            v = cfg_conv.kwargs[k]
+            if isinstance(v, (_Conv, _Opt, _Leaf)):
+                cfg_conv.kwargs[k] = v()
     except UsageError as e:                     # provenance: it came from config
         raise AppealDataError(f"config: {e}", getattr(e, 'usage', None) or usage,
                               param=getattr(e, 'param', None)) from None

@@ -3155,6 +3155,9 @@ class ValueBinding:
             if processor.peek() is None:
                 raise UsageError(f"option {self.name!r} requires a value", None)
             value = processor.advance()                 # raw: no option check
+        # value options convert eagerly, per occurrence: a repeated option
+        # validates EVERY value (ruled 2026-08-16, "not called validate for
+        # nothing"), last wins.  (Positional leaves defer; options don't.)
         self.instance.kwargs[self.name] = convert(conv, value, self.name)
     def _multi(self, processor, conv, value):
         constructor, leaves = conv[0], conv[1:]
@@ -3215,11 +3218,11 @@ class MultiBinding:
         self.factory = factory
         self.converters, self.minimum = _oparg_converters(factory)
     def invoke(self, processor, value=None):
-        instance = self.owner.multis.get(self.name)
-        if instance is None:                        # every Option is repeatable
-            instance = self.factory()               # (StrictOption removed
-            instance.init(_default(self.owner, self.name))  # 2026-08-22)
-            self.owner.multis[self.name] = instance
+        instance = self.owner.kwargs.get(self.name)     # MultiOptions live in
+        if instance is None:                            # kwargs now, rendered
+            instance = self.factory()                   # like any deferred value
+            instance.init(_default(self.owner, self.name))
+            self.owner.kwargs[self.name] = instance
         opargs = []
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)
@@ -3316,6 +3319,23 @@ class ConjureValueBinding:
 
 
 # ---- the converter base --------------------------------------------
+class LeafConverter:
+    """
+    A deferred leaf conversion (Larry's two-phase, 2026-08-23): the parse phase
+    stores the raw operand and its converter here without running it; the render
+    phase (Converter.__call__) finalizes it by calling this.  So no leaf
+    converter runs until the whole command line has been parsed and its
+    structure validated -- a malformed line raises before any side effect.
+    """
+    __slots__ = ('name', 'raw', 'converter')
+    def __init__(self, name, raw, converter):
+        self.name = name
+        self.raw = raw
+        self.converter = converter
+    def __call__(self):
+        return convert(self.converter, self.raw, self.name)
+
+
 class Converter:
     """
     Base for a generated command or converter.  There is a 1:1 mapping
@@ -3384,9 +3404,12 @@ class Converter:
         "Wire this converter's child converters (generated override; base no-op)."
 
     def __init__(self):
-        self.args = []
-        self.kwargs = {}
-        self.multis = {}                # name -> live MultiOption, finalized last
+        self.args = []                  # positional operands, as deferred
+                                        # renderables (LeafConverter / child
+                                        # Converter); finalized in __call__
+        self.kwargs = {}                # options by name -- the SOLE memory for
+                                        # options (a MultiOption lives here too,
+                                        # rendered like everything else)
         self.reserve = []               # this converter's end-pocket
         self.bound = None               # a method command's instance (self)
 
@@ -3407,24 +3430,26 @@ class Converter:
         return RepeatInstruction(items)
 
     def __call__(self):
-        "Render: finalize MultiOptions, resolve child converters, call."
-        def render(child):
-            # a nested converter's constructor body that raises ValueError/
-            # TypeError is a POLITE usage error ('not a valid spot'), the same
-            # contract convert() gives a leaf -- the top command's own body
-            # (called below, un-wrapped) still raises honestly.
-            try:
-                return child()
-            except (ValueError, TypeError) as e:
-                name = getattr(type(child).converter, '__name__', 'converter')
-                detail = str(e) or f'not a valid {name}'
-                raise UsageError(f"not a valid {name}: {detail}", None) from None
-        for name, instance in self.multis.items():
-            self.kwargs[name] = instance()
-        for name, value in self.kwargs.items():         # group-option values
-            if isinstance(value, Converter):
-                self.kwargs[name] = render(value)
-        args = [render(a) if isinstance(a, Converter) else a for a in self.args]
+        "Render (phase 2): finalize every deferred value, then call the callable."
+        def render(v):
+            # everything Appeal defers is a zero-arg callable: a LeafConverter
+            # (a raw operand + its converter), a child Converter (a group), or a
+            # MultiOption (a fold, living in kwargs).  A group's constructor body
+            # that raises ValueError/TypeError is a POLITE usage error ('not a
+            # valid spot'); anything else is a final value, passed through.
+            if isinstance(v, Converter):
+                try:
+                    return v()
+                except (ValueError, TypeError) as e:
+                    name = getattr(type(v).converter, '__name__', 'converter')
+                    raise UsageError(
+                        f"not a valid {name}: {e or name}", None) from None
+            if isinstance(v, (Option, LeafConverter)):
+                return v()
+            return v
+        for name in list(self.kwargs):
+            self.kwargs[name] = render(self.kwargs[name])
+        args = [render(a) for a in self.args]
         conv = type(self).converter
         if type(self)._iterable:            # tuple[...]/list[...]: build from the iterable
             return conv(args)
@@ -3626,7 +3651,7 @@ class Processor:
                     raise UsageError(f"missing argument {arg.name!r}", None)
                 return                              # optional: signature default fills
             raw = arg.owner.reserve.pop(0)
-            arg.owner.kwargs[arg.name] = convert(arg.converter, raw, arg.name)
+            arg.owner.kwargs[arg.name] = LeafConverter(arg.name, raw, arg.converter)
             return
         tok = self.peek()
         # a leaf converter is any one-string-in callable (str, int, split(':'),
@@ -3641,7 +3666,7 @@ class Processor:
                     raw = arg.owner._attached
                     arg.owner._attached = None
                     self.queue.popleft()
-                    arg.owner.args.append(convert(arg.converter, raw, arg.name))
+                    arg.owner.args.append(LeafConverter(arg.name, raw, arg.converter))
                     return
                 if tok is None or tok == '--':
                     if arg.required:
@@ -3657,7 +3682,7 @@ class Processor:
                     return
                 self.advance()
                 self.queue.popleft()
-                arg.owner.args.append(convert(arg.converter, tok, arg.name))
+                arg.owner.args.append(LeafConverter(arg.name, tok, arg.converter))
                 return
             if tok is None or (not self.force_positional and self._is_option(tok)):
                 if arg.required:
@@ -3678,7 +3703,7 @@ class Processor:
                         _positional_default(arg.owner, arg.name))
                 return
             self.advance()
-            arg.owner.args.append(convert(arg.converter, tok, arg.name))
+            arg.owner.args.append(LeafConverter(arg.name, tok, arg.converter))
             self.queue.popleft()
             return
         # a converter slot: a conjured instance, or a fresh one from an operand
