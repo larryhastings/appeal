@@ -2141,7 +2141,7 @@ def run_both(command, argv, decorations=None):
     decorations: the app-side @option/@parameter registry.
     """
     import appeal
-    from appeal.compile import build_converters, _converter_key
+    from appeal.backend import build_converters, _converter_key
     plan = build_plan(command, decorations=decorations)
     word = plan.name.replace('_', '-')
     cls = build_converters([plan])[_converter_key(plan)]

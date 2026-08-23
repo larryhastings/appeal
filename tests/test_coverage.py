@@ -28,7 +28,7 @@ import appeal
 def both(fn, argv, decorations=None):
     "One engine: build the Converter in memory and run it; errors as text."
     import appeal
-    from appeal.compile import build_converters, _converter_key
+    from appeal.backend import build_converters, _converter_key
     plan = build_plan(fn, decorations=decorations)
     word = plan.name.replace('_', '-')
     cls = build_converters([plan])[_converter_key(plan)]
