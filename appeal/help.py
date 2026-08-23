@@ -6,8 +6,7 @@
 #
 # The build-time half of help: docstring parsing and resolving
 # entries against the plan.  The run-time half--render_help_page
-# and friends--live in appeal/__init__.py, the core streamed into standalone
-# scripts.
+# and friends--live in appeal/__init__.py.
 
 import inspect as _inspect
 import re as _re

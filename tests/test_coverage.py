@@ -1698,7 +1698,6 @@ def test_section_template_validation():
     assert by['options'][1] == '  '
 
 
-
 def test_vocabulary_validation():
     try:
         appeal.split('')
@@ -1739,30 +1738,6 @@ def test_process_stream_edges():
 # ---------------------------------------------------------------------
 # batch 8: the core--token stream edges, completion internals,
 # the MCP wire protocol
-
-
-def test_parse_tokens_edges():
-    # '--' outranks greed once the minimum is met, even inside an
-    # option group's optional operands
-    def og(x: int, y: int = 0):
-        return (x, y)
-    def f(z, *, where: og = None):
-        return (z, where)
-    got = both(f, ['--where', '1', '--', '2'])
-    assert got == ('ok', ('2', (1, 0))), got
-    # a negative-number-looking token is an operand when no such
-    # short option exists
-    def neg(x):
-        return x
-    got = both(neg, ['-2'])
-    assert got == ('ok', '-2'), got
-    # a nullary option refuses '=' by name
-    def loud():
-        return 'LOUD'
-    def g(*, mode: loud = 'quiet'):
-        return mode
-    got = both(g, ['--mode=x'])
-    assert got[0] == 'usage', got
 
 
 def test_completion_candidate_edges():
@@ -2000,38 +1975,6 @@ def test_runtime_token_and_set_edges():
         return mode
     got = both(gm, ['--mode=x'])
     assert got == ('usage', "option 'mode' doesn't take a value"), got
-
-
-def test_tokenize_ir():
-    # stage 1 of the two-stage parser: argv -> the uniform token IR
-    # (marker '' is an operand run; else a canonical option key + raw
-    # opargs).  Aliases normalize, clusters split, '='/attached/'--'
-    # resolve, and the operand/option INTERLEAVING is preserved.
-    from appeal import tokenize
-    opts = {
-        '-a': ('--apple', 'flag', True), '--apple': ('--apple', 'flag', True),
-        '-b': ('--banana', 'flag', True), '--banana': ('--banana', 'flag', True),
-        '-v': ('--verbose', 'flag', True), '--verbose': ('--verbose', 'flag', True),
-        '-t': ('--tag', 'multi'), '--tag': ('--tag', 'multi'),
-        '-u': ('--units', 'value'), '--units': ('--units', 'value'),
-        '--span': ('--span', 'value', 2),
-    }
-    T = lambda argv: tokenize(argv, opts)
-    assert T(['-ab']) == [('--apple',), ('--banana',)]        # cluster
-    assert T(['a', '-v', 'b', 'c']) == [
-        ('', 'a'), ('--verbose',), ('', 'b', 'c')]            # interleave
-    assert T(['--units=C', 'f']) == [('--units', 'C'), ('', 'f')]
-    assert T(['-uC']) == [('--units', 'C')]                   # attached
-    assert T(['--span', '3', '4']) == [('--span', '3', '4')]  # multi-arg
-    assert T(['--', '-v']) == [('', '-v')]                    # terminator
-    assert T(['-5', 'a']) == [('', '-5', 'a')]                # negative
-    # repeats keep command-line ORDER (this is what makes last-wins
-    # fall out of the stage-2 walk--no occurrence lists)
-    assert T(['-t', 'x', '-t', 'y']) == [('--tag', 'x'), ('--tag', 'y')]
-    # command_split: the global's slice, then the rest from the word
-    toks, rest = tokenize(['1', 'go', 'z'], {},
-                          command_split=(1, 1, frozenset({'go'})))
-    assert toks == [('', '1')] and rest == ['go', 'z']
 
 
 def test_run_main_themed_and_set_completion():

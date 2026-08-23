@@ -6,8 +6,8 @@
 #
 # The plan tree: the passive, immutable data structure the compiler
 # produces.  One Plan per callable (per grammar rule).  All behavior
-# lives in the consumers--the parser rungs, usage generation, codegen,
-# the JSON schema--never here.  Nothing at parse time ever writes to
+# lives in the consumers--the parser, usage generation, the JSON
+# schema--never here.  Nothing at parse time ever writes to
 # the tree.
 
 def _validate_arg_format(fmt):
@@ -186,7 +186,7 @@ class OptionRule:
 
     def table_entry(self, windowed=False):
         """
-        This option's parse_tokens table value.  Folds and groups
+        This option's option-table value.  Folds and groups
         carry their per-occurrence (minimum, maximum) operand
         counts--consumption is greedy to the maximum (v1: an
         optional operand takes the next token unconditionally);
@@ -313,7 +313,7 @@ class Plan:
         # COMMAND plans at build so the usage line reads
         # `usage: prog go ...` (0.6.4's shape, ruled 2026-07-19)
         # --pasteable into a shell.  Named argv0 (ruled
-        # 2026-08-04), matching standalone(argv0=).
+        # 2026-08-04).
         self.argv0 = None
         self.callable = callable
         self.name = name

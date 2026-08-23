@@ -10,9 +10,7 @@
 # mapping (or by position from a sequence), converters apply, groups
 # recurse into sub-mappings/sub-sequences, defaults fill absences.
 #
-# In-process API only: these aren't part of the command-line grammar,
-# so the standalone north star doesn't apply.  One interpreted
-# implementation (like the interpreter), no codegen.
+# In-process API only: these aren't part of the command-line grammar.
 #
 # v1 parity where v1 0.6.4 works (probed): values pulled by name,
 # converters always applied (already-typed values included), extra

@@ -3,7 +3,7 @@
 #
 # Help, usage, color, and markdown rendering--carved out of
 # the core so `import appeal` (the parse/convert/dispatch
-# core a precompiled parser imports) pulls in NOTHING from big.
+# core) pulls in NOTHING from big.
 # This module DOES import big (markdown/stylesheet/text); it's
 # imported LAZILY--only when help or an error actually renders.
 
@@ -493,8 +493,7 @@ def render_help_page(usage, corpus, templates, margin=79,
 
     BAKE + RUN in one call: help_page_pieces does the Markdown
     work (this machine), render_baked_help wraps and paints (any
-    machine)--the same two halves a generated script uses, so
-    in-process help and standalone help cannot drift.
+    machine).
     """
     return render_baked_help(
         help_page_pieces(usage, corpus, templates, suppress),
@@ -583,8 +582,7 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
     runtime--('usage', prefix, usage-string) for the usage line,
     ('markdown', layout) for everything else, where layout is
     big's width-independent flat tuple.  Every value reprs into
-    valid Python source: a generated script embeds the pieces as
-    a literal.
+    valid Python source.
     """
     from big.markdown import (layout_document, parse,
                               split_styles_document, style_document)

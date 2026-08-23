@@ -6,9 +6,7 @@
 #
 # The build-time half of shell completion: turning a plan into the
 # tables the engine answers from.  The engine itself--and the
-# reentry protocol--lives in appeal/__init__.py, streamed into every
-# standalone script, so completion works identically in-process
-# and in a generated script.
+# reentry protocol--live in appeal/__init__.py.
 
 from .build import all_options, help_option_strings
 from .plan import Terminal
@@ -26,7 +24,7 @@ def completion_table(plan):
     """
     The completion table for one command (see
     complete_command for the shape).  Plain data plus
-    converter references--everything a generated script can carry.
+    converter references--plain data.
     """
     options = {}
     values = {}

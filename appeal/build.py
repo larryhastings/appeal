@@ -271,9 +271,7 @@ def _short_option(name):
 # default), it returns a list of option strings.  Appeal claims
 # every long ('--xxx') unconditionally (they must be unique) and
 # every short ('-x') if its letter is still free.  The policy runs
-# at build time only; its output--the strings--is what the
-# compiled parser bakes, so a custom policy never rides along into
-# a standalone script.
+# at build time only.
 
 def default_options(app, callable, name):
     """
@@ -656,9 +654,8 @@ def _tuple_plan(annotation, parameter_name, memo, stack):
     """
     tuple[T1, T2, ...Tn] on a positional parameter: one slot that
     consumes n operands and builds a tuple.  Modeled as a child Plan
-    whose callable is the builtin `tuple`; the interpreter and codegen
-    both special-case construction (a tuple display, no call), so
-    there's nothing to import--standalone-safe by construction.
+    whose callable is the builtin `tuple`; the engine special-cases
+    construction (a tuple display, no call).
     Elements recurse through the ordinary child logic, so converters
     and nested tuples inside a tuple just work.
     """
@@ -1466,7 +1463,7 @@ def _analyze(plan):
 
 
 def _shallow_slots(obj):
-    "copy.copy for a __slots__ object (no copy module in standalone)."
+    "copy.copy for a __slots__ object, without importing copy."
     new = obj.__class__.__new__(obj.__class__)
     for klass in type(obj).__mro__:
         for name in getattr(klass, '__slots__', ()):

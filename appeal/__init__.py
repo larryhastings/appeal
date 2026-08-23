@@ -8,23 +8,20 @@
 # parameter grouper it shipped with--lives on this branch's history.
 #
 # The spec of record is appeal.grammar.md; the design rationale
-# is appeal.proposal.md.  North star: every command must be
-# emittable as a *standalone*, dependency-free Python script
-# (see codegen.emit_standalone_module).
+# is appeal.proposal.md.
 
 """
 Appeal: give Appeal your function's signature, get a command-line
-interface--in process, or as a generated standalone script.
+interface.
 """
 
 __version__ = '1.0'
 
-# build / codegen / interpreter / render are imported LAZILY (see the
-# module __getattr__ below and the local imports in the methods that
-# use them): `import appeal` pulls in only the stdlib-only runtime
-# core, so a precompiled program's `import appeal` is near bare-Python
-# speed; big and inspect load only when you actually build, compile,
-# or render (Larry's ruling 2026-08-16).
+# build and render are imported LAZILY (see the module __getattr__ below
+# and the local imports in the methods that use them): `import appeal`
+# pulls in only the stdlib-only core, so it's near bare-Python speed;
+# big and inspect load only when you actually build or render (Larry's
+# ruling 2026-08-16).
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
 from .plan import _validate_arg_format
 
@@ -38,12 +35,7 @@ import collections
 import operator
 import sys
 
-# Appeal REQUIRES big (ruled 2026-08-06).  In-process code uses
-# the installed big directly; standalone EMISSION grabs big's
-# snippet regions live from the installed big's source at
-# compile time (codegen.snippet_source), so upgrading big
-# reaches every subsequently compiled parser.  Generated
-# scripts themselves stay dependency-free.
+# Appeal REQUIRES big (ruled 2026-08-06) for its help/usage rendering.
 # NB: this core imports NOTHING from big--the parse/convert/dispatch
 # core is stdlib-only, so plain `import appeal` is near bare-Python
 # speed.  All big-backed rendering lives in appeal/render.py, imported
@@ -77,69 +69,13 @@ class AppealError(Exception):
     (the command line was fine)--main() prints `error: ...` and
     exits 1.
     """
-    # A precompiled module bakes no help/usage text: when an error
-    # that renders help (the DataError family) crosses a command's
-    # parse/convert body, that body tags this with the Command it
-    # belongs to (whose .callable the shim filled live), so the
-    # compiled shim can hand it to full Appeal for rendering
-    # (precompile.py; ruled 2026-08-17).  None everywhere else--the
-    # in-process paths ignore it.
-    command = None
-    # set by the set dispatcher's "no command"/"unknown command"
-    # errors: render the tagged command's set LISTING, not its own
-    # usage line (a class command can be both a constructor and a
-    # parent, so the Command alone can't disambiguate).
-    want_listing = False
-
-
-class _CompiledHelp(Exception):
-    """
-    Not an error--a control-flow signal a COMPILED parser raises
-    when the line asks for help (-h/--help, or a bare set line
-    wanting the listing).  It carries the Command whose page to show
-    (None = the program root: a bare app's page or a set's listing).
-    The compiled shim catches it and renders live through full
-    Appeal; it never escapes run_main.  In-process parsers never
-    raise it.
-
-    code is the exit status to return after rendering: 0 for
-    requested help (-h/--help/help), 1 for the listing a BARE set
-    line falls through to (orientation, not a diagnostic--v1's
-    nonzero exit for "no command ran").
-    """
-    def __init__(self, command=None, code=0):
-        super().__init__()
-        self.command = command
-        self.code = code
-
-
-def _tag_errors(fn, command):
-    """
-    Wrap a compiled parser's scan/run so any help-rendering error
-    (the DataError family) crossing it gets tagged with the Command
-    it belongs to--the deepest command wins (`if e.command is
-    None`).  `command` is the Command OBJECT itself (stable): the
-    shim fills its .callable after module exec, so nothing here needs
-    a getter--reading e.command.callable later sees the live value.
-    Other exceptions pass through untouched.
-    """
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except DataError as e:
-            if e.command is None:
-                e.command = command
-            raise
-    return wrapper
 
 
 class ConfigurationError(AppealError):
     """
-    Raised at *build* time: the program's signature (or a request,
-    like standalone emission) doesn't make sense.  Always names the
-    offender.  A bug, so main() lets it raise.  Generated parsers
-    never raise it--but the converter vocabulary below does, so it
-    travels with the file.
+    Raised at *build* time: the program's signature doesn't make
+    sense.  Always names the offender.  A bug, so main() lets it
+    raise.
     """
 
 
@@ -206,593 +142,6 @@ def convert(converter, text, name, usage=None):
         raise UsageError(
             f"invalid value for {name!r}: {text!r} ({detail})",
             usage, param=name) from None
-
-
-def parse_tokens(argv, options, usage=None, command_split=None,
-                 positions=None):
-    """
-    The driver: split argv into plain operands and option values.
-
-    options maps each option string to (key, kind), where key is
-    the option's canonical name and kind is 'flag', 'value', or
-    'multi'.  Folds and groups carry per-occurrence operand
-    counts: (key, kind, minimum, maximum); consumption is greedy
-    to the maximum--an optional operand takes the next token
-    unconditionally (v1).  Returns (operands, given): operands is
-    a list of strings; given maps keys to True (flags), a raw
-    string (values), or a list of raw strings (multi).  Options
-    that aren't repeatable kinds error when given twice (v1
-    semantics).
-
-    Handles: '--' (ends option recognition for this parse only--
-    it's local state, never program state), '--name=value',
-    and single-dash bundling of flags ('-abc').
-
-    command_split, if given, is (minimum, maximum, command_words)
-    for a global command parsed ahead of a subcommand: once
-    `minimum` operands are consumed, the first operand naming a
-    command is the command word; at `maximum` (when bounded) the
-    next operand is the word regardless of name.  Parsing stops
-    there, and (operands, given, rest) is returned instead, where
-    rest begins with the command word (empty if the line ran out).
-
-    positions, if given, is a dict this function fills in: for
-    each option, how many operands had been consumed when it first
-    appeared.  The gate rule (a required group blocks options
-    behind it until it's been fed) is checked against these.
-    """
-    # STAGE 1: recognition now lives once, in tokenize(); it walks
-    # the command line into the uniform IR (operand runs interleaved
-    # with canonical option tuples).  Every recognition error--
-    # unknown option, "requires a value", a value on a flag, a bad
-    # '=' boolean--raises THERE, in argv order, before we fold.
-    if command_split is not None:
-        tokens, rest = tokenize(argv, options, usage, command_split)
-    else:
-        tokens = tokenize(argv, options, usage)
-
-    # STAGE 1.5: fold the IR into operands + given (the value-shaping
-    # and occurrence tangle).  The generated eager walk reuses fold_ir
-    # too, to reconstruct `given` for a converter group's inner options.
-    operands, given = fold_ir(tokens, options, usage, positions)
-
-    if command_split is not None:
-        return operands, given, rest
-    return operands, given
-
-
-def fold_ir(tokens, options, usage=None, positions=None):
-    """
-    Fold the stage-1 IR into (operands, given): operands flattened from
-    the operand runs, given mapping each option KEY to its value(s) per
-    kind (a flag's last-wins scalar, a value/multi occurrence list, a
-    fold's tuples, a w:/s: option's positional records).  positions, if
-    given, is filled with each option's first-appearance operand count
-    (and a ('seq', key) clock) for the gate rule.
-
-    A key whose canonical name isn't in `options` is skipped--so a
-    caller can fold only a SUBSET of the recognized options (e.g. a
-    group's inner options) and leave the rest to the eager on-sight
-    walk.  operands are gathered regardless.
-    """
-    operands = []
-    given = {}
-    seq = [0]
-
-    # the IR carries only canonical keys; recover each key's kind and
-    # arity from the string table (all of an option's strings share
-    # one entry shape).
-    by_key = {}
-    for _s, _entry in options.items():
-        by_key.setdefault(_entry[0], _entry)
-
-    def record(key, kind, value):
-        # seq is the token clock: adjacent options share an
-        # operand position, so sibling-group announcement order
-        # needs a finer tick.  Every key's LAST occurrence seq is
-        # stamped under ('seq', key)--tuple keys are invisible to
-        # the gate logic, which reads plain string keys.
-        seq[0] += 1
-        if positions is not None:
-            positions[('seq', key)] = seq[0]
-            if key not in positions:
-                positions[key] = len(operands)
-        if kind.startswith('w:'):
-            # a *args group's option: binding to an instance
-            # happens later, by operand position (window_options)
-            given.setdefault(key, []).append((len(operands), kind[2:], value))
-            return
-        if kind.startswith('s:'):
-            # a sibling option group's shared option: binding is
-            # by announcement (--e1/--e2), resolved after the
-            # scan (sibling_scopes); the seq is the position
-            given.setdefault(key, []).append((seq[0], kind[2:], value))
-            return
-        if kind == 'fold1':
-            # a StrictOption: at most once, by declaration
-            if key in given:
-                raise UsageError(
-                    f"option {key} specified more than once", usage)
-            given[key] = value
-        elif kind == 'value':
-            # collect every occurrence, in command-line order:
-            # convert_value converts them all (ruled 2026-08-16:
-            # every oparg is validated--"it's not called validate
-            # for nothing") and the LAST wins for the value (ruled
-            # 2026-07-18: a shell alias baking `--mode fast` is
-            # overridden by a later `--mode safe`).  Re-add at the
-            # end so `given` stays in last-occurrence order, which
-            # is how a parameter shared by several option strings
-            # picks the one that spoke last.
-            occurrences = given.pop(key, [])
-            occurrences.append(value)
-            given[key] = occurrences
-        elif kind in ('flag', 'nullary', 'group'):
-            # last one wins.  A bare flag idempotently stores `not
-            # default` (its entry's presence value): -v -v is -v.
-            # The explicit spellings (--verbose=false) are absolute.
-            # Reinsertion keeps `given` in last-occurrence order,
-            # which is how a parameter shared by several option
-            # strings knows which string spoke last.
-            if key in given:
-                del given[key]
-            given[key] = value
-        else:   # 'multi' collects raw strings; 'fold' tuples of them
-            given.setdefault(key, []).append(value)
-
-    for token in tokens:
-        key = token[0]
-        if key == '':
-            operands.extend(token[1:])
-            continue
-        entry = by_key.get(key)
-        if entry is None:
-            continue   # not in this (sub)table--the caller owns this key
-        kind = entry[1]
-        base = kind[2:] if kind[:2] in ('w:', 's:') else kind
-        if base in ('fold', 'fold1', 'group'):
-            maximum = entry[3] if len(entry) > 3 else entry[2]
-        else:
-            maximum = entry[2] if len(entry) > 2 else 1
-        raws = token[1:]
-        if base in ('flag', 'nullary') or maximum == 0:
-            if raws:
-                # a flag's explicit boolean, carried by tokenize as the
-                # literal 'true'/'false' (already validated there)
-                value = raws[0] == 'true'
-            else:
-                # presence: a flag stores its entry's value (v1's `not
-                # default`; the bare auto-help entry stores True);
-                # nullary is True; an options-only group is ()
-                value = (entry[2] if base == 'flag' and len(entry) > 2
-                         else True if base in ('flag', 'nullary') else ())
-        else:
-            values = list(raws)
-            value = (tuple(values)
-                     if (base in ('fold', 'fold1', 'group') or maximum != 1)
-                     else values[0])
-        record(key, kind, value)
-
-    return operands, given
-
-
-def tokenize(argv, options, usage=None, command_split=None):
-    """
-    STAGE 1 of the two-stage parser (Larry's design): recognize the
-    command line into a uniform, ordered IR--a list of tuples.  Each
-    tuple is `(marker, *raw_strings)`:
-
-      * marker '' is an operand RUN: ('', 'a', 'b')--consecutive
-        operands merge into one tuple, so the interleaving with
-        options is preserved (that ordering is what makes
-        last-wins and window-binding fall out in stage 2).
-      * marker is a canonical option KEY otherwise, followed by its
-        raw oparg strings: ('--units', 'C'), ('--span', '3', '4'),
-        or a bare ('--verbose',) for a flag.  Aliases normalize to
-        the key (the option table's entry[0]); `-abc` splits into
-        one tuple per flag; '=', attachment, and '--' are resolved
-        here.  Nothing is converted--stage 2 dispatches on the
-        marker and converts, knowing each key's kind.
-
-    options is the same table parse_tokens uses.  With command_split
-    = (minimum, maximum, command_words), returns (tokens, rest) for
-    a global command scanned ahead of a subcommand; otherwise returns
-    tokens.  This is stage 1 ONLY--no `given`, no occurrence lists,
-    no conversion; that tangle moves into the generated stage-2 walk.
-    """
-    tokens = []
-    it = iter(argv)
-    force_positional = False
-
-    def operand(text):
-        # merge into the current run, or start one
-        if tokens and tokens[-1][0] == '':
-            tokens[-1] = tokens[-1] + (text,)
-        else:
-            tokens.append(('', text))
-
-    def option(key, values):
-        tokens.append((key,) + tuple(values))
-
-    def n_operands():
-        # operands seen so far--the window position an option lands
-        # at (the interleaving carries what `positions` used to)
-        return sum(len(t) - 1 for t in tokens if t[0] == '')
-
-    def arity(entry, base):
-        if base in ('fold', 'fold1', 'group'):
-            return entry[2], (entry[3] if len(entry) > 3 else entry[2])
-        n = entry[2] if len(entry) > 2 else 1
-        return n, n
-
-    def flag_value(name, text):
-        if text == 'true':
-            return 'true'
-        if text == 'false':
-            return 'false'
-        raise UsageError(
-            f"option {name!r}: '=' value must be 'true' or "
-            f"'false', not {text!r}", usage)
-
-    def greedy(name, minimum, maximum):
-        nonlocal force_positional
-        values = []
-        for value in it:
-            if value == '--' and len(values) >= minimum:
-                force_positional = True
-                break
-            values.append(value)
-            if len(values) == maximum:
-                break
-        if len(values) < minimum:
-            raise UsageError(
-                f"option {name!r} requires "
-                f"{'a value' if minimum == 1 else f'{minimum} values'}",
-                usage)
-        return values
-
-    def split_here(token):
-        # deterministic: a global/precommand era fills its arguments greedily
-        # to its maximum, then hands the rest (a command word, or a stray) to
-        # the command loop.  It NEVER peeks at the command-word set mid-fill --
-        # an optional argument eats whatever's next, a *args runs to the end.
-        if command_split is None:
-            return None
-        _minimum, maximum, _command_words = command_split
-        n = n_operands()
-        if maximum is not None:
-            assert n <= maximum
-            if n == maximum:
-                return [token] + list(it)
-        return None
-
-    for token in it:
-        if force_positional or (not token.startswith('-')) or (token == '-'):
-            rest = split_here(token)
-            if rest is not None:
-                return tokens, rest
-            operand(token)
-            continue
-
-        if token == '--':
-            force_positional = True
-            continue
-
-        if token.startswith('--'):
-            name_part, equals, value_part = token.partition('=')
-            entry = options.get(name_part)
-            if entry is None:
-                rest = split_here(token)    # saturated era: an option we don't
-                if rest is not None:        # own ends our boundary -- yield it
-                    return tokens, rest
-                tail = did_you_mean(
-                    name_part,
-                    [s for s in options if s.startswith('--')])
-                raise UsageError(
-                    f"unknown option {name_part!r}{tail}", usage)
-            key, kind = entry[0], entry[1]
-            base = kind[2:] if kind[:2] in ('w:', 's:') else kind
-            minimum, maximum = arity(entry, base)
-            if base in ('flag', 'nullary') or maximum == 0:
-                if equals:
-                    if base != 'flag':
-                        raise UsageError(
-                            f"option {name_part!r} doesn't take a value",
-                            usage)
-                    option(key, (flag_value(name_part, value_part),))
-                    continue
-                option(key, ())
-                continue
-            if equals:
-                if maximum > 1:
-                    counts = (f'{maximum} values' if minimum == maximum
-                              else f'up to {maximum} values')
-                    raise UsageError(
-                        f"option {name_part!r} takes {counts} "
-                        f"and can't use '='", usage)
-                option(key, (value_part,))
-                continue
-            option(key, greedy(name_part, minimum, maximum))
-            continue
-
-        if token[1].isdigit() and ('-' + token[1]) not in options:
-            rest = split_here(token)
-            if rest is not None:
-                return tokens, rest
-            operand(token)
-            continue
-
-        chars = token[1:]
-        for index, c in enumerate(chars):
-            entry = options.get('-' + c)
-            if entry is None:
-                if index == 0:              # whole bundle unowned: a saturated
-                    rest = split_here(token)  # era yields it (a later char was
-                    if rest is not None:      # ours, so a stray there is an error)
-                        return tokens, rest
-                raise UsageError(f"unknown option {'-' + c!r}", usage)
-            key, kind = entry[0], entry[1]
-            base = kind[2:] if kind[:2] in ('w:', 's:') else kind
-            minimum, maximum = arity(entry, base)
-            if base in ('flag', 'nullary') or maximum == 0:
-                rest = chars[index + 1:]
-                if rest.startswith('='):
-                    if base != 'flag':
-                        raise UsageError(
-                            f"option {'-' + c!r} doesn't take a value",
-                            usage)
-                    option(key, (flag_value('-' + c, rest[1:]),))
-                    break
-                option(key, ())
-                continue
-            rest = chars[index + 1:]
-            if rest:
-                if maximum == 1:
-                    if rest.startswith('='):
-                        rest = rest[1:]
-                    option(key, (rest,))
-                    break
-                counts = (f'{maximum} values' if minimum == maximum
-                          else f'up to {maximum} values')
-                raise UsageError(
-                    f"option {'-' + c!r} takes {counts} and "
-                    f"must be last in a bundle", usage)
-            option(key, greedy('-' + c, minimum, maximum))
-
-    if command_split is not None:
-        return tokens, []
-    return tokens
-
-
-class Command:
-    """
-    One node of a program's command tree--the single dispatch record
-    shared by the in-process and compiled parsers (0.6.4 had this;
-    the facade's tree-of-Appeals and the grammar's Plan are heavier
-    layers above it).  A leaf has no subcommands; a parent (a set)
-    carries its children in `subcommands` (word -> Command).
-
-    `callable` is the live command function.  In-process it's bound
-    at construction; in a COMPILED module it starts None and the
-    shim fills it at registration--and because everything (the run
-    body, the error wrappers, the dispatch frames) holds the SAME
-    Command object, filling `callable` once is seen everywhere, with
-    no re-lookup.  That is the whole point of the object: it is the
-    stable indirection a bare module global can't be.
-
-    `scan`/`run` are the two generated stages.  `fused` is set
-    instead for the auto commands (version, help) that scan and run
-    in one call.  `usage` is the baked listing pieces in-process, or
-    None in a compiled module (which renders live).
-    """
-    __slots__ = ('name', 'callable', 'scan', 'run', 'subcommands',
-                 'words', 'repeat', 'usage', 'default', 'fused',
-                 'fingerprint', 'options', 'arguments', 'converters')
-
-    def __init__(self, name=None, *, callable=None, scan=None, run=None,
-                 subcommands=None, words=None, repeat=False,
-                 usage=None, default=None, fused=None,
-                 fingerprint=None, options=None, arguments=None,
-                 converters=None):
-        self.name = name
-        self.callable = callable
-        self.scan = scan
-        self.run = run
-        self.subcommands = subcommands if subcommands is not None else {}
-        self.words = words
-        self.repeat = repeat
-        self.usage = usage
-        self.default = default
-        self.fused = fused
-        # compile-time verification data a COMPILED module carries so
-        # its shim can police drift (all None in-process, and None on
-        # fused auto commands): the recursive signature fingerprint,
-        # the @option and @argument decoration digests, and the
-        # reachable converters (path + drift) for live binding.
-        self.fingerprint = fingerprint
-        self.options = options
-        self.arguments = arguments
-        self.converters = converters
-
-    def __repr__(self):
-        kind = ('fused' if self.fused else
-                'set' if self.subcommands else 'command')
-        return f'<Command {self.name!r} ({kind})>'
-
-
-def scan_command_set(argv, parse_globals, commands, usage=None,
-                     default=None, repeat=False, words=None):
-    """
-    Stage 1 of a multi-command program: scan the whole line--global
-    portion, command word, command portion--with no user code.  A
-    malformed line dies here, before anything runs (Appeal rule).
-
-    parse_globals is the global command's Command (or None); each
-    commands value is a Command (leaf, nested set, or fused auto
-    command).  With repeat (Appeal's cycling), a command's
-    arguments--all of them, optional included--may be followed by
-    another command word, resolved against `words`; scanning loops
-    until the line runs out.  Returns (invocations, tail):
-    invocations is a list of (word, command, operands, given,
-    positions)--word None for the global command--and tail is the
-    odd trailing job, if any: ('fused', word, callable, tokens) for a
-    fused Command, or ('default',) for an empty line with a default
-    command.  A compiled command bakes no usage, so any error from
-    its scan is tagged HERE with its Command (its own operand error--
-    a usage line, not the set listing).
-    """
-    def do_scan(command, *args):
-        try:
-            return command.scan(*args)
-        except DataError as e:
-            if e.command is None:
-                e.command = command
-            raise
-
-    invocations = []
-    rest = list(argv)
-    for era in parse_globals:            # an ordered list of head eras (each a
-                                         # Command); they run front-to-back
-        operands, given, rest, positions = do_scan(era, rest)
-        invocations.append((None, era, operands, given, positions))
-    if not rest:
-        if default is not None:
-            return invocations, ('default',)
-        # an empty command line isn't a mistake, it's someone who
-        # needs orientation (ruled 2026-07-09, git-style): the
-        # caller shows the listing and exits 1; nothing runs
-        return invocations, ('bare',)
-
-    # the resolution stack, deepest set on top.  Each frame's Command
-    # is the set whose subcommands are in scope (a synthetic root
-    # Command for the top level, callable None).  Consulting a set
-    # for its FIRST command is free--that's descent, how the line got
-    # here; re-entering it is repetition, gated on that set's repeat.
-    root = Command(subcommands=commands, words=words, repeat=repeat,
-                   usage=usage)
-    stack = [{'command': root, 'entered': False}]
-
-    def frames_in_order():
-        for depth, frame in enumerate(reversed(stack)):
-            if depth == 0 and not frame['entered']:
-                yield frame          # descent: first consult free
-            elif frame['command'].repeat:
-                yield frame          # re-entry: gated on repeat
-
-    def resolvable_words():
-        out = set()
-        for frame in frames_in_order():
-            out.update(frame['command'].words or ())
-        return frozenset(out)
-
-    def tag(err, frame):
-        # a compiled set bakes no usage; the frame's Command (its
-        # callable filled live by the shim) tells the shim which
-        # LISTING to render.  In-process the baked usage is used and
-        # this is ignored.  The root frame's command has no callable,
-        # so it renders the program root.
-        err.command = frame['command']
-        err.want_listing = True
-        return err
-
-    while rest:
-        word = rest[0]
-        entry = target = None
-        for frame in frames_in_order():
-            entry = frame['command'].subcommands.get(word)
-            if entry is not None:
-                target = frame
-                break
-        if entry is None:
-            if word.startswith('-') and word not in ('-', '--'):
-                # commands never start with a dash: a leading-dash straggler
-                # is a mistyped option (--verison), not a mystery command
-                raise tag(UsageError(f"unknown option {word}",
-                                     stack[-1]['command'].usage), stack[-1])
-            tail = did_you_mean(word, resolvable_words())
-            raise tag(UsageError(f"unknown command {word!r}{tail}",
-                                 stack[-1]['command'].usage), stack[-1])
-        while stack[-1] is not target:
-            stack.pop()              # re-base at the resolved set
-        target['entered'] = True
-        if entry.subcommands:
-            # a nested set: the parent runs first, like a global
-            # command of its own little set
-            stack.append({'command': entry, 'entered': False})
-            boundary = resolvable_words()
-            operands, given, rest, positions = do_scan(
-                entry, rest[1:], boundary)
-            invocations.append((word, entry, operands, given,
-                                positions))
-            continue
-        if entry.fused is not None:
-            # fused: scanned and executed together, last (stage
-            # separation inside is its own business)
-            return invocations, ('fused', word, entry.fused, rest[1:])
-        boundary = resolvable_words()
-        operands, given, rest, positions = do_scan(
-            entry, rest[1:], boundary or None)
-        invocations.append((word, entry, operands, given, positions))
-
-    if len(stack) > 1 and not stack[-1]['entered']:
-        # a parent was named but its set never got a command: the
-        # set's default command (a Command) fills in, or it's an error
-        d = stack[-1]['command'].default
-        if d is None:
-            raise tag(UsageError("no command specified.",
-                                 stack[-1]['command'].usage), stack[-1])
-        operands, given, _, positions = do_scan(d, [], None)
-        invocations.append((None, d, operands, given, positions))
-    return invocations, None
-
-
-def run_command_set(argv, parse_globals, commands, usage=None,
-                    default=None, repeat=False, words=None,
-                    listing=None):
-    """
-    Both stages of a multi-command program: scan the whole line,
-    then execute left to right.  A nonzero int return halts
-    dispatch and is the result (v1's early-exit contract, extended
-    to every command in a cycle; other truthy returns don't halt).
-    An empty line (no command named, no default command) prints
-    the listing--`listing` if given, else the usage text--to
-    stdout and returns 1: orientation, not a diagnostic.
-    """
-    invocations, tail = scan_command_set(argv, parse_globals, commands,
-                                         usage, default, repeat, words)
-    if tail == ('bare',):
-        if listing is not None:
-            listing()
-        elif isinstance(usage, tuple):
-            print(render_baked_help(usage, margin=help_margin(79)),
-                  end='')
-        else:
-            print(f"usage: {usage}")
-        return 1
-    result = None
-    env = {}    # class-based commands: instances live here
-    for word, command, operands, given, positions in invocations:
-        # the command runs with its OWN Command in hand (for the live
-        # callable and its -h); a compiled command bakes no usage, so
-        # its convert-time errors get tagged with it here
-        try:
-            result = command.run(operands, given, positions, env,
-                                  command)
-        except DataError as e:
-            if e.command is None:
-                e.command = command
-            raise
-        if (isinstance(result, int)
-                and not isinstance(result, bool) and result):
-            return result
-    if tail is not None:
-        if tail[0] == 'fused':
-            return tail[2](tail[3])
-        # ('default',): the root default command (a Command), run
-        # with its own Command in hand like any other
-        operands, given, rest, positions = default.scan([])
-        return default.run(operands, given, positions, {}, default)
-    return result
 
 
 class Option:
@@ -1307,10 +656,10 @@ def check_count(n, minimum, maximum, valid_counts, usage=None, what=None,
 
 
 def run_main(parse, args=None, stylesheet=None, completion=None,
-             errors=None, version=None, margin=79, fallback=None):
+             errors=None, version=None, margin=79):
     """
-    The main() driver for a generated parser: parse and execute,
-    print errors the polite way, return the exit code.  stylesheet
+    The main() driver: parse and execute, print errors the polite
+    way, return the exit code.  stylesheet
     (a spec: None for auto, False for never-color, or a complete
     composed StyleSheet used verbatim) paints the 'error:' prefix
     and any attached usage/listing when the error stream wants
@@ -1376,12 +725,6 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
 
     try:
         result = parse(list(args))
-    except _CompiledHelp as h:
-        # a COMPILED parser asked for help (it bakes none): full
-        # Appeal renders it live, from the tagged command function
-        if fallback is None:
-            raise           # never raised in-process--a real bug
-        return fallback.on_help(h)
     except SystemExit as e:
         # the precommand exits (program metadata: -V, ...);
         # main()'s contract is to RETURN the exit code.  A non-int,
@@ -1402,12 +745,6 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         # processor, not an environment
         return 130
     except AppealDataError as e:
-        if fallback is not None:
-            # a COMPILED parser: it baked no usage, and tagged the
-            # error with the command that owns it--full Appeal
-            # renders the message + usage live (never re-running the
-            # line: the command may already have had side effects)
-            return fallback.on_usage(e)
         print(f"{error_prefix()} {e}", file=error_stream())
         if e.usage:
             print_usage(e.usage)
@@ -1429,163 +766,11 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
     return 0
 
 
-##
-## Fingerprints (Larry's design, 2026-08-09): a compiled
-## module identifies--and polices--the functions handed to its
-## decorators by fingerprint.  Everything the PARSING and
-## DISPATCH were derived from is in here: parameter shape,
-## defaults, annotations, and the @option/@parameter
-## attributes--but NOT the docstring (it feeds only help, which
-## a compiled module renders live; ruled 2026-08-17).
-## Hand-rolled from the
-## function and code objects--inspect.signature knows nothing
-## these don't, and it's slow.
-##
-
-def _stable_repr(obj):
-    "repr with memory addresses masked--id churn isn't drift (no `re`)."
-    s = repr(obj)
-    if '0x' not in s:
-        return s
-    hexdigits = '0123456789abcdefABCDEF'
-    out = []
-    i, n = 0, len(s)
-    while i < n:
-        # mask 0x + one-or-more hex digits (a memory address) to a fixed
-        # token -- the digit count never leaks, so the fingerprint is the
-        # same on 32- and 64-bit
-        if (s[i] == '0' and i + 2 < n and s[i + 1] == 'x'
-                and s[i + 2] in hexdigits):
-            out.append('<address>')
-            i += 2
-            while i < n and s[i] in hexdigits:
-                i += 1
-        else:
-            out.append(s[i])
-            i += 1
-    return ''.join(out)
-
-
-def _canonical(obj):
-    """
-    A hash-seed-stable serialization of a value: sets/dicts sorted (their
-    repr order is randomized per run), code objects recursed (a nested
-    function's own bytecode + consts).  Feeds _callable_fingerprint.
-    """
-    if isinstance(obj, (bytes, bytearray)):
-        return b'b' + bytes(obj)
-    if isinstance(obj, (str, int, float, bool)) or obj is None:
-        return repr(obj).encode()
-    if isinstance(obj, (tuple, list)):
-        return b'(' + b','.join(_canonical(x) for x in obj) + b')'
-    if isinstance(obj, (set, frozenset)):
-        return b'{' + b','.join(sorted(_canonical(x) for x in obj)) + b'}'
-    if isinstance(obj, dict):
-        return b'{' + b','.join(sorted(
-            _canonical(k) + b':' + _canonical(v) for k, v in obj.items())) + b'}'
-    code = getattr(obj, 'co_code', None)
-    if code is not None:                        # a code object (nested callable)
-        return b'code(' + code + _canonical(obj.co_consts) + b')'
-    return _stable_repr(obj).encode()
-
-
-def _callable_fingerprint(fn):
-    """
-    A hash identifying a policy callable (default_mappings/default_options) by
-    its bytecode, constants, and closure -- enough to catch a swapped or
-    edited callable at run time (compile-time bake vs run-time check).  It
-    cannot see through calls the callable MAKES: change a function it calls
-    and this won't notice (accepted -- we can only do so much).
-    """
-    if fn is None:
-        return None
-    import _sha1                              # C module: ~0.1ms, vs hashlib ~16ms
-    code = fn.__code__
-    closure = tuple(cell.cell_contents for cell in (fn.__closure__ or ()))
-    material = _canonical((code.co_code, code.co_consts, closure))
-    return _sha1.sha1(material).hexdigest()
-
-
 # the compiled Appeal's default for a policy argument: "use the library
 # default".  The facade can't reproduce that default without importing full
 # appeal, so for the sentinel it falls back to the fingerprint the emitter
 # baked (the compile-time policy's).  An explicit value is fingerprinted live.
 _CONFIG_DEFAULT = object()
-
-
-def config_fingerprint(version, default_mappings_fp, default_options_fp):
-    """
-    The compiled Appeal's configuration identity: the version plus the two
-    policy callables' fingerprints (default_mappings/default_options).  Baked
-    at compile time, recomputed in the compiled Appeal's __init__; a mismatch
-    means the configuration changed since compile -> regenerate.
-    """
-    import _sha1
-    material = _canonical((version, default_mappings_fp, default_options_fp))
-    return _sha1.sha1(material).hexdigest()
-
-
-def signature_fingerprint(fn):
-    """
-    A short hash of fingerprint(fn) -- the compiled parser's per-command drift
-    check, baked per Converter class and re-verified when the live function is
-    wired at @command.  fingerprint() covers the signature shape/defaults/
-    annotations the baked register() depends on; the docstring is not identity.
-    """
-    import _sha1
-    return _sha1.sha1(_canonical(fingerprint(fn))).hexdigest()
-
-
-def _deref_annotated(value):
-    # Annotated[T, converter]: the LAST metadata element is the
-    # converter (v1's documented rule, kept)
-    metadata = getattr(value, '__metadata__', None)
-    if metadata:
-        return metadata[-1]
-    return value
-
-
-def _annotation_token(value, owner_module=None):
-    "One annotation, as stable, bakeable text."
-    value = _deref_annotated(value)
-    recipe = getattr(value, '__appeal_recipe__', None)
-    if recipe:
-        # a vocabulary product (validate(1, 2), accumulator[Path],
-        # ...): its identity IS its recipe, not its __module__.
-        kind, factory, args, kwargs = recipe
-        return (f'recipe:{kind}:{factory}:'
-                f'{_stable_repr(args)}:{_stable_repr(kwargs)}')
-    module = getattr(value, '__module__', None)
-    qualname = getattr(value, '__qualname__', None)
-    if qualname and '<locals>' in qualname:
-        return qualname             # closures: structure, not home
-    if qualname and owner_module is not None and module == owner_module:
-        # defined in the same file as its owner: a LOCAL
-        # reference.  The file's own name is volatile--imported
-        # at compile time it's `weather`, run directly it's
-        # `__main__`--but the two flip together, so locality is
-        # the stable fact.
-        return f'local.{qualname}'
-    if qualname:
-        return f'{module}.{qualname}'
-    return _stable_repr(value)      # list[int], dict[str,int], ...
-
-
-def _parameter_default(fn, name):
-    "The default of fn's parameter `name`, from the raw objects."
-    kwdefaults = getattr(fn, '__kwdefaults__', None) or {}
-    if name in kwdefaults:
-        return kwdefaults[name]
-    code = fn.__code__
-    defaults = getattr(fn, '__defaults__', None) or ()
-    positional = code.co_varnames[:code.co_argcount]
-    if name in positional:
-        index = positional.index(name) - (code.co_argcount
-                                          - len(defaults))
-        if index >= 0:
-            return defaults[index]
-    raise AppealConfigurationError(
-        f"parameter {name!r} of {fn.__name__!r} has no default")
 
 
 def _params_host(obj):
@@ -1598,219 +783,14 @@ def _params_host(obj):
     return None
 
 
-def _converter_fingerprint(value, owner_module, seen):
-    """
-    An annotation's entry in a fingerprint: a NON-LEAF converter
-    recurses into its own fingerprint (so a converter's signature
-    change surfaces in its command's fingerprint), while leaves
-    (builtins) and vocabulary products stay flat tokens.  Reached
-    the same way resolve_fingerprint_path walks, so drift is caught
-    everywhere the grammar reaches a converter.
-    """
-    value = _deref_annotated(value)
-    if getattr(value, '__appeal_recipe__', None):
-        return _annotation_token(value, owner_module)   # recipe: structural
-    if getattr(value, '__module__', None) == 'builtins':
-        return _annotation_token(value, owner_module)   # int/str/... : leaf
-    if _params_host(value) is None or id(value) in seen:
-        # uninspectable, a generic alias, or a cycle (build forbids
-        # converter cycles, but guard anyway)
-        return _annotation_token(value, owner_module)
-    return fingerprint(value, seen)                     # RECURSE
-
-
-def fingerprint(fn, seen=frozenset()):
-    """
-    The identity a compiled parser was baked from: a nested tuple
-    of plain data, equal iff nothing the grammar or the help
-    depends on has changed.  reprs into a script as a literal.
-    Mirrors inspect.Signature--the function's NAME is not identity
-    (rename freely; only the shape matters).  A converter parameter
-    nests its OWN fingerprint, recursively.  A class converter's
-    parameters live on __init__ (the host).  The docstring is NOT
-    part of identity (ruled 2026-08-17): it feeds help, not parse
-    or dispatch, and a compiled module bakes no help.
-    """
-    host = _params_host(fn)
-    if host is None:
-        raise AppealConfigurationError(
-            f"can't fingerprint {fn!r}: no code object")
-    code = host.__code__
-    varargs = bool(code.co_flags & 0x04)
-    varkw = bool(code.co_flags & 0x08)
-    named = code.co_argcount + code.co_kwonlyargcount
-    annotations = getattr(host, '__annotations__', None) or {}
-    owner_module = getattr(fn, '__module__', None)
-    # the docstring is deliberately NOT here (ruled 2026-08-17): the
-    # fingerprint confirms the compiled PARSING and DISPATCH are
-    # current, and the docstring feeds neither--a compiled module
-    # bakes no help text, rendering it live through full Appeal.
-    # (Dropping it also keeps hashlib off the cold path.)
-    inner = seen | {id(fn)}
-    return (
-        code.co_argcount,
-        getattr(code, 'co_posonlyargcount', 0),
-        code.co_kwonlyargcount,
-        varargs, varkw,
-        code.co_varnames[:named + varargs + varkw],
-        _stable_repr(getattr(host, '__defaults__', None)),
-        _stable_repr(getattr(host, '__kwdefaults__', None)),
-        tuple(sorted((name, _converter_fingerprint(value, owner_module, inner))
-                     for name, value in annotations.items())),
-    )
-
-
-def decoration_fingerprint(fn, option_overrides, parameter_usage):
-    """
-    A stable rendering of everything @app.option and
-    @app.parameter said about fn--recorded in the APP, never on
-    the function (ruled 2026-08-09), so it fingerprints
-    separately: the function vouches for the function, the app
-    vouches for the registration.  option_overrides and
-    parameter_usage are callable-keyed dicts (the app registry's,
-    or the shim's replay).
-    """
-    owner_module = getattr(fn, '__module__', None)
-    overrides = option_overrides.get(fn) or {}
-    usage = parameter_usage.get(fn) or {}
-    return (
-        tuple(sorted(
-            (param,
-             tuple((decl['strings'],
-                    _annotation_token(decl['annotation'],
-                                      owner_module),
-                    _stable_repr(decl['default']))
-                   for decl in decls))
-            for param, decls in overrides.items())),
-        tuple(sorted(usage.items())),
-    )
-
-
-def resolve_fingerprint_path(fn, path, option_overrides=None):
-    """
-    Walk from a live decorated function to one of the callables
-    its grammar uses, by the recipe the emitter baked: a tuple of
-    ('annotation', param) / ('default_type', param) /
-    ('override', (param, index)) steps.  The exact mirror of
-    codegen's harvest--the converter arrives LIVE at registration
-    time, never by import.  option_overrides is the
-    callable-keyed @option registry (needed only for 'override'
-    steps).
-    """
-    obj = fn
-    for kind, name in path:
-        host = _params_host(obj)
-        if host is None:
-            raise AppealConfigurationError(
-                f"can't resolve {name!r} on {obj!r}")
-        if kind == 'annotation':
-            obj = _deref_annotated(host.__annotations__[name])
-        elif kind == 'default_type':
-            obj = type(_parameter_default(host, name))
-        elif kind == 'override':
-            # an @app.option(annotation=...) converter: recorded
-            # in the app's registry, reachable by declaration
-            # index
-            param, index = name
-            declaration = (option_overrides or {})[obj][param][index]
-            obj = _deref_annotated(declaration['annotation'])
-        else:
-            raise AppealConfigurationError(
-                f"unknown fingerprint path step {kind!r}")
-    return obj
-
-
-
-##
-## The standalone shim (Larry's design, 2026-08-09): a compiled
-## module WEARS THE APPEAL API.  The user's program is the
-## documented spelling, unchanged--
-##
-##     try:
-##         from . import standalone as appeal
-##     except ImportError:
-##         import appeal
-##
-## --and when the compiled module is the one imported, Appeal()
-## and its decorators don't build anything: @app.command() on
-## `forecast` says "I have the precompiled bits for that over
-## here", fingerprints the live function against what the parser
-## was baked from, and binds it as the thing run_forecast calls.
-## Converters bind the same way, resolved from the live
-## function's annotations--nothing imports the user's code, the
-## relationship runs the other way.
-##
-## Verification is all-or-nothing at main(): EVERY mapped
-## function checks, not just the one dispatched (ruled: editing
-## foo's signature yells even when you ran bar), plus baked
-## configuration.  Any mismatch is a loud, complete list, with
-## the remedy (regenerate) in the message.
-##
-
-_OPTION_UNSET = object()      # option(default=...) omitted marker
-_KNOB_UNSET = object()        # constructor knob omitted marker
-
-##
-## the compiled module's POLICY VOCABULARY: stand-ins wearing the
-## public names, so the same program source spells
-## appeal.default_mappings(...) / appeal.default_long_option in
-## both worlds.  Their EFFECTS are baked into the compiled
-## grammar; these exist to be compared against what was baked
-## (and to refuse loudly if anything ever tries to RUN one).
-## NOTE: the real ones are defined above in build/__init__;
-## nothing imports these from here.
-##
-
-
-
-
-
-##
-## big's snippet regions--the word-wrap trio, the StyleSheet
-## renderer, the ANSI stylesheets, terminal color detection--
-## are NOT copied here (the compile-time grab, ruled
-## 2026-08-06): in-process code imports big directly (the
-## imports at the top), and standalone emission reads big's
-## regions live from the installed big's source
-## (codegen.snippet_source).  The glue regions below are
-## appeal's own: they stream ahead of big's regions in a
-## generated script and supply what those regions expect from
-## their home modules.
-##
-
 import os
 import sys
-
-
-# the home-module spellings big/markdown.py's regions expect.
-# Deferring wrappers, not assignments: snippets emit in source
-# order and this appeal-side glue precedes big's regions in the
-# combined warehouse--the names resolve at CALL time, by which
-# big's stylesheet region has defined them.
-# Appeal owns the WIDTH-AWARE structure (ruled 2026-08-08: big
-# stays width-agnostic by design--its markdown_defaults are the
-# neutral look: headings unruled, the thematic break a short
-# dash).  These entries compose OVER big's defaults in every
-# help stylesheet: h1 between full-length rules, h2 over one,
-# the thematic break filled to the margin--all in terms of
-# `line`, which the renderer injects.  STRUCTURE only; the look
-# (attributes, colors) arrives with the themes.  Alert titles
-# say their kind colors directly--referencing heading2 would
-# inherit its rule, inside the quote bars.
-##
-## help and usage rendering
-##
-## Formatting happens at run time: bake the formatter, not the
-## text.  Built on the word-wrap trio above.
-##
-
 
 
 ##
 ## Shell completion (the completion rulings): the engine answers
 ## "what could legally come next?" from tables--plain data plus
-## converter references--so it runs identically in-process and
-## inside a generated script.  A converter may carry a
+## converter references.  A converter may carry a
 ## `completions` attribute: always a callable, (prefix) -> tuple
 ## of str; the engine always calls it, always passing the prefix
 ## (empty string when nothing's typed), and always re-filters.
@@ -2169,8 +1149,7 @@ def _split_arg_string(string):
     (This is Click's split_arg_string, adopted: the shell hands the
     reentry its word array with the quote CHARACTERS still attached,
     so a plain split would leave `"New York"` quoted; a shell lexer
-    recovers the logical value.  shlex is stdlib, so it rides into a
-    standalone script for free.)
+    recovers the logical value.  shlex is stdlib.)
     """
     import shlex
     lex = shlex.shlex(string, posix=True)
@@ -2316,7 +1295,6 @@ def run_mcp(tools, name, version='0'):
     return 0
 
 
-
 ##
 ## Themes (Larry's design, 2026-08-06): a theme is DATA--a dict
 ## of StyleSheet entries covering the Markdown concepts and
@@ -2347,9 +1325,8 @@ def run_mcp(tools, name, version='0'):
 
 # (big format_definition_list requires removed 2026-08-15: the
 # runtime deflist path is wrap_words' own render_deflist; nothing
-# in a generated script calls format_definition_list, so the
-# ~10KB region no longer rides along.  Appeal still imports it
-# in-process for the borrowed-trio tests.)
+# calls format_definition_list any more.  Appeal still imports it
+# for the borrowed-trio tests.)
 ##
 ## Templates (Larry's single-template model, ruled 2026-08-01).
 ## ONE template string defines the help page: six {sections}--
@@ -2365,10 +1342,7 @@ def run_mcp(tools, name, version='0'):
 ##
 
 ##
-## bake-time help machinery: assembles and lays out the page
-## on the AUTHOR'S machine (imports big; never streamed into
-## a generated script--the script gets baked layout tuples and
-## the runtime half above).
+## help machinery: assembles and lays out the page (imports big).
 ##
 
 ##
@@ -2376,14 +1350,10 @@ def run_mcp(tools, name, version='0'):
 ##
 ## v1's converter vocabulary: split, validate, validate_range,
 ## counter, accumulator, mapping.  All semantics probed against
-## shipping v1 0.6.4.  Factory *products* carry a structured
-## recipe (__appeal_recipe__ = (kind, factory, args, kwargs),
-## kind 'call' or 'subscript', args/kwargs holding LIVE objects):
-## a standalone script re-runs the factory, with literal arguments
-## rendered by repr and classes/callables rendered through the
-## reference table (so `type=float` and `accumulator[Path]` both
-## survive emission)--the north star holds without importing
-## appeal.
+## shipping v1 0.6.4.  Factory *products* carry a structured recipe
+## (__appeal_recipe__ = (kind, factory, args, kwargs), kind 'call'
+## or 'subscript') that marks them as vocabulary products -- build.py
+## recognizes a terminal by it.
 ##
 
 
@@ -2680,9 +1650,6 @@ def file(mode='r', *, buffering=-1, encoding=None, errors=None,
                 f"can't open {value!r}: {e.strerror or e}") from None
     file_converter.__name__ = 'file'
     if opener is None:
-        # an opener is a callable: it can't ride a recipe string,
-        # so a converter carrying one refuses standalone emission
-        # (by name, per the north star)
         settings = {kw: v for kw, v, default in (
                         ('buffering', buffering, -1),
                         ('encoding', encoding, None),
@@ -2722,9 +1689,7 @@ class optional(metaclass=_OptionalMeta):
             raise AppealConfigurationError(
                 f"optional[...]: {T!r} isn't callable")
         # None is the no-oparg sentinel: an operand that WAS
-        # given always arrives as a str, never the None object--
-        # and None renders into standalone scripts, which an
-        # anonymous sentinel can't
+        # given always arrives as a str, never the None object
         def option_value(value: str = None):
             if value is None:
                 return T()
@@ -2848,10 +1813,8 @@ class mapping(MultiOption, metaclass=_Subscriptable):
         return sub
 
 
-
 # ====================================================================
-#  The data-driven back-end engine (moved here from processor.py so a
-#  precompiled parser imports ONLY appeal).  The work-item
+#  The data-driven back-end engine.  The work-item
 #  classes wear an `Instruction` suffix; the self.X factory methods on
 #  Converter keep the bare names.
 # ====================================================================
@@ -3211,7 +2174,7 @@ class MultiBinding:
             return
         try:
             instance.option(*opargs)
-        except (ValueError, TypeError) as e:    # match the interpreter's wrap
+        except (ValueError, TypeError) as e:    # wrap the option body's error
             raise UsageError(f"{self.name}: {e}", None)
 
 class GroupBinding:
@@ -3302,8 +2265,6 @@ class Converter:
                                         # the args iterable, don't splat them
     converter = None                    # the user's callable, wired by
                                         # fixup_converters at @command time
-    _fingerprint = None                 # signature hash the emitter bakes;
-                                        # None in the in-memory build (no drift)
     binds = None                        # a method command: the env key of the
                                         # instance to pass as self (class-as-app)
     constructs = None                   # a class command: the env key to stash
@@ -3332,19 +2293,12 @@ class Converter:
     @classmethod
     def fixup_converters(cls, converter):
         """
-        Wire the callable onto the class, verify it hasn't drifted from what
-        was compiled, and wire every child converter it reaches (via the
-        generated _fixup_children, guarded so a shared child wires once).
-        Called from @command; the 1:1 mapping makes the class the callable's
-        home.
+        Wire the callable onto the class, and wire every child converter it
+        reaches (via the generated _fixup_children, guarded so a shared child
+        wires once).  Called from @command; the 1:1 mapping makes the class the
+        callable's home.
         """
         cls.converter = converter
-        if (cls._fingerprint is not None
-                and signature_fingerprint(converter) != cls._fingerprint):
-            raise ConfigurationError(
-                f"the compiled parser is stale: command "
-                f"{converter.__name__!r} changed since it was generated; "
-                f"regenerate the compiled module")
         cls._fixup_children(converter)
 
     @classmethod
@@ -3851,123 +2805,8 @@ def execute(commands, argv, *, precommands=(), repeat=False):
     return result
 
 
-def appeal_class(baked_fingerprint=None, default_mappings_fp=None,
-                 default_options_fp=None):
-    """
-    Build the Appeal class a compiled parser module wears.  A fresh class
-    per module (so each program's registered Converters stay its own): the
-    generated module does `Appeal = appeal_class(baked_fingerprint=...)` and
-    decorates its Converter subclasses with @Appeal._converter(name).
-    `baked_fingerprint` is the compile-time configuration identity;
-    default_mappings_fp/default_options_fp are the compile-time policy
-    fingerprints the sentinel default falls back to.  Appeal.__init__
-    recomputes the identity and raises on drift.
-    """
-    class Appeal:
-        """
-        The v2 API surface, matching v1's shape:
-
-          * @app.command() functions are *subcommands*: the first
-            operand on the line names one (literally--the function's
-            name, no mangling), even when only one is registered.
-          * @app.global_command() is the command with no name: its
-            options and operands come before the command word.  With
-            no @app.command()s at all, it owns the whole line--that's
-            how you spell a program without subcommands.
-
-        Decoration only records; the plans are built and compiled at
-        first use (see "Laziness and late binding" in the grammar doc).
-        """
-        Converters = {}
-
-        def __init__(self, name=None, *, version=None, repeat=False,
-                     default_mappings=_CONFIG_DEFAULT,
-                     default_options=_CONFIG_DEFAULT,
-                     stylesheet=None, margin=79, errors=None,
-                     positional_argument_usage_format='<{name.upper()}>',
-                     doc=None):
-            self.name = name
-            self.version = version
-            self.repeat = repeat            # cycle commands left to right
-            self.commands = {}
-            self.precommands = []           # ordered precommand eras (run first)
-            # config kept for reconstruct (help/error render through full Appeal)
-            self.default_mappings = default_mappings
-            self.default_options = default_options
-            self.stylesheet = stylesheet
-            self.margin = margin
-            self.errors = errors
-            self.positional_argument_usage_format = positional_argument_usage_format
-            self.doc = doc
-            if baked_fingerprint is not None:
-                # sentinel default -> the compile-time policy's baked fp;
-                # an explicit value -> its live fingerprint
-                dm_fp = (default_mappings_fp
-                         if default_mappings is _CONFIG_DEFAULT
-                         else _callable_fingerprint(default_mappings))
-                do_fp = (default_options_fp
-                         if default_options is _CONFIG_DEFAULT
-                         else _callable_fingerprint(default_options))
-                current = config_fingerprint(version, dm_fp, do_fp)
-                if current != baked_fingerprint:
-                    raise ConfigurationError(
-                        f"{name or 'this program'}: the compiled parser is "
-                        f"stale -- the Appeal configuration changed since it "
-                        f"was generated; regenerate the compiled module")
-
-        @classmethod
-        def _converter(cls, name):
-            def _converter(converter):
-                cls.Converters[name] = converter
-                return converter
-            return _converter
-
-        def command(self, name=None):
-            def command(converter):
-                # mirror full Appeal: the function name maps _->- (an explicit
-                # name is verbatim), and a command word can't start with a dash
-                word = (name if name is not None
-                        else converter.__name__.replace('_', '-'))
-                if word.startswith('-'):
-                    raise ConfigurationError(
-                        f"a command name can't start with a dash: {word!r}")
-                cls = self.Converters[word]
-                cls.fixup_converters(converter)     # wire cls + its children
-                self.commands[word] = cls
-                return converter
-            return command
-
-        def precommand(self, *, index=-1):
-            def precommand(converter):
-                cls = self.Converters[converter.__name__]
-                cls.fixup_converters(converter)     # wire cls + its children
-                if index == -1:                     # an ordered era; runs first,
-                    self.precommands.append(cls)    # before commands
-                else:
-                    self.precommands.insert(index, cls)
-                return converter
-            return precommand
-        global_command = precommand     # transitional alias for the old name
-
-        def process(self, args):
-            return execute(self.commands, list(args),
-                           precommands=self.precommands, repeat=self.repeat)
-
-        def main(self, args=None):
-            args = sys.argv[1:] if args is None else list(args)
-            try:
-                result = self.process(args)
-            except UsageError as e:
-                print(f'{self.name or "error"}: {e}', file=sys.stderr)
-                return 2
-            return result if isinstance(result, int) else 0
-
-    return Appeal
-
-_Command = Command
-
 # theming (themes are DATA--resolve_stylesheet composes them) and
-# the build/codegen surface are re-exported LAZILY via __getattr__
+# the build surface is re-exported LAZILY via __getattr__
 # below, so accessing appeal.appeal_theme / appeal.build / etc. still
 # works but doesn't cost anything until you touch it.
 
@@ -4595,8 +3434,7 @@ class Appeal:
         # parameter.  The stock policy adds a long and a short;
         # default_long_option drops the short, default_short_option
         # drops the long, or supply your own.  Its output--the
-        # strings--is baked into the compiled parser, so a custom
-        # policy never needs to ride into a standalone script.
+        # strings--are computed at build time.
         if default_options is _DEFAULT_OPTIONS:
             # not supplied -> the stock policy (lazy: importing build
             # is deferred until an Appeal is actually constructed)
@@ -4893,9 +3731,8 @@ class Appeal:
             from .help import summary as _summary, command_set_corpus
             node_table = node._table()
             entries = [(w, _summary(c)) for w, c in node_table.items()]
-            # add the auto `help` row unless the set already registers one (the
-            # codegen listing did this via auto_help; the bare-root path gets it
-            # from the root's own table instead)
+            # add the auto `help` row unless the set already registers one
+            # (the bare-root path gets it from the root's own table instead)
             auto_help = node._help_enabled and 'help' not in node_table
             corpus = command_set_corpus(
                 node.global_plan, entries, auto_help, auto_version=False,
@@ -5737,9 +4574,7 @@ class Appeal:
         The precommand's mini plan, built from what
         default_mappings mapped to it.  None when nothing is.
         The closure is marked stock when the app doesn't override
-        the precommand family, so standalone scripts can bake the
-        behavior as literals (an override refuses by name--the
-        north star's teeth).
+        the precommand family.
         """
         mapped = self.root._precommand_options
         if not mapped:
@@ -5826,8 +4661,8 @@ class Appeal:
 
     def _compiled_dispatch(self, argv, config=None):
         """
-        The one path (Larry, 2026-08-21): compile the parser in memory (same as
-        a precompiled module, minus the fingerprint check) and run the Processor.
+        The one path (Larry, 2026-08-21): compile the parser in memory and
+        run the Processor.
         Dispatches the head eras then the command words -- recursing into a
         command's subcommand node when it has one -- and logs the instances the
         old two-stage execute() did (app.instances reads _last_processor).

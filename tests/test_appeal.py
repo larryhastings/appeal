@@ -2898,43 +2898,6 @@ def test_converter_vocabulary():
     except AppealConfigurationError as e:
         assert 'call it first' in str(e), e
 
-def test_fingerprint_recurses_into_converters():
-    # A command's fingerprint nests its converters' fingerprints, so
-    # a CONVERTER signature change surfaces in the command's own
-    # fingerprint (drift caught by one check, ruled 2026-08-16).
-    from appeal import fingerprint
-
-    def scale(s: int):
-        return s * 2
-    def cmd(x: scale, verbose: bool = False):
-        return x
-    base = fingerprint(cmd)
-
-    # converter drift: add a parameter -> the command fingerprint moves
-    def scale(s: int, factor: int = 2):
-        return s * factor
-    def cmd_drifted(x: scale, verbose: bool = False):
-        return x
-    assert fingerprint(cmd_drifted) != base, 'converter drift not seen'
-
-    # renaming a function is NOT identity (mirrors inspect.Signature)
-    def scale(s: int):
-        return s * 2
-    def renamed(x: scale, verbose: bool = False):
-        return x
-    assert fingerprint(renamed) == base, 'rename wrongly changed fingerprint'
-
-    # leaves stay flat tokens; the converter nests a tuple
-    ann = dict(base[8])
-    assert ann['verbose'] == 'builtins.bool', ann
-    assert isinstance(ann['x'], tuple), ann          # scale's fingerprint
-
-    # a vocabulary recipe stays a flat recipe token, never recursed
-    def usemode(m: appeal.validate('fast', 'safe')):
-        return m
-    entry = dict(fingerprint(usemode)[8])['m']
-    assert isinstance(entry, str) and entry.startswith('recipe:'), entry
-
 
 def test_kwargs_options():
     # @app.option declarations for parameters not in the signature
@@ -5773,7 +5736,6 @@ def test_cycling():
         assert False, 'expected UsageError'
     except UsageError:
         pass
-
 
 
 NESTED_MODULE = """\
