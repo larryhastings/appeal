@@ -1266,6 +1266,9 @@ class Appeal:
             print('Print usage documentation on a specific command.')
             return
         fn = table.get(topic)
+        if fn is None and topic.replace('_', '-') in table:
+            topic = topic.replace('_', '-')     # accept the underscore spelling
+            fn = table.get(topic)
         if getattr(fn, '__func__', None) is Appeal.print_version:
             # a stock command describes itself with its summary
             print(_inspect.getdoc(fn))
