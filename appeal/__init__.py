@@ -1350,10 +1350,8 @@ def run_mcp(tools, name, version='0'):
 ##
 ## v1's converter vocabulary: split, validate, validate_range,
 ## counter, accumulator, mapping.  All semantics probed against
-## shipping v1 0.6.4.  Factory *products* carry a structured recipe
-## (__appeal_recipe__ = (kind, factory, args, kwargs), kind 'call'
-## or 'subscript') that marks them as vocabulary products -- build.py
-## recognizes a terminal by it.
+## shipping v1 0.6.4.  Factory *products* carry a `recipe = True`
+## marker so build.py recognizes them as vocabulary terminals.
 ##
 
 
@@ -1466,12 +1464,9 @@ def split(*separators, strip=False):
                 del values[-1]
         return values
     split_converter.__name__ = 'split'
-    split_converter.__appeal_recipe__ = (
-        'call', 'split', tuple(separators),
-        {'strip': True} if strip else {})
-    split_converter.__appeal_snippet__ = 'appeal split'
+    split_converter.recipe = True
     return split_converter
-split.__appeal_factory__ = "split(':')"
+split.factory = "split(':')"
 
 
 def validate(*values, type=None):
@@ -1497,11 +1492,9 @@ def validate(*values, type=None):
             raise ValueError(f"must be one of {allowed}")
         return value
     validate_converter.__name__ = 'validate'
-    validate_converter.__appeal_recipe__ = (
-        'call', 'validate', tuple(values), {'type': type})
-    validate_converter.__appeal_snippet__ = 'appeal validate'
+    validate_converter.recipe = True
     return validate_converter
-validate.__appeal_factory__ = "validate('red', 'green')"
+validate.factory = "validate('red', 'green')"
 
 
 def validate_range(start, stop=None, *, type=None, clamp=False):
@@ -1527,14 +1520,9 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
             raise ValueError(f"must be in range {start}..{stop}")
         return value
     validate_range_converter.__name__ = 'validate_range'
-    recipe_kwargs = {'type': type}
-    if clamp:
-        recipe_kwargs['clamp'] = True
-    validate_range_converter.__appeal_recipe__ = (
-        'call', 'validate_range', (start, stop), recipe_kwargs)
-    validate_range_converter.__appeal_snippet__ = 'appeal validate range'
+    validate_range_converter.recipe = True
     return validate_range_converter
-validate_range.__appeal_factory__ = "validate_range(0, 10)"
+validate_range.factory = "validate_range(0, 10)"
 
 
 def counter(*, max=None, step=1):
@@ -1545,9 +1533,7 @@ def counter(*, max=None, step=1):
     ceiling = max
 
     class Counter(MultiOption):
-        __appeal_recipe__ = ('call', 'counter', (),
-                             {'max': ceiling, 'step': step})
-        __appeal_snippet__ = 'appeal counter'
+        recipe = True
 
         def init(self, default):
             self.value = default if isinstance(default, int) else 0
@@ -1561,7 +1547,7 @@ def counter(*, max=None, step=1):
             return self.value
     Counter.__name__ = 'counter'
     return Counter
-counter.__appeal_factory__ = "counter()"
+counter.factory = "counter()"
 
 
 class _ProcessStream:
@@ -1650,17 +1636,9 @@ def file(mode='r', *, buffering=-1, encoding=None, errors=None,
                 f"can't open {value!r}: {e.strerror or e}") from None
     file_converter.__name__ = 'file'
     if opener is None:
-        settings = {kw: v for kw, v, default in (
-                        ('buffering', buffering, -1),
-                        ('encoding', encoding, None),
-                        ('errors', errors, None),
-                        ('newline', newline, None))
-                    if v != default}
-        file_converter.__appeal_recipe__ = (
-            'call', 'file', (mode,), settings)
-        file_converter.__appeal_snippet__ = 'appeal file'
+        file_converter.recipe = True
     return file_converter
-file.__appeal_factory__ = "file()"
+file.factory = "file()"
 
 
 class _OptionalMeta(type):
@@ -1678,7 +1656,7 @@ class optional(metaclass=_OptionalMeta):
     (ruled 2026-08-03, the make precedent: `-f file` is the
     common case, `-j [jobs]` is the marked one).
     """
-    __appeal_factory__ = "optional[str]"
+    factory = "optional[str]"
 
     @classmethod
     def _parameterize(cls, T):
@@ -1704,10 +1682,8 @@ class optional(metaclass=_OptionalMeta):
                     f"(not a valid {name})") from None
         # usage metavar: show the OPTION'S parameter name, not
         # this closure's ('[-j|--jobs [jobs]]', not '[value]')
-        option_value.__appeal_oparg_borrows_name__ = True
-        option_value.__appeal_recipe__ = (
-            'subscript', 'optional', (T,), {})
-        option_value.__appeal_snippet__ = 'appeal optional'
+        option_value.borrows_name = True
+        option_value.recipe = True
         return option_value
 
 
@@ -1742,7 +1718,6 @@ class accumulator(MultiOption, metaclass=_Subscriptable):
     list[T] is sugar for accumulator[T]--one repeatable-list
     mechanism, spelled either way.
     """
-    __appeal_snippet__ = 'appeal folds'
 
     def init(self, default):
         self.values = list(default) if default else []
@@ -1759,8 +1734,7 @@ class accumulator(MultiOption, metaclass=_Subscriptable):
             types = (types,)
         sub = _Subscriptable('accumulator', (cls,),
                              {'option': _accumulator_option(types)})
-        sub.__appeal_recipe__ = ('subscript', 'accumulator',
-                                 tuple(types), {})
+        sub.recipe = True
         return sub
 
 
@@ -1775,12 +1749,11 @@ class mapping(MultiOption, metaclass=_Subscriptable):
     mechanism, spelled either way; the config layer reads it from a
     dict, the command line from KEY=VALUE tokens.
     """
-    __appeal_snippet__ = 'appeal folds'
     # the reader (config layer) hands these a whole dict, not a
     # sequence of occurrences; the two halves' converters live on
     # the parameterized subclass (below), invisible to the fold's
     # single-operand protocol but caught by the recipe fingerprint.
-    __appeal_mapping__ = True
+    mapping = True
     _key_converter = staticmethod(str)
     _value_converter = staticmethod(str)
 
@@ -1808,8 +1781,7 @@ class mapping(MultiOption, metaclass=_Subscriptable):
         sub = _Subscriptable('mapping', (cls,),
                              {'_key_converter': staticmethod(key_type),
                               '_value_converter': staticmethod(value_type)})
-        sub.__appeal_recipe__ = ('subscript', 'mapping',
-                                 (key_type, value_type), {})
+        sub.recipe = True
         return sub
 
 
@@ -2981,7 +2953,7 @@ def _config_inject(vetted, config, given, usage, scoped_keys=frozenset()):
                 injected[name] = key
             return
         if kind == 'fold' and getattr(rule.converters[0],
-                                      '__appeal_mapping__', False):
+                                      'mapping', False):
             # the mapping MultiOption (dict[K, V]'s mechanism): config
             # gives a whole dict; each pair becomes one KEY=VALUE
             # occurrence, exactly as the command line spells it
@@ -3115,7 +3087,7 @@ def _config_apply(conv, table, global_plan, config, plan_for):
                 toks += tokens_for(orule, value[oname], f'{provenance}.{oname}')
             return toks
         if kind == 'fold':
-            if getattr(rule.converters[0], '__appeal_mapping__', False):
+            if getattr(rule.converters[0], 'mapping', False):
                 if not isinstance(value, dict):
                     raise AppealDataError(
                         f"config: {provenance!r} collects KEY=VALUE pairs; "
@@ -3353,7 +3325,7 @@ def default_mappings(*options):
     # _finalize reads this to drive the legacy help machinery
     # (per-command --help, bare-app -h) until the era unification
     # retires it: the requested tokens are the truth
-    default_mappings_policy.appeal_requested = requested
+    default_mappings_policy.requested = requested
     return default_mappings_policy
 
 
@@ -3685,7 +3657,7 @@ class Appeal:
         if root.default_mappings is not None:
             root.default_mappings(root)
             requested = getattr(root.default_mappings,
-                                'appeal_requested', None)
+                                'requested', None)
             if requested is not None:
                 # the stock factory says what was asked for
                 root._help_enabled = bool(
@@ -4565,7 +4537,7 @@ class Appeal:
         """
         plan = self.global_plan
         if plan is not None and getattr(plan.callable,
-                                        'appeal_precommand', False):
+                                        'precommand', False):
             return None
         return plan
 
@@ -4604,14 +4576,7 @@ class Appeal:
             app.root._decorations.add_option(precommand, 'help',
                                              mapped['help'])
         cls = type(app)
-        precommand.appeal_help = app.help
-        precommand.appeal_precommand = True
-        precommand.appeal_stock = (
-            cls.help_and_version_precommand is Appeal.help_and_version_precommand
-            and cls.print_version is Appeal.print_version
-            and cls.help is Appeal.help)
-        precommand.appeal_version = (str(app.version)
-                                     if app.version is not None else None)
+        precommand.precommand = True
         return self._build(precommand, name=self.root._prog())
 
     @property
@@ -4725,7 +4690,7 @@ class Appeal:
             # must run even in the dry pre-scan -- otherwise the pre-scan would
             # validate (and reject) a command portion that help would preempt.
             # It's a no-op unless help/version was actually requested.
-            is_meta = getattr(era_plan.callable, 'appeal_precommand', False)
+            is_meta = getattr(era_plan.callable, 'precommand', False)
             proc = Processor(argv[pos:], conv, table, dry=dry and not is_meta)
             if config is not None and era_plan.callable is self._global and not dry:
                 # layer config onto the global command: parse argv, merge config

@@ -366,7 +366,7 @@ class Plan:
             bits = ['|'.join(o.strings)]
             if o.kind == 'group':
                 if getattr(o.child.callable,
-                           '__appeal_oparg_borrows_name__', False):
+                           'borrows_name', False):
                     # an optional[T]-style wrapper: its own
                     # parameter name is plumbing; the metavar is
                     # the OPTION's parameter (or its rename)

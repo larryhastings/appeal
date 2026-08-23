@@ -73,7 +73,7 @@ def _is_option_group(annotation):
                        # types, and types bailed at the isinstance check
     if getattr(annotation, '__origin__', None) is not None:
         return False
-    if hasattr(annotation, '__appeal_factory__'):
+    if hasattr(annotation, 'factory'):
         return False   # pragma: no cover -- _refuse_bare_factory fires
                        # before the only caller reaches this predicate
     try:
@@ -94,7 +94,7 @@ def _is_option_group(annotation):
                 annotation_ = dereference_annotated(annotation_)
                 if (callable(annotation_)
                         and annotation_ not in _blessed_leaves
-                        and not hasattr(annotation_, '__appeal_recipe__')
+                        and not hasattr(annotation_, 'recipe')
                         and getattr(annotation_, '__origin__', None) is None
                         and _positional_arity(annotation_) > 0):
                     return True
@@ -140,7 +140,7 @@ def _positional_arity(callable):
 
 
 def _refuse_bare_factory(annotation, context):
-    factory = getattr(annotation, '__appeal_factory__', None)
+    factory = getattr(annotation, 'factory', None)
     if factory:
         raise AppealConfigurationError(
             f"{context}: {annotation.__name__} is a converter factory; "
@@ -425,7 +425,7 @@ def _child_for(parameter, memo, stack):
         return Terminal(str)
     annotation = dereference_annotated(annotation)
     _refuse_bare_factory(annotation, f"parameter {parameter.name!r}")
-    if (hasattr(annotation, '__appeal_recipe__')
+    if (hasattr(annotation, 'recipe')
             and not isinstance(annotation, type)):
         # a vocabulary product (validate(...), split(...)): a terminal,
         # so its ValueError becomes a polite UsageError via convert()
@@ -571,7 +571,7 @@ def _is_repeat_group(annotation):
         return False
     if annotation in _blessed_leaves:
         return False
-    if (hasattr(annotation, '__appeal_recipe__')
+    if (hasattr(annotation, 'recipe')
             and not isinstance(annotation, type)):
         # a vocabulary product (split/validate/...): a terminal,
         # exactly as _child_for treats it off *args (the old param
@@ -748,7 +748,7 @@ def _build_option_rule(name, strings, explicit, annotation, grammar_default,
     if (callable(annotation)
             and not isinstance(annotation, type)
             and getattr(annotation, '__origin__', None) is None
-            and not hasattr(annotation, '__appeal_factory__')
+            and not hasattr(annotation, 'factory')
             and annotation is not inspect.Parameter.empty
             and _positional_arity(annotation) == 0
             and _accepts_no_arguments(annotation)):

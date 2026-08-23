@@ -4770,16 +4770,12 @@ def test_file_converter():
         return inp._stream is sys.stdin.buffer
     assert run_both(slurp, ['-']) == ('ok', True)
 
-    # the recipe is structured--(kind, factory, args, kwargs),
-    # arguments live--and carries only non-default settings
-    conv = _appeal.file('w', encoding='utf-8')
-    assert conv.__appeal_recipe__ == \
-        ('call', 'file', ('w',), {'encoding': 'utf-8'})
-    assert _appeal.file().__appeal_recipe__ == \
-        ('call', 'file', ('r',), {})
-    # an opener is a callable: no recipe, so standalone refuses
-    assert not hasattr(_appeal.file(opener=os.open),
-                       '__appeal_recipe__')
+    # a vocabulary product is marked `recipe = True` so build.py
+    # recognizes it as a terminal; an opener-based file isn't a
+    # vocabulary terminal, so it carries no marker
+    assert _appeal.file('w', encoding='utf-8').recipe is True
+    assert _appeal.file().recipe is True
+    assert not hasattr(_appeal.file(opener=os.open), 'recipe')
 
 
 def test_usage_formatter_knobs():

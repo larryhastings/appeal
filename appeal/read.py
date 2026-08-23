@@ -115,7 +115,7 @@ def _option_value(o, value, path):
         if o.converters[0] is tuple:
             return tuple(converted)
         return o.converters[0](*converted)
-    if getattr(o.converters[0], '__appeal_mapping__', False):
+    if getattr(o.converters[0], 'mapping', False):
         # the mapping MultiOption (dict[K, V]'s mechanism): config
         # supplies a whole dict, not KEY=VALUE tokens, so read it as
         # one--the K/V converters live on the parameterized class

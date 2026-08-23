@@ -55,7 +55,7 @@ def _option_schema(o, docs):
         'repeatable': o.kind == 'fold',
         # the mapping MultiOption (dict[K, V]) schemas as a JSON object
         'mapping': bool(o.converters) and getattr(
-            o.converters[0], '__appeal_mapping__', False),
+            o.converters[0], 'mapping', False),
     }
     if o.kind == 'group':
         entry['group'] = _plan_schema(o.child)
