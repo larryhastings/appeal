@@ -2134,19 +2134,19 @@ def needs_39(what):
 def run_both(command, argv, decorations=None):
     """
     Run argv through 1.0's one engine: build the Converter classes in memory
-    (compile.build_converters) and run runtime.Processor.  Returns
+    (compile.build_converters) and run appeal.Processor.  Returns
     ('ok', result) or ('usage', message).  (Named run_both from when it
     cross-checked an in-memory vs an emitted-source rung; the pivot to
     interpreter-only retired source emission, so there's one rung now.)
     decorations: the app-side @option/@parameter registry.
     """
-    from appeal import runtime
+    import appeal
     from appeal.compile import build_converters, _converter_key
     plan = build_plan(command, decorations=decorations)
     word = plan.name.replace('_', '-')
     cls = build_converters([plan])[_converter_key(plan)]
     try:
-        return ('ok', runtime.execute({word: cls}, [word] + list(argv)))
+        return ('ok', appeal.execute({word: cls}, [word] + list(argv)))
     except UsageError as e:
         return ('usage', str(e))
 
@@ -2902,7 +2902,7 @@ def test_fingerprint_recurses_into_converters():
     # A command's fingerprint nests its converters' fingerprints, so
     # a CONVERTER signature change surfaces in the command's own
     # fingerprint (drift caught by one check, ruled 2026-08-16).
-    from appeal.runtime import fingerprint
+    from appeal import fingerprint
 
     def scale(s: int):
         return s * 2

@@ -20,7 +20,7 @@ from . import cheapsig as inspect        # a microsecond stand-in for the real
                                          # build.py uses.  See appeal/cheapsig.py.
 
 from .plan import Terminal, NO_DEFAULT, OptionRule, Plan, Slot
-from .runtime import (
+from . import (
     AppealConfigurationError, Option, accumulator, is_multioption,
     is_option, mapping,
     )

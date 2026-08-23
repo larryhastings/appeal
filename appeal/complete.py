@@ -6,13 +6,13 @@
 #
 # The build-time half of shell completion: turning a plan into the
 # tables the engine answers from.  The engine itself--and the
-# reentry protocol--lives in runtime.py, streamed into every
+# reentry protocol--lives in appeal/__init__.py, streamed into every
 # standalone script, so completion works identically in-process
 # and in a generated script.
 
 from .build import all_options, help_option_strings
 from .plan import Terminal
-from .runtime import complete_command, complete_command_set
+from . import complete_command, complete_command_set
 
 
 def _option_value_converters(o):
@@ -25,7 +25,7 @@ def _option_value_converters(o):
 def completion_table(plan):
     """
     The completion table for one command (see
-    runtime.complete_command for the shape).  Plain data plus
+    complete_command for the shape).  Plain data plus
     converter references--everything a generated script can carry.
     """
     options = {}
@@ -106,7 +106,7 @@ def completion_set_table(commands, global_plan, repeat=False,
                          sets=None, auto_version=False, help=True):
     """
     The completion table for a multi-command program (see
-    runtime.complete_command_set for the shape).  repeat: the root
+    complete_command_set for the shape).  repeat: the root
     set cycles.  sets, if given, maps a parent word to
     {'commands': {sub: Plan}, 'repeat': bool}--a nested set.
     auto_version: the program supplies the automatic version

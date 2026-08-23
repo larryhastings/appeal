@@ -6,14 +6,14 @@
 #
 # The build-time half of help: docstring parsing and resolving
 # entries against the plan.  The run-time half--render_help_page
-# and friends--lives in runtime.py, the file streamed into standalone
+# and friends--live in appeal/__init__.py, the core streamed into standalone
 # scripts.
 
 import inspect as _inspect
 import re as _re
 
 from .plan import Terminal, format_arg, _oparg_names
-from .runtime import AppealConfigurationError
+from . import AppealConfigurationError
 
 
 ##

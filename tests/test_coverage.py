@@ -22,18 +22,18 @@ from appeal import (
     Appeal, AppealConfigurationError, AppealDataError, AppealError,
     UsageError, build_plan,
     )
-from appeal import runtime
+import appeal
 
 
 def both(fn, argv, decorations=None):
     "One engine: build the Converter in memory and run it; errors as text."
-    from appeal import runtime
+    import appeal
     from appeal.compile import build_converters, _converter_key
     plan = build_plan(fn, decorations=decorations)
     word = plan.name.replace('_', '-')
     cls = build_converters([plan])[_converter_key(plan)]
     try:
-        return ('ok', runtime.execute({word: cls}, [word] + list(argv)))
+        return ('ok', appeal.execute({word: cls}, [word] + list(argv)))
     except AppealDataError as e:
         return ('usage', str(e))
 
@@ -225,7 +225,7 @@ def test_repl_in_process():
 # completion reentry, in-process: the environment IS the protocol
 
 def test_completion_reentry_in_process():
-    from appeal.runtime import completion_reentry, completion_script
+    from appeal import completion_reentry, completion_script
 
     def completer(words, prefix):
         assert words == ['x']
@@ -277,7 +277,7 @@ def test_completion_word_boundaries_and_prog_quoting():
     # quotes come off.  The program name is shell-quoted in the
     # emitted courier (no breakage/injection).
     import shlex
-    from appeal.runtime import completion_reentry, completion_script, _split_arg_string
+    from appeal import completion_reentry, completion_script, _split_arg_string
 
     # the lexer strips quotes, keeps a word with a space whole, and
     # tolerates the half-typed current word's unterminated quote
@@ -335,7 +335,7 @@ def test_completion_word_boundaries_and_prog_quoting():
 # run_main's remaining branches
 
 def test_run_main_branches():
-    from appeal.runtime import run_main
+    from appeal import run_main
 
     # argv=None reads sys.argv[1:]
     old = sys.argv
@@ -1457,51 +1457,8 @@ def test_codegen_option_group_counts():
 
 
 # ---------------------------------------------------------------------
-# batch 7: runtime.py--the two-copies protocol, the Option ABC,
+# batch 7: the core--the Option ABC,
 # converters, themes, templates, vocabulary, streams
-
-
-def test_foreign_appeal_error_names():
-    # exceptions from ANOTHER copy of appeal.runtime (a standalone
-    # script) are recognized by name and home
-    from appeal.runtime import foreign_appeal_error
-    # both spellings: the raiser's class __name__ is the
-    # canonical unprefixed form when it imported installed
-    # appeal, the prefixed form is the old-names alias family
-    for name, kind in (('AppealConfigurationError', 'configuration'),
-                       ('ConfigurationError', 'configuration'),
-                       ('AppealDataError', 'data'),
-                       ('DataError', 'data'),
-                       ('AppealCommandError', 'command'),
-                       ('CommandError', 'command'),
-                       ('AppealError', 'error')):
-        cls = type(name, (Exception,),
-                   {'__module__': 'script.appeal.runtime'})
-        assert foreign_appeal_error(cls()) == kind, name
-    class Unrelated(Exception):
-        pass
-    assert foreign_appeal_error(Unrelated()) is None
-
-
-def test_run_main_foreign_errors():
-    from appeal import run_main
-    ForeignData = type('AppealDataError', (Exception,),
-                       {'__module__': 'script.appeal.runtime'})
-    ForeignPlain = type('AppealError', (Exception,),
-                        {'__module__': 'script.appeal.runtime'})
-    def parse_data(argv):
-        e = ForeignData('bad juju')
-        e.usage = 'prog x'
-        raise e
-    err = io.StringIO()
-    assert run_main(parse_data, [], errors=err) == 2
-    text = err.getvalue()
-    assert 'bad juju' in text and 'usage: prog x' in text
-    def parse_plain(argv):
-        raise ForeignPlain('boom')
-    err = io.StringIO()
-    assert run_main(parse_plain, [], errors=err) == 1
-    assert 'boom' in err.getvalue()
 
 
 def test_run_main_completion_param():
@@ -1574,7 +1531,7 @@ def test_converter_body_errors():
 
 
 def test_absorb_take_edges():
-    from appeal.runtime import absorb_take
+    from appeal import absorb_take
     # no suffix counts: the remainder after the suffix minimum
     assert absorb_take(5, None, 2, 1, False) == 3
     # nothing fits and the slot can't skip: no take at all
@@ -1582,10 +1539,10 @@ def test_absorb_take_edges():
 
 
 def test_toy_multisplit_and_bytes_iter():
-    # _toy_multisplit is snipped into appeal.runtime (stdlib-only, so
+    # _toy_multisplit is snipped into the appeal core (stdlib-only, so
     # the core imports nothing from big); _iterate_over_bytes still
     # rides in for the render side
-    from appeal.runtime import _toy_multisplit
+    from appeal import _toy_multisplit
     from appeal.render import _iterate_over_bytes
     assert list(_iterate_over_bytes('ab')) == ['a', 'b']
     assert _toy_multisplit('a,b', ',') == [('a', ','), ('b', '')]
@@ -1769,7 +1726,7 @@ def test_vocabulary_validation():
 
 
 def test_process_stream_edges():
-    from appeal.runtime import _ProcessStream
+    from appeal import _ProcessStream
     class Cranky(io.StringIO):
         def flush(self):
             raise OSError('nope')
@@ -1780,7 +1737,7 @@ def test_process_stream_edges():
 
 
 # ---------------------------------------------------------------------
-# batch 8: runtime.py--token stream edges, completion internals,
+# batch 8: the core--token stream edges, completion internals,
 # the MCP wire protocol
 
 
@@ -1834,7 +1791,7 @@ def test_completion_candidate_edges():
 
 
 def test_completion_bad_candidates_and_fish():
-    from appeal.runtime import completion_reentry
+    from appeal import completion_reentry
     def color(hue):
         return hue
     color.completions = lambda prefix: ('ok', 42)
@@ -1874,7 +1831,7 @@ def test_completion_bad_candidates_and_fish():
 
 def test_run_mcp_protocol():
     import json as _json
-    from appeal.runtime import run_mcp
+    from appeal import run_mcp
     def go(arguments):
         x = arguments['x']
         if x == 'bad':
@@ -2050,7 +2007,7 @@ def test_tokenize_ir():
     # (marker '' is an operand run; else a canonical option key + raw
     # opargs).  Aliases normalize, clusters split, '='/attached/'--'
     # resolve, and the operand/option INTERLEAVING is preserved.
-    from appeal.runtime import tokenize
+    from appeal import tokenize
     opts = {
         '-a': ('--apple', 'flag', True), '--apple': ('--apple', 'flag', True),
         '-b': ('--banana', 'flag', True), '--banana': ('--banana', 'flag', True),
@@ -2078,7 +2035,7 @@ def test_tokenize_ir():
 
 
 def test_run_main_themed_and_set_completion():
-    from appeal.runtime import UsageError, run_main
+    from appeal import UsageError, run_main
     from appeal.complete import completion_set_table
     class FakeTTY(io.StringIO):
         def isatty(self):
@@ -2200,7 +2157,7 @@ def test_completion_more_corners():
 
 def test_run_mcp_ping():
     import json as _json
-    from appeal.runtime import run_mcp
+    from appeal import run_mcp
     old_stdin = sys.stdin
     out = io.StringIO()
     try:
@@ -2272,14 +2229,14 @@ def test_short_option_equals_refusal():
 
 def test_scoped_queue_live_resolve():
     # resolve() in the live phase replays; it never re-decides
-    from appeal.runtime import ScopedQueue
+    from appeal import ScopedQueue
     sq = ScopedQueue([], 'multi')
     sq.phase = 'live'
     assert sq.resolve('--x') is None
 
 
 def test_completion_internals_direct():
-    from appeal.runtime import complete_command, complete_command_set
+    from appeal import complete_command, complete_command_set
     from appeal.complete import completion_table, completion_set_table
     def go(x, *, level: int = 0):
         return x
@@ -2365,7 +2322,7 @@ def test_windowed_option_before_first_window():
 
 
 def test_completion_boundary_and_help():
-    from appeal.runtime import complete_command_set
+    from appeal import complete_command_set
     from appeal.complete import completion_set_table
     def go(x, *, level: int = 0):
         return x
@@ -2421,27 +2378,6 @@ def test_entry_points_default_to_sys_argv():
 #                          copy at construction; all three keys present
 #   build.py    936->826   all five Parameter kinds `continue`; the
 #                          not-VAR_KEYWORD fall-through is dead
-#   codegen.py  523->526   emit_group_count_check's only caller passes
-#                          guard=True
-#   codegen.py  617->620   option_value_expr's callers never pre-supply
-#                          default_name
-#   codegen.py 1372->1361  a duplicate plain from-line needs two
-#                          DISTINCT objects rendering identical import
-#                          lines; refs' identity-dedupe prevents it
-#   codegen.py 1545->1547  imports never empty: the command callable
-#                          always renders as an import (or refuses)
-#   codegen.py 1547->1549  constants never empty: _HELP_/_TEMPLATES_
-#                          always emitted
-#   codegen.py 1667->1669  same as 1545 for the module-sourced emitter
-#   runtime.py 1725->1742  wrap_words: col==0 only coexists with
-#                          new_line=True; every placement adds len>0
-#   runtime.py 1857->1867  split: rstrip guarantees len_indent <
-#                          len(line), the indent loop always breaks
-#   runtime.py 3307->3305  the themed-table painter's not-found
-#                          fallback: format_definition_list renders
-#                          every term at line start (and refuses
-#                          linebreak terms), so a corpus row's display
-#                          is always found
 
 def test_branch_schema_and_read_edges():
     from appeal.schema import mcp_input_schema
@@ -2519,7 +2455,7 @@ def test_schema_degenerate_group_transparent():
 
 
 def test_branch_run_main_error_edges():
-    from appeal.runtime import run_main
+    from appeal import run_main
 
     def quiet_main(fn):
         out, err = io.StringIO(), io.StringIO()
@@ -2531,31 +2467,6 @@ def test_branch_run_main_error_edges():
     def d():
         raise AppealDataError('data, no usage')
     code, err = quiet_main(d)
-    assert code == 2 and 'usage:' not in err, (code, err)
-
-    # the two-copies case: exceptions from "another appeal" match by
-    # name and home.  A foreign AppealUsageError walks the MRO past
-    # the three names to its AppealError base; a foreign
-    # AppealDataError has no usage attribute to print.
-    class FE(Exception):
-        pass
-    class FUsage(FE):
-        pass
-    FE.__name__, FE.__module__ = 'AppealError', 'other.appeal.runtime'
-    FUsage.__name__, FUsage.__module__ = ('AppealUsageError',
-                                          'other.appeal.runtime')
-    def u():
-        raise FUsage('foreign usage error')
-    code, err = quiet_main(u)
-    assert code == 1, (code, err)
-
-    class FData(Exception):
-        pass
-    FData.__name__, FData.__module__ = ('AppealDataError',
-                                        'other.appeal.runtime')
-    def fd():
-        raise FData('foreign data, no usage attr')
-    code, err = quiet_main(fd)
     assert code == 2 and 'usage:' not in err, (code, err)
 
 
@@ -2574,7 +2485,7 @@ def test_branch_negative_number_global_operand():
 
 def test_branch_completion_edges():
     from appeal.complete import completions_set
-    from appeal.runtime import completion_reentry
+    from appeal import completion_reentry
 
     # a repeatable option already on the line still completes
     def f(*, tag: appeal.accumulator[str] = ()):

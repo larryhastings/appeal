@@ -12,7 +12,7 @@
 
 def _validate_arg_format(fmt):
     "Only {name} and {name.upper()} may interpolate."
-    from .runtime import AppealConfigurationError
+    from . import AppealConfigurationError
     if not isinstance(fmt, str):
         raise AppealConfigurationError(
             f"positional_argument_usage_format must be a string, "

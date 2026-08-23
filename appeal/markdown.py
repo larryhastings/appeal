@@ -33,7 +33,7 @@
 
 import re
 
-from .runtime import ConfigurationError
+from . import ConfigurationError
 
 
 SPECIAL_SECTIONS = ('options', 'arguments', 'commands')

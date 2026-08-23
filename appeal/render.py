@@ -2,7 +2,7 @@
 # Part of Appeal 1.0.
 #
 # Help, usage, color, and markdown rendering--carved out of
-# runtime.py so `import appeal.runtime` (the parse/convert/dispatch
+# the core so `import appeal` (the parse/convert/dispatch
 # core a precompiled parser imports) pulls in NOTHING from big.
 # This module DOES import big (markdown/stylesheet/text); it's
 # imported LAZILY--only when help or an error actually renders.
@@ -23,7 +23,7 @@ from big.text import (OverflowStrategy, _iterate_over_bytes,
                       merge_columns, split_text_with_code,
                       wrap_words)
 
-from .runtime import AppealConfigurationError
+from . import AppealConfigurationError
 
 _re = re
 
