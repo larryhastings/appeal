@@ -2147,6 +2147,37 @@ def _analyze(plan):
         shifted = {c + plan.tree_trailing for c in whole_counts}
         plan.maximum = max(shifted)
         plan.valid_counts = shifted
+    _check_option_reachability(plan)
+
+
+def _check_option_reachability(plan):
+    """
+    An option a later same-string option would STOMP is unreachable, and
+    that's a ConfigurationError (Larry, 2026-08-24).  It happens with two
+    ZERO-OPERAND converter groups on the same command: they stack at the same
+    spot (no operands to tell them apart), so the second's options overwrite
+    the first's -- the first's are unreachable.  Windowed groups (that DO
+    consume operands, like rip's a/b/c) sit at different positions and scope
+    the option by window, so they're fine.
+    """
+    own = set()
+    for o in plan.options:
+        own.update(o.strings)
+    claimed = {}                        # option string -> the slot that owns it
+    for slot in plan.slots:
+        child = slot.child
+        if isinstance(child, Terminal) or getattr(child, 'maximum', None) != 0:
+            continue                    # only zero-width groups stack at a spot
+        for o in getattr(child, 'options', ()):
+            for s in o.strings:
+                if s in own:
+                    continue            # the command's own option shadows it
+                if s in claimed and claimed[s] != slot.name:
+                    raise AppealConfigurationError(
+                        f"option {s!r} of {claimed[s]!r} is unreachable: "
+                        f"{slot.name!r} stomps on it (two zero-operand groups "
+                        f"can't be told apart by position)")
+                claimed[s] = slot.name
 
 
 def _shallow_slots(obj):

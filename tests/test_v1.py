@@ -937,17 +937,18 @@ class SmokeTests(AppealTestsBase):
             )
 
     def test_invalid_logging_1(self):
-        # converted from a v1 refusal (ruled 2026-07-09): two
-        # required same-converter siblings sharing option strings
-        # are legal now--position decides.  Both windows are
-        # zero-width here, at the same spot: the deepest/latest
-        # wins, so -v lands on the second Logging.
+        # invalid_logging is deliberately illegal (Larry's ruling, 2026-08-24):
+        # l and l2 are both ZERO-operand Logging groups sharing option strings,
+        # so they stack at the same spot -- l2's -v stomps on l's, leaving l's
+        # unreachable.  1.0 rejects it at compile.  (The 2026-07-09 "position
+        # decides" migration was wrong: position can't tell two zero-width
+        # groups apart.)
         command(invalid_logging)
-        result = process(shlex.split("invalid_logging -v"))
-        marker, first, second = result
-        self.assertIs(marker, invalid_logging)
-        self.assertEqual(first.verbose, 0)
-        self.assertEqual(second.verbose, 1)
+        e = self.assert_process_raises(
+            "invalid_logging -v",
+            appeal.AppealConfigurationError,
+            )
+        self.assertIn("unreachable", str(e))
 
     def test_invalid_annotation_1_1(self):
         command(invalid_annotation_1)
