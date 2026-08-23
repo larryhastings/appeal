@@ -199,6 +199,15 @@ def _takes_many(binding):
     return False
 
 
+def _is_float(text):
+    "Does text parse as a Python float? (the negative-number heuristic's test.)"
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
 def _operand_list(names):
     "Render required operand names as '<A> <B> and <C>' (usage's default form)."
     toks = [f'<{n.upper()}>' for n in names]
@@ -649,12 +658,35 @@ class Processor:
     def _is_option(self, tok):
         if not tok.startswith('-') or tok in ('-', '--'):
             return False
-        # a negative number ('-2', '-2.5') is an OPERAND, not an option --
-        # unless a matching short option is actually registered (v1's rule,
-        # parse_tokens)
-        if tok[1].isdigit() and ('-' + tok[1]) not in self.handlers:
-            return False
+        if not tok.startswith('--') and tok[1].isdigit():
+            # a dash+digit token is ambiguous: it could be short options
+            # (-243 == -2 -4 -3) or a negative number (Larry's heuristic,
+            # 2026-08-24).  (1) if it fully parses as a short-option bundle,
+            # it's options; (2) else if it's a valid float, it's an operand;
+            # (3) else it's an option, so _invoke_option raises the real
+            # "unknown option" error.
+            if self._parses_as_shorts(tok):
+                return True
+            return not _is_float(tok)
         return True
+
+    def _parses_as_shorts(self, tok):
+        "Would tok fully parse as a short-option bundle?  Structural, no side effects."
+        chars = tok[1:]
+        i = 0
+        while i < len(chars):
+            binding = self.handlers.get('-' + chars[i])
+            if binding is None:                         # an unknown short: no
+                return False
+            if chars[i + 1:i + 2] == '=':               # -x=value: valid unless
+                return not _takes_many(binding)         # x needs several values
+            if self._nullary(binding):                  # a flag: keep bundling
+                i += 1
+                continue
+            # arg-taking: the rest (if any) is its attached oparg -- valid,
+            # unless it takes several values (those can't be attached)
+            return not (chars[i + 1:] and _takes_many(binding))
+        return True                                     # all consumed as flags
 
     def _owns_option(self, tok):
         "Does this option token name one of the converter's registered options?"

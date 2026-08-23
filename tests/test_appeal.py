@@ -349,6 +349,43 @@ def test_app_option_errors_are_named():
     except AppealConfigurationError as e:
         assert 'nonesuch' in str(e)
 
+def test_negative_number_heuristic():
+    # a '-'+digit token (Larry's heuristic, 2026-08-24): (1) if it fully
+    # parses as a short-option bundle, it's options; (2) else if float()
+    # accepts it, it's an operand; (3) else raise the option-parse error.
+    def build(three=True):
+        app = Appeal(name='p')
+        def c(x: float = None, *, two=False, four=False, tri=False):
+            return (x, two, four, tri)
+        app.global_command()(c)
+        app.option('two', '-2')(c)
+        app.option('four', '-4')(c)
+        if three:
+            app.option('tri', '-3')(c)
+        return app
+    # (1) all of -2 -4 -3 mapped: the bundle parses, so it's options
+    assert build().process(['-243']) == (None, True, True, True)
+    # (2) -3 unmapped: bundle fails, float('-243') works -> operand
+    assert build(three=False).process(['-243']) == (-243.0, False, False, False)
+    # a plain negative number with no digit options at all -> operand
+    assert build(three=False).process(['-5']) == (-5.0, False, False, False)
+    # a lone mapped digit option still wins as an option
+    assert build().process(['-2']) == (None, True, False, False)
+    # a digit option that takes an oparg: -25 is -2 with attached oparg '5'
+    app = Appeal(name='p')
+    def v(*, two: str = None):
+        return two
+    app.global_command()(v)
+    app.option('two', '-2')(v)
+    assert app.process(['-25']) == '5'
+    # (3) neither a valid bundle nor a float: the option error, naming the
+    # first offending short
+    try:
+        build().process(['-5x'])
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert str(e) == "unknown option '-5'", e
+
 def test_option_errors_name_the_typed_spelling():
     # an option error names the spelling the user actually typed
     # (--verbose / -v), not the parameter name
