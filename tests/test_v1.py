@@ -629,7 +629,7 @@ class SmokeTests(AppealTestsBase):
     def test_pool_1(self):
         command(pool)
         self.assert_process(
-            'pool -d 1 x -d 2 y "bath salts" -d xya z',
+            'pool -d 1=x -d 2=y "bath salts" -d xya=z',
             (pool, "bath salts", {'1': 'x', '2': 'y', 'xya': 'z'}),
             )
 
@@ -637,7 +637,7 @@ class SmokeTests(AppealTestsBase):
     def test_snooker_1(self):
         command(snooker)
         self.assert_process(
-            'snooker -d 1 e -d 2 f "part of the body" -d 3 g',
+            'snooker -d 1=e -d 2=f "part of the body" -d 3=g',
             (snooker, "part of the body", {1: 'e', 2: 'f', 3: 'g'}),
             )
 
@@ -2792,7 +2792,7 @@ class BugfixRegressionTests(AppealTestsBase):
         def cmd(*, define:appeal.mapping={}):
             return define
         with self.assertRaises(appeal.AppealUsageError) as cm:
-            app.process(shlex.split("cmd --define key one --define key two")).result
+            app.process(shlex.split("cmd --define key=one --define key=two")).result
         msg = str(cm.exception)
         self.assertIn("key", msg)
         self.assertNotIn("{key}", msg)
@@ -3073,7 +3073,7 @@ class ConverterVocabularyTests(AppealTestsBase):
         def m(*, define:appeal.mapping={}):
             return define
         self.assertEqual(
-            app.process(shlex.split("m --define k1 v1 --define k2 v2")).result,
+            app.process(shlex.split("m --define k1=v1 --define k2=v2")).result,
             {'k1': 'v1', 'k2': 'v2'},
             )
 
@@ -3083,7 +3083,7 @@ class ConverterVocabularyTests(AppealTestsBase):
         def m(*, define:appeal.mapping[str, int]={}):
             return define
         self.assertEqual(
-            app.process(shlex.split("m --define age 5 --define count 9")).result,
+            app.process(shlex.split("m --define age=5 --define count=9")).result,
             {'age': 5, 'count': 9},
             )
 

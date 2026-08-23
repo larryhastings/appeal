@@ -27,18 +27,12 @@ from big import test
 repo_dir = str(test.preload('appeal'))
 sys.path.insert(0, repo_dir + '/tests')
 
-EXPECTED_FAILURES = frozenset((
-    # v2 deliberately diverges: mapping (dict[K, V]'s mechanism) now
-    # collects one KEY=VALUE token per occurrence, not v1's space-
-    # separated KEY VALUE (Larry's ruling, 2026-08-18).  KEY=VALUE
-    # mapping--incl. the duplicate-key message and typed halves--is
-    # covered by the v2 tests (test_39, test_appeal).
-    'SmokeTests.test_pool_1',
-    'SmokeTests.test_snooker_1',
-    'BugfixRegressionTests.test_mapping_duplicate_key_message',
-    'ConverterVocabularyTests.test_mapping',
-    'ConverterVocabularyTests.test_mapping_typed',
-))
+# NOTHING is marked "expected to fail" (Larry's rule, 2026-08-24): either a
+# test demonstrates broken 1.0 functionality -- then we fix Appeal so it
+# passes -- or the test is wrong for 1.0 (it pins 0.6.4 behavior a ruling
+# changed) -- then we fix the test.  The mapping cases that used to live here
+# were updated to 1.0's KEY=VALUE spelling in test_v1.py.  Keep this empty.
+EXPECTED_FAILURES = frozenset()
 
 
 def main():
