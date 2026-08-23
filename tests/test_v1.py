@@ -1592,13 +1592,13 @@ class SmokeTests(AppealTestsBase):
             )
 
 
-    def test_str_i_f_1(self):
+    def test_str_i_f_3(self):
         command(str_i_f)
         e = self.assert_process_raises(
             "str_i_f abc 1",
             appeal.AppealUsageError,
             )
-        self.assertEqual(str(e), "wrong number of arguments: got 2, expected 1 or 3")  # v2 message
+        self.assertEqual(str(e), "missing argument 'real'")  # 1.0 message
 
     def test_str_i_f_2(self):
         command(str_i_f)
@@ -1611,7 +1611,7 @@ class SmokeTests(AppealTestsBase):
             "str_i_f abc 1 --verbose",
             appeal.AppealUsageError,
             )
-        self.assertEqual(str(e), "wrong number of arguments: got 2, expected 1 or 3")  # v2 message
+        self.assertEqual(str(e), "missing argument 'real'")  # 1.0 message
 
     def test_str_i_f_1(self):
         command(str_i_f)
@@ -1619,7 +1619,7 @@ class SmokeTests(AppealTestsBase):
             "str_i_f abc 1 --option x",
             appeal.AppealUsageError,
             )
-        self.assertEqual(str(e), "wrong number of arguments: got 2, expected 1 or 3")  # v2 message
+        self.assertEqual(str(e), "missing argument 'real'")  # 1.0 message
 
     def test_str_i_f_4(self):
         command(str_i_f)
