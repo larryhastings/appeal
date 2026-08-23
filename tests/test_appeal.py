@@ -554,10 +554,29 @@ def test_appeal_is_lazy():
     except AppealConfigurationError as e:
         assert "isn't callable" in str(e)
 
+def test_eager_compile_surfaces_errors():
+    # lazy=False (the default): the first process() builds EVERY command's
+    # plan across the tree, so a broken command surfaces at startup even when
+    # you invoke a good one -- config errors don't lurk in uncalled commands.
+    app = Appeal(name='tool')                   # eager by default
+    @app.command()
+    def good(x):
+        return ('good', x)
+    @app.command()
+    def broken(t: 42):                          # not in the grammar
+        pass
+    try:
+        app.process(['good', 'hi'])
+        assert False, 'expected AppealConfigurationError from the broken sibling'
+    except AppealConfigurationError:
+        pass
+
 def test_commands_compile_independently():
-    # laziness is per command: dispatching one never builds the
-    # others, so a broken sibling costs nothing until it's used
-    app = Appeal(name='tool')
+    # laziness is per command (opt-in via lazy=True): dispatching one never
+    # builds the others, so a broken sibling costs nothing until it's used.
+    # (The default is lazy=False -- eager -- which would surface `broken` at
+    # the first process(); see test_eager_compile_surfaces_errors.)
+    app = Appeal(name='tool', lazy=True)
     @app.command()
     def good(x):
         return ('good', x)

@@ -824,9 +824,6 @@ def test_config_vet_refusals():
     @app.command()
     def go(dest, *, level: int = 0):
         return dest
-    @app.command()
-    def broken(z: 42):
-        return z
     cases = (
         ({'deep': True}, AppealConfigurationError, 'scoped'),
         ({'go': 1}, AppealDataError, 'is a command'),

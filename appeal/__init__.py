@@ -790,6 +790,9 @@ class Processor:
 
     def __call__(self, args=None, config=None):
         argv = _sys.argv[1:] if args is None else list(args)
+        if not self.app.root._lazy:         # eager: build every command's plan
+            self.app._compile_all()         # up front (once) so config errors
+                                            # surface at startup, not on invoke
         # whole-line STRUCTURAL pre-scan first (Larry, 2026-08-23): parcel and
         # validate the ENTIRE command set -- every command's arity, oparg
         # counts, unknown options -- running NO converter or command body.  A
@@ -934,7 +937,7 @@ class Appeal:
                  margin=79,
                  positional_argument_usage_format='<{name.upper()}>',
                  default_options=_DEFAULT_OPTIONS,
-                 default_mappings=default_mappings(), doc=None):
+                 default_mappings=default_mappings(), doc=None, lazy=False):
         from .frontend import Decorations
         self.name = name
         # the command tree (v1's model, restored 2026-07-18 by
@@ -984,6 +987,12 @@ class Appeal:
         # bare-app help machinery still keys off this flag;
         # approximate it until the era unification lands
         self._help_enabled = default_mappings is not None
+        # eager plan compilation (Larry, 2026-08-24): unless lazy, the first
+        # process()/main() builds every command's plan across the tree, so a
+        # ConfigurationError anywhere surfaces at startup rather than only when
+        # that command happens to be invoked.  _compiled_all guards the once.
+        self._lazy = lazy
+        self._compiled_all = False
         # the option-string policy (v1's knob, restored): a callable
         # (name, annotation, default) -> list of option strings, run
         # at build time on every automatically-mapped keyword-only
@@ -2043,6 +2052,29 @@ class Appeal:
         if node is None:
             raise AppealConfigurationError(f"no command named {word!r}")
         return self._plan_for_node(node, word)
+
+    def _compile_all(self):
+        """
+        Eagerly build every command's plan across the whole tree (unless the
+        app is lazy), so a ConfigurationError anywhere -- a bad annotation, an
+        option a later one stomps on -- surfaces now, at first process()/
+        main(), instead of lurking until someone invokes that command.  Runs
+        once per root.
+        """
+        from .backend import build_converters
+        root = self.root
+        if root._compiled_all:
+            return
+        root._compiled_all = True
+        root._finalize()
+        for plan in root.global_plans():                # the head eras
+            build_converters([plan])
+        def visit(node):
+            for word, child in list(node._children.items()):
+                if child._command_callable() is not None:
+                    build_converters([node._plan_for_node(child, word)])
+                visit(child)
+        visit(root)
 
     def _program_doc(self):
         """
