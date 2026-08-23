@@ -3486,6 +3486,125 @@ def test_read_mapping_facade():
     assert app.read_mapping(f, {'x': '5'}) == 5
     assert app.read_iterable(f, [['5']]) == [5]
 
+def test_prescan_dry_live_agree():
+    # HARDENING the two-pass engine (2026-08-23): the whole-line
+    # STRUCTURAL pre-scan (dry) and the live pass must traverse the
+    # command line identically -- that's what makes the shared
+    # `built` converter FIFO sound.  With INFALLIBLE converters (str),
+    # any failure is STRUCTURAL, so the dry pass must catch it all.
+    # Two oracle-free properties, one with real teeth:
+    #   (A) dry accepts <=> live accepts, same UsageError when both reject,
+    #       and live never CRASHES (a FIFO divergence pops the wrong
+    #       converter -> IndexError/AttributeError).
+    #   (B) TEETH: every command returns its OWN name and the app carries a
+    #       GLOBAL (so >=2 converters sit in the FIFO in order).  A dispatch
+    #       of `[--g?, cmdK, ...]` that ACCEPTS must return 'cmdK' -- pop the
+    #       wrong converter and the wrong body runs, so the name is wrong.
+    # (Mutation-checked: dropping `built.reverse()` fails (B).)
+    # See [[eager-parse-then-convert]], [[streaming-dispatch]].
+    import contextlib, io, random
+    import appeal as _ap
+
+    rng = random.Random(20260823)
+
+    def gen_sig(name):
+        parts, star = [], False
+        if rng.random() < 0.7:
+            parts.append('a')
+        if rng.random() < 0.5:
+            parts.append("b='B'")
+        if rng.random() < 0.4:
+            parts.append('*args'); star = True
+        kw = []
+        if star and rng.random() < 0.5:
+            kw.append('dest')                       # trailing (after *args)
+        if rng.random() < 0.6:
+            kw.append('verbose=False')              # flag option
+        if rng.random() < 0.5:
+            kw.append('label=None')                 # str-value option
+        if kw:
+            if not star:
+                parts.append('*')
+            parts += kw
+        return ', '.join(parts)
+
+    def make_command(ns, name):
+        # each command returns its own name -- the teeth for property (B)
+        exec(f"def {name}({gen_sig(name)}):\n    return {name!r}\n", ns)
+        return ns[name]
+
+    def build_app(has_global, repeat):
+        ns = {}
+        names = [f'cmd{k}' for k in range(rng.randrange(1, 4))]
+        app = _ap.Appeal(name='fz', repeat=repeat, default_mappings=None)
+        if has_global:
+            # options-only global: it never eats the command word, so a
+            # constructed [glob-opts, cmdK, ...] dispatches cmdK cleanly
+            exec("def glob(*, g=False):\n    return 'glob'\n", ns)
+            app.global_command()(ns['glob'])
+        for nm in names:
+            app.command(nm)(make_command(ns, nm))
+        return app, names
+
+    def dry_alone(app, argv):
+        app._finalize()
+        app._run_node(list(argv), 0, _ap._RunLog(app), top=True,
+                      dry=True, built=[])
+
+    def outcome(fn):
+        "Run fn, returning ('ok', result) / ('usage', msg); crashes propagate."
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            try:
+                return ('ok', fn())
+            except _ap.UsageError as e:
+                return ('usage', str(e))
+
+    tok = ['a', 'w', '1', '2', '--verbose', '--label', 'L', '-v', '--', 'v']
+    accepts = rejects = teeth = 0
+    for _ in range(160):
+        has_global = rng.random() < 0.6
+        repeat = rng.random() < 0.3
+        app, names = build_app(has_global, repeat)
+        for _ in range(6):
+            teeth_word = None
+            if has_global and not repeat and rng.random() < 0.6:
+                # (B) a constructed dispatch with a known expected command
+                teeth_word = rng.choice(names)
+                argv = ((['--g'] if rng.random() < 0.4 else [])
+                        + [teeth_word]
+                        + [rng.choice(tok) for _ in range(rng.randrange(0, 4))])
+            else:
+                # (A) fully random line
+                argv = [rng.choice(tok + names)
+                        for _ in range(rng.randrange(0, 7))]
+
+            try:
+                dry_kind = outcome(lambda: dry_alone(app, argv))[0]
+            except Exception as e:
+                assert False, f'DRY crashed: {type(e).__name__}: {e}\nargv={argv!r}'
+            try:
+                live_kind, live_val = outcome(lambda: app.process(list(argv)))
+            except Exception as e:
+                assert False, (f'LIVE crashed (dry/live divergence?): '
+                               f'{type(e).__name__}: {e}\nargv={argv!r}')
+
+            assert dry_kind == live_kind, (
+                f'dry/live DISAGREE:\nargv={argv!r}\n'
+                f'dry={dry_kind} live={live_kind} ({live_val!r})')
+            if live_kind == 'ok':
+                accepts += 1
+                if teeth_word is not None:
+                    teeth += 1
+                    assert live_val == teeth_word, (      # the teeth
+                        f'wrong converter ran: expected {teeth_word!r}, '
+                        f'got {live_val!r}\nargv={argv!r}')
+            else:
+                rejects += 1
+    assert accepts >= 50 and rejects >= 50 and teeth >= 20, (
+        accepts, rejects, teeth)
+
+
 def test_differential_fuzz_v1_greedy():
     # Audit round 2, resurrected (2026-08-09): random
     # shared-grammar programs through REAL v1 (extracted from git
