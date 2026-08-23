@@ -406,7 +406,7 @@ class SmokeTests(AppealTestsBase):
             )
         command = app.command()
         def my_process(args):
-            return app.process(args)
+            return app.process(args).result
         process = my_process
 
     def assert_process(self, cmdline, result):
@@ -1656,7 +1656,7 @@ class SmokeTests(AppealTestsBase):
             def dump(self):
                 return self.verbose, self.pattern, self.filename, self.context
 
-        result = app.process(shlex.split("-v fgrep patt -c 33 file"))
+        result = app.process(shlex.split("-v fgrep patt -c 33 file")).result
         self.assertEqual(result, None)
         self.assertEqual(len(instances), 1)
         instance = instances.pop()
@@ -1898,11 +1898,7 @@ class ReadmeTests(AppealTestsBase):
         p = globals_dict['p']
 
         def my_process(args):
-            nonlocal p
-            if not p:
-                p = app.processor()
-            p(args)
-            return p
+            return app.process(args).result
         process = my_process
 
         result = capture_stdout(cmdline)
@@ -2719,7 +2715,7 @@ class ReadmeTests(AppealTestsBase):
     def test_classes_instances_and_preparers_0_1(self):
         lines = []
         app = self._class_app(lines.append)
-        app.process(shlex.split("add f g h"))
+        app.process(shlex.split("add f g h")).result
         self.assertEqual(lines, [
             "MyApp init verbose=False",
             "MyApp add self=<MyApp> a='f' b='g' c='h' self.verbose=False"])
@@ -2727,7 +2723,7 @@ class ReadmeTests(AppealTestsBase):
     def test_classes_instances_and_preparers_0_2(self):
         lines = []
         app = self._class_app(lines.append)
-        app.process(shlex.split("-v add f g h"))
+        app.process(shlex.split("-v add f g h")).result
         self.assertEqual(lines, [
             "MyApp init verbose=True",
             "MyApp add self=<MyApp> a='f' b='g' c='h' self.verbose=True"])
@@ -2748,7 +2744,7 @@ class ReadmeTests(AppealTestsBase):
 
         my_app = MyApp("dingus")
         app.command()(my_app.add)
-        app.process(shlex.split("add f g h"))
+        app.process(shlex.split("add f g h")).result
         self.assertEqual(lines, [
             "MyApp add self=<MyApp id='dingus'> a='f' b='g' c='h'"])
 
@@ -2772,7 +2768,7 @@ class BugfixRegressionTests(AppealTestsBase):
         @app.command()
         def cmd(*, v:appeal.counter(step=-1)=0):
             return v
-        self.assertEqual(app.process(shlex.split("cmd -v -v")), -2)
+        self.assertEqual(app.process(shlex.split("cmd -v -v")).result, -2)
 
     def test_no_argument_option_given_value(self):
         # Specifying "=value" on an option that takes no oparg used to put
@@ -2783,7 +2779,7 @@ class BugfixRegressionTests(AppealTestsBase):
         def cmd(*, flag=False):
             return flag
         with self.assertRaises(appeal.AppealUsageError) as cm:
-            app.process(shlex.split("cmd --flag=x"))
+            app.process(shlex.split("cmd --flag=x")).result
         msg = str(cm.exception)
         self.assertIn("--flag", msg)
         self.assertNotIn("<function", msg)
@@ -2796,7 +2792,7 @@ class BugfixRegressionTests(AppealTestsBase):
         def cmd(*, define:appeal.mapping={}):
             return define
         with self.assertRaises(appeal.AppealUsageError) as cm:
-            app.process(shlex.split("cmd --define key one --define key two"))
+            app.process(shlex.split("cmd --define key one --define key two")).result
         msg = str(cm.exception)
         self.assertIn("key", msg)
         self.assertNotIn("{key}", msg)
@@ -3000,7 +2996,7 @@ class ConverterVocabularyTests(AppealTestsBase):
         @app.command()
         def go(direction:appeal.validate('up', 'down', 'left')):
             return direction
-        self.assertEqual(app.process(shlex.split("go up")), 'up')
+        self.assertEqual(app.process(shlex.split("go up")).result, 'up')
 
     def test_validate_rejects(self):
         app = self.app
@@ -3008,14 +3004,14 @@ class ConverterVocabularyTests(AppealTestsBase):
         def go(direction:appeal.validate('up', 'down', 'left')):
             return direction
         with self.assertRaises(appeal.AppealUsageError):
-            app.process(shlex.split("go sideways"))
+            app.process(shlex.split("go sideways")).result
 
     def test_validate_range_inside(self):
         app = self.app
         @app.command()
         def n(v:appeal.validate_range(0, 10)):
             return v
-        self.assertEqual(app.process(shlex.split("n 5")), 5)
+        self.assertEqual(app.process(shlex.split("n 5")).result, 5)
 
     def test_validate_range_equals_stop_allowed(self):
         app = self.app
@@ -3023,7 +3019,7 @@ class ConverterVocabularyTests(AppealTestsBase):
         def n(v:appeal.validate_range(0, 10)):
             return v
         # validate_range differs from range(): the stop value is allowed.
-        self.assertEqual(app.process(shlex.split("n 10")), 10)
+        self.assertEqual(app.process(shlex.split("n 10")).result, 10)
 
     def test_validate_range_rejects_out_of_range(self):
         app = self.app
@@ -3031,35 +3027,35 @@ class ConverterVocabularyTests(AppealTestsBase):
         def n(v:appeal.validate_range(0, 10)):
             return v
         with self.assertRaises(appeal.AppealUsageError):
-            app.process(shlex.split("n 99"))
+            app.process(shlex.split("n 99")).result
 
     def test_validate_range_clamp(self):
         app = self.app
         @app.command()
         def n(v:appeal.validate_range(0, 10, clamp=True)):
             return v
-        self.assertEqual(app.process(shlex.split("n 99")), 10)
+        self.assertEqual(app.process(shlex.split("n 99")).result, 10)
 
     def test_split_with_delimiter(self):
         app = self.app
         @app.command()
         def s(items:appeal.split(':')=''):
             return items
-        self.assertEqual(app.process(shlex.split("s a:b:c")), ['a', 'b', 'c'])
+        self.assertEqual(app.process(shlex.split("s a:b:c")).result, ['a', 'b', 'c'])
 
     def test_split_default_whitespace(self):
         app = self.app
         @app.command()
         def s(items:appeal.split()=''):
             return items
-        self.assertEqual(app.process(shlex.split("s 'a b c'")), ['a', 'b', 'c'])
+        self.assertEqual(app.process(shlex.split("s 'a b c'")).result, ['a', 'b', 'c'])
 
     def test_accumulator_typed(self):
         app = self.app
         @app.command()
         def a(*, p:appeal.accumulator[int]=[]):
             return p
-        self.assertEqual(app.process(shlex.split("a -p 1 -p 2 -p 3")), [1, 2, 3])
+        self.assertEqual(app.process(shlex.split("a -p 1 -p 2 -p 3")).result, [1, 2, 3])
 
     def test_accumulator_multiple_types(self):
         app = self.app
@@ -3067,7 +3063,7 @@ class ConverterVocabularyTests(AppealTestsBase):
         def a(*, p:appeal.accumulator[int, float]=[]):
             return p
         self.assertEqual(
-            app.process(shlex.split("a -p 1 2.5 -p 3 4.5")),
+            app.process(shlex.split("a -p 1 2.5 -p 3 4.5")).result,
             [(1, 2.5), (3, 4.5)],
             )
 
@@ -3077,7 +3073,7 @@ class ConverterVocabularyTests(AppealTestsBase):
         def m(*, define:appeal.mapping={}):
             return define
         self.assertEqual(
-            app.process(shlex.split("m --define k1 v1 --define k2 v2")),
+            app.process(shlex.split("m --define k1 v1 --define k2 v2")).result,
             {'k1': 'v1', 'k2': 'v2'},
             )
 
@@ -3087,7 +3083,7 @@ class ConverterVocabularyTests(AppealTestsBase):
         def m(*, define:appeal.mapping[str, int]={}):
             return define
         self.assertEqual(
-            app.process(shlex.split("m --define age 5 --define count 9")),
+            app.process(shlex.split("m --define age 5 --define count 9")).result,
             {'age': 5, 'count': 9},
             )
 
@@ -3096,14 +3092,14 @@ class ConverterVocabularyTests(AppealTestsBase):
         @app.command()
         def c(*, v:appeal.counter()=0):
             return v
-        self.assertEqual(app.process(shlex.split("c -v -v -v")), 3)
+        self.assertEqual(app.process(shlex.split("c -v -v -v")).result, 3)
 
     def test_counter_max(self):
         app = self.app
         @app.command()
         def c(*, v:appeal.counter(max=2)=0):
             return v
-        self.assertEqual(app.process(shlex.split("c -v -v -v -v")), 2)
+        self.assertEqual(app.process(shlex.split("c -v -v -v -v")).result, 2)
 
 
 class OptionParsingTests(AppealTestsBase):
@@ -3122,7 +3118,7 @@ class OptionParsingTests(AppealTestsBase):
         def c(*, name='', age:int=0):
             return (name, age)
         self.assertEqual(
-            app.process(shlex.split("c --name=joe --age=30")),
+            app.process(shlex.split("c --name=joe --age=30")).result,
             ('joe', 30),
             )
 
@@ -3133,7 +3129,7 @@ class OptionParsingTests(AppealTestsBase):
         def c(*, a=False, b=False, c=False):
             return (a, b, c)
         self.assertEqual(
-            app.process(shlex.split("c -abc")),
+            app.process(shlex.split("c -abc")).result,
             (True, True, True),
             )
 
@@ -3146,7 +3142,7 @@ class OptionParsingTests(AppealTestsBase):
         @app.command()
         def c(name='default'):
             return name
-        self.assertEqual(app.process(shlex.split("c")), 'default')
+        self.assertEqual(app.process(shlex.split("c")).result, 'default')
 
     def test_optional_positional_given(self):
         # The positive arm of the same parameter shape.
@@ -3154,7 +3150,7 @@ class OptionParsingTests(AppealTestsBase):
         @app.command()
         def c(name='default'):
             return name
-        self.assertEqual(app.process(shlex.split("c specified")), 'specified')
+        self.assertEqual(app.process(shlex.split("c specified")).result, 'specified')
 
     def test_short_option_concatenated_oparg(self):
         # -fX where -f takes exactly one *optional* oparg.  Appeal allows
@@ -3165,7 +3161,7 @@ class OptionParsingTests(AppealTestsBase):
         @app.command()
         def c(*, f:with_default=''):
             return f
-        self.assertEqual(app.process(shlex.split("c -fjoe")), 'joe')
+        self.assertEqual(app.process(shlex.split("c -fjoe")).result, 'joe')
 
     def test_short_option_bare_uses_converter_default(self):
         # -f alone, no oparg: the converter's own default ('hello') applies.
@@ -3175,7 +3171,7 @@ class OptionParsingTests(AppealTestsBase):
         @app.command()
         def c(*, f:with_default=''):
             return f
-        self.assertEqual(app.process(shlex.split("c -f")), 'hello')
+        self.assertEqual(app.process(shlex.split("c -f")).result, 'hello')
 
     def test_short_option_equals_value(self):
         # -f=X is also valid for the same optional-oparg shape.
@@ -3185,7 +3181,7 @@ class OptionParsingTests(AppealTestsBase):
         @app.command()
         def c(*, f:with_default=''):
             return f
-        self.assertEqual(app.process(shlex.split("c -f=joe")), 'joe')
+        self.assertEqual(app.process(shlex.split("c -f=joe")).result, 'joe')
 
     def test_short_option_concat_binds_rest(self):
         # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09):
@@ -3197,7 +3193,7 @@ class OptionParsingTests(AppealTestsBase):
         @app.command()
         def c(*, f=''):
             return f
-        self.assertEqual(app.process(shlex.split("c -fjoe")), 'joe')
+        self.assertEqual(app.process(shlex.split("c -fjoe")).result, 'joe')
 
     def test_short_option_concat_takes_rest_verbatim(self):
         # DELIBERATE v1 -> v2 DIVERGENCE (same ruling): the rest
@@ -3208,7 +3204,7 @@ class OptionParsingTests(AppealTestsBase):
         @app.command()
         def c(*, f=''):
             return f
-        self.assertEqual(app.process(shlex.split("c -fjoe=extra")),
+        self.assertEqual(app.process(shlex.split("c -fjoe=extra")).result,
                          'joe=extra')
 
     def test_unknown_option_rejected(self):
@@ -3218,7 +3214,7 @@ class OptionParsingTests(AppealTestsBase):
         def c(*, name=''):
             return name
         with self.assertRaises(appeal.AppealUsageError) as cm:
-            app.process(shlex.split("c --bogus value"))
+            app.process(shlex.split("c --bogus value")).result
         self.assertIn("--bogus", str(cm.exception))
 
     def test_too_many_positionals_rejected(self):
@@ -3228,7 +3224,7 @@ class OptionParsingTests(AppealTestsBase):
         def c(a, b):
             return (a, b)
         with self.assertRaises(appeal.AppealUsageError):
-            app.process(shlex.split("c x y z"))
+            app.process(shlex.split("c x y z")).result
 
     def test_missing_required_positional_rejected(self):
         app = self.app
@@ -3236,7 +3232,7 @@ class OptionParsingTests(AppealTestsBase):
         def c(a, b):
             return (a, b)
         with self.assertRaises(appeal.AppealUsageError):
-            app.process(shlex.split("c only_one"))
+            app.process(shlex.split("c only_one")).result
 
     def test_end_of_options_terminator(self):
         # '--' on the command line terminates option processing: subsequent
@@ -3246,7 +3242,7 @@ class OptionParsingTests(AppealTestsBase):
         def c(*args, verbose=False):
             return (verbose, args)
         self.assertEqual(
-            app.process(shlex.split("c --verbose -- --not-an-option positional")),
+            app.process(shlex.split("c --verbose -- --not-an-option positional")).result,
             (True, ('--not-an-option', 'positional')),
             )
 
@@ -3322,7 +3318,7 @@ class SubcommandTests(AppealTestsBase):
         @db_registrar.command()
         def deploy(version:int):
             calls.append(('deploy', version))
-        app.process(shlex.split("db deploy 5"))
+        app.process(shlex.split("db deploy 5")).result
         self.assertEqual(calls, [('db', 'localhost'), ('deploy', 5)])
 
     def test_subcommand_parent_option_propagates(self):
@@ -3338,7 +3334,7 @@ class SubcommandTests(AppealTestsBase):
         @db_registrar.command()
         def deploy(version:int):
             calls.append(('deploy', version))
-        app.process(shlex.split("db --host prod deploy 7"))
+        app.process(shlex.split("db --host prod deploy 7")).result
         self.assertEqual(calls, [('db', 'prod'), ('deploy', 7)])
 
     def test_parent_command_without_subcommand_rejected(self):
@@ -3353,7 +3349,7 @@ class SubcommandTests(AppealTestsBase):
         def deploy(version:int):
             return version
         with self.assertRaises(appeal.AppealUsageError):
-            app.process(shlex.split("db"))
+            app.process(shlex.split("db")).result
 
     def test_global_command_runs_before_command(self):
         app = appeal.Appeal(version="0.5")
@@ -3364,7 +3360,7 @@ class SubcommandTests(AppealTestsBase):
         @app.command()
         def go():
             calls.append(('go',))
-        app.process(shlex.split("--verbose go"))
+        app.process(shlex.split("--verbose go")).result
         self.assertEqual(calls, [('global', True), ('go',)])
 
     def test_default_command_invoked_with_no_args(self):
@@ -3379,7 +3375,7 @@ class SubcommandTests(AppealTestsBase):
         @app.default_command()
         def default():
             calls.append(('default',))
-        app.process(shlex.split(""))
+        app.process(shlex.split("")).result
         self.assertEqual(calls, [('default',)])
 
     def test_default_command_not_invoked_when_command_specified(self):
@@ -3391,7 +3387,7 @@ class SubcommandTests(AppealTestsBase):
         @app.default_command()
         def default():
             calls.append(('default',))
-        app.process(shlex.split("a"))
+        app.process(shlex.split("a")).result
         self.assertEqual(calls, [('a',)])
 
 
@@ -3413,7 +3409,7 @@ class OptionsThatMapOptionsTests(AppealTestsBase):
         def paint(*, color:color=None):
             return color
         self.assertEqual(
-            app.process(shlex.split("paint --color red")),
+            app.process(shlex.split("paint --color red")).result,
             ('red', None),
             )
 
@@ -3427,7 +3423,7 @@ class OptionsThatMapOptionsTests(AppealTestsBase):
         def paint(*, color:color=None):
             return color
         self.assertEqual(
-            app.process(shlex.split("paint --color red --brightness 50")),
+            app.process(shlex.split("paint --color red --brightness 50")).result,
             ('red', 50),
             )
 
@@ -3441,7 +3437,7 @@ class OptionsThatMapOptionsTests(AppealTestsBase):
         def paint(*, color:color=None):
             return color
         with self.assertRaises(appeal.AppealUsageError) as cm:
-            app.process(shlex.split("paint --brightness 50"))
+            app.process(shlex.split("paint --brightness 50")).result
         self.assertIn("--brightness", str(cm.exception))
 
 
