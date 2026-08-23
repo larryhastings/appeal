@@ -1454,21 +1454,16 @@ class SmokeTests(AppealTestsBase):
             )
 
     def test_mixed_groups_2(self):
-        # v2 divergence (the documented distribution superset):
-        # v1's greedy b grabbed 'def' and starved; v2's completable
-        # distribution reads it as the only-possible a + d
+        # fill-left-to-right (ruled 2026-08-20): 'def' can't complete the
+        # optional bundle b (it needs child_a AND child_b), and we NEVER skip
+        # an optional to reach a later one -- so this is an error, not 0.6.4's
+        # completable a+d distribution (the older plan this test used to pin).
         command(multiple_groups)
-        self.assert_process(
+        e = self.assert_process_raises(
             "multiple_groups abc def",
-            (multiple_groups,
-                'abc',
-                (multiple_groups_child, None, None, None, False,
-                 (0, 0.0, False)),
-                (multiple_groups_child, None, None, None, False,
-                 (0, 0.0, False)),
-                'def'
-                ),
+            appeal.AppealUsageError,
             )
+        self.assertEqual(str(e), "missing argument 'child_b'")
 
     def test_mixed_groups_3(self):
         command(multiple_groups)
