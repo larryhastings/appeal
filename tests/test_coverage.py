@@ -2751,6 +2751,22 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_default_mappings_refusals():
+    from appeal import default_mappings, AppealConfigurationError
+    # an unknown mapping gets a did-you-mean hint
+    try:
+        default_mappings('-v')
+        assert False, 'expected refusal'
+    except AppealConfigurationError as e:
+        assert "did you mean '-V'" in str(e)
+    # a non-string isn't a mapping name at all
+    try:
+        default_mappings(5)
+        assert False, 'expected refusal'
+    except AppealConfigurationError as e:
+        assert "isn't a mapping name" in str(e)
+
+
 def test_docstring_section_refusals():
     import appeal
     from appeal.presentation import parse_docstring
