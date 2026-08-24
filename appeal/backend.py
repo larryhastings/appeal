@@ -66,7 +66,7 @@ class OptionInstruction:
         self.name = name
         self.converter = converter
         self.strings = strings
-    def register(self, processor):
+    def register(self, processor, overwrite=True):
         conv = self.converter
         if conv is bool:
             binding = LiveBinding(self.owner, self.name)
@@ -77,7 +77,8 @@ class OptionInstruction:
         else:
             binding = ValueBinding(self.owner, self.name, conv)
         for string in self.strings:
-            processor.handlers[string] = binding
+            if overwrite or string not in processor.handlers:
+                processor.handlers[string] = binding
 
 
 class PreOptionInstruction:
@@ -95,7 +96,9 @@ class PreOptionInstruction:
                                             # oparg); None -> a flag (conjure)
         self.factory = factory              # set -> a fold option (counter/
                                             # accumulator/mapping on the group)
-    def register(self, processor):
+    def register(self, processor, overwrite=True):
+        if not overwrite and self.string in processor.handlers:
+            return                          # first-wins (announce-first)
         if self.factory is not None:
             processor.handlers[self.string] = ConjureFoldBinding(
                 self.name, self.slot, self.converter_cls, self.factory)
@@ -700,16 +703,21 @@ class Engine:
         # on the line, even before its converter is entered.  Register a batch's
         # options into the handlers table eagerly, not only when they reach the
         # queue front, so `--dashed dot 2.5` knows --dashed before `dot` fills.
+        # FIRST-wins here (overwrite=False): when sibling windows share an
+        # option string, a LEADING occurrence (before any is built) binds to
+        # the FIRST window -- announce-first, the interval model.  As the loop
+        # advances, each window's queued option re-registers (overwrite=True),
+        # so mid/trailing occurrences track the current region.
         for item in items:
             if isinstance(item, (OptionInstruction, PreOptionInstruction)):
-                item.register(self)
+                item.register(self, overwrite=False)
             elif isinstance(item, RepeatInstruction):
                 # a *args window's options live inside its Repeat; register them
                 # too so `--dashed 1 2 3` knows --dashed before the window lays.
                 for inner in item.items:
                     if isinstance(inner, (OptionInstruction,
                                           PreOptionInstruction)):
-                        inner.register(self)
+                        inner.register(self, overwrite=False)
         self.queue.extendleft(reversed(items))
 
     def peek(self):
