@@ -84,9 +84,9 @@ class OptionInstruction:
 class PreOptionInstruction:
     "Registers a conjure: fire before the converter exists to summon one."
     __slots__ = ('owner', 'string', 'name', 'slot', 'converter_cls',
-                 'converter', 'factory')
+                 'converter', 'factory', 'chain')
     def __init__(self, owner, string, name, slot, converter_cls,
-                 converter=None, factory=None):
+                 converter=None, factory=None, chain=None):
         self.owner = owner
         self.string = string
         self.name = name
@@ -96,10 +96,17 @@ class PreOptionInstruction:
                                             # oparg); None -> a flag (conjure)
         self.factory = factory              # set -> a fold option (counter/
                                             # accumulator/mapping on the group)
+        self.chain = chain                  # set -> the option lives on a
+                                            # NESTED positional-slot group; the
+                                            # chain is [(slot, cls), ...] from
+                                            # this converter down to that group
     def register(self, processor, overwrite=True):
         if not overwrite and self.string in processor.handlers:
             return                          # first-wins (announce-first)
-        if self.factory is not None:
+        if self.chain is not None:
+            processor.handlers[self.string] = ConjureChainBinding(
+                self.chain, self.name, self.converter, self.factory)
+        elif self.factory is not None:
             processor.handlers[self.string] = ConjureFoldBinding(
                 self.name, self.slot, self.converter_cls, self.factory)
         elif self.converter is not None:
@@ -545,6 +552,76 @@ class ConjureFoldBinding:
             raise UsageError(f"{self.name}: {e}", None)
 
 
+class ConjureChainBinding:
+    """
+    An option on a NESTED positional-slot group (grandparent -> parent ->
+    enfant_terrible.flag): build the chain from the top, conjuring/getting each
+    instance and linking parent.kwargs[slot] = child (the nested params are
+    positional-OR-keyword, so keyword linkage renders correctly), then set the
+    option on the deepest.  The top instance stashes in processor.conjured (so
+    the top slot's Argument picks it up); deeper ones live in their parent's
+    kwargs.
+    """
+    __slots__ = ('chain', 'name', 'converter', 'factory')
+    def __init__(self, chain, name, converter=None, factory=None):
+        self.chain = chain                  # [(slot_name, converter_cls), ...]
+        self.name = name
+        self.converter = converter
+        self.factory = factory
+    def invoke(self, processor, value=None, spelling=None):
+        # stash every level in processor.conjured by its slot, so each level's
+        # slot pops its instance during normal filling (as the single-level
+        # conjure does) -- the engine enters each conjured group and fills its
+        # sub-slots from the stash.
+        parent = None
+        for slot_name, cls in self.chain:
+            obj = processor.conjured.get(slot_name)
+            if obj is None:
+                obj = cls()
+                obj._summoned = True
+                processor.conjured[slot_name] = obj
+            parent = obj
+        name = spelling or self.name
+        if self.factory is not None:                    # a fold option
+            instance = parent.kwargs.get(self.name)
+            if instance is None:
+                instance = self.factory()
+                if not processor.dry:
+                    instance.init(_default(parent, self.name))
+                parent.kwargs[self.name] = instance
+            converters, minimum = _oparg_converters(self.factory)
+            opargs = []
+            if value is not None:
+                opargs = [processor._cv(converters[0], value, self.name)]
+            else:
+                for k, conv in enumerate(converters):
+                    tok = processor.peek()
+                    if tok is None or tok == '--':
+                        if k < minimum:
+                            raise UsageError(
+                                f"option {name!r} requires a value", None)
+                        break
+                    opargs.append(processor._cv(conv, processor.advance(),
+                                                self.name))
+            if not processor.dry:
+                try:
+                    instance.option(*opargs)
+                except (ValueError, TypeError) as e:
+                    raise UsageError(f"{self.name}: {e}", None)
+        elif self.converter is not None:                # a value option
+            if value is None:
+                if processor.peek() is None:
+                    raise UsageError(
+                        f"option {name!r} requires a value", None)
+                value = processor.advance()
+            parent.kwargs[self.name] = processor._cv(
+                self.converter, value, self.name)
+        else:                                           # a flag
+            parent.kwargs[self.name] = (
+                _presence(parent, self.name) if value is None
+                else value == 'true')
+
+
 class Converter:
     """
     Base for a generated command or converter.  There is a 1:1 mapping
@@ -624,9 +701,9 @@ class Converter:
     def Option(self, name, converter, *strings):
         return OptionInstruction(self, name, converter, strings)
     def PreOption(self, string, name, slot, converter_cls, converter=None,
-                  factory=None):
+                  factory=None, chain=None):
         return PreOptionInstruction(self, string, name, slot, converter_cls,
-                                    converter, factory)
+                                    converter, factory, chain)
     def Repeat(self, items):
         return RepeatInstruction(items)
 
@@ -1338,6 +1415,33 @@ def _build_class(plan, classes):
                     preopts + [self.Argument(slot.name, childcls, required=False)]))
                 boundary = len(items)
                 continue
+            # recurse into the child's OWN positional-slot groups, so a
+            # grandchild's option (--flag buried under positional slots) is
+            # advertised up front -- with a chain that conjures the whole path
+            # when it fires (discretionary).
+            def _nest(child_plan, chain):
+                for sub in child_plan.slots:
+                    if isinstance(sub.child, Terminal) or sub.repeat:
+                        continue
+                    subcls = classes[_converter_key(sub.child)]
+                    subchain = chain + [(sub.name, subcls)]
+                    for o in sub.child.options:
+                        for s in o.strings:
+                            if s in own_strings:
+                                continue
+                            if o.kind == 'flag':
+                                preopts.append(self.PreOption(
+                                    s, o.name, sub.name, subcls, chain=subchain))
+                            elif o.kind == 'value' and len(o.converters) == 1:
+                                preopts.append(self.PreOption(
+                                    s, o.name, sub.name, subcls,
+                                    converter=o.converters[0], chain=subchain))
+                            elif o.kind == 'fold':
+                                preopts.append(self.PreOption(
+                                    s, o.name, sub.name, subcls,
+                                    factory=o.converters[0], chain=subchain))
+                    _nest(sub.child, subchain)
+            _nest(slot.child, [(slot.name, childcls)])
             for k, pre in enumerate(preopts):           # leap over optionals
                 items.insert(boundary + k, pre)
             items.append(self.Argument(slot.name, childcls, required=req))

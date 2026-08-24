@@ -403,6 +403,27 @@ def test_converter_group_contributes_fold_options():
     assert run_both(cmd, ['--verbose', 'nm']) == ('ok', (1, [], 'nm'))
     assert run_both(cmd, ['-t', 'a', '-t', 'b', 'nm']) == ('ok', (0, ['a', 'b'], 'nm'))
 
+def test_nested_positional_group_options():
+    # an option on a group buried under POSITIONAL slots (grandparent ->
+    # parent -> enfant.flag) is advertised up front and conjures the whole
+    # chain when fired -- 0.6.4's discretionary_converter_torture pattern.
+    def first_child(*, verbose=False):
+        return ('fc', verbose)
+    def enfant(*, flag=0):
+        return ('et', flag)
+    def parent(fc: first_child = ('fc', False), et: enfant = ('et', 0)):
+        return ('parent', fc, et)
+    def grandparent(p: parent = ('parent', ('fc', False), ('et', 0))):
+        return ('gp', p)
+    assert run_both(grandparent, []) == (
+        'ok', ('gp', ('parent', ('fc', False), ('et', 0))))
+    # --flag is three levels down; conjures parent + enfant, sets flag
+    assert run_both(grandparent, ['--flag', '3']) == (
+        'ok', ('gp', ('parent', ('fc', False), ('et', 3))))
+    # two options on different nested branches both land
+    assert run_both(grandparent, ['--verbose', '--flag', '7']) == (
+        'ok', ('gp', ('parent', ('fc', True), ('et', 7))))
+
 def test_nested_group_option_bundling():
     # a group option whose converter takes NO operands is nullary: firing it
     # conjures + enters the group, and a short bundle CONTINUES past it
