@@ -2751,6 +2751,49 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_reachable_grind_more():
+    import appeal, io, contextlib
+    from appeal import AppealConfigurationError as CE
+    from big.stylesheet import strip_styles
+    # a subcommand under a path that never gets a command -> compile error
+    app = appeal.Appeal('y')
+    @app.subcommand('ghost')
+    def s():
+        pass
+    @app.command()
+    def real():
+        pass
+    try:
+        app.process(['real']); assert False, 'expected CE'
+    except CE:
+        pass
+    # mcp() refuses nested subcommands
+    app2 = appeal.Appeal('w')
+    d2 = app2.command('db')
+    @d2.command()
+    def mig():
+        pass
+    try:
+        app2.mcp(); assert False, 'expected CE'
+    except CE:
+        pass
+    # documentation() with both a doc= and a command table
+    app3 = appeal.Appeal('e', doc="Program prose here.")
+    @app3.command()
+    def c():
+        "C."
+    assert 'Program prose here' in app3.documentation('commonmark')
+    # a bare listing with a doc override
+    app4 = appeal.Appeal('f', doc="Override prose.")
+    @app4.command()
+    def cc():
+        "CC."
+    o = io.StringIO()
+    with contextlib.redirect_stdout(o):
+        app4.help()
+    assert 'Override prose' in strip_styles(o.getvalue())
+
+
 def test_reachable_grind_config_doc_version():
     import appeal, io, contextlib
     from appeal import default_mappings
