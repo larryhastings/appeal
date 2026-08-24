@@ -2680,6 +2680,28 @@ def test_oparg_name_fallbacks():
     assert '--pt' in strip_styles(build_plan(cmd2).usage())
 
 
+def test_frontend_signature_resolution():
+    from appeal.frontend import signature, build_plan, subtree_option_keys
+    def fn(x):
+        pass
+    signature(fn)                              # a plain function
+    class C:
+        def m(self, x):
+            pass
+    signature(C().m)                           # a bound method
+    class Plain:
+        pass
+    assert len(signature(Plain).parameters) == 0   # plain class: no params
+    class CallInst:
+        def __call__(self, x):
+            pass
+    signature(CallInst())                      # a callable instance
+    # subtree_option_keys: every option key in the tree
+    def cmd(a, *, v=False):
+        pass
+    assert '-v' in subtree_option_keys(build_plan(cmd))
+
+
 def test_frontend_parameter_dunders():
     from appeal.frontend import empty, Parameter
     assert repr(empty) == '<empty>'                      # _Empty.__repr__
