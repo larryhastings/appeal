@@ -2639,6 +2639,65 @@ def test_degenerate_leaf_type_non_degenerate():
         {**one_each, 'operands': [{'repeat': True}]}) is None
 
 
+def test_backend_execute_edges():
+    import appeal
+    from appeal.backend import build_converters, _converter_key
+    def mk(fn):
+        plan = build_plan(fn)
+        return plan.name.replace('_', '-'), build_converters(
+            [plan])[_converter_key(plan)]
+    def setup(*, verbose=False): return ('setup', verbose)
+    def halt(*, stop=False): return 3 if stop else None
+    def go(x): return ('go', x)
+    _, setup_cls = mk(setup)
+    _, halt_cls = mk(halt)
+    word, go_cls = mk(go)
+    # a precommand era runs first, binds its option, then the command runs
+    assert appeal.execute({word: go_cls}, ['-v', word, 'X'],
+                          precommands=[setup_cls]) == ('go', 'X')
+    # a precommand returning a nonzero int halts the line
+    assert appeal.execute({word: go_cls}, ['--stop', word, 'X'],
+                          precommands=[halt_cls]) == 3
+    # no precommands and no argv: nothing to do
+    try:
+        appeal.execute({}, [])
+        assert False, 'expected UsageError'
+    except appeal.UsageError as e:
+        assert 'no command given' in str(e)
+    # an unknown command word
+    try:
+        appeal.execute({word: go_cls}, ['bogus'])
+        assert False, 'expected UsageError'
+    except appeal.UsageError as e:
+        assert 'unknown command' in str(e)
+
+
+def test_backend_option_value_errors():
+    # a flag with a non-bool attached value
+    def a(*, flag=False): return flag
+    status, msg = both(a, ['--flag=x'])
+    assert status == 'usage' and 'true' in msg and 'false' in msg, (status, msg)
+    # a counter takes no value, so an attached one is refused
+    def cnt(*, v: appeal.counter() = 0): return v
+    status, msg = both(cnt, ['-v=5'])
+    assert status == 'usage' and "doesn't take a value" in msg, (status, msg)
+    # a value option at end of line has nothing to consume
+    def b(*, name: str = ''): return name
+    status, msg = both(b, ['--name'])
+    assert status == 'usage' and 'requires a value' in msg, (status, msg)
+    # a multi-value (two-operand converter) option: too few values,
+    # and '='-packing refused
+    def twovals(x: int, y: int):
+        return (x, y)
+    def e(*, at=None):
+        return at
+    e.__annotations__['at'] = twovals
+    status, msg = both(e, ['--at'])
+    assert status == 'usage' and 'requires 2 values' in msg, (status, msg)
+    status, msg = both(e, ['--at=1'])
+    assert status == 'usage' and "not '='" in msg, (status, msg)
+
+
 def test_help_margin_modes():
     # margin: an explicit int wraps at exactly that width; None
     # measures--a tty's real width, else 79 for stable captured output

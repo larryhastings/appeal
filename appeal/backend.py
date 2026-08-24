@@ -41,15 +41,6 @@ class ArgumentInstruction:
         self.trailing = trailing
 
 
-class OpargInstruction:
-    "An option's value: a raw grab (a leading-dash token is a literal)."
-    __slots__ = ('owner', 'name', 'converter')
-    def __init__(self, owner, name, converter):
-        self.owner = owner
-        self.name = name
-        self.converter = converter
-
-
 class OptionInstruction:
     """
     Registers all of an option's `strings` against an already-built owner.
@@ -696,8 +687,6 @@ class Converter:
     def Argument(self, name, converter, *, required, trailing=False):
         return ArgumentInstruction(self, name, converter, required=required,
                         trailing=trailing)
-    def Oparg(self, name, converter):
-        return OpargInstruction(self, name, converter)
     def Option(self, name, converter, *strings):
         return OptionInstruction(self, name, converter, strings)
     def PreOption(self, string, name, slot, converter_cls, converter=None,
