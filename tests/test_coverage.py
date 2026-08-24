@@ -2647,7 +2647,8 @@ def test_default_options_policy_proxy():
     seen = {}
     def policy(proxy, callable, name):
         seen['app_name'] = proxy.name           # __getattr__ -> app
-        proxy.option(name)                       # zero strings: unmap
+        # zero strings: unmap; the returned decorator is a no-op
+        assert proxy.option(name)(callable) is callable
         try:
             proxy.option(name, '-x', annotation=int)
         except appeal.AppealConfigurationError:
@@ -2748,6 +2749,27 @@ def test_backend_option_value_errors():
     assert status == 'usage' and 'requires 2 values' in msg, (status, msg)
     status, msg = both(e, ['--at=1'])
     assert status == 'usage' and "not '='" in msg, (status, msg)
+
+
+def test_docstring_section_refusals():
+    import appeal
+    from appeal.presentation import parse_docstring
+    for doc, needle in [
+        ("S.\n\n## Arguments\n   stray indented line\n", "stray indented"),
+        ("S.\n\n## Arguments\n", "empty"),
+    ]:
+        try:
+            parse_docstring(doc, 'x')
+            assert False, 'expected refusal'
+        except appeal.AppealConfigurationError as e:
+            assert needle in str(e), (doc, str(e))
+
+
+def test_help_margin_bad_stream():
+    from appeal.presentation import help_margin
+    class BadTTY:
+        def isatty(self): raise ValueError('nope')
+    assert help_margin(None, BadTTY()) == 79   # isatty error -> fallback 79
 
 
 def test_help_margin_modes():
