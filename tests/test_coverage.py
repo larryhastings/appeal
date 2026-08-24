@@ -2751,6 +2751,41 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_reachable_grind_config_doc_version():
+    import appeal, io, contextlib
+    from appeal import default_mappings
+    # a config value that fails conversion is reported as config: ...
+    app = appeal.Appeal('a', default_mappings=None)
+    @app.global_command()
+    def g(*, jobs: int = 1):
+        return jobs
+    try:
+        app.process([], config={'jobs': 'notanint'}).result
+        assert False, 'expected AppealDataError'
+    except appeal.AppealDataError as e:
+        assert 'config:' in str(e)
+    # documentation() for a global-only program (no command table)
+    app2 = appeal.Appeal('b')
+    @app2.global_command()
+    def gg(x):
+        "Doc prose."
+    assert 'Doc prose' in app2.documentation('commonmark')
+    # a version-only default_mappings: the version precommand branch
+    app3 = appeal.Appeal('c', version='1.0',
+                         default_mappings=default_mappings('-V', '--version',
+                                                           'version'))
+    @app3.command()
+    def cmd():
+        "C."
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app3.main(['--version'])
+        except SystemExit:
+            pass
+    assert out.getvalue().strip() == '1.0'
+
+
 def test_reachable_grind_completion_docs():
     import appeal
     # completion builds table_entry for each option kind
