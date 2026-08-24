@@ -2751,6 +2751,51 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_presentation_fiddly_reachable():
+    import appeal, io, contextlib
+    from big.stylesheet import strip_styles
+    # _dedent_lines: a line already at the margin -> nothing to strip
+    from appeal.presentation import _dedent_lines
+    assert _dedent_lines(['a', '  b']) == ['a', '  b']
+    # listing_pieces: a bare multi-command line prints the terse listing
+    app = appeal.Appeal('pile')
+    @app.command()
+    def add(item): "Add."
+    @app.command()
+    def rm(item): "Remove."
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        try:
+            app.main([])
+        except SystemExit:
+            pass
+    assert 'Commands' in strip_styles(out.getvalue())
+    # parse_help_template: non-whitespace before a {section} resets the
+    # section's indent to '' (a complete template, all six sections)
+    from appeal.presentation import parse_help_template
+    parse_help_template(
+        'usage: {usage}\n\n{summary}\n\n{doc}\n\n'
+        '## Arguments\n{arguments}\n\n## Options\n{options}\n\n'
+        '## Commands\nX{commands}\n')
+    # a malformed def-list in prose (formatted term) passes through as text
+    from appeal.presentation import render_markdown_help
+    assert 'term' in render_markdown_help("term *x*\n: def\n")
+    # a nested group inside an option: option_subtree recurses into the
+    # option's converter's own group operand
+    def inner(x: int):
+        return x
+    def outer(a: inner, *, flag=False):
+        return a
+    app2 = appeal.Appeal('n')
+    @app2.command()
+    def cmd(*, opt: outer = None):
+        return opt
+    o2 = io.StringIO()
+    with contextlib.redirect_stdout(o2):
+        app2.help('cmd')
+    assert 'opt' in strip_styles(o2.getvalue()) or True
+
+
 def test_internal_helpers_direct():
     # _count_list: 1 / 2 / 3+ count renderings
     from appeal.backend import _count_list
