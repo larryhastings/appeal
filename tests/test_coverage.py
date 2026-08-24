@@ -2751,6 +2751,35 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_reachable_grind_completion_docs():
+    import appeal
+    # completion builds table_entry for each option kind
+    def twovals(x: int, y: int): return (x, y)
+    def a(*, at=None): pass
+    a.__annotations__['at'] = twovals
+    app = appeal.Appeal('a'); app.command()(a)
+    assert '--at' in app.complete(['a'], '--')          # value, multi
+    def host(name, *, port=22): return (name, port)
+    def b(*srv: host): pass
+    app2 = appeal.Appeal('b'); app2.command()(b)
+    assert '--port' in app2.complete(['b'], '--')        # windowed group option
+    def opts(*, verbose=False): return verbose
+    def c(*, o: opts = None): pass
+    app3 = appeal.Appeal('c'); app3.command()(c)
+    app3.complete(['c'], '--')                            # nullary group option
+    # documentation(): global-only (no command table) and table+doc
+    app4 = appeal.Appeal('d')
+    @app4.global_command()
+    def g(x):
+        "Prose."
+    assert app4.documentation('troff').startswith('.TH')
+    app5 = appeal.Appeal('e', doc="Program prose.")
+    @app5.command()
+    def cmd():
+        "C."
+    assert 'Program prose' in app5.documentation('troff')
+
+
 def test_init_reachable_edges():
     import appeal, io, contextlib
     from appeal.frontend import all_options, build_plan, Plan
