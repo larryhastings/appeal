@@ -2630,6 +2630,21 @@ def sneaky_default(x, *, pt: PtOpt = Sneaky({'a': 1})):
 '''
 
 
+def test_optional_parameterize_refusals():
+    # optional[...] takes exactly one callable converter
+    from appeal import optional, AppealConfigurationError
+    try:
+        optional[int, float]                 # a tuple of two
+        assert False, 'expected refusal'
+    except AppealConfigurationError as e:
+        assert 'exactly one converter' in str(e)
+    try:
+        optional[5]                          # not callable
+        assert False, 'expected refusal'
+    except AppealConfigurationError as e:
+        assert "isn't callable" in str(e)
+
+
 def run_tests(run=None):
     (run or test.run)(name='appeal coverage suite', module=__name__)
 

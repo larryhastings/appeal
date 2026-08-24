@@ -24,7 +24,7 @@ from collections.abc import Mapping, Sequence
 from .frontend import build_plan
 from .frontend import Terminal, NO_DEFAULT, Plan
 from . import (
-    AppealConfigurationError, AppealDataError, is_multioption, is_option,
+    AppealConfigurationError, AppealDataError, is_option,
     )
 
 
@@ -125,10 +125,10 @@ def _option_value(o, value, path):
         return {_convert(cls._key_converter, k, path):
                 _convert(cls._value_converter, v, path)
                 for k, v in value.items()}
-    # Option/MultiOption classes: init/option/render, driven by
-    # the mapping's shapes.  arity 1: a scalar per occurrence;
-    # arity k: a k-sequence; arity 0: a bool (fold1) or a count
-    # (fold).  fold takes a sequence of occurrences, fold1 one.
+    # Option classes: init/option/render, driven by the mapping's
+    # shapes.  arity 1: a scalar per occurrence; arity k: a
+    # k-sequence; arity 0: a count.  An Option reads a sequence of
+    # occurrences.
     cls = o.converters[0]
     element_converters = o.converters[1:]
     arity = len(element_converters)
@@ -143,20 +143,14 @@ def _option_value(o, value, path):
         return tuple(_convert(c, v, where)
                      for c, v in zip(element_converters, occurrence))
 
-    if o.kind == 'fold1':
-        if arity == 0:
-            occurrences = [()] if _read_bool(value, path) else []
-        else:
-            occurrences = [value]
+    if arity == 0:
+        if not isinstance(value, int) or value < 0:
+            _fail(f"expected a count, got {value!r}", path)
+        occurrences = [()] * value
+    elif _is_sequence(value):
+        occurrences = list(value)
     else:
-        if arity == 0:
-            if not isinstance(value, int) or value < 0:
-                _fail(f"expected a count, got {value!r}", path)
-            occurrences = [()] * value
-        elif _is_sequence(value):
-            occurrences = list(value)
-        else:
-            _fail(f"expected a sequence of occurrences, got {value!r}", path)
+        _fail(f"expected a sequence of occurrences, got {value!r}", path)
 
     instance = cls()
     instance.init(o.default)
@@ -305,14 +299,12 @@ def _read_fold(cls, data):
     a sequence of occurrences), render() produces the value.
     """
     plan = build_plan(cls.option, name=cls.__name__, method_of=cls.__name__)
-    if is_multioption(cls):
-        if not _is_sequence(data):
-            raise AppealDataError(
-                f"{cls.__name__} repeats; read it from a sequence "
-                f"of occurrences, got {type(data).__name__}")
-        occurrences = data
-    else:
-        occurrences = (data,)
+    # an Option reads a sequence of occurrences
+    if not _is_sequence(data):
+        raise AppealDataError(
+            f"{cls.__name__} repeats; read it from a sequence "
+            f"of occurrences, got {type(data).__name__}")
+    occurrences = data
     instance = cls()
     instance.init(None)
     for index, occurrence in enumerate(occurrences):
