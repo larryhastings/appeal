@@ -2639,6 +2639,58 @@ def test_degenerate_leaf_type_non_degenerate():
         {**one_each, 'operands': [{'repeat': True}]}) is None
 
 
+def test_default_options_policy_proxy():
+    # a custom default_options policy drives the registrar proxy:
+    # zero strings unmap, annotation=/default= is refused, and
+    # attribute access delegates to the app
+    import appeal
+    seen = {}
+    def policy(proxy, callable, name):
+        seen['app_name'] = proxy.name           # __getattr__ -> app
+        proxy.option(name)                       # zero strings: unmap
+        try:
+            proxy.option(name, '-x', annotation=int)
+        except appeal.AppealConfigurationError:
+            seen['refused'] = True
+    app = appeal.Appeal('demo', default_options=policy)
+    @app.command()
+    def go(x, *, verbose=False):
+        return x
+    assert app.process(['go', 'z']).result == 'z'
+    assert seen['app_name'] == 'demo' and seen.get('refused')
+
+
+def test_oparg_name_fallbacks():
+    import appeal
+    from appeal import build_plan
+    from big.stylesheet import strip_styles
+    # a MultiOption whose option() takes several operands: each oparg
+    # is named after its converter type
+    class Pair(appeal.MultiOption):
+        def init(self, default): self.v = []
+        def option(self, a: int, b: int): self.v.append((a, b))
+        def __call__(self): return self.v
+    def cmd(*, p: Pair = []):
+        return p
+    assert '-p' in strip_styles(build_plan(cmd).usage())
+    # a tuple[...] option: element type names
+    def cmd2(*, pt: tuple[int, int] = ()):
+        return pt
+    assert '--pt' in strip_styles(build_plan(cmd2).usage())
+
+
+def test_frontend_parameter_dunders():
+    from appeal.frontend import empty, Parameter
+    assert repr(empty) == '<empty>'                      # _Empty.__repr__
+    k = Parameter.KEYWORD_ONLY
+    assert repr(k) == 'KEYWORD_ONLY'                     # _Kind.__repr__
+    # _Kind.__lt__: orders by ordinal for another kind, else NotImplemented
+    assert isinstance(Parameter.POSITIONAL_ONLY
+                      < Parameter.KEYWORD_ONLY, bool)
+    assert k.__lt__(5) is NotImplemented
+    assert "Parameter 'x'" in repr(Parameter('x', k))    # Parameter.__repr__
+
+
 def test_backend_execute_edges():
     import appeal
     from appeal.backend import build_converters, _converter_key
