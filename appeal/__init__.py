@@ -148,7 +148,7 @@ from .converters import (
 
 
 def run_main(parse, args=None, stylesheet=None, completion=None,
-             errors=None, version=None, margin=79):
+             errors=None, version=None, margin=None):
     """
     The main() driver: parse and execute, print errors the polite
     way, return the exit code.  stylesheet
@@ -210,7 +210,7 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         # 2026-08-06)
         from .presentation import render_baked_help, help_margin
         if isinstance(usage, tuple):
-            print(render_baked_help(usage, margin=help_margin(margin),
+            print(render_baked_help(usage, margin=help_margin(margin, error_stream()),
                                     file=error_stream(),
                                     stylesheet=stylesheet),
                   end='', file=error_stream())
@@ -825,7 +825,7 @@ class Appeal:
     def __init__(self, name=None, *, parent=None,
                  stylesheet=None, version=None, repeat=False,
                  errors=None, script=_sys.argv[0],
-                 margin=79,
+                 margin=None,
                  default_options=_DEFAULT_OPTIONS,
                  default_mappings=default_mappings(), doc=None, lazy=False):
         from .frontend import Decorations
@@ -961,13 +961,16 @@ class Appeal:
         # docstring beats the shared module's docstring
         self.doc = doc
         # the help formatter's knob (v1's, wired 2026-07-09):
-        # margin caps the wrap width (narrow terminals re-wrap
-        # below it; pipes get the cap itself).  indent= died
-        # unshipped with the Markdown pivot (ruled 2026-08-06):
-        # big's renderer owns the definition-list layout
-        if not isinstance(margin, int) or margin <= 0:
+        # margin is the wrap width.  None (the default) measures: a
+        # tty gets its real width, a non-tty (pipe/capture) gets 79,
+        # so redirected output is stable.  A positive int wraps at
+        # exactly that width, tty or not.  (indent= died unshipped
+        # with the Markdown pivot, 2026-08-06: big's renderer owns
+        # the definition-list layout.)
+        if margin is not None and (not isinstance(margin, int)
+                                   or margin <= 0):
             raise AppealConfigurationError(
-                f"margin must be a positive int, not {margin!r}")
+                f"margin must be None or a positive int, not {margin!r}")
         self.margin = margin
         # the help template: ONE string, six {sections}, its headings
         # Markdown, yours to replace.  Loaded lazily (it lives in render, which
@@ -1185,7 +1188,7 @@ class Appeal:
                 doc=node._program_doc_override())
             text = render_help_page(
                 command_set_usage(node._prog(), node._display_global()),
-                corpus, node.templates, margin=help_margin(node.margin),
+                corpus, node.templates, margin=help_margin(node.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=node.stylesheet,
                 suppress=suppress).rstrip('\n')
         else:
@@ -1193,7 +1196,7 @@ class Appeal:
             plan = root.plan_for(topic)
             text = render_help_page(
                 plan.usage(), merge_docs(plan), root.templates,
-                margin=help_margin(root.margin),
+                margin=help_margin(root.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=root.stylesheet,
                 suppress=suppress).rstrip('\n')
         print(text)
@@ -1669,7 +1672,7 @@ class Appeal:
             text = render_help_page(
                 command_set_usage(self._prog(), self._display_global()),
                 corpus, self.templates,
-                margin=help_margin(self.margin),
+                margin=help_margin(self.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=self.stylesheet,
                 suppress=suppress).rstrip('\n')
         else:
@@ -1686,7 +1689,7 @@ class Appeal:
                 corpus['documentation'] = parsed['documentation']
             text = render_help_page(
                 plan.usage(), corpus, self.templates,
-                margin=help_margin(self.margin),
+                margin=help_margin(self.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=self.stylesheet,
                 suppress=suppress).rstrip('\n')
         print(text)

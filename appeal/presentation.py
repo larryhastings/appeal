@@ -604,17 +604,24 @@ _TEMPLATE_SECTIONS = ('usage', 'summary', 'doc', 'options',
                       'arguments', 'commands')
 
 
-def help_margin(max_columns=79):
+def help_margin(margin=None, file=None):
     """
-    The wrap margin for a rendered help page: the terminal's
-    width, capped at max_columns (v1's rule--a narrow terminal
-    re-wraps, a wide one doesn't stretch lines past the cap).
-    Pipes and other non-terminals get the cap itself, so captured
-    output is stable.
+    The wrap width for a rendered help page.  An explicit int wraps
+    at exactly that width (tty or not).  None (the default) measures:
+    if `file` is a terminal, its real width; otherwise 79, so
+    redirected/captured output is stable.
     """
-    import shutil
-    return min(shutil.get_terminal_size((max_columns, 24)).columns,
-               max_columns)
+    if margin is not None:
+        return margin
+    import sys
+    stream = file if file is not None else sys.stdout
+    try:
+        if stream.isatty():
+            import shutil
+            return shutil.get_terminal_size((79, 24)).columns
+    except (AttributeError, ValueError, OSError):
+        pass
+    return 79
 
 
 def help_stylesheet(file=None):

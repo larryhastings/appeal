@@ -2639,6 +2639,19 @@ def test_degenerate_leaf_type_non_degenerate():
         {**one_each, 'operands': [{'repeat': True}]}) is None
 
 
+def test_help_margin_modes():
+    # margin: an explicit int wraps at exactly that width; None
+    # measures--a tty's real width, else 79 for stable captured output
+    from appeal.presentation import help_margin
+    import io
+    class TTY(io.StringIO):
+        def isatty(self): return True
+    assert help_margin(50, io.StringIO()) == 50      # int: exact, non-tty
+    assert help_margin(50, TTY()) == 50              # int: exact, tty
+    assert help_margin(None, io.StringIO()) == 79    # None: non-tty -> 79
+    assert isinstance(help_margin(None, TTY()), int)  # None: tty -> measured
+
+
 def run_tests(run=None):
     (run or test.run)(name='appeal coverage suite', module=__name__)
 
