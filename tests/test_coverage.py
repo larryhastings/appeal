@@ -2751,6 +2751,30 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_init_internal_edges():
+    import appeal
+    from appeal.frontend import Plan
+    app = appeal.Appeal('p')
+    @app.global_command()
+    def g(x):
+        pass
+    proc = app.process(['z'])
+    assert proc._command_for(None) is None           # word None -> None
+    # a command node with no body and no children: no callable
+    empty = app.command('empty')
+    assert empty._command_callable() is None
+    # _sub_defaults over a subcommand set that has a default
+    app2 = appeal.Appeal('q')
+    db = app2.command('db')
+    @db.command()
+    def migrate():
+        pass
+    @db.default()
+    def dbdefault():
+        pass
+    assert isinstance(app2._sub_defaults, dict)
+
+
 def test_reachable_grind_more():
     import appeal, io, contextlib
     from appeal import AppealConfigurationError as CE
