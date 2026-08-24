@@ -2692,6 +2692,38 @@ def test_frontend_parameter_dunders():
     assert "Parameter 'x'" in repr(Parameter('x', k))    # Parameter.__repr__
 
 
+def test_backend_more_errors():
+    import appeal
+    from appeal.backend import build_converter, build_converters, _converter_key
+    from appeal import build_plan, execute
+    def both2(fn, argv):
+        plan = build_plan(fn)
+        word = plan.name.replace('_', '-')
+        cls = build_converters([plan])[_converter_key(plan)]
+        try:
+            return ('ok', execute({word: cls}, [word] + list(argv)))
+        except appeal.AppealDataError as e:
+            return ('usage', str(e))
+    # build_converter: the single-plan convenience wrapper
+    def solo(x):
+        return x
+    assert build_converter(build_plan(solo)) is not None
+    # an unknown short option inside a bundle
+    def f(*, x=False, v=False):
+        pass
+    assert both2(f, ['-xq'])[0] == 'usage'
+    # a group option at end of line needs its operand
+    def host(name, *, port=22):
+        return (name, port)
+    def g(*, where: host = None):
+        pass
+    assert both2(g, ['--where'])[0] == 'usage'
+    # a fold (accumulator) option at end needs a value
+    def h(*, tag: appeal.accumulator[str] = ()):
+        pass
+    assert both2(h, ['--tag'])[0] == 'usage'
+
+
 def test_backend_execute_edges():
     import appeal
     from appeal.backend import build_converters, _converter_key
