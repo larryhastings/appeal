@@ -1545,9 +1545,9 @@ def test_program_doc_three_tiers():
                 pass
         return out.getvalue()
 
-    # tier 1 beats tier 2; its Commands: entries curate the listing
+    # tier 1 beats tier 2; its Commands entries curate the listing
     app = _appeal.Appeal('t1',
-                         doc='Doc wins.\n\nCommands:\n    work: curated.')
+                         doc='Doc wins.\n\n# Commands\nwork\n: curated.')
     @app.global_command()
     def g():
         "Global docstring loses."
@@ -1585,7 +1585,7 @@ def test_program_doc_three_tiers():
     finally:
         del sys.modules['_appeal_doc_fakemod']
 
-    # unknown Commands: entries in doc= refuse by name
+    # unknown Commands entries in doc= refuse by name
     app5 = _appeal.Appeal('t5', doc='Hi.\n\n# Commands\nzork\n: no.')
     @app5.command()
     def real():
@@ -4923,12 +4923,16 @@ def test_usage_formatter_knobs():
             Serves the thing with a summary long enough that a
             narrow margin will have to re-wrap it across lines.
 
-            Arguments:
-              host: The host to serve on, described at length so
-                wrapping becomes visible in a narrow margin.
+            ## Arguments
 
-            Options:
-              verbose: Print more output.
+            host
+            : The host to serve on, described at length so
+              wrapping becomes visible in a narrow margin.
+
+            ## Options
+
+            verbose
+            : Print more output.
             """
         return app
 
@@ -4943,6 +4947,13 @@ def test_usage_formatter_knobs():
     narrow = helptext(make_app(margin=40))
     assert max(len(l) for l in narrow.splitlines()) <= 40
     assert 'Serves the thing' in narrow
+
+    # the per-parameter docs (## Arguments / ## Options definition
+    # lists, keyed by parameter name) actually reach the page: the
+    # descriptions render, under the rewritten command-line spellings.
+    assert 'The host to serve on' in wide
+    assert 'Print more output' in wide
+    assert 'Arguments' in wide and 'Options' in wide
 
     # indent= is DEAD (ruled 2026-08-06, killed unshipped with
     # the Markdown pivot): big's renderer owns definition-list
@@ -5327,19 +5338,22 @@ def test_documentation_man():
 
         Longer prose about the tool.
 
-        Options:
-          trace: Print a trace of everything.
+        # Options
+        trace
+        : Print a trace of everything.
         """
     @app.command()
     def greet(name, *, shout=False):
         """
         Greets a name.
 
-        Arguments:
-          name: Who to greet.
+        # Arguments
+        name
+        : Who to greet.
 
-        Options:
-          shout: LOUDER.
+        # Options
+        shout
+        : LOUDER.
         """
     text = app.documentation('troff')
     assert text.startswith('.TH MYTOOL 1 "" "mytool 2.0" ""\n')
@@ -6384,9 +6398,9 @@ class MyApp:
 # the docstring parser (composable documentation, proposal §8.7.1)
 
 def test_parse_docstring():
-    # THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05;
-    # Markdown ONLY--the 'Arguments:' + 'name: desc' grammar died
-    # unshipped, this test converted the same day).
+    # THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05):
+    # sections are Markdown headings plus definition lists, and
+    # there is no other grammar.
     from appeal.presentation import parse_docstring
 
     # the docstring is input, never output: sections are slurped
@@ -6444,15 +6458,12 @@ def test_parse_docstring():
         'y': ['simple.'],
     }
 
-    # heading-free docstring: pure prose, no sections.  The old
-    # grammar's spellings are just prose now, too.
+    # heading-free docstring: pure prose, no sections.  A colon-
+    # bearing line that isn't a section heading stays prose.
     c = parse_docstring("Just prose.\n\nNote: this stays prose.", "f")
     assert c['summary'] == ['Just prose.']
     assert c['documentation'] == ['Note: this stays prose.']
     assert not (c['arguments'] or c['options'] or c['commands'])
-    c = parse_docstring("Sum.\n\nArguments:\n  x: old dialect", "f")
-    assert not c['arguments']            # the old grammar is dead
-    assert 'Arguments:' in '\n'.join(c['documentation'])
 
     # empty and None
     for empty in (None, '', '\n\n'):

@@ -419,8 +419,9 @@ def test_schema_branches():
         """
         A server.
 
-        Arguments:
-          host: The host name.
+        # Arguments
+        host
+        : The host name.
         """
         return (host, port)
 
@@ -714,13 +715,13 @@ def test_help_ambiguous_three_ways():
     # the same parameter name documented differently in THREE
     # sibling grammars: once ambiguous, later conflicts stand down
     def red(n):
-        "Red.\n\nArguments:\n  n: Red's n.\n"
+        "Red.\n\n# Arguments\nn\n: Red's n.\n"
         return n
     def green(n):
-        "Green.\n\nArguments:\n  n: Green's n.\n"
+        "Green.\n\n# Arguments\nn\n: Green's n.\n"
         return n
     def blue(n):
-        "Blue.\n\nArguments:\n  n: Blue's n.\n"
+        "Blue.\n\n# Arguments\nn\n: Blue's n.\n"
         return n
     def cmd(a: red, b: green, c: blue):
         return (a, b, c)
@@ -2484,11 +2485,13 @@ def test_branch_text_formatter_edges():
         """
         Draws.
 
-        Options:
-          verbose: a very long narration that will definitely need
-              to be wrapped across multiple lines when rendered into
-              the table column because it keeps going artisanally.
-          times: short.
+        # Options
+        verbose
+        : a very long narration that will definitely need
+          to be wrapped across multiple lines when rendered into
+          the table column because it keeps going artisanally.
+        times
+        : short.
         """
     plan = build_plan(draw)
     from big.markdown import markdown_defaults

@@ -595,11 +595,75 @@ def sync(source, dest):
     """
 ```
 
-The first line becomes the one-line summary in the command list; the rest
-is the command's help page. You never write help *strings*--the
-documentation you'd write anyway *is* the help. To document individual
-parameters, describe them in the docstring; to reshape the page or add
-prose, see `appeal.documentation.md`.
+The first line becomes the one-line summary in the command list; the rest is
+the command's help page. You never write help *strings*--the documentation
+you'd write anyway *is* the help.
+
+### Documenting individual arguments and options
+
+To describe individual parameters, add a Markdown **heading** named
+`Arguments`, `Options`, or `Commands` (any level, and the case doesn't
+matter), and under it a **definition list**: the parameter's name on its own
+line, then its description on the next line after a `:`.
+
+```Python
+@app.command()
+def serve(host, port: int = 8080, *, verbose=False):
+    """
+    Serves the thing.
+
+    Longer prose about serving, wrapped and formatted for you.
+
+    ## Arguments
+
+    host
+    : The host to serve on.
+
+    port
+    : The port. Defaults to 8080.
+
+    ## Options
+
+    verbose
+    : Print more output.
+    """
+```
+
+Ask for `serve`'s help and you get:
+
+```
+usage: net serve [-v|--verbose] <HOST> [<PORT>]
+
+Serves the thing.
+
+Longer prose about serving, wrapped and formatted for you.
+
+Arguments
+---------
+
+<HOST>  The host to serve on.
+<PORT>  The port.  Defaults to 8080.
+
+Options
+-------
+
+-v|--verbose  Print more output.
+```
+
+The crucial detail: you name the **parameter** (`host`, `verbose`), and
+Appeal rewrites it to the real command-line spelling for you--`<HOST>` in the
+argument list, `-v|--verbose` in the options. You document the parameter;
+Appeal knows how it shows up.
+
+And the documentation is **composable**, exactly like the converters
+themselves. Write a converter group's parameter docs once, in that
+converter's *own* docstring, and every command that uses it inherits
+them--with the command free to override any entry (nearest scope wins).
+Document a `Logging` group once; every command that mixes it in is documented
+for free.
+
+To reshape the page itself--reorder the sections, retitle a heading, add
+prose blocks--see `appeal.documentation.md`.
 
 
 ## Color

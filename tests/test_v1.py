@@ -115,33 +115,29 @@ def int_float_verbose(x_int:int, y_float:float, *, verbose=False):
     """
     Pointless demonstration converter.
 
-    [[arguments]]
-    {x_int} A pointless int.
-    {y_float} A pointless float.
-    [[end]]
+    # Arguments
+    x_int
+    : A pointless int.
+    y_float
+    : A pointless float.
 
-    [[options]]
-    {verbose} Allows control of
-      the int float pair's verbosity.
-
-      Example:
-          for a in code:
-              print(example(a))
-       Hopefully this all survives.
-    [[end]]
+    # Options
+    verbose
+    : Allows control of the int float pair's verbosity.
     """
     return (int_float_verbose, x_int, y_float, "verbose" if verbose else "silent")
 
 def gloopfn(gloopstr, *, intfloat:int_float_verbose="(default value for intfloat)"):
     """
-    [[arguments]]
-    {gloopstr} A pointless string, we don't even care about it.
-    [[end]]
+    A pointless demonstration converter with a gloopy string.
 
-    [[options]]
-    {intfloat} An optional pair of int float, with verbosity.
-    [[end]]
+    # Arguments
+    gloopstr
+    : A pointless string, we don't even care about it.
 
+    # Options
+    intfloat
+    : An optional pair of int float, with verbosity.
     """
     return (gloopfn, gloopstr, intfloat)
 
@@ -151,27 +147,20 @@ def test(str1, str2, optional_int=0, *, gloop:gloopfn=("(default value for gloop
 
     Does this and that.  Actually just prints its arguments.
 
-    Arguments:
+    More text goes down here, in the prose.
 
-    [[arguments]]
-    {str1}  A string!
-    {str2} It's another string.
-      Who knows why we add these things.
-      I sure don't.
-      Look, I'm writing these docs but I have no jokes.
-    {optional_int}
-      An optional integer that fills your heart with joy.
-    [[end]]
+    # Arguments
+    str1
+    : A string!
+    str2
+    : It's another string.  Who knows why we add these things.
+    optional_int
+    : An optional integer that fills your heart with joy.
 
-    Options:
-
-    [[options]]
-    {gloop} Does kind of a grab-bag of things.  {gloopfn.gloopstr} gets
-       a string but nobody's sure why.
-    [[end]]
-
-    More text goes down here.  This should be in a fifth section.
-
+    # Options
+    gloop
+    : Does kind of a grab-bag of things.  gloopstr gets a string
+      but nobody's sure why.
     """
 
     return (test, str1, str2, optional_int, gloop)
