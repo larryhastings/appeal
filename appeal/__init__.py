@@ -2247,7 +2247,7 @@ class Appeal:
         return processor
 
     def _run_node(self, argv, pos, holder, top, env=None, config=None,
-                  dry=False, built=None):
+                  dry=False, built=None, inherited=None):
         "Dispatch one set node's eras + command words; recurse for subcommands."
         if env is None:
             env = {}                                # class-as-app instance store
@@ -2273,7 +2273,10 @@ class Appeal:
         else:
             precommands = [built.pop() for _ in era_plans]
 
-        result = None
+        # a parent's own body already produced a result; if this node runs
+        # nothing (the line stopped at the parent), keep it -- result is "the
+        # last command that ran" (Larry, 2026-08-24), not None.
+        result = inherited
         for cls, era_plan in zip(precommands, era_plans):   # head eras, in order
             conv = cls()
             # -h/--help/-V/--version is Appeal's own metadata precommand: its
@@ -2308,9 +2311,10 @@ class Appeal:
                 env[cls.constructs] = result        # methods bind to this instance
             holder.instances.append(               # eras log (None, instance-or-None)
                 (None, result if cls.constructs is not None else None))
-            if _halts(result):
-                return result, pos
-            pos += proc.consumed
+            pos += proc.consumed                    # this era's tokens are done;
+            if _halts(result):                      # advance BEFORE halting so a
+                return result, pos                  # nonzero-int return doesn't
+                                                    # leave its own tokens behind
         dispatched = False              # did a command word of THIS node run?
         while pos < len(argv):
             word = argv[pos]
@@ -2349,9 +2353,10 @@ class Appeal:
                     env[cls.constructs] = result
                 instance = result if _is_class_command(c) else None
                 holder.instances.append((holder._command_for(word), instance))
-                if _halts(result):
-                    return result, pos
-                pos += proc.consumed
+                pos += proc.consumed                # advance BEFORE halting so a
+                if _halts(result):                  # nonzero-int return doesn't
+                    return result, pos              # strand its own tokens
+
             # recurse into the command's subcommand node: it may dispatch a
             # subcommand OR (the line stops at the parent) run that node's
             # default command -- so recurse even at end-of-line when a default
@@ -2361,7 +2366,8 @@ class Appeal:
             if child is not None and (child._commands
                                       or child._default is not None):
                 result, pos = child._run_node(argv, pos, holder, top=False,
-                                              env=env, dry=dry, built=built)
+                                              env=env, dry=dry, built=built,
+                                              inherited=result)
             if not self._node_repeat and pos < len(argv):
                 # this set doesn't cycle: pop the leftover word up to an
                 # ancestor whose set does (the parent's loop re-dispatches it);

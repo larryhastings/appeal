@@ -3333,9 +3333,10 @@ class SubcommandTests(AppealTestsBase):
         app.process(shlex.split("db --host prod deploy 7")).result
         self.assertEqual(calls, [('db', 'prod'), ('deploy', 7)])
 
-    def test_parent_command_without_subcommand_rejected(self):
-        # Once a command has subcommands, invoking the parent alone is an
-        # error -- the user must pick a sub.
+    def test_parent_command_without_subcommand_runs(self):
+        # 1.0 ruling (no-pure-dispatcher): having subcommands does NOT force the
+        # user to pick one -- a parent has its own body and runs it.  result is
+        # the last command that ran.
         app = appeal.Appeal(version="0.5")
         @app.command()
         def db(*, host='localhost'):
@@ -3344,8 +3345,9 @@ class SubcommandTests(AppealTestsBase):
         @db_registrar.command()             # needs 3.9
         def deploy(version:int):
             return version
-        with self.assertRaises(appeal.AppealUsageError):
-            app.process(shlex.split("db")).result
+        self.assertEqual(app.process(shlex.split("db")).result, 'localhost')
+        self.assertEqual(app.process(shlex.split("db --host prod")).result, 'prod')
+        self.assertEqual(app.process(shlex.split("db deploy 5")).result, 5)
 
     def test_global_command_runs_before_command(self):
         app = appeal.Appeal(version="0.5")
