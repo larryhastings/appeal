@@ -2751,6 +2751,41 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_init_reachable_edges():
+    import appeal, io, contextlib
+    from appeal.frontend import all_options, build_plan, Plan
+    app = appeal.Appeal('p')
+    @app.global_command()
+    def g(x):
+        "Global doc."
+    assert app.default_callable is None               # no default set
+    assert isinstance(app.plan, Plan)                 # root .plan -> global
+    def cmd(a, *, v=False):
+        pass
+    assert '-v' in [o.key for _, o in all_options(build_plan(cmd))]
+    # tier 1: doc= overrides the program prose in the listing
+    a2 = appeal.Appeal('q', doc="Override.\n\nProse here.")
+    @a2.command()
+    def c():
+        "C."
+    o = io.StringIO()
+    with contextlib.redirect_stdout(o):
+        a2.help()
+    assert 'Override' in o.getvalue()
+    # tier 2: the global command's own docstring supplies program prose
+    a3 = appeal.Appeal('r')
+    @a3.global_command()
+    def gg(x):
+        "Global derived prose."
+    @a3.command()
+    def d():
+        "D."
+    o3 = io.StringIO()
+    with contextlib.redirect_stdout(o3):
+        a3.help()
+    assert 'Global derived prose' in o3.getvalue()
+
+
 def test_presentation_fiddly_reachable():
     import appeal, io, contextlib
     from big.stylesheet import strip_styles
