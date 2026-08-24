@@ -96,11 +96,14 @@ def _slot_schema(slot, docs):
 
 
 def _plan_schema(plan):
+    from big.stylesheet import strip_styles
     summary, docs = _docs_for(plan)
     entry = {
         'name': plan.name,
         'summary': summary,
-        'usage': plan.usage(),
+        # plan.usage() is role-tagged for the terminal; the schema
+        # carries the plain visible line
+        'usage': strip_styles(plan.usage()),
         'operands': [_slot_schema(s, docs) for s in plan.slots],
         'options': [_option_schema(o, docs) for o in plan.options],
         'operand_counts': {

@@ -224,29 +224,6 @@ def signature(callable):
 import sys as _sys
 inspect = _sys.modules[__name__]
 
-def _validate_arg_format(fmt):
-    "Only {name} and {name.upper()} may interpolate."
-    from . import AppealConfigurationError
-    if not isinstance(fmt, str):
-        raise AppealConfigurationError(
-            f"positional_argument_usage_format must be a string, "
-            f"not {fmt!r}")
-    probe = fmt.replace('{name.upper()}', '').replace('{name}', '')
-    if '{' in probe or '}' in probe:
-        raise AppealConfigurationError(
-            f"positional_argument_usage_format {fmt!r}: the only "
-            f"interpolations are {{name}} and {{name.upper()}}")
-
-
-DEFAULT_ARG_FORMAT = '<{name.upper()}>'   # full clap (ruled 2026-08-04)
-
-
-def format_arg(fmt, name):
-    "Render one operand's usage name through the format string."
-    return fmt.replace('{name.upper()}', name.upper()).replace(
-        '{name}', name)
-
-
 def _oparg_names(o):
     """
     The bare operand names an option's value(s) render as, before
@@ -466,17 +443,12 @@ class Plan:
     __slots__ = ('callable', 'name', 'slots', 'options',
                  'minimum', 'maximum', 'valid_counts', 'windowed', 'gated',
                  'certain', 'var_keyword', 'constructs', 'binds',
-                 'tree_trailing', 'scoped_keys', 'arg_format', 'auto_help',
+                 'tree_trailing', 'scoped_keys', 'auto_help',
                  'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0',
                  'bound_inner')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
-        # how operands render in usage/help: a format string over
-        # the operand name (the app's positional_argument_usage_format,
-        # stamped onto the top plan at build time; children inherit
-        # the default and read it off the root at render time).
-        self.arg_format = DEFAULT_ARG_FORMAT
         # whether this command answers -h/--help (the app's help=
         # knob, stamped at build time; False suppresses the
         # automatic help option entirely).
@@ -550,24 +522,27 @@ class Plan:
         bracket reads left-to-right as something you can type
         (announce-first, truth in advertising).
         """
-        fmt = self.arg_format
+        from big.stylesheet import style, escape_styles
+        from .presentation import decorate_argument
+
+        def _arg(name):
+            # a positional operand or an oparg: the name decorated
+            # EARLY into its placeholder (host -> <HOST>, via the
+            # argument_decoration transform) and tagged 'argument'
+            # (the color role).  An explicit @app.parameter rename
+            # rides the same decoration (ruled 2026-08-24: one uniform
+            # decoration).
+            return style('argument', decorate_argument(name))
 
         def name_text(slot):
-            # a positional operand's rendered metavar: an explicit
-            # @app.parameter/add_parameter_usage rename (usage_name
-            # != name) is the literal text and wins outright;
-            # otherwise the name flows through the format string.
-            if slot.usage_name != slot.name:
-                return slot.usage_name
-            return format_arg(fmt, slot.usage_name)
+            return _arg(slot.usage_name)
 
         def transparent_name(slot):
             # the outer slot's name flows through iff the child
             # consumes exactly one operand AND that terminal wasn't
             # explicitly renamed (usage_name != name means
-            # @app.parameter or add_parameter_usage spoke; explicit
-            # wins).  Returns the FINAL display text (formatted, or
-            # literal if the outer slot was itself renamed).
+            # @app.parameter spoke; explicit wins).  Returns the
+            # FINAL display span, or None to keep the child's own.
             inner = slot.child.sole_terminal_slot()
             if inner is None:
                 return None
@@ -576,7 +551,8 @@ class Plan:
             return name_text(slot)
 
         def option_text(o):
-            bits = ['|'.join(o.strings)]
+            bits = ['|'.join(style('option', escape_styles(s))
+                             for s in o.strings)]
             if o.kind == 'group':
                 if getattr(o.child.callable,
                            'borrows_name', False):
@@ -584,22 +560,19 @@ class Plan:
                     # parameter name is plumbing; the metavar is
                     # the OPTION's parameter (or its rename)
                     name = (o.usage_name if o.usage_name is not None
-                            else format_arg(fmt, o.name))
-                    bits.append(f'[{name}]')
+                            else o.name)
+                    bits.append(f'[{_arg(name)}]')
                 else:
                     bits.append(body_text(o.child))
             elif o.kind not in ('flag', 'nullary'):
                 if o.usage_name is not None:
-                    # @app.parameter renamed the metavar: explicit
-                    # wins outright over the format string
-                    bits.append(o.usage_name)
+                    bits.append(_arg(o.usage_name))
                 else:
-                    # v1's knob: an option operand shows the NAME
-                    # (the parameter's, or the converter parameters'
-                    # for a multi-operand option), formatted through
-                    # positional_argument_usage_format
+                    # an option operand shows the NAME (the
+                    # parameter's, or the converter parameters' for a
+                    # multi-operand option), through the 'argument' role
                     for name in _oparg_names(o):
-                        bits.append(format_arg(fmt, name))
+                        bits.append(_arg(name))
             return '[' + ' '.join(bits) + ']'
 
         def slot_text(slot, rename=None):
@@ -632,10 +605,13 @@ class Plan:
             bits.extend(slot_text(s, rename) for s in plan.slots)
             return ' '.join(bits)
 
-        head = argv0
-        if head is None:
-            head = (f'{self.argv0} {self.name}' if self.argv0
-                    else self.name)
+        if argv0 is not None:
+            head = style('program', escape_styles(argv0))
+        elif self.argv0:
+            head = (style('program', escape_styles(self.argv0)) + ' '
+                    + style('command', escape_styles(self.name)))
+        else:
+            head = style('program', escape_styles(self.name))
         return f'{head} {body_text(self)}'.rstrip()
 
     @property
@@ -688,12 +664,15 @@ def command_set_usage(prog, global_plan):
     'command' word.  The command listing is rendered separately,
     from the corpus (help.command_set_corpus).
     """
-    parts = [prog]
+    from big.stylesheet import style, escape_styles
+    from .presentation import decorate_argument
+    parts = [style('program', escape_styles(prog))]
     if global_plan is not None:
+        # usage() leads with the program span; drop it, keep the rest
         rest = global_plan.usage().partition(' ')[2]
         if rest:
             parts.append(rest)
-    parts.append('command')
+    parts.append(style('argument', decorate_argument('command')))
     return ' '.join(parts)
 
 

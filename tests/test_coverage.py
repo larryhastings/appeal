@@ -1623,7 +1623,7 @@ def test_format_definition_list_more():
 
 
 def test_theme_resolution_and_markup():
-    from appeal.presentation import can_colorize, resolve_stylesheet, usage_markup
+    from appeal.presentation import can_colorize, resolve_stylesheet
     from big.stylesheet import strip_styles
     assert can_colorize(file=object()) is False
     class FakeTTY(io.StringIO):
@@ -1648,10 +1648,6 @@ def test_theme_resolution_and_markup():
     finally:
         os.environ.clear()
         os.environ.update(old_env)
-    # markup: an unclosed atom renders as-is (and stripping the
-    # roles always recovers the input)
-    assert '<oops' in strip_styles(usage_markup('a <oops'))
-    assert strip_styles(usage_markup('a <oops')) == 'a <oops'
 
 
 def test_section_template_validation():
@@ -2505,20 +2501,6 @@ def test_branch_text_formatter_edges():
                             default_template, margin=50,
                             stylesheet=sheet)
     assert '\x1b[' in page
-
-
-def test_branch_help_qualifier_with_empty_format():
-    # positional_argument_usage_format='' renders operand names to
-    # nothing--the position qualifier's anchors both come up falsy
-    from appeal.presentation import merge_docs
-    def child(p, *, flag=False):
-        return (p, flag)
-    app = Appeal(name='f', positional_argument_usage_format='')
-    @app.global_command()
-    def mg(a, b: child = None, c: child = None):
-        return (a, b, c)
-    corpus = merge_docs(app.plan)
-    assert corpus['options'], corpus
 
 
 def test_branch_repl_data_error_without_usage():

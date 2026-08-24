@@ -826,7 +826,6 @@ class Appeal:
                  stylesheet=None, version=None, repeat=False,
                  errors=None, script=_sys.argv[0],
                  margin=79,
-                 positional_argument_usage_format='<{name.upper()}>',
                  default_options=_DEFAULT_OPTIONS,
                  default_mappings=default_mappings(), doc=None, lazy=False):
         from .frontend import Decorations
@@ -851,7 +850,6 @@ class Appeal:
             # knobs are the root's, copied as processed values
             for attr in ('_help_enabled', 'default_options',
                          'default_mappings',
-                         'positional_argument_usage_format',
                          'script', 'errors', 'repeat', 'stylesheet',
                          'margin', '_templates'):    # the BACKING field, not the
                 setattr(self, attr, getattr(parent, attr))  # `templates` property
@@ -924,18 +922,9 @@ class Appeal:
         # decoration and resolved lazily (ruled 2026-08-10:
         # explicit parentage, registration order free)
         self._pending_subcommands = []
-        # how an operand renders in usage lines and help tables:
-        # a format string over the parameter NAME (v1's knob,
-        # restored).  '{name}' (default) shows the bare name; the
-        # only interpolations are {name} and {name.upper()}, so
-        # '<{name}>' gives <name> and '{name.upper()}' gives NAME.
-        # Applies to positional operands AND option operands
-        # (opargs) alike; an explicit @app.parameter usage= wins
-        # outright over the format.
-        from .frontend import _validate_arg_format
-        _validate_arg_format(positional_argument_usage_format)
-        self.positional_argument_usage_format = \
-            positional_argument_usage_format
+        # how an operand renders in usage lines and help tables is
+        # the `argument_decoration` stylesheet transform (host ->
+        # <HOST>), not a constructor knob--restyle it there.
         # argv[0], captured HERE at the outer edge (its default is
         # read once, when this module is imported) rather than
         # sniffed from sys.argv deep in the machinery--so the
@@ -1871,10 +1860,8 @@ class Appeal:
 
     def _build(self, callable, **kwargs):
         """
-        build_plan() a top plan and stamp it with the app's operand
-        usage format (positional_argument_usage_format).  Every
-        top plan the app renders funnels through here; child plans
-        read the format off their root at render time.
+        build_plan() a top plan and stamp it with the app's help
+        policy.  Every top plan the app renders funnels through here.
         """
         from .frontend import build_plan
         # the policy registers via the registrar-proxy's
@@ -1884,7 +1871,6 @@ class Appeal:
                      default_options=self.root.default_options,
                      app=self.root,
                      decorations=self.root._decorations, **kwargs)
-        plan.arg_format = self.positional_argument_usage_format
         plan.auto_help = self._help_enabled
         return plan
 

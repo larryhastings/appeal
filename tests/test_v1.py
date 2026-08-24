@@ -1022,10 +1022,10 @@ class SmokeTests(AppealTestsBase):
         # Rust convention; see register entry F-metavar
         self.bind_two_or_more_files()
         text = capture_stdout('help two_or_more_files')
-        # the un-renamed first parameter formats (<FILE>); the two
-        # explicitly renamed ones stay literal ("file"), renames
-        # being unformatted by rule
-        self.assertIn("<FILE> file [file]...", text)
+        # every operand rides the one argument_decoration transform
+        # now (ruled 2026-08-24, uniform): renames decorate too, so
+        # all three show <FILE>
+        self.assertIn("<FILE> <FILE> [<FILE>]...", text)
 
     def test_two_or_more_files_1(self):
         self.bind_two_or_more_files()
@@ -1777,7 +1777,7 @@ class NewStyleTests(AppealTestsBase):
             app.help()
             text = end()
 
-            assertIn(f"usage: {expected_prog} command", text)
+            assertIn(f"usage: {expected_prog} <COMMAND>", text)
             # converted from a v1 pin (ruled 2026-08-05, the
             # Markdown pivot): the listing's heading is the
             # template's '## Commands', rendered setext-style

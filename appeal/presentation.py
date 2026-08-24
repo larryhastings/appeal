@@ -376,6 +376,24 @@ def _style_span(*args, **kwargs):
     return style(*args, **kwargs)
 
 
+_argument_decoration_sheet = None
+
+def decorate_argument(name):
+    # render a RAW operand name through the argument_decoration
+    # transform (host -> <HOST>), the single definition of operand
+    # placeholder decoration.  Applied EARLY--baked into the text--so
+    # big's layout sizes def-list columns at the decorated width and
+    # the usage wrap sees real widths, both colored and plain (ruled
+    # 2026-08-24).  Color stays a late, per-theme concern (the
+    # 'argument'/'oparg' roles); only the decoration bakes in here.
+    global _argument_decoration_sheet
+    if _argument_decoration_sheet is None:
+        _argument_decoration_sheet = transforms | StyleSheet(
+            {'argument_decoration': uncolored_theme['argument_decoration']})
+    return _argument_decoration_sheet.render(
+        style('argument_decoration', escape_styles(name)))
+
+
 appeal_markdown_defaults = {
     'heading1': ('T',
         '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄\n'
@@ -431,6 +449,11 @@ uncolored_theme = {
     'command':    ('T', '⦃bold⦙T⦄'),
     'option':     ('T', '⦃bold⦙T⦄'),
     'argument':   ('T', 'T'),
+    # the distinct decoration transform: a raw operand name -> its
+    # placeholder (host -> <HOST>), formerly the app's
+    # positional_argument_usage_format.  Kept out of the 'argument'
+    # color role so themes stay color-only.
+    'argument_decoration': ('T', '<⦃upper⦙T⦄>'),
     'oparg':      ('T', '⦃argument⦙T⦄'),    # ruled: defaults to argument
     'summary':    ('T', '⦃bold⦙T⦄'),
     'error':      ('T', '⦃bold⦙T⦄'),
@@ -534,66 +557,6 @@ def resolve_stylesheet(spec, file=None):
     return spec
 
 
-def usage_markup(usage):
-    """
-    Dress a usage line in role spans: the first bare word is the
-    program, '-'-led words are options, <words> are arguments at
-    the top level and opargs inside brackets, other bare words
-    at the top level are arguments.  Structural characters
-    (brackets, pipes, ellipses) stay bare.  Purely lexical and
-    purely additive--the visible text is unchanged, so
-    usage_units and the wrap see the same units, and a plain
-    sheet strips the spans back to the input.
-    """
-    out = []
-    append = out.append
-    depth = 0
-    saw_program = False
-    i = 0
-    n = len(usage)
-    while i < n:
-        c = usage[i]
-        if c == '<':
-            j = usage.find('>', i)
-            if j == -1:
-                append(escape_styles(usage[i:]))
-                break
-            role = 'oparg' if depth else 'argument'
-            append(style(role, escape_styles(usage[i:j + 1])))
-            i = j + 1
-            continue
-        if c == '-' and ((i == 0) or (usage[i - 1] in '[|= ')):
-            j = i
-            while j < n and (usage[j].isalnum() or usage[j] in '-_'):
-                j += 1
-            append(style('option', escape_styles(usage[i:j])))
-            i = j
-            continue
-        if c.isalnum() or c in '_.':
-            j = i
-            while j < n and (usage[j].isalnum() or usage[j] in '_.'):
-                j += 1
-            word = usage[i:j]
-            if not any(ch.isalnum() for ch in word):
-                append(escape_styles(word))      # '...' and friends
-            elif not saw_program:
-                append(style('program', escape_styles(word)))
-                saw_program = True
-            elif not depth:
-                append(style('argument', escape_styles(word)))
-            else:
-                append(escape_styles(word))
-            i = j
-            continue
-        if c == '[':
-            depth += 1
-        elif c == ']':
-            depth = max(0, depth - 1)
-        append(escape_styles(c))
-        i += 1
-    return ''.join(out)
-
-
 def usage_units(usage):
     """
     Split a usage line into its unbreakable top-level units: the
@@ -670,12 +633,12 @@ def render_baked_help(pieces, margin=79, file=None,
     """
     The runtime half of a help page.  pieces is the baked,
     template-ordered tuple from help_page_pieces: ('usage',
-    prefix, usage-string) entries are dressed in role spans
-    (usage_markup) and wrapped at whole units; ('markdown',
-    layout) entries carry big's width-independent layout
-    tuples--wrap_words lays them out at the real margin
-    (strip_styles measuring the words), join_styles fuses
-    adjacent spans.  Either way the stylesheet paints last:
+    prefix, usage-string) entries already carry their role spans
+    (built by Plan.usage) and are wrapped at whole units;
+    ('markdown', layout) entries carry big's width-independent
+    layout tuples--wrap_words lays them out at the real margin
+    (the sheet-rendered width measuring the words), join_styles
+    fuses adjacent spans.  Either way the stylesheet paints last:
     stylesheet is a spec (None auto per stream, False never,
     or a composed StyleSheet used verbatim).
     """
@@ -687,11 +650,11 @@ def render_baked_help(pieces, margin=79, file=None,
     # own `line` wins (the stylesheet= verbatim rule).
     sheet = StyleSheet({'line': ('-' * margin,)}) | sheet
     glyphs = glyphs_from_stylesheet(sheet)
-    # ...and measures it: glyphs_from_stylesheet only knows big's
-    # markdown glyph roles, so a bare ⦃line⦄ word in a layout
-    # would measure zero-wide and wrap_words would drop it.  Same
-    # symmetry as the injection--only the renderer knows how wide
-    # a line is.
+    # measure a unit's visible width: glyphs_from_stylesheet knows
+    # big's markdown glyph roles; operand placeholders are already
+    # DECORATED into literal text (host -> <HOST>) by the time they
+    # get here, so their width measures correctly too.  The bare
+    # ⦃line⦄ word is the one role only the renderer sizes.
     line_span = _style_span('line')
     line_glyph = sheet.render(line_span)
     measure = lambda w: strip_styles(
@@ -700,9 +663,10 @@ def render_baked_help(pieces, margin=79, file=None,
     for piece in pieces:
         if piece[0] == 'usage':
             prefix, usage = piece[1], piece[2]
-            # roles are lexical and additive, so the units and
-            # their widths are those of the bare usage line
-            body = wrap_words(usage_units(usage_markup(usage)),
+            # the usage line already carries its role spans (built by
+            # Plan.usage) with operands decorated inline; split into
+            # units and wrap
+            body = wrap_words(usage_units(usage),
                               margin, raw=measure,
                               indent=(prefix, ' ' * len(prefix)))
             out.append(sheet.render(body))
@@ -858,6 +822,9 @@ def term_markup(word, role):
         return word
     if role != 'option':
         return prefix + style(role, inner) + suffix
+    # an option term reads '-t|--times <TIMES>': dash-led words are
+    # options; <...> spans are opargs (already decorated by
+    # decorate_argument in _option_display)
     out = []
     append = out.append
     i = 0
@@ -976,7 +943,7 @@ plain_theme['oparg'] = ('T', '⦃argument⦙T⦄')
 import inspect as _inspect
 import re as _re
 
-from .frontend import Terminal, format_arg, _oparg_names
+from .frontend import Terminal, _oparg_names
 from . import AppealConfigurationError
 
 
@@ -1102,17 +1069,13 @@ def merge_docs(plan, command_names=None):
                            # depth) for qualifiers and indentation
     docs = {}              # rowkey -> lines, post-merge
     command_names = tuple(command_names) if command_names else ()
-    fmt = plan.arg_format  # positional_argument_usage_format: how
-                           # operand names decorate in the tables
-    arg = lambda name: format_arg(fmt, name)
-
     def arg_name(s):
-        # an operand's rendered metavar: an explicit rename
-        # (usage_name != name) is literal and wins; otherwise the
-        # name flows through the format string
-        if s.usage_name != s.name:
-            return s.usage_name
-        return format_arg(fmt, s.usage_name)
+        # an operand's display: the name (or @app.parameter rename)
+        # decorated EARLY into its placeholder (host -> <HOST>), so
+        # big's def-list layout sizes the column at the real width;
+        # term_markup adds only the color role at bake time (ruled
+        # 2026-08-24: one uniform decoration, renames included).
+        return decorate_argument(s.usage_name)
 
     def flanks(p, index):
         # the nearest argument display before/after slot index, at
@@ -1141,7 +1104,7 @@ def merge_docs(plan, command_names=None):
         ns = {}
         for inner in child.options:
             rowkey = id(inner)
-            display = _option_display(inner, fmt)
+            display = _option_display(inner)
             ns.setdefault(inner.name, ('option', display, rowkey))
             option_rows.append(
                 (rowkey, '  ' * depth + display, (None, None)))
@@ -1171,8 +1134,8 @@ def merge_docs(plan, command_names=None):
         for o in p.options:
             if o.name not in namespace:
                 rowkey = id(o)
-                namespace[o.name] = ('option', _option_display(o, fmt), rowkey)
-                option_rows.append((rowkey, _option_display(o, fmt), anchors))
+                namespace[o.name] = ('option', _option_display(o), rowkey)
+                option_rows.append((rowkey, _option_display(o), anchors))
             if o.child is not None:
                 for name, value in option_subtree(o.child, 1).items():
                     namespace.setdefault(name, value)
@@ -1363,18 +1326,17 @@ def summary(callable):
     return doc.splitlines()[0] if doc else ''
 
 
-def _option_display(o, fmt):
-    "The option as shown in help tables: '-t|--times times'."
+def _option_display(o):
+    "The option as shown in help tables: '-t|--times <TIMES>'."
     bits = ['|'.join(o.strings)]
     if o.kind == 'group':
         bits.append('...')
     elif o.kind not in ('flag', 'nullary'):
         if o.usage_name is not None:
-            # @app.parameter renamed the metavar: explicit wins
-            bits.append(o.usage_name)
+            bits.append(decorate_argument(o.usage_name))
         else:
             for name in _oparg_names(o):
-                bits.append(format_arg(fmt, name))
+                bits.append(decorate_argument(name))
     return ' '.join(bits)
 
 
@@ -1398,8 +1360,10 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
         return text
 
     def opt(display):
-        # option/argument display columns use troff minus signs
-        return esc(display).replace('-', '\\-')
+        # option/argument display columns use troff minus signs; the
+        # usage line carries appeal role spans (troff bolds via .B,
+        # not our spans), so strip them to visible text first
+        return esc(strip_styles(display)).replace('-', '\\-')
 
     out = []
     line = out.append

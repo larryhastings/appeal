@@ -25,6 +25,8 @@ import subprocess
 import sys
 import tempfile
 
+from big.stylesheet import strip_styles
+
 import appeal
 from appeal import (
     Appeal, AppealConfigurationError, AppealDataError, AppealError,
@@ -1293,7 +1295,7 @@ def test_help_knobs():
     assert 'Start the server.' in no_doc      # summary survives
     # bare listing obeys the knobs too
     bare = captured(app.help, doc=False)
-    assert 'usage: t command' in bare
+    assert 'usage: t <COMMAND>' in bare
     assert 'Commands' not in bare
     # the help COMMAND has no --usage/--summary/--doc surface
     knob_options = [s for s in app.commands['help'].options
@@ -2607,7 +2609,7 @@ def test_usage_metavars_and_wrapping():
         "Connects somewhere."
         pass
     plan = build_plan(connect)
-    usage = plan.usage()
+    usage = strip_styles(plan.usage())   # usage() is role-tagged now
     assert '[-t|--times <TIMES>]' in usage, usage
     assert '[--timeout <TIMEOUT>]' in usage, usage
     assert '[-c|--certificate <CERTIFICATE>]' in usage, usage
@@ -2792,7 +2794,7 @@ def test_command_set_help():
     # `help`: the listing, with summaries and the help row (v1's shape)
     result, listing = grab(['help'])
     assert result is None
-    assert listing.startswith('usage: pile command')
+    assert listing.startswith('usage: pile <COMMAND>')
     assert 'add-item  Adds an item to the pile.' in listing
     assert 'remove    Removes an item.' in listing
     assert 'help      Print usage documentation on a specific command.' in listing
@@ -2869,7 +2871,7 @@ def test_set_level_help_flag():
         return code, out.getvalue()
 
     code, text = grab(['--help'])
-    assert code == 0 and text.startswith('usage: pile command'), text
+    assert code == 0 and text.startswith('usage: pile <COMMAND>'), text
     assert 'add-item  Adds an item.' in text        # _ -> - in the command word
     hcode, htext = grab(['help'])                    # the `help` command: same listing
     assert hcode == 'returned' and htext == text
@@ -3131,12 +3133,14 @@ def test_app_parameter_renames():
         : where to listen.
         """
         pass
-    usage = app.plan.usage()
-    assert usage == 'serve [-t|--times COUNT] <HOST> [PORT]', usage
+    usage = strip_styles(app.plan.usage())
+    # renames ride the one argument_decoration transform now (ruled
+    # 2026-08-24, uniform): COUNT/PORT decorate like any operand
+    assert usage == 'serve [-t|--times <COUNT>] <HOST> [<PORT>]', usage
     result, text = run_both_stdout(serve, ['--help'],
                                    decorations=app._decorations)
-    assert '[-t|--times COUNT]' in text
-    assert 'PORT    where to listen.' in text  # tables renamed too
+    assert '[-t|--times <COUNT>]' in text
+    assert '<PORT>  where to listen.' in text  # tables renamed too
     # a converter's own parameters rename by decorating the
     # converter--recorded in the app, never on the converter
     # (ruled 2026-08-09)
@@ -3159,61 +3163,6 @@ def test_app_parameter_renames():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'nonesuch' in str(e)
-
-def test_positional_argument_usage_format():
-    # v1's constructor knob, restored: a format string over the
-    # operand NAME, applied to positionals AND option operands
-    # alike.  The default is '{name}' (bare names); the only other
-    # interpolation is {name.upper()}.
-    def frob(count: int, *, width: int = 80, at: float = 0.0):
-        "Frob."
-        return count
-
-    # the three documented values (0.6.8's API docs)
-    cases = {
-        '{name}':        'frob [-w|--width width] [-a|--at at] count',
-        '<{name}>':      'frob [-w|--width <width>] [-a|--at <at>] <count>',
-        '{name.upper()}':'frob [-w|--width WIDTH] [-a|--at AT] COUNT',
-    }
-    for fmt, expected in cases.items():
-        app = Appeal(positional_argument_usage_format=fmt)
-        app.global_command()(frob)
-        # the format decorates OPERANDS only; option letters are
-        # untouched
-        assert app.plan.usage('frob') == expected, (fmt, app.plan.usage('frob'))
-
-    # the format decorates option operands in help tables, too
-    from appeal.presentation import merge_docs
-    app = Appeal(positional_argument_usage_format='<{name}>')
-    app.global_command()(frob)
-    options = dict(merge_docs(app.plan)['options'])
-    assert '-w|--width <width>' in options, options
-
-    # a multi-parameter converter borrows its parameters' names
-    def point(x: int, y: int):
-        return (x, y)
-    def plot(*, at: point = None):
-        "Plot."
-        return at
-    assert build_plan(plot).usage('plot') == 'plot [-a|--at <X> <Y>]'
-
-    # an explicit @app.parameter usage= is literal and wins outright,
-    # unadorned by the format
-    app = Appeal(positional_argument_usage_format='<{name}>')
-    @app.argument('width', usage='W')
-    @app.global_command()
-    def g(count: int, *, width: int = 1):
-        "G."
-        return count
-    assert app.plan.usage('g') == 'g [-w|--width W] <count>', app.plan.usage('g')
-
-    # bad interpolations refuse at construction
-    for bad in ('{bogus}', '{name!r}', '{count}', 42):
-        try:
-            Appeal(positional_argument_usage_format=bad)
-            assert False, f'expected refusal of {bad!r}'
-        except AppealConfigurationError:
-            pass
 
 def test_default_options_policy():
     # v1's constructor knob, restored: default_options is a policy
@@ -5362,7 +5311,7 @@ def test_documentation_man():
     text = app.documentation('troff')
     assert text.startswith('.TH MYTOOL 1 "" "mytool 2.0" ""\n')
     assert '.SH NAME\nmytool \\- A demonstration tool.' in text
-    assert '.B mytool [\\-t|\\-\\-trace] command' in text
+    assert '.B mytool [\\-t|\\-\\-trace] <COMMAND>' in text
     assert '.B mytool greet [\\-s|\\-\\-shout] <NAME>' in text
     assert '.SH OPTIONS' in text and 'Print a trace' in text
     assert '.SS "mytool greet"' in text
@@ -6667,7 +6616,7 @@ def test_theme():
     # resolve_stylesheet: None auto, False never, a composed
     # sheet verbatim
     import io
-    from appeal.presentation import appeal_theme, plain_theme, resolve_stylesheet, uncolored_theme, usage_markup
+    from appeal.presentation import appeal_theme, plain_theme, resolve_stylesheet, uncolored_theme
 
     # every theme speaks the same vocabulary
     for theme in (plain_theme, uncolored_theme, appeal_theme):
@@ -6694,17 +6643,16 @@ def test_theme():
     never = resolve_stylesheet(False, io.StringIO())
     assert never.render('⦃error⦙error:⦄') == 'error:'
 
-    # usage_markup: lexical, additive--strip the spans, get the
-    # input back
-    from big.stylesheet import strip_styles
-    usage = 'serve [-v|--verbose] [-p|--port <PORT>] <HOST> ...'
-    marked = usage_markup(usage)
-    assert strip_styles(marked) == usage
+    # Plan.usage() emits role-tagged spans directly (no reparse);
+    # strip the spans, get the visible usage back
+    from appeal import build_plan
+    def serve(host, *, verbose=False, port: int = 8080):
+        pass
+    marked = build_plan(serve).usage()
+    assert strip_styles(marked) == 'serve [-v|--verbose] [-p|--port <PORT>] <HOST>'
     assert '⦃program⦙serve⦄' in marked
     assert '⦃option⦙-v⦄|⦃option⦙--verbose⦄' in marked
-    assert '⦃oparg⦙<PORT>⦄' in marked          # inside brackets
-    assert '⦃argument⦙<HOST>⦄' in marked       # at the top level
-    assert '⦃' not in marked.split('⦃argument⦙<HOST>⦄')[1]  # '...' bare
+    assert '⦃argument⦙<HOST>⦄' in marked       # operand, decorated inline
 
 
 def test_can_colorize_precedence():
@@ -6789,16 +6737,6 @@ def test_colorized_help_paints_after_layout():
     body = painted.split('\n\n', 1)[1]
     assert '\x1b[' in body, body
     assert '\x1b[36m--verbose\x1b[39m' in body        # options table term
-
-    # angle-bracketed operands (positional_argument_usage_format=
-    # '<{name}>') wear oparg inside brackets--which defaults to
-    # argument (ruled), italic under appeal_theme
-    from appeal.frontend import DEFAULT_ARG_FORMAT
-    plan.arg_format = '<{name}>'
-    bracketed = render_help_page(plan.usage(), merge_docs(plan),
-                                 default_template, stylesheet=sheet)
-    assert '\x1b[3m<times>\x1b[23m' in bracketed, bracketed
-    plan.arg_format = DEFAULT_ARG_FORMAT
 
 
 # ---------------------------------------------------------------------
@@ -6927,7 +6865,7 @@ def test_single_terminal_transparency():
         """
 
     plan = build_plan(scoop)
-    assert '[<TASTE>]' in plan.usage(), plan.usage()
+    assert '[<TASTE>]' in strip_styles(plan.usage()), plan.usage()
     corpus = merge_docs(plan)
     # the row wears the outer name; the outer entry documents it,
     # winning (nearest) over flavor's own 'name:' entry
@@ -6952,7 +6890,7 @@ def test_single_terminal_transparency():
     def tint(x, shade: hue = 'red'):
         "Tints."
     plan = build_plan(tint, decorations=d)
-    assert '[HUE]' in plan.usage(), plan.usage()
+    assert '[<HUE>]' in strip_styles(plan.usage()), plan.usage()
 
     # multi-operand converters are NOT transparent: the invisible-
     # node error stands (pinned in test_merge_docs_errors), and
@@ -6961,7 +6899,7 @@ def test_single_terminal_transparency():
         return (x, y)
     def place(label, at: pair = None):
         "Places."
-    u = build_plan(place).usage()
+    u = strip_styles(build_plan(place).usage())
     assert '[<X> <Y>]' in u or '<X> <Y>' in u, u
 
 
