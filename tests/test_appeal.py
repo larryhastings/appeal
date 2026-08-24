@@ -5427,8 +5427,7 @@ def test_appeal_error_umbrella():
     except AppealConfigurationError:
         pass
 
-    # the reparenting revived _config_inject's dead except clause:
-    # a bad config boolean now carries the usage it always meant to
+    # a bad config boolean carries the usage it always meant to
     app3 = _appeal.Appeal(name='t3')
     @app3.global_command()
     def top(*, verbose=False):
