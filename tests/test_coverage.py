@@ -2751,6 +2751,27 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_internal_helpers_direct():
+    # _count_list: 1 / 2 / 3+ count renderings
+    from appeal.backend import _count_list
+    assert _count_list({1}) == '1'
+    assert _count_list({1, 3}) == '1 or 3'
+    assert _count_list({1, 2, 4}) == '1, 2, or 4'
+    # _run_has_term: is there a term/':' pair here (after a blank gap)?
+    from appeal.presentation import _run_has_term
+    assert _run_has_term(['term', ': def'], 0, 2) is True
+    assert _run_has_term(['term', '', '', ': def'], 0, 4) is True   # gap
+    assert _run_has_term(['term', 'not a def'], 0, 2) is False      # no ':'
+    assert _run_has_term(['  indented'], 0, 1) is False
+    assert _run_has_term([': nodef'], 0, 1) is False
+    # render_markdown_help(width=None) measures the terminal
+    from appeal.presentation import render_markdown_help
+    assert 'hi' in render_markdown_help("**hi**", width=None)
+    # help_stylesheet() is resolve_stylesheet(None, None)
+    from appeal.presentation import help_stylesheet
+    help_stylesheet()
+
+
 def test_init_misconfig_and_edges():
     import appeal
     from appeal import Appeal, AppealConfigurationError as CE
@@ -2767,6 +2788,11 @@ def test_init_misconfig_and_edges():
     app = Appeal('p')
     try:
         app.command(5); assert False
+    except CE:
+        pass
+    # command(): a name AND a parent= are mutually exclusive
+    try:
+        app.command('two', parent='p'); assert False
     except CE:
         pass
     # plan_for a word that isn't a command
