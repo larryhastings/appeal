@@ -2751,6 +2751,31 @@ def test_backend_option_value_errors():
     assert status == 'usage' and "not '='" in msg, (status, msg)
 
 
+def test_init_misconfig_and_edges():
+    import appeal
+    from appeal import Appeal, AppealConfigurationError as CE
+    # constructor validation
+    try:
+        Appeal('x', default_mappings=5); assert False
+    except CE:
+        pass
+    try:
+        Appeal('x', errors=5); assert False
+    except CE:
+        pass
+    # command(): a non-str command word
+    app = Appeal('p')
+    try:
+        app.command(5); assert False
+    except CE:
+        pass
+    # plan_for a word that isn't a command
+    try:
+        app.plan_for('ghost'); assert False
+    except CE:
+        pass
+
+
 def test_default_mappings_refusals():
     from appeal import default_mappings, AppealConfigurationError
     # an unknown mapping gets a did-you-mean hint
