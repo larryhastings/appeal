@@ -1194,7 +1194,7 @@ class Appeal:
             # (the bare-root path gets it from the root's own table instead)
             auto_help = node._help_enabled and 'help' not in node_table
             corpus = command_set_corpus(
-                node.global_plan, entries, auto_help, auto_version=False,
+                node.global_plan, entries, auto_help,
                 doc=node._program_doc_override())
             text = render_help_page(
                 command_set_usage(node._prog(), node._display_global()),
@@ -1637,7 +1637,6 @@ class Appeal:
         # the real help/version commands ride the table; no
         # legacy synthesis (banishment must banish)
         return completions_set(self.plans, self.global_plan, words, prefix,
-                            auto_version=False,
                             repeat=self.repeat, sets=sets or None,
                             help=False)
 
@@ -1678,7 +1677,7 @@ class Appeal:
             from .presentation import render_help_page
             entries = [(w, summary(c)) for w, c in table.items()]
             corpus = command_set_corpus(
-                self.global_plan, entries, False, auto_version=False,
+                self.global_plan, entries, False,
                 doc=self._program_doc_override())
             from .presentation import help_margin
             text = render_help_page(
@@ -1762,7 +1761,7 @@ class Appeal:
                             version=version)
         entries = [(w, summary(c)) for w, c in table.items()]
         corpus = command_set_corpus(
-            self.global_plan, entries, False, auto_version=False,
+            self.global_plan, entries, False,
             doc=self._program_doc_override(), listing=False)
         pages = [(word,
                   self.plan_for(word).usage(f'{prog} {word}'),

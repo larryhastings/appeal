@@ -139,24 +139,14 @@ def completion_table(plan):
     }
 
 
-# the auto version command's completion entry: a word that takes
-# nothing--zero operands, no options
-_VERSION_ENTRY = {
-    'options': {}, 'help': (), 'values': {}, 'operands': (),
-    'repeat': None, 'minimum': 0, 'maximum': 0,
-    }
-
-
 def completion_set_table(commands, global_plan, repeat=False,
-                         sets=None, auto_version=False, help=True):
+                         sets=None, help=True):
     """
     The completion table for a multi-command program (see
     complete_command_set for the shape).  repeat: the root
     set cycles.  sets, if given, maps a parent word to
     {'commands': {sub: Plan}, 'repeat': bool}--a nested set.
-    auto_version: the program supplies the automatic version
-    command, so the word completes.  help=False suppresses the
-    automatic `help` command (v1's knob).
+    help=False suppresses the automatic `help` command (v1's knob).
     """
     sets = sets or {}
 
@@ -176,8 +166,6 @@ def completion_set_table(commands, global_plan, repeat=False,
     table = {}
     for word, plan in commands.items():
         table[word] = entry_for(word, plan)
-    if auto_version:
-        table['version'] = dict(_VERSION_ENTRY)
     return {
         'commands': table,
         'global': dict(completion_table(global_plan), help=())
@@ -199,7 +187,7 @@ def completions(plan, words, prefix=''):
 
 
 def completions_set(commands, global_plan, words, prefix='',
-                 repeat=False, sets=None, auto_version=False, help=True):
+                 repeat=False, sets=None, help=True):
     """
     Completion for a multi-command program: the global command's
     options and the command words before the command word; that
@@ -208,7 +196,7 @@ def completions_set(commands, global_plan, words, prefix='',
     """
     return complete_command_set(
         completion_set_table(commands, global_plan, repeat, sets,
-                             auto_version, help=help),
+                             help=help),
         words, prefix)
 
 

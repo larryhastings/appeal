@@ -1311,18 +1311,15 @@ def merge_docs(plan, command_names=None):
 
 
 def command_set_corpus(global_plan, entries, auto_help=True,
-                       auto_version=False, doc=None, listing=True):
+                       doc=None, listing=True):
     """
     The corpus for a multi-command program's listing.  entries is
     a sequence of (word, summary) pairs in declaration order.  The
     command rows' documentation comes from the global command's
     Commands: entries, falling back to each command's own summary;
-    the auto help and version commands document themselves
-    (version before help, v1's listing order).
+    the auto help command documents itself.
     """
     words = [word for word, _ in entries]
-    if auto_version:
-        words.append('version')
     if auto_help:
         words.append('help')
     if doc is not None:
@@ -1358,8 +1355,6 @@ def command_set_corpus(global_plan, entries, auto_help=True,
         corpus['arguments'] = []
         corpus['options'] = []
     fallback = dict(entries)
-    if auto_version:
-        fallback['version'] = "Print the program's version."
     if auto_help:
         fallback['help'] = 'Print usage documentation on a specific command.'
     corpus['commands'] = [
