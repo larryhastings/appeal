@@ -140,13 +140,12 @@ def completion_table(plan):
 
 
 def completion_set_table(commands, global_plan, repeat=False,
-                         sets=None, help=True):
+                         sets=None):
     """
     The completion table for a multi-command program (see
     complete_command_set for the shape).  repeat: the root
     set cycles.  sets, if given, maps a parent word to
     {'commands': {sub: Plan}, 'repeat': bool}--a nested set.
-    help=False suppresses the automatic `help` command (v1's knob).
     """
     sets = sets or {}
 
@@ -171,7 +170,6 @@ def completion_set_table(commands, global_plan, repeat=False,
         'global': dict(completion_table(global_plan), help=())
                   if global_plan is not None else None,
         'minimum': global_plan.minimum if global_plan is not None else 0,
-        'auto_help': help and 'help' not in commands,
         'repeat': repeat,
     }
 
@@ -187,7 +185,7 @@ def completions(plan, words, prefix=''):
 
 
 def completions_set(commands, global_plan, words, prefix='',
-                 repeat=False, sets=None, help=True):
+                 repeat=False, sets=None):
     """
     Completion for a multi-command program: the global command's
     options and the command words before the command word; that
@@ -195,8 +193,7 @@ def completions_set(commands, global_plan, words, prefix='',
     resolution chain's words at each saturated boundary.
     """
     return complete_command_set(
-        completion_set_table(commands, global_plan, repeat, sets,
-                             help=help),
+        completion_set_table(commands, global_plan, repeat, sets),
         words, prefix)
 
 
@@ -340,7 +337,6 @@ def complete_command_set(table, words, prefix=''):
                      'repeat': bool}}
         global     the global command's table, or None
         minimum    the global command's minimum argument count
-        auto_help  True if the automatic help command is live
         repeat     the root set cycles
 
     The walk mirrors the dispatcher: the global command's portion,
@@ -349,23 +345,12 @@ def complete_command_set(table, words, prefix=''):
     window keeps offering its options.
     """
     commands = table['commands']
-    auto_help = table['auto_help']
     words = list(words)
 
     def is_set(entry):
         return 'options' not in entry
 
-    root_words = set(commands) | ({'help'} if auto_help else set())
-
-    if words and auto_help and words[0] == 'help' and 'help' not in commands:
-        remaining = words[1:]
-        if not remaining and not prefix.startswith('-'):
-            return sorted(w for w in root_words if w.startswith(prefix))
-        if remaining and remaining[0] in commands:
-            entry = commands[remaining[0]]
-            if not is_set(entry):
-                return complete_command(entry, remaining[1:], prefix)
-        return []
+    root_words = set(commands)
 
     stack = [{'commands': commands, 'repeat': table.get('repeat', False),
               'entered': False}]
@@ -375,8 +360,6 @@ def complete_command_set(table, words, prefix=''):
         for depth, frame in enumerate(reversed(stack)):
             if (depth == 0 and not frame['entered']) or frame['repeat']:
                 out.update(frame['commands'])
-                if auto_help and frame is stack[0]:
-                    out.add('help')
         return out
 
     index = 0

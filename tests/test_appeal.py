@@ -1726,7 +1726,9 @@ def test_command_listings_are_definition_order():
     tail = out.getvalue().split('Commands')[-1]
     words = [l.split()[0] for l in tail.splitlines()
              if l and not l.startswith(' ') and set(l) != {'-'}]
-    assert words == ['walk', 'crawl', 'help'], words
+    # a nested set lists only its real commands--no synthesized `help`
+    # (default_mappings registers the real help command at the root)
+    assert words == ['walk', 'crawl'], words
 
     # completion stays sorted, deliberately
     candidates = app.complete([], '')
@@ -2903,13 +2905,15 @@ def test_completion():
         return None
     def deploy(target):
         return None
+    # a hand-built table has only its real commands; `help` is a real
+    # command only where default_mappings registers one (not here)
     commands = {'run': build_plan(run), 'deploy': build_plan(deploy)}
     got = completions_set(commands, None, [], '')
-    assert got == ['deploy', 'help', 'run'], got
+    assert got == ['deploy', 'run'], got
     got = completions_set(commands, None, [], 'de')
     assert got == ['deploy'], got
     got = completions_set(commands, None, ['help'], '')
-    assert got == ['deploy', 'help', 'run'], got     # help topics
+    assert got == [], got            # no real help command to pick topics
     # after the command word: that command's options
     got = completions_set(commands, None, ['run'], '--')
     assert '--help' in got, got
@@ -2922,7 +2926,7 @@ def test_completion():
     got = completions_set(commands, build_plan(g), [], '')
     assert got == [], got                             # minimum unmet
     got = completions_set(commands, build_plan(g), ['proj'], '')
-    assert got == ['deploy', 'help', 'run'], got
+    assert got == ['deploy', 'run'], got
 
     # facade
     app = Appeal()

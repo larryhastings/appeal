@@ -2258,11 +2258,13 @@ def test_completion_boundary_and_help():
     st = completion_set_table({'go': build_plan(go)}, build_plan(gtop2))
     got = complete_command_set(st, ['op', 'go'], '-')
     assert '--level' in got, got
-    # `help CMD` completes through CMD; unknown topics get nothing
+    # a set with no real `help` command doesn't complete `help` topics:
+    # the synthesized help word is gone, default_mappings is the only
+    # source of a help command now
     st2 = completion_set_table({'go': build_plan(go)}, None)
-    assert complete_command_set(st2, ['help', 'go'], '-') != []
+    assert complete_command_set(st2, ['help', 'go'], '-') == []
     assert complete_command_set(st2, ['help', 'zzz'], 'x') == []
-    assert 'go' in complete_command_set(st2, ['help'], 'g')
+    assert complete_command_set(st2, ['help'], 'g') == []
 
 
 def test_entry_points_default_to_sys_argv():
@@ -2643,6 +2645,16 @@ def test_optional_parameterize_refusals():
         assert False, 'expected refusal'
     except AppealConfigurationError as e:
         assert "isn't callable" in str(e)
+
+
+def test_degenerate_leaf_type_non_degenerate():
+    # the schema's degenerate-chain collapse returns None for the
+    # shapes that AREN'T a single non-repeating operand
+    from appeal.mcp import _degenerate_leaf_type
+    one_each = {'operand_counts': {'minimum': 1, 'maximum': 1}}
+    assert _degenerate_leaf_type({**one_each, 'operands': []}) is None
+    assert _degenerate_leaf_type(
+        {**one_each, 'operands': [{'repeat': True}]}) is None
 
 
 def run_tests(run=None):
