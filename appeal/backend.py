@@ -831,8 +831,7 @@ class Engine:
 
     def _span_arity(self, binding):
         "How many space-separated opargs an option consumes (for the pocket scan)."
-        if binding is None:
-            return None
+        assert binding is not None      # both callers null-check first
         if isinstance(binding, (LiveBinding, ConjureBinding)):
             return 0
         if isinstance(binding, MultiBinding):
@@ -1026,11 +1025,11 @@ class Engine:
 
     def _fill_argument(self, arg):
         if arg.trailing:                            # a required trailing operand
+            assert arg.required                     # trailing == keyword-only,
+                                                    # no default == required
             self.queue.popleft()                    # reserved off the end, keyword
             if not arg.owner.reserve:               # too few operands
-                if arg.required:
-                    raise UsageError(f"missing argument {arg.name!r}", None)
-                return
+                raise UsageError(f"missing argument {arg.name!r}", None)
             raw = arg.owner.reserve.pop(0)
             arg.owner.kwargs[arg.name] = self._cv(arg.converter, raw, arg.name)
             return
@@ -1313,14 +1312,13 @@ def _build_class(plan, classes):
             kind, extra = 'fold', o.converters[0]
         elif o.kind == 'group':                 # sibling converter-group option
             kind, extra = 'group', _converter_key(o.child)
-        elif o.kind == 'nullary':               # a zero-arg converter as a flag:
+        else:
+            assert o.kind == 'nullary'          # a zero-arg converter as a flag:
             # presence CALLS it (--north -> north()).  Spelled as a value option
             # with a (constructor,) tuple and no leaves -- ValueBinding._multi
             # grabs zero opargs and returns constructor().  (In-memory only: the
             # live converter needs no source spelling.)
             kind, extra = 'multi', (o.converters[0],)
-        else:                                   # the rest: later
-            continue
         option_specs.append((o.name, kind, extra, o.strings))
 
     # spellings the enclosing command owns: a sub-converter option with the
