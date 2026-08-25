@@ -852,6 +852,7 @@ class Appeal:
         self._impl = None         # this node's command function
         self._precommands = []    # ordered precommand eras (the head; _impl
                                   # tracks the primary until dispatch runs them all)
+        self._precommand_explicit = set()  # ids given an explicit index=
         self._auto_impl = None    # synthesized fn for a pure dispatcher
         self._node_default = None # this node's default command
         self._node_repeat = False # this node's set cycles
@@ -1377,6 +1378,7 @@ class Appeal:
                 self._precommands.append(callable)
             else:
                 self._precommands.insert(index, callable)
+                self._precommand_explicit.add(id(callable))
             self._impl = self._precommands[-1]
             self._invalidate()
             return callable
@@ -2154,6 +2156,8 @@ class Appeal:
         """
         order = list(self._precommands)
         owners = self._method_owner
+        explicit = self._precommand_explicit
+        name = lambda p: getattr(p, '__name__', repr(p))
         for cls in [p for p in order if _is_class_command(p)]:
             key = getattr(cls, '__qualname__', None)
             members = [i for i, p in enumerate(order)
@@ -2163,6 +2167,19 @@ class Appeal:
             first = min(members)
             ci = order.index(cls)
             if ci > first:
+                # the wand must move the class ahead of its member.  If an
+                # explicit index= asked for that member (or the class) to sit
+                # where it is, we can't honor both -- nobody wins, we raise
+                # (Larry, 2026-08-25).  A purely registration-order clash (no
+                # explicit index) hoists silently.
+                if (id(cls) in explicit
+                        or any(id(order[i]) in explicit
+                               for i in members if i < ci)):
+                    raise AppealConfigurationError(
+                        f"precommand ordering conflict: {name(cls)!r} builds "
+                        f"the instance its member {name(order[first])!r} "
+                        f"needs, so it must run first, but an explicit index= "
+                        f"places the member ahead of it")
                 order.pop(ci)
                 order.insert(first, cls)
         return order

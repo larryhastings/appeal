@@ -6227,6 +6227,116 @@ def test_precommand_methods_and_hoist():
                    ('second', True), ('extra', True), ('go',)], out
 
 
+def test_precommand_default_classes_and_bics():
+    # command/precommand/default accept classes and BICs, not just functions.
+    import appeal as _appeal
+    from big.boundinnerclass import BoundInnerClass
+
+    # a CLASS as the default command constructs when the line names none
+    out = []
+    a1 = _appeal.Appeal('a')
+    @a1.command()
+    def other(x: int):
+        out.append(('other', x))
+    @a1.default()
+    class Runner:
+        def __init__(self, target='.'):
+            out.append(('run', target))
+    a1.process([])
+    assert out == [('run', '.')], out
+
+    # a BIC as a precommand ERA of a class-as-app binds through the instance
+    out = []
+    a2 = _appeal.Appeal('b')
+    @a2.precommand()
+    class Host:
+        def __init__(self, *, v=False):
+            out.append(('host', v)); self.v = v
+        @a2.precommand()
+        @BoundInnerClass
+        class Setup:
+            def __init__(self, host, *, level='info'):
+                out.append(('setup', host.v, level))
+        @a2.command()
+        def go(self):
+            out.append(('go',))
+    a2.process(['-v', 'go'])
+    assert out == [('host', True), ('setup', True, 'info'), ('go',)], out
+
+    # a BIC as the DEFAULT of a class-as-app
+    out = []
+    a3 = _appeal.Appeal('c')
+    @a3.precommand()
+    class H2:
+        def __init__(self, *, v=False):
+            out.append(('h2', v)); self.v = v
+        @a3.command()
+        def other(self):
+            out.append(('other',))
+        @a3.default()
+        @BoundInnerClass
+        class Status:
+            def __init__(self, h2):
+                out.append(('status', h2.v))
+    a3.process(['-v'])
+    assert out == [('h2', True), ('status', True)], out
+
+    # two independent class precommands both construct, in order
+    out = []
+    a4 = _appeal.Appeal('d')
+    @a4.precommand()
+    class First:
+        def __init__(self, *, a=False):
+            out.append(('First', a))
+    @a4.precommand()
+    class Second:
+        def __init__(self, *, b=False):
+            out.append(('Second', b))
+    @a4.command()
+    def go():                                 # a plain function command
+        out.append(('go',))
+    a4.process(['-a', '-b', 'go'])
+    assert out == [('First', True), ('Second', True), ('go',)], out
+
+
+def test_precommand_index_conflict_raises():
+    # the wand hoists a class ahead of its members; if an explicit index=
+    # demands a member run FIRST, nobody wins -- we raise (noticed by main).
+    import appeal as _appeal
+    app = _appeal.Appeal('e')
+    @app.precommand()
+    class C:
+        def __init__(self, *, v=False):
+            self.v = v
+        @app.precommand(index=0)          # demands: before the class
+        def early(self):
+            pass
+        @app.command()
+        def go(self):
+            pass
+    try:
+        app.process(['-v', 'go'])
+        assert False, 'expected an ordering conflict'
+    except AppealConfigurationError as e:
+        assert 'ordering conflict' in str(e), e
+    # an explicit index that AGREES with the wand (a function era after the
+    # class) is fine
+    out = []
+    ok = _appeal.Appeal('ok')
+    @ok.precommand()
+    class E:
+        def __init__(self, *, v=False):
+            out.append(('E', v)); self.v = v
+        @ok.command()
+        def go(self):
+            out.append(('go',))
+    @ok.precommand(index=1)
+    def extra(*, e=False):
+        out.append(('extra', e))
+    ok.process(['-v', '-e', 'go'])
+    assert out == [('E', True), ('extra', True), ('go',)], out
+
+
 def test_subcommand():
     # @app.subcommand(parent, name=) (ruled 2026-08-10): parent
     # is a command word PATH string or None, EXPLICIT always--
