@@ -2682,6 +2682,30 @@ def test_oparg_name_fallbacks():
     assert '--pt' in strip_styles(build_plan(cmd2).usage())
 
 
+def test_backend_nested_chain_value_option_needs_value():
+    # a VALUE option three levels down in a positional-group chain, fired with
+    # no value after it, reports that it needs one (ConjureChainBinding's value
+    # branch: the whole chain conjures, then the value is missing)
+    import appeal
+    from appeal.backend import build_converters, _converter_key
+    from appeal import build_plan, execute
+    def first_child(*, verbose=False):
+        return verbose
+    def enfant(*, flag: int = 0):
+        return flag
+    def parent(fc: first_child = None, et: enfant = None):
+        return (fc, et)
+    def grandparent(p: parent = None):
+        return p
+    cls = build_converters([build_plan(grandparent)])[
+        _converter_key(build_plan(grandparent))]
+    try:
+        execute({'grandparent': cls}, ['grandparent', '--flag'])
+        assert False, 'expected AppealDataError'
+    except appeal.AppealDataError as e:
+        assert "option '--flag' requires a value" in str(e), e
+
+
 def test_backend_availability_and_counts():
     import appeal
     from appeal.backend import build_converters, _converter_key

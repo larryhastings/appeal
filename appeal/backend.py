@@ -236,10 +236,8 @@ def _availability_message(owner):
             spoken = next((s for s in strings if s.startswith('--')), strings[0])
             break
     ops = _operand_list(operands)
-    if spoken and ops:
-        return f"{spoken} only becomes available if you specify {ops}"
     if spoken:
-        return f"{spoken} isn't available here"
+        return f"{spoken} only becomes available if you specify {ops}"
     return f"expected {ops}" if ops else "expected an argument"
 
 

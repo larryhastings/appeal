@@ -4714,6 +4714,41 @@ def sub_run(argv, capture_output=True, text=True, **kw):
                            universal_newlines=True, **kw)
 
 
+def test_attached_equals_value_rules():
+    # ruled (Larry, 2026-08-25): the `--opt=value` / `-x=value` attached form
+    # is legal ONLY for options that take exactly one oparg.  A multi-oparg
+    # option refuses it (its values can't be jammed into one token), long or
+    # short.  A single-oparg option accepts it, and `=` with nothing after it
+    # means the empty string.
+    import appeal as _appeal
+
+    def point(x: int, y: int):
+        return (x, y)
+
+    # multi-oparg option: attached `=` is illegal, both spellings
+    app = _appeal.Appeal('m')
+    @app.command()
+    @app.option('at', '-2', '--at')          # a digit short, too
+    def cmd(*, at: point = None):
+        return at
+    for tok in ('--at=5', '-2=5', '-2='):
+        try:
+            app.process(['cmd', tok])
+            assert False, f'expected refusal for {tok!r}'
+        except AppealDataError as e:
+            assert 'takes several values' in str(e), (tok, e)
+            assert "not '='" in str(e), (tok, e)
+
+    # single-oparg option: attached `=` works; `=` with nothing is empty string
+    app2 = _appeal.Appeal('s')
+    @app2.command()
+    def cmd2(*, name: str = 'D'):
+        return name
+    assert app2.process(['cmd2', '--name=hi']).result == 'hi'
+    assert app2.process(['cmd2', '--name=']).result == ''
+    assert app2.process(['cmd2', '-n=']).result == ''
+
+
 def test_flag_explicit_boolean():
     # ruled 2026-07-09: a flag accepts an explicit boolean with
     # '=' only--exactly 'true' and 'false', no alternate-spelling
