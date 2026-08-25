@@ -204,18 +204,12 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         return sheet.render(style('error', 'error:'))
 
     def print_usage(usage):
-        # a STRING is a usage line; a TUPLE is a baked listing
-        # (pieces), finished here--at the real margin, styled for
-        # the error stream (errors ride the pipeline too, ruled
-        # 2026-08-06)
-        from .presentation import render_baked_help, help_margin
-        if isinstance(usage, tuple):
-            print(render_baked_help(usage, margin=help_margin(margin, error_stream()),
-                                    file=error_stream(),
-                                    stylesheet=stylesheet),
-                  end='', file=error_stream())
-        else:
-            print(f"usage: {usage}", file=error_stream())
+        # usage is a styled string; render it (colored on a tty, plain
+        # otherwise) like the error prefix and help do -- errors ride the
+        # pipeline too (ruled 2026-08-06)
+        from .presentation import resolve_stylesheet
+        sheet = resolve_stylesheet(stylesheet, error_stream())
+        print(f"usage: {sheet.render(usage)}", file=error_stream())
 
     try:
         result = parse(list(args))
@@ -1260,14 +1254,10 @@ class Appeal:
     # -- derived from the tree
 
     @property
-    def _commands(self):
-        "(word, callable) for this node's children, decl order."
-        out = []
-        for word, node in self._children.items():
-            impl = node._command_callable()
-            if impl is not None:
-                out.append((word, impl))
-        return out
+    def _has_commands(self):
+        "Does this node have at least one command (a child with a body)?"
+        return any(node._command_callable() is not None
+                   for node in self._children.values())
 
     @property
     def _global(self):
@@ -1471,10 +1461,9 @@ class Appeal:
 
     def _attach_subcommand(self, parent, name, repeat, callable):
         node = self._node_at_path(parent)
-        if node is None:
-            raise AppealConfigurationError(
-                f"subcommand: no command at path {parent!r} (for "
-                f"{getattr(callable, '__name__', callable)!r})")
+        assert node is not None     # the resolver calls us only once the
+                                    # path resolves; unresolvable paths are
+                                    # refused there, naming them
         child = node._child(self._command_word(name, callable))
         child._node_repeat = child._node_repeat or repeat
         child(callable)
@@ -1887,12 +1876,11 @@ class Appeal:
     def _table(self):
         "The {command word: callable} table.  Cheap: no inspection."
         self._finalize()
-        table = {}
-        for name, callable in self._commands:
-            if name in table:
-                raise AppealConfigurationError(
-                    f"two commands named {name!r}")
-            table[name] = callable
+        # words are unique by construction (keys of self._children), so no
+        # collision check is needed; a bodyless node contributes nothing
+        table = {word: node._command_callable()
+                 for word, node in self._children.items()
+                 if node._command_callable() is not None}
         if self._global is not None and self._global.__name__ in table:
             raise AppealConfigurationError(
                 f"the global command {self._global.__name__!r} has the "
@@ -2317,7 +2305,7 @@ class Appeal:
             # is waiting.  Every command has a child node (lazy registration);
             # only enter one that actually has subcommands or a default.
             child = self._children.get(word)
-            if child is not None and (child._commands
+            if child is not None and (child._has_commands
                                       or child._default is not None):
                 result, pos = child._run_node(argv, pos, holder, top=False,
                                               env=env, dry=dry, built=built,
@@ -2356,7 +2344,7 @@ class Appeal:
                 if not dry:
                     holder.instances.append((None, None))
                 pos += dproc.consumed
-            elif top and self._commands and not dry:
+            elif top and self._has_commands and not dry:
                 self.help()                         # the set listing, to stdout
                 result = 1
         return result, pos
@@ -2504,6 +2492,10 @@ class Appeal:
             pass
         if banner is not None:
             print(banner)
+        # errors ride the pipeline here too: color them (or strip, off a tty)
+        # exactly as main() does, against stdout (where the REPL prints)
+        from .presentation import resolve_stylesheet, style
+        sheet = resolve_stylesheet(self.stylesheet, _sys.stdout)
         while True:
             try:
                 line = input(prompt)
@@ -2525,12 +2517,12 @@ class Appeal:
             try:
                 result = self.process(words)
             except AppealDataError as e:
-                print(f'error: {e}')
+                print(f"{sheet.render(style('error', 'error:'))} {e}")
                 usage = getattr(e, 'usage', None)
                 if usage:
-                    print(f'usage: {usage}')
+                    print(f"usage: {sheet.render(usage)}")
             except AppealConfigurationError as e:
-                print(f'configuration error: {e}')
+                print(f"{sheet.render(style('error', 'configuration error:'))} {e}")
             else:
                 if result is not None:
                     print(result)

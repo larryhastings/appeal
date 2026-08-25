@@ -3193,6 +3193,71 @@ def test_init_reachable_edges():
     assert 'Global derived prose' in o3.getvalue()
 
 
+def test_init_empty_node_paths():
+    # a command word named but never bound (and with no subcommands) is a
+    # node with no body -- reachable through the public API
+    import appeal
+    Cfg = appeal.AppealConfigurationError
+    app = appeal.Appeal('x')
+    @app.command()
+    def real(a):
+        pass
+    app.command('ghost')                 # creates the node, never binds it
+    try:
+        app.plan_for('ghost')            # asking for its plan is an error
+        assert False, 'expected AppealConfigurationError'
+    except Cfg as e:
+        assert "no command named 'ghost'" in str(e), e
+    # the program-prose scan skips a bodyless child
+    app2 = appeal.Appeal('y')
+    @app2.command()
+    def go(a):
+        "Go prose."
+    app2.command('empty')                # bodyless child, skipped by the scan
+    assert 'Go prose' in app2.documentation('commonmark')
+
+
+def test_error_usage_rendered_clean():
+    # a config error carries a STYLED usage string; both main() and the REPL
+    # must render it (colored on a tty, stripped otherwise), never print the
+    # raw role markup.  Also covers the REPL's usage-print line.
+    import appeal, io, contextlib, builtins
+    cfg = {'jobs': 'notanint'}
+    app = appeal.Appeal('r')
+    @app.precommand(config=cfg)
+    def top(*, jobs: int = 1):
+        pass
+    @app.command()
+    def work():
+        return 'ok'
+    # main(): the usage line is present and clean (captured -> non-tty -> plain)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        try:
+            app.main(['work'])
+        except SystemExit:
+            pass
+    assert 'usage: top' in out.getvalue(), out.getvalue()
+    assert '⦃' not in out.getvalue(), out.getvalue()   # no role markup
+    # the REPL: same styled-usage handling, against stdout
+    lines = iter(['work'])
+    def fake_input(prompt=''):
+        try:
+            return next(lines)
+        except StopIteration:
+            raise EOFError
+    orig = builtins.input
+    builtins.input = fake_input
+    o = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(o):
+            app.repl()
+    finally:
+        builtins.input = orig
+    assert 'error:' in o.getvalue() and 'usage: top' in o.getvalue()
+    assert '⦃' not in o.getvalue(), o.getvalue()
+
+
 def test_init_more_reachable_edges():
     import appeal, io, contextlib
     Cfg = appeal.AppealConfigurationError
