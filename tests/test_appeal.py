@@ -5177,13 +5177,16 @@ def test_appeal_tree_registration():
     assert app2.process(['sub', 'leaf']).result == 'leaf!'
 
     # chained .option() works (the child is an Appeal, so every
-    # registration method is there)
+    # registration method is there).  Fetch the node into a name first
+    # rather than decorating off `app3.command('serve').command()`
+    # directly--that spelling is PEP 614 (3.9+) and Appeal targets 3.6.
     app3 = _appeal.Appeal(name='v')
     @app3.command()
     def serve(*, quiet=False):
         pass
-    @app3.command('serve').command()
-    @app3.command('serve').option('port', '-p')
+    serve_node = app3.command('serve')
+    @serve_node.command()
+    @serve_node.option('port', '-p')
     def start(*, port=80):
         return ('start', port)
     # -p derives int from port=80 (ruled 2026-07-25)

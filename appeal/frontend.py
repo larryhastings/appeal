@@ -167,7 +167,9 @@ def signature(callable):
         return Signature({})
 
     co = func.__code__
-    posonly = co.co_posonlyargcount
+    # co_posonlyargcount is 3.8+; on 3.6/3.7 there are no positional-only
+    # parameters, so it's 0
+    posonly = getattr(co, 'co_posonlyargcount', 0)
     pos_or_kw = co.co_argcount - posonly
     has_varargs = bool(co.co_flags & _CO_VARARGS)
     kwonly = co.co_kwonlyargcount
