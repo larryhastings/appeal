@@ -1,7 +1,7 @@
 # The Appeal grammar
 
 *Appeal 1.0's spec-of-record for how Python signatures read as command-line
-grammars.  Everything else--the plan builder, both parser rungs, usage
+grammars.  Everything else--the plan builder, the interpreter, usage
 generation, the JSON schema--is tested against this document.
 (Proposal §10 step 2.)*
 
@@ -70,9 +70,8 @@ one command-line string.
   automatically-mapped keyword-only parameter.  The stock
   `default_options` yields the long plus the short; `default_long_option`
   drops the short (the "no auto shorts" policy), `default_short_option`
-  drops the long, or supply your own.  It runs on the build host and
-  only its output--the strings--rides into a standalone script, never
-  the callable.
+  drops the long, or supply your own.  It runs at build time; only the
+  option strings it produces reach the parser.
 * **`@app.option(parameter_name, *strings, annotation=…, default=…)`
   blows away ALL default mappings** for one keyword-only parameter
   and maps *only* the strings you specify--no auto long, no auto
@@ -186,25 +185,12 @@ one command-line string.
   its row; a command-level docstring entry matching two sibling
   windows refuses ("document it in the converter's docstring").
 
-The help/usage formatting machinery embeds big's
-word-wrap trio--`wrap_words`, `split_text_with_code`,
-`merge_columns`--the same way: `appeal/runtime.py` carries them
-between scissors markers, synced verbatim from big/big/text.py's
-"word wrapping" snippet by `tools/sync_snippets.py` (a thin wrapper
-around big's own snippet machinery, `python -m big.snip`).
-One copy of the code in the world--big's;
-parsing has no runtime dependency on big (standalone *emission*
-imports big.snip to assemble the runtime, and refuses by name
-without it), and neither will the
-scripts.  Every emitted CLI parser carries it--help is a
-permanent fixture--and formatting happens at run time: bake the
-formatter, not the text.
-
-One standalone caveat for `MultiOption`: the generated script still
-never imports appeal, but the *user's module* does (the base class
-lives there), so the deployment environment needs the appeal the
-class was written against.  That is the user module's own
-dependency, same as any other import it makes.
+Help, usage, and error output render through big's markdown +
+stylesheet pipeline (`big >= 0.15`), imported **lazily**--only when
+something actually renders.  So *parsing* has no runtime dependency on
+big: a program that only ever succeeds never imports it, and pays none
+of big's startup.  There is one copy of the wrapping/rendering code in
+the world, big's; appeal calls it, it doesn't embed it.
 
 ## Multiple commands and the global command
 
@@ -285,8 +271,8 @@ From the linear order of terminal slots, group boundaries are computed:
 
 Decoration records; use executes.  `@app.command()` and
 `@app.option(...)` do nothing but take notes; the plan is built,
-analyzed, and compiled at first *use* (`process`, `main`,
-`standalone`, or reading `app.plan`).  Consequences, all deliberate
+analyzed, and compiled at first *use* (`process`, `main`, or
+reading `app.plan`).  Consequences, all deliberate
 and all tested:
 
 * Configuration errors surface at first use, never at decoration
@@ -299,14 +285,14 @@ and all tested:
 * Laziness is **per command**: dispatching (or examining) one
   command never builds the others, and each compiles once, at its
   first dispatch.  A config error in command B surfaces when B is
-  first used.  The exceptions are deliberate and eager: `.plans`
-  (asks for everything) and `standalone()` (a whole-program
-  artifact must build--and refuse--everything).
+  first used.  The one deliberate, eager exception is `.plans`,
+  which asks for everything.
 
-The compiler pass must preserve this: no stage may require work at
+The build must preserve this: no stage may require work at
 decoration or import time.  Signatures are inspected when the plan
-is built, and the generated parser binds converter *objects* at
-compile time--both as late as a use-driven design allows.
+is built, and the backend binds converter *objects* when it compiles
+the plan into converter classes--both as late as a use-driven design
+allows.
 
 ## Errors
 
@@ -314,19 +300,14 @@ compile time--both as late as a use-driven design allows.
 as an alias): `AppealConfigurationError` and `AppealDataError`
 (and so `AppealUsageError`) derive from it.  Its own job: raised
 from a command, `main()` prints the message and exits 1
-(configuration errors re-raise--bugs stay tracebacks).  A
-standalone script recognizes the INSTALLED appeal's exceptions
-by name and home (foreign_appeal_error--the two-copies problem,
-exceptions edition).
+(configuration errors re-raise--bugs stay tracebacks).
 
 Errors print to **standard error** by default (the POSIX
 diagnostic convention: a filter's stdout stays clean, so a
 pipeline never receives an error message as data).  `errors=`
 takes any writable file object--`Appeal(errors=sys.stdout)` is
 v1's behavior--resolved at error time like `print(file=None)`.
-Standalone scripts bake `sys.stderr`/`sys.stdout`; any other
-stream refuses at emission by name.  Requested help prints to
-stdout regardless.  A usage error exits with status 2, any
+Requested help prints to stdout regardless.  A usage error exits with status 2, any
 other Appeal error with 1 (v1 exited 255).
 
 Three sentences (hierarchy ruled 2026-07-09).  Everything wrong
@@ -335,7 +316,7 @@ or CSV row being read, the command line--is an `AppealDataError`.
 The command line specifically raises its subclass `UsageError`
 (v1's name, kept): message plus contextual usage.  Everything
 wrong with the *program* (a bad signature, an unrenderable
-converter in standalone mode) is an `AppealConfigurationError`,
+converter) is an `AppealConfigurationError`,
 raised at build time, naming the offender.  A converter raising
 `ValueError`/`TypeError` on a user's operand becomes a
 `UsageError` naming the parameter and the offending text; the
@@ -393,8 +374,7 @@ position or after `--`), command words at the command position
 empty list means "no opinion" (the shell's business); a converter
 that carries a `.completions` supplies candidates for its own
 operand.  Shell integration scripts (`app.completion(shell)`, for
-bash/zsh/fish) build on this, and standalone scripts emit the same
-completion tables.
+bash/zsh/fish) build on this.
 
 ## The converter vocabulary
 
@@ -408,9 +388,7 @@ counting occurrences x step, capped), and the annotatable classes
 `accumulator` / `mapping` (subscriptable: `accumulator[int, str]`
 collects tuples, `mapping[int, str, float]` maps keys to tuples;
 they're just `MultiOption` subclasses, so the fold machinery does
-all the work).  Factory *products* carry a recipe, and standalone
-scripts re-run it from an embedded vocabulary region--closures and
-dynamic classes survive emission.  A bare factory as an annotation
+all the work).  A bare factory as an annotation
 is a config error ("call it first, e.g. split(':')").  Converter
 `ValueError` text now flows into usage errors ("invalid value for
 'direction': 'up' (must be one of 'north', 'south')").
@@ -426,9 +404,7 @@ node has a `.default_command()`, which then runs--implemented as
 a nested command set with the parent as its global command, so
 it's the same machinery one level down.  `@app.command('x')`
 also RENAMES: the word is `'x'`, the decorated function's name
-is ignored.  Emits: the standalone dispatcher carries one nested
-table per parent's set, each with its own default slot; the root
-default command emits too.
+is ignored.
 
 ## Class-based commands (§8.6, July 2026 rulings)
 
@@ -558,10 +534,7 @@ are configuration errors.  `read_csv(fn, reader, first_row_map=
 None)` consumes the heading row: without the map, rows feed
 positionally; with it, headings map to parameter names and rows
 feed read_mapping-style.  `app.unnested()` is a v1 compat no-op
-(v2 reads both the nested and flat spellings).  In-process API
-only: not part of the command-line grammar, so the standalone
-north star doesn't apply; one interpreted implementation, no
-codegen.
+(v2 reads both the nested and flat spellings).  In-process API only: not part of the command-line grammar.
 
 Because a mapping is a tree, sibling branches may each have a
 parameter named `x`--address them with the nested spelling.  The
@@ -569,15 +542,18 @@ flat spelling reads the current level and is for shallow configs.
 
 ## Config layering
 
-`app.process(args, config=...)` (and `parse`/`main`) accepts ONE
-mapping--merge your layers yourself--supplying the **global
-command's options only**: config holds program-wide settings; the
-command line names the work.  Precedence is fixed and unknobbed:
+A dict **bound to a precommand** with `@app.precommand(config=...)`
+supplies that precommand's options: config holds program-wide
+settings; the command line names the work.  You bind the dict at
+registration and fill it before `main()` (Appeal holds the same
+object), and each precommand that wants config binds its own--there is
+no single global slot, and no `config=` on `process`/`main`.  Merge
+your layers into the one dict yourself.  Precedence is fixed and unknobbed:
 defaults < config < args, **atomic per option** (an option the
 args mention wins whole; repeatable kinds REPLACE, never append--the
 command line can always subtract).  Keys are **full strict**
-("either this is ours, or it isn't"): every key must name a
-global-command option; a command name, a positional argument
+("either this is ours, or it isn't"): every key must name one of
+that precommand's options; a command name, a positional argument
 (anyone's), or an unknown key is a loud `AppealDataError` saying
 which it is (a config file is data of unknown provenance--not the
 command line, so not "usage").  Values convert in **stage 2 through the ordinary argv
@@ -619,23 +595,18 @@ positional), so the shape stays reserved; adding support later only
 turns that error into acceptance--monotonic, breaking no existing
 program and changing nothing for anyone who doesn't write the new
 shape.  (Entry point for a future fix: `_config_vet` /
-`_config_inject` in `appeal/__init__.py`, `plan.scoped_keys`, and
-the scan/bind path in `runtime.window_options` + the interpreter/
-codegen scoped-window handling.)
+`_config_apply` in `appeal/__init__.py`, `plan.scoped_keys`, and the
+backend's scoped-window binding.)
 
 With class-as-app this is the
 argparse-replacement story: the config file helps construct your
-application object, args picks the methods.  Standalone: config
-is a per-call input, nothing to bake; emitted parse functions
-grow a config= parameter when the mapping-driver emitters land
-(until then the gap is a loud TypeError).
+application object, args picks the methods.
 
 ## MCP servers (July 2026 rulings)
 
 MCP (the Model Context Protocol) is the JSON-RPC-over-stdio
 protocol AI agents use to call tools.  `app.mcp()` serves this
-program's commands as MCP tools, and `app.standalone_mcp()`
-emits that server as a standalone script.  Each command is one
+program's commands as MCP tools.  Each command is one
 tool: the docstring summary is its description, `schema()`
 translated to JSON Schema is its input schema (keys are
 **parameter names**, never option strings), and a `tools/call`
@@ -656,109 +627,34 @@ server startup**--not per call: `mcp(config=...)` feeds
 global-command options only), and every method tool dispatches
 bound to that one instance, so state persists across calls.  A
 required `__init__` positional has no coverage (config supplies
-only options) and refuses at startup--or, for the standalone
-emitter, at *emission*, naming the parameter.
+only options) and refuses at startup, naming the parameter.
 
-The standalone MCP server streams the REAL machinery--the plan
-classes, the builder, and the read driver, carved from appeal's
-own modules by snippet markers--and calls `build()` on each
-command at script startup.  One copy of the rules in the world;
-there is no parallel reimplementation to drift.  The script
-itself never imports appeal, but the *user's* module may (it
-must, to subclass `Option`), putting two copies of the protocol
-classes in one process; recognition therefore accepts a foreign
-`Option` by name and home (`is_option`/`is_multioption`), not
-just by identity.  A class-based standalone server bakes the
-config mapping into the script as a literal.
-
-## The standalone north star
-
-Every grammar this document accepts must be emittable as a standalone
-Python script: stdlib-only, importing the user's own module for
-converters and commands, with Appeal's runtime embedded (appeal/runtime.py,
-streamed into the script whole and unchanged).  Constructs that cannot survive standalone emission (lambda
-converters, closures, unimportable callables) are legal in-process but
-raise `AppealConfigurationError` *by name* when standalone emission is
-requested.  No feature may be added to the in-process parser that
-silently cannot be emitted; if it can't be emitted, it must say so.
+`mcp()` runs the REAL machinery in process--the plans, the builder,
+and the read driver--so there is one copy of the rules and nothing to
+drift.  `Option` subclasses are recognized structurally
+(`is_option`/`is_multioption`), not by identity, so a converter still
+reads correctly even if the user's module and appeal disagree about
+class identity.
 
 ## Implementation status
 
-| Construct | plan/build | rung 1 (interpreter) | rung 3 (codegen) | standalone |
-|---|---|---|---|---|
-| required/optional operands | ✓ | ✓ | ✓ | ✓ |
-| `str`/`int`/`float`/callable terminal converters | ✓ | ✓ | ✓ | ✓ |
-| `*args` | ✓ | ✓ | ✓ | ✓ |
-| flag options (`bool`) | ✓ | ✓ | ✓ | ✓ |
-| single-operand value options | ✓ | ✓ | ✓ | ✓ |
-| trailing required operands (kwonly-no-default) | ✓ | ✓ | ✓ | ✓ |
-| `--`, bundling, `--name=value` | ✓ | ✓ | ✓ | ✓ |
-| converter recursion (positional-only nonterminals) | ✓ | ✓ | ✓ | ✓ |
-| counting automaton (suffix-set completable decisions) | ✓ | ✓ | ✓ | ✓ |
-| options inside converters (flat recognition, owner-entry check) | ✓ | ✓ | ✓ | ✓ |
-| auto short options, first-letter first-served | ✓ | ✓ | ✓ | ✓ |
-| `Annotated[T, converter]` (provisional import, v1's shim) | ✓ | ✓ | ✓ | ✓ |
-| `@app.option` string/annotation/default overrides | ✓ | ✓ | ✓ | ✓ |
-| `@app.parameter` usage renames (operands + option metavars) | ✓ | ✓ | ✓ | ✓ |
-| `Appeal(positional_argument_usage_format=)`: operand metavar format (v1 knob, default `'{name}'`) | ✓ | ✓ | ✓ | ✓ |
-| `Appeal(default_options=)`: pluggable option-string policy (v1 knob; `default_long_option`/`default_short_option`) | ✓ | ✓ | ✓ | ✓ |
-| `Appeal(help=False)`: disable automatic `-h`/`--help` + `help` command (v1 knob) | ✓ | ✓ | ✓ | ✓ |
-| `list[T]` accumulator options | ✓ | ✓ | ✓ | ✓ |
-| `dict[K, V]` mapping options | ✓ | ✓ | ✓ | ✓ |
-| scoped options (position-decides, the interval model) | ✓ | ✓ | ✓ | ✓ |
-| config layering (`config=` on parse/process/main) | ✓ | n/a | ✓ | — |
-| `app.mcp()` / `standalone_mcp()` (commands as MCP tools) | ✓ | n/a | n/a | ✓ |
-| `Appeal(version=)`: `--version` + auto `version` command | ✓ | n/a | ✓ | ✓ |
-| `app.repl()` (§8.9: the same parser, interactively) | ✓ | n/a | n/a | n/a |
-| `*args` inside converters (absorbing subtrees) | ✓ | ✓ | ✓ | ✓ |
-| trailing arguments inside converters (uniform end-reservation) | ✓ | ✓ | ✓ | ✓ |
-| `tuple[T1, T2]` fixed-arity multi-operand slots | ✓ | ✓ | ✓ | ✓ |
-| `MultiOption` custom folds (incl. multi-operand occurrences) | ✓ | ✓ | ✓ | ✓ |
-| `Option` class (single occurrence, same protocol) | ✓ | ✓ | ✓ | ✓ |
-| no-repeat rule; one-char names short-only (v1, probed) | ✓ | ✓ | ✓ | ✓ |
-| multi-operand plain converters on options (`--where X Y`) | ✓ | ✓ | ✓ | ✓ |
-| optional opargs, greedy (`make -j` / `-j 5` / `-j5`) | ✓ | ✓ | ✓ | ✓ |
-| flags take `=true`/`=false` (exactly those; args-overrules-config) | ✓ | ✓ | ✓ | ✓ |
-| `-fVALUE` attachment, getopt's rule (v1 refused; ruled 2026-07-09) | ✓ | ✓ | ✓ | ✓ |
-| repetition = last-one-wins (v1 errored; ruled 2026-07-09; incl. shared-parameter strings, per-window, scoped; `StrictOption` opts out) | ✓ | ✓ | ✓ | ✓ |
-| `--` outranks optional-oparg greed (v1: greed won; ruled 2026-07-09; required opargs still take `--` verbatim, `grep -e --`) | ✓ | ✓ | ✓ | ✓ |
-| `appeal.file()` (open-as-converter; `-` = stdin/stdout by mode, inert-close wrapper; recipe travels; `sys.std*` defaults render by identity) | ✓ | ✓ | ✓ | ✓ |
-| typo suggestions on unknown commands / long options (difflib; short options and no-close-match stay bare) | ✓ | ✓ | ✓ | ✓ |
-| ^C exits 130, quietly--in run_main ONLY (ruled: process()/parse() raw; no other signal handling, ever) | ✓ | n/a | n/a | ✓ |
-| subcommand sets nested to any depth (the last named standalone refusal, lifted; plan_for finds nested parents; recursive _SET_/completion tables, children emitted first) | ✓ | ✓ | ✓ | ✓ |
-| `app.documentation('man')` (troff from the help corpus; unknown formats refuse by name) | ✓ | n/a | n/a | n/a |
-| long-option abbreviation | REFUSED BY DESIGN (ruled 2026-07-09: script fragility; completion covers comfort; click agrees, argparse regrets) ||||
-| `tuple[T1, T2]` options (`--span 3 4`) | ✓ | ✓ | ✓ | ✓ |
-| `*args` converter groups with windowed options | ✓ | ✓ | ✓ | ✓ |
-| the gate rule (required groups wall off later options) | ✓ | ✓ | ✓ | ✓ |
-| multiple commands / subcommand dispatch / global command | ✓ | ✓ | ✓ | ✓ |
-| automatic `-h`/`--help` (usage + rewrapped docstring, big trio embedded) | ✓ | ✓ | ✓ | ✓ |
-| per-parameter doc tables (`name: description`) | ✓ | ✓ | ✓ | ✓ |
-| `help` command for command sets (listing + `help CMD`) | ✓ | ✓ | ✓ | ✓ |
-| `read_mapping` / `read_iterable` (in-process API; standalone n/a) | ✓ | ✓ | n/a | n/a |
-| `**kwargs` options (`@app.option`, omitted when absent) | ✓ | ✓ | ✓ | ✓ |
-| set-level `--help`/`-h` (the listing) | ✓ | ✓ | ✓ | ✓ |
-| converter vocabulary (split/validate/range/counter/acc/map) | ✓ | ✓ | ✓ | ✓ |
-| nested subcommands (`command('db').command()`), default_command | ✓ | n/a | ✓ | ✓ |
-| parse-before-execute (two stages; `app.parse` -> Processor) | ✓ | ✓ | ✓ | ✓ |
-| cycling (`repeat=True`, per-parent; pop-up resolution) | ✓ | ✓ | ✓ | ✓ |
-| class-based commands (§8.6: class-as-app, methods, nested classes, BIC) | ✓ | ✓ | ✓ | ✓ |
-| completion at cycling boundaries | ✓ | ✓ | ✓ | ✓ |
-| completion (`complete`; in-process API, bash/zsh/fish integration scripts, emitted into standalone) | ✓ | ✓ | ✓ | ✓ |
-| JSON schema (`schema`/`schema_set`; pairs with read_mapping) | ✓ | ✓ | n/a | n/a |
-| flexible global-command operands (optional, `*args`, groups) | ✓ | ✓ | ✓ | ✓ |
+Appeal is a single interpreter now--no code generator, no emitted standalone
+scripts.  A signature compiles once to a `Plan`, and the backend walks `argv`
+against it.  Every construct in this document is implemented and tested; a row
+is never called done without tests, and `test_corpus` ratchets the whole
+matrix.  The grammar is validated at build time (unreachable options, the
+same-world rule, arity), so an ill-formed grammar is a `ConfigurationError` at
+first use rather than a surprise at parse time.
 
-*(This table is updated as the implementation grows; a row may not be
-marked ✓ without tests, and no row may be ✓ in-process but — in
-standalone.)*
+One standing **refusal by design**: long-option *abbreviation* (`--verb` for
+`--verbose`).  Ruled out 2026-07-09 as script-fragile; completion covers the
+comfort it would have bought.
 
-Beyond the per-construct tests, `test_fuzz_parity` generates random
-signatures (nested converters, tuple slots, all four option kinds,
-`*args`, trailing operands) and random command lines--valid and
-invalid counts, options aimed at groups that end up skipped--and
-requires the interpreter and the generated parser to agree on every
-result and every error message.  Deterministic seed; failures
-reproduce exactly.
+The compatibility contract with the 0.6 line is **executed, not asserted**:
+the differential-fuzz tests run random shared-grammar programs and command
+lines through the shipping 0.6 (extracted from git, in a subprocess) and
+through 1.0, and require identical calls wherever 0.6 succeeds.  The 0.6
+errors that 1.0 accepts are the two documented supersets below.
 
 ## v1 → v2 semantic changes (deliberate)
 
