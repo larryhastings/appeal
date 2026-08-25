@@ -2676,10 +2676,11 @@ def test_oparg_name_fallbacks():
     def cmd(*, p: Pair = []):
         return p
     assert '-p' in strip_styles(build_plan(cmd).usage())
-    # a tuple[...] option: element type names
-    def cmd2(*, pt: tuple[int, int] = ()):
-        return pt
-    assert '--pt' in strip_styles(build_plan(cmd2).usage())
+    # a tuple[...] option: element type names (3.9+ builtin-generic spelling)
+    if sys.version_info >= (3, 9):
+        def cmd2(*, pt: tuple[int, int] = ()):
+            return pt
+        assert '--pt' in strip_styles(build_plan(cmd2).usage())
 
 
 def test_backend_nested_chain_value_option_needs_value():

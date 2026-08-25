@@ -23,6 +23,19 @@ repo_dir = str(test.preload('appeal'))
 import os.path
 import subprocess
 import sys
+
+if sys.version_info < (3, 7):
+    # subprocess.run's capture_output= and text= keywords are 3.7+; Appeal
+    # targets 3.6, so translate them to the 3.6 spellings for the whole suite
+    _real_subprocess_run = subprocess.run
+    def _compat_subprocess_run(*args, **kwargs):
+        if kwargs.pop('capture_output', False):
+            kwargs.setdefault('stdout', subprocess.PIPE)
+            kwargs.setdefault('stderr', subprocess.PIPE)
+        if 'text' in kwargs:
+            kwargs['universal_newlines'] = kwargs.pop('text')
+        return _real_subprocess_run(*args, **kwargs)
+    subprocess.run = _compat_subprocess_run
 import tempfile
 
 from big.stylesheet import strip_styles

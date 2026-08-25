@@ -2550,3 +2550,12 @@ from .backend import (
     execute, build_converters, _converter_key,
     _halts, _unexpected, Converter,
     )
+
+
+if _sys.version_info < (3, 7):
+    # module-level __getattr__ (PEP 562) is 3.7+; on 3.6 it's never called,
+    # so `from appeal import build_plan` (and the other lazy re-exports) would
+    # fail.  Bind them eagerly here instead--at the cost of importing their
+    # modules now, which on this legacy interpreter is a fair trade.
+    for _name in _LAZY_REEXPORTS:
+        globals()[_name] = __getattr__(_name)
