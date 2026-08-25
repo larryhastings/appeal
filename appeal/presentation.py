@@ -729,7 +729,7 @@ def parse_help_template(template):
     return sections
 
 
-def rows_markdown(rows):
+def rows_markdown(rows, role=None):
     """
     Corpus rows [(display, doc-lines), ...] as one Markdown
     definition list, definition order preserved (ruled
@@ -743,45 +743,49 @@ def rows_markdown(rows):
     definition list inside its parent's details (ruled
     2026-08-06)--the rendered table indents sub-options beneath
     the option that declares them.
+
+    Argument/option displays arrive pre-built as role spans.
+    `role` (e.g. 'command') dresses rows whose display is plain
+    text instead--the command listing's words wear 'command'.
     """
+    if role is not None:
+        rows = [(style(role, escape_styles(display)), lines)
+                for display, lines in rows]
+    # display is a role-tagged span; the markdown SOURCE term is its
+    # plain text (strip_styles), and the span itself is collected, in
+    # document order, to be injected as a StyledText term post-parse.
     def entry_block(display, lines, children):
         body = [l for l in lines] or ['']
         first = f": {body[0]}" if body[0] else ": "
         rest = [("  " + l) if l.strip() else '' for l in body[1:]]
-        block = [display, first] + rest
+        block = [strip_styles(display), first] + rest
+        terms = [display]
         for child in children:
             block.append('')
-            block.extend(("  " + l) if l.strip() else ''
-                         for l in entry_block(*child))
-        return block
+            sub_block, sub_terms = entry_block(*child)
+            block.extend(("  " + l) if l.strip() else '' for l in sub_block)
+            terms.extend(sub_terms)
+        return block, terms
 
     # rebuild the tree the merge flattened: depth = the display's
-    # leading two-space pairs
+    # leading two-space pairs (on the plain text)
     roots = []
     stack = []                  # (depth, entry) path to the tip
     for display, lines in rows:
-        stripped = display.lstrip(' ')
-        depth = (len(display) - len(stripped)) // 2
-        entry = (stripped, lines, [])
+        plain = strip_styles(display)
+        stripped_plain = plain.lstrip(' ')
+        depth = (len(plain) - len(stripped_plain)) // 2
+        entry = (display.lstrip(' '), lines, [])
         while stack and stack[-1][0] >= depth:
             stack.pop()
         (stack[-1][1][2] if stack else roots).append(entry)
         stack.append((depth, entry))
-    return '\n\n'.join('\n'.join(entry_block(*e)) for e in roots)
-
-
-def listing_pieces(usage, corpus, templates):
-    """
-    The terse command listing as BAKED PIECES: the usage line and
-    the Commands table, no prose.  Attached to dispatch-level
-    UsageErrors and printed for a bare command line;
-    render_baked_help finishes it at print time--wrapped at the
-    real margin, styled for the real stream (the 2026-08-06
-    ruling: errors render through the pipeline too).
-    """
-    return help_page_pieces(usage, corpus, templates,
-                            suppress=('summary', 'doc',
-                                      'arguments', 'options'))
+    blocks, terms = [], []
+    for e in roots:
+        b, t = entry_block(*e)
+        blocks.append('\n'.join(b))
+        terms.extend(t)
+    return '\n\n'.join(blocks), terms
 
 
 def render_help_page(usage, corpus, templates, margin=79,
@@ -809,80 +813,40 @@ def render_help_page(usage, corpus, templates, margin=79,
         margin, file=file, stylesheet=stylesheet)
 
 
-def term_markup(word, role):
+def role_layout(layout):
     """
-    Dress one laid-out table-term word in its role span: 'option'
-    terms lexically (option strings and <oparg>s), 'argument' and
-    'command' terms whole.  The word usually wears the Markdown
-    'term' wrapper; the role span nests INSIDE it, so a themed
-    table term is bold AND role-colored.  The word came out of
-    the styled pipeline, so its text is already escaped.
+    Dress the summary section: every word wears the 'summary' role
+    (join_styles fuses them back at render).  Table terms are dressed
+    at bake time now (built structurally, injected as StyledText),
+    and doc prose flushes section-less, so only the summary reaches
+    here.  Purely additive: a plain sheet strips the spans, so
+    unthemed output is unchanged.
     """
-    prefix = suffix = ''
-    inner = word
-    open_ = style_delimiters[0] + 'term' + style_delimiters[1]
-    close = style_delimiters[2]
-    if word.startswith(open_) and word.endswith(close):
-        inner = word[len(open_):-len(close)]
-        prefix, suffix = open_, close
-    if not inner:
-        return word
-    if role != 'option':
-        return prefix + style(role, inner) + suffix
-    # an option term reads '-t|--times <TIMES>': dash-led words are
-    # options; <...> spans are opargs (already decorated by
-    # decorate_argument in _option_display)
-    out = []
-    append = out.append
-    i = 0
-    n = len(inner)
-    while i < n:
-        c = inner[i]
-        if c == '<':
-            j = inner.find('>', i)
-            if j == -1:
-                append(inner[i:])
-                break
-            append(style('oparg', inner[i:j + 1]))
-            i = j + 1
-            continue
-        if c == '-' and ((i == 0) or (inner[i - 1] in '[|= ')):
-            j = i
-            while j < n and (inner[j].isalnum() or inner[j] in '-_'):
-                j += 1
-            append(style('option', inner[i:j]))
-            i = j
-            continue
-        append(c)
-        i += 1
-    return prefix + ''.join(out) + suffix
+    return tuple(style('summary', item)
+                 if isinstance(item, str) and item.strip() else item
+                 for item in layout)
 
 
-_SECTION_TERM_ROLES = {'options': 'option', 'arguments': 'argument',
-                       'commands': 'command'}
-
-
-def role_layout(layout, section):
+def _inject_styled_terms(document, terms):
     """
-    Dress one laid-out help section in appeal's role spans--the
-    bake half of themed help.  Table sections mark their
-    definition-list terms (term_markup); the summary marks every
-    word (join_styles fuses them back into one span at render).
-    Purely additive: a plain sheet strips the spans, so unthemed
-    output is unchanged.
+    Replace each definition-list term in `document` (in document
+    order) with its pre-built role span, delivered as a big
+    StyledText node so style_document carries it verbatim (no
+    escaping, no re-derivation).  `terms` is the ordered list
+    rows_markdown collected.
     """
-    role = _SECTION_TERM_ROLES.get(section)
-    out = []
-    for item in layout:
-        if role and (type(item) is tuple) and item and (item[0] == 'term'):
-            out.append(('term',) + tuple(term_markup(w, role)
-                                         for w in item[1:]))
-        elif ((section == 'summary') and isinstance(item, str)
-              and item.strip()):
-            out.append(style('summary', item))
-        else:
-            out.append(item)
-    return tuple(out)
+    from big.markdown import StyledText, DefinitionList
+    it = iter(terms)
+
+    def walk(blocks):
+        for b in blocks:
+            if isinstance(b, DefinitionList):
+                for entry in b.entries:
+                    entry.term.children = [StyledText(next(it))]
+                    for d in entry.definitions:
+                        walk(d.blocks)
+
+    walk(document.blocks)
 
 
 def help_page_pieces(usage, corpus, templates, suppress=()):
@@ -901,15 +865,20 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
     pieces = []
     md = []            # pending markdown, flushed per role change
 
-    def flush(section=None):
+    def flush(section=None, terms=None):
         text = ''.join(md)
         md.clear()
         if text.strip():
-            document = split_styles_document(
-                style_document(parse(text)))
-            layout = layout_document(document)
-            if section:
-                layout = role_layout(layout, section)
+            document = parse(text)
+            if terms:
+                # a table section: its def-list terms are pre-built
+                # role spans, injected as StyledText so big's layout
+                # carries them verbatim (no post-layout reparse)
+                _inject_styled_terms(document, terms)
+            layout = layout_document(
+                split_styles_document(style_document(document)))
+            if section == 'summary':
+                layout = role_layout(layout)
             pieces.append(('markdown', layout))
 
     for name, header, indent in parse_help_template(templates):
@@ -921,22 +890,24 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
             prefix = header[nl + 1:] if nl >= 0 else header
             pieces.append(('usage', prefix, usage))
             continue
+        terms = None
         if name == 'summary':
             content = '\n'.join(corpus['summary'])
         elif name == 'doc':
             content = '\n'.join(corpus['documentation'])
         else:
-            content = rows_markdown(corpus[name])
+            content, terms = rows_markdown(
+                corpus[name], 'command' if name == 'commands' else None)
         if not content.strip():
             continue
         if name == 'doc':
             md.append(header + content)
             continue
-        # a roled section bakes alone, so role_layout knows whose
-        # terms (or words) it is dressing
+        # a roled section bakes alone, so its terms line up with its
+        # own def-list
         flush()
         md.append(header + content)
-        flush(name)
+        flush(name, terms)
     flush()
     return tuple(pieces)
 
@@ -1078,11 +1049,10 @@ def merge_docs(plan, command_names=None):
     command_names = tuple(command_names) if command_names else ()
     def arg_name(s):
         # an operand's display: the name (or @app.parameter rename)
-        # decorated EARLY into its placeholder (host -> <HOST>), so
-        # big's def-list layout sizes the column at the real width;
-        # term_markup adds only the color role at bake time (ruled
-        # 2026-08-24: one uniform decoration, renames included).
-        return decorate_argument(s.usage_name)
+        # decorated into its placeholder (host -> <HOST>) and tagged
+        # with the 'argument' role.  Built structurally here; injected
+        # as a StyledText term (no post-layout reparse).
+        return style('argument', decorate_argument(s.usage_name))
 
     def flanks(p, index):
         # the nearest argument display before/after slot index, at
@@ -1165,7 +1135,8 @@ def merge_docs(plan, command_names=None):
                     # annotated parameter's name flows through.
                     # (An explicit rename on the inner parameter
                     # still wins the *display*.)
-                    display = (inner.usage_name
+                    display = (style('argument',
+                                     decorate_argument(inner.usage_name))
                                if inner.usage_name != inner.name
                                else arg_name(s))
                     child_override = (s.name, display)
@@ -1254,10 +1225,11 @@ def merge_docs(plan, command_names=None):
     # the flanking arguments' names say which window each row is
     seen = {}
     for rowkey, display, anchors in option_rows:
-        seen[display.strip()] = seen.get(display.strip(), 0) + 1
+        key = strip_styles(display).strip()
+        seen[key] = seen.get(key, 0) + 1
     rows = []
     for rowkey, display, anchors in option_rows:
-        if seen[display.strip()] > 1 and anchors != (None, None):
+        if seen[strip_styles(display).strip()] > 1 and anchors != (None, None):
             before, after = anchors
             if before and after:
                 display += f' (after {before}, before {after})'
@@ -1334,16 +1306,20 @@ def summary(callable):
 
 
 def _option_display(o):
-    "The option as shown in help tables: '-t|--times <TIMES>'."
-    bits = ['|'.join(o.strings)]
+    """
+    The option as shown in help tables, role-tagged:
+    '⦃option⦙-t⦄|⦃option⦙--times⦄ ⦃oparg⦙<TIMES>⦄'.  Built
+    structurally (option strings vs opargs), so nothing downstream
+    has to re-derive it.
+    """
+    bits = ['|'.join(style('option', escape_styles(s)) for s in o.strings)]
     if o.kind == 'group':
-        bits.append('...')
+        bits.append('...')                       # structural, stays bare
     elif o.kind not in ('flag', 'nullary'):
-        if o.usage_name is not None:
-            bits.append(decorate_argument(o.usage_name))
-        else:
-            for name in _oparg_names(o):
-                bits.append(decorate_argument(name))
+        names = ([o.usage_name] if o.usage_name is not None
+                 else _oparg_names(o))
+        for name in names:
+            bits.append(style('oparg', decorate_argument(name)))
     return ' '.join(bits)
 
 

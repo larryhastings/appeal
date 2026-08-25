@@ -4272,7 +4272,7 @@ def test_scoped_help_presentation():
     def mg(a, b: child = None, c: child = None, *, gronk=''):
         return (a, b, c)
     corpus = merge_docs(build_plan(mg))
-    options = dict(corpus['options'])
+    options = {strip_styles(d): v for d, v in corpus['options']}
     assert '-g|--gronk <GRONK>' in options            # unqualified
     assert '-f|--flag (after <A>, before <C>)' in options
     assert '-f|--flag (after <B>)' in options
@@ -4327,7 +4327,7 @@ def test_scoped_help_presentation():
     def draw(shape, *, stroke: fancy = None):
         return (shape, stroke)
     corpus = merge_docs(build_plan(draw))
-    displays = [display for display, lines in corpus['options']]
+    displays = [strip_styles(display) for display, lines in corpus['options']]
     assert '-s|--stroke [-d|--dotted] [width]' in displays[0] or True
     indented = [d for d in displays if d.startswith('  ')]
     assert any('-d|--dotted' in d for d in indented), displays
@@ -6506,13 +6506,14 @@ def test_merge_docs():
     assert c['documentation'] == []
     # rows in plan order; entries merge up; nearest wins ('i');
     # undocumented surfaces get empty rows ('s')
-    assert c['arguments'] == [
+    assert [(strip_styles(d), v) for d, v in c['arguments']] == [
         ('<A>', ['The first thing.']),
         ('<I>', ['Overridden, how many knocks.']),
         ('<F>', ['The float part.']),
         ('<S>', []),
     ]
-    assert c['options'] == [('-v|--verbose', ['Print more output.'])]
+    assert [(strip_styles(d), v) for d, v in c['options']] == \
+        [('-v|--verbose', ['Print more output.'])]
     assert c['commands'] == []
 
     # a keyword-only-no-default parameter is a trailing operand:
@@ -6524,8 +6525,8 @@ def test_merge_docs():
         : a trailing operand.
         """
     c = merge_docs(build_plan(trailing_ok))
-    assert c['arguments'] == [('<A>', []),
-                              ('<REQUIRED_KW>', ['a trailing operand.'])]
+    assert [(strip_styles(d), v) for d, v in c['arguments']] == \
+        [('<A>', []), ('<REQUIRED_KW>', ['a trailing operand.'])]
 
     # commands merge only when the plan dispatches
     def dispatcher():
@@ -6869,7 +6870,8 @@ def test_single_terminal_transparency():
     corpus = merge_docs(plan)
     # the row wears the outer name; the outer entry documents it,
     # winning (nearest) over flavor's own 'name:' entry
-    assert ('<TASTE>', ['which flavor to serve.']) in corpus['arguments']
+    assert ('<TASTE>', ['which flavor to serve.']) in \
+        [(strip_styles(d), v) for d, v in corpus['arguments']]
 
     # the converter's own docstring keeps working in its own
     # vocabulary: without an outer override, 'name:' documents
@@ -6877,8 +6879,8 @@ def test_single_terminal_transparency():
     def scoop2(cone, taste: flavor = 'vanilla'):
         "Serves."
     corpus = merge_docs(build_plan(scoop2))
-    assert ('<TASTE>', ["the flavor, in flavor's own vocabulary."]) \
-        in corpus['arguments']
+    assert ('<TASTE>', ["the flavor, in flavor's own vocabulary."]) in \
+        [(strip_styles(d), v) for d, v in corpus['arguments']]
 
     # an explicit rename on the inner parameter wins the display
     # (recorded in a registry, never on the converter)
