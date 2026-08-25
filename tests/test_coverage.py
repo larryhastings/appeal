@@ -3260,6 +3260,50 @@ def test_init_more_reachable_edges():
         _sys.stdin = saved
 
 
+def test_init_config_layering_edges():
+    import appeal
+    DataErr = appeal.AppealDataError
+    # a converter with an optional parameter is a group OPTION (kind='group');
+    # config may feed it a dict, and a dict omitting an optional child slot
+    # stops synthesizing tokens at the gap
+    def grp(x: int, y: int = 0):
+        return (x, y)
+    app = appeal.Appeal('cfg')
+    @app.global_command()
+    class Config:
+        def __init__(self, src='.', *, at: grp = None):
+            self.src = src
+            self.at = at
+    @app.command()
+    def build(t):
+        pass
+    proc = app.process(['s', 'build', 't'], config={'at': {'x': 5}})
+    assert proc.instances[1][1].at == (5, 0)   # y defaulted, no token for it
+    proc = app.process(['s', 'build', 't'], config={'at': {'x': 5, 'y': 9}})
+    assert proc.instances[1][1].at == (5, 9)
+    # an unknown config key triggers the "where does it live?" search; a table
+    # command whose plan fails to BUILD (here two indistinguishable zero-operand
+    # groups) is skipped, and the search still reports the key isn't an option
+    lazy = appeal.Appeal('cfg2', lazy=True)
+    @lazy.global_command()
+    class C2:
+        def __init__(self, *, verbose=False):
+            self.verbose = verbose
+    @lazy.command()
+    def good(t):
+        pass
+    def fancy(*, dotted=False):
+        return dotted
+    @lazy.command('bad')
+    def bad_cmd(a: fancy = None, b: fancy = None):
+        pass
+    try:
+        lazy.process(['good', 't'], config={'unknownkey': 1})
+        assert False
+    except DataErr as e:
+        assert "isn't an option" in str(e)
+
+
 def test_presentation_fiddly_reachable():
     import appeal, io, contextlib
     from big.stylesheet import strip_styles
