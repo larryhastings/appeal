@@ -509,20 +509,20 @@ def _config_vet(plan, table_words, config, command_plan_for=None):
     return vetted
 
 
-def _config_apply(conv, table, global_plan, config, plan_for):
+def _config_apply(conv, table, plan, config, plan_for):
     """
-    Layer a config mapping onto the global command's already-parsed converter
-    (the one engine): defaults < config < argv, atomic per option.  Keys are
-    vetted strictly (reuse _config_vet).  Each vetted option argv did NOT set
-    is replayed as the synthetic command-line tokens it would have produced,
-    run through a fresh converter of the same class and merged in -- so config
-    rides the ordinary conversion pipeline.  Conversion failures carry
-    'config:' provenance (an option argv already gave wins whole).
+    Layer a precommand era's BOUND config mapping onto its already-parsed
+    converter (the one engine): defaults < config < argv, atomic per option.
+    Keys are vetted strictly (reuse _config_vet).  Each vetted option argv did
+    NOT set is replayed as the synthetic command-line tokens it would have
+    produced, run through a fresh converter of the same class and merged in --
+    so config rides the ordinary conversion pipeline.  Conversion failures
+    carry 'config:' provenance (an option argv already gave wins whole).
     """
     from .load import _read_bool
-    vetted = _config_vet(global_plan, frozenset(table), config, plan_for)
+    vetted = _config_vet(plan, frozenset(table), config, plan_for)
     given = set(conv.kwargs)            # options (folds included) all live here now
-    usage = global_plan.usage()
+    usage = plan.usage()
 
     def tokens_for(rule, value, provenance):
         kind = rule.kind
@@ -552,7 +552,7 @@ def _config_apply(conv, table, global_plan, config, plan_for):
             for oname, orule in option_rules.items():   # child options, recursively
                 if oname not in value:
                     continue
-                if orule.key in global_plan.scoped_keys:
+                if orule.key in plan.scoped_keys:
                     # a scoped option's essence is position; a mapping has none
                     # (same ruling as a scoped top-level key, _config_vet)
                     raise AppealConfigurationError(
@@ -683,7 +683,7 @@ class Processor:
         self.result = None
         self.instances = []
 
-    def __call__(self, args=None, config=None):
+    def __call__(self, args=None):
         argv = _sys.argv[1:] if args is None else list(args)
         if not self.app.root._lazy:         # eager: build every command's plan
             self.app._compile_all()         # up front (once) so config errors
@@ -700,11 +700,11 @@ class Processor:
         # converter is built twice.  reverse() so a live pop() off the end
         # yields them front-to-back.
         built = []
-        self.app._run_node(list(argv), 0, self, top=True, config=config,
+        self.app._run_node(list(argv), 0, self, top=True,
                            dry=True, built=built)
         built.reverse()
         self.result, _ = self.app._run_node(list(argv), 0, self, top=True,
-                                            config=config, built=built)
+                                            built=built)
         return self.result
 
     def __repr__(self):
@@ -853,6 +853,8 @@ class Appeal:
         self._precommands = []    # ordered precommand eras (the head; _impl
                                   # tracks the primary until dispatch runs them all)
         self._precommand_explicit = set()  # ids given an explicit index=
+        self._precommand_config = {}       # id(callable) -> the bound config
+                                           # mapping (filled by the user later)
         self._auto_impl = None    # synthesized fn for a pure dispatcher
         self._node_default = None # this node's default command
         self._node_repeat = False # this node's set cycles
@@ -1365,20 +1367,28 @@ class Appeal:
         return decorator
     default_command = default           # transitional alias for the old name
 
-    def precommand(self, *, index=-1):
+    def precommand(self, *, index=-1, config=None):
+        """
+        Register a precommand era.  A class here is class-as-app (its __init__
+        is the era's grammar; its methods/inner classes bind to the instance).
+        REPEATABLE (Larry, 2026-08-21): each call inserts an era; index -1
+        appends, 0 heads, they run front-to-back before the commands.
+
+        config= (Larry, 2026-08-25): BIND a mapping to this precommand and its
+        option values layer from it (defaults < config < argv) at dispatch.
+        You bind the dict at decoration and fill it before main() -- Appeal
+        holds the SAME object, so an empty dict you .update() later is seen.
+        None (the default) means this era takes no config -- the -h/--help/
+        --version precommand simply leaves it None and opts out for free.
+        """
         def decorator(callable):
-            # a class here is class-as-app (§8.6): its __init__
-            # is the global command's grammar; its methods
-            # register themselves explicitly and membership
-            # derivation binds them (ruled 2026-08-10).  precommand is
-            # REPEATABLE (Larry, 2026-08-21): each call inserts an era into
-            # the ordered list (index -1 = append, 0 = head); they run
-            # front-to-back before the commands, each its own era.
             if index == -1:
                 self._precommands.append(callable)
             else:
                 self._precommands.insert(index, callable)
                 self._precommand_explicit.add(id(callable))
+            if config is not None:
+                self._precommand_config[id(callable)] = config
             self._impl = self._precommands[-1]
             self._invalidate()
             return callable
@@ -2184,31 +2194,25 @@ class Appeal:
                 order.insert(first, cls)
         return order
 
-    def process(self, args=None, config=None):
+    def process(self, args=None):
         """
         Parse args (default: sys.argv[1:]) and invoke the command.
         Returns the Processor for this run: its .result is the command's
         return value, .instances the execution log.  (A shortcut for
-        Processor(app)(args); see Processor.)
+        Processor(app)(args); see Processor.)  Config is no longer passed
+        here -- bind it per precommand via @app.precommand(config=...).
         """
         processor = Processor(self)
-        processor(args, config)
+        processor(args)
         return processor
 
-    def _run_node(self, argv, pos, holder, top, env=None, config=None,
+    def _run_node(self, argv, pos, holder, top, env=None,
                   dry=False, built=None, inherited=None):
         "Dispatch one set node's eras + command words; recurse for subcommands."
         if env is None:
             env = {}                                # class-as-app instance store
         self._finalize()
         table = self._table()
-        if config and self._global is None:
-            # config layers only the global command's options; a commands-only
-            # program has nowhere for it to land (an empty config is a no-op)
-            key = next(iter(config))
-            raise AppealDataError(
-                f"config: {key!r} isn't an option of this program (it has no "
-                f"global command)")
         era_plans = self.global_plans()             # carries the global as a head era
         # laziness is per command (build_converters compiles independently): the
         # head eras always run, so build them now; each command word builds ITS
@@ -2237,23 +2241,22 @@ class Appeal:
             # It's a no-op unless help/version was actually requested.
             is_meta = getattr(era_plan.callable, 'precommand', False)
             proc = backend.Engine(argv[pos:], conv, table, dry=dry and not is_meta)
-            if config is not None and era_plan.callable is self._global and not dry:
-                # layer config onto the global command: parse argv, merge config
+            cfg = self._precommand_config.get(id(era_plan.callable))
+            if cfg and not dry:
+                # this era has a BOUND config mapping: parse argv, merge config
                 # for options argv didn't set, THEN invoke (argv wins, whole).
                 # Config only adds OPTION values, never changes structure, so the
                 # dry pre-scan validates argv alone (config is a live-only merge).
                 proc.enter(conv)
                 proc._loop()
-                _config_apply(conv, table, self.global_plan, config,
-                              self.plan_for)
+                _config_apply(conv, table, era_plan, cfg, self.plan_for)
                 result = proc.root()
             else:
-                if dry and config is not None and era_plan.callable is self._global:
+                if dry and cfg:
                     # config KEY vetting is structural -- fire its refusals in the
                     # pre-scan, before the command portion is parsed (the value
                     # merge stays live, above)
-                    _config_vet(self.global_plan, frozenset(table), config,
-                                self.plan_for)
+                    _config_vet(era_plan, frozenset(table), cfg, self.plan_for)
                 result = proc.run()
             if dry:                                 # pre-scan: no instances, no
                 pos += proc.consumed                # halt (scan the whole line)
@@ -2358,7 +2361,7 @@ class Appeal:
                 result = 1
         return result, pos
 
-    def main(self, args=None, config=None):
+    def main(self, args=None):
         """
         Parse-and-execute with polite error handling, then EXIT
         the process with the result--0.6.4's contract, restored
@@ -2381,7 +2384,7 @@ class Appeal:
         # the one engine (2026-08-22): main() drives the same in-memory dispatch
         # process() does (config layering included).  A help/version precommand
         # prints then sys.exit()s; run_main catches that and converts to a code.
-        parse = lambda argv: Processor(self)(list(argv), config)
+        parse = lambda argv: Processor(self)(list(argv))
         _sys.exit(run_main(parse, args, stylesheet=self.stylesheet,
                            errors=self.errors, margin=self.margin))
 

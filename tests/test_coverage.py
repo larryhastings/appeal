@@ -819,7 +819,8 @@ def test_config_vet_refusals():
     def g2(b: int = 0, *, deep=False):
         return (b, deep)
     app = Appeal(name='cfg')
-    @app.global_command()
+    cfg = {}
+    @app.global_command(config=cfg)
     def top(src=None, *, verbose=False, x: g1 = None, y: g2 = None):
         return (src, verbose)
     @app.command()
@@ -834,8 +835,9 @@ def test_config_vet_refusals():
         ({'nowhere': 1}, AppealDataError, "isn't an option"),
         )
     for config, exc, complaint in cases:
+        cfg.clear(); cfg.update(config)
         try:
-            app.process(['go', 'd'], config=config).result
+            app.process(['go', 'd']).result
             assert False, 'expected %s for %r' % (exc.__name__, config)
         except exc as e:
             assert complaint in str(e), (config, str(e))
@@ -857,9 +859,9 @@ def test_config_inject_shapes():
     def box(w: int, h: int = 0):
         return (w, h)
     seen = []
-    def make_app():
+    def make_app(cfg=None):
         app = Appeal(name='cfi')
-        @app.global_command()
+        @app.global_command(config=cfg)
         def top(*, tags: appeal.accumulator[str] = (), adds: Add = 0,
                 spot: pt = None, corner: box = None, flag=False):
             seen.append((tuple(tags), adds, spot, corner, flag))
@@ -870,7 +872,7 @@ def test_config_inject_shapes():
 
     def drive(config):
         seen[:] = []
-        make_app().process(['go'], config=config).result
+        make_app(config).process(['go']).result
         return seen[0]
 
     assert drive({'tags': ['a', 'b'], 'adds': [1, [2]],
@@ -890,7 +892,7 @@ def test_config_inject_shapes():
     # and the fused main() spelling drives the same machinery
     seen[:] = []
     try:
-        make_app().main(['go'], config={'flag': True})
+        make_app({'flag': True}).main(['go'])
         code = 0
     except SystemExit as e:
         code = e.code if isinstance(e.code, int) else 0
@@ -3097,11 +3099,11 @@ def test_reachable_grind_config_doc_version():
     from appeal import default_mappings
     # a config value that fails conversion is reported as config: ...
     app = appeal.Appeal('a', default_mappings=None)
-    @app.global_command()
+    @app.global_command(config={'jobs': 'notanint'})
     def g(*, jobs: int = 1):
         return jobs
     try:
-        app.process([], config={'jobs': 'notanint'}).result
+        app.process([]).result
         assert False, 'expected AppealDataError'
     except appeal.AppealDataError as e:
         assert 'config:' in str(e)
@@ -3269,7 +3271,8 @@ def test_init_config_layering_edges():
     def grp(x: int, y: int = 0):
         return (x, y)
     app = appeal.Appeal('cfg')
-    @app.global_command()
+    at_cfg = {}
+    @app.global_command(config=at_cfg)
     class Config:
         def __init__(self, src='.', *, at: grp = None):
             self.src = src
@@ -3277,15 +3280,17 @@ def test_init_config_layering_edges():
     @app.command()
     def build(t):
         pass
-    proc = app.process(['s', 'build', 't'], config={'at': {'x': 5}})
+    at_cfg.clear(); at_cfg.update({'at': {'x': 5}})
+    proc = app.process(['s', 'build', 't'])
     assert proc.instances[1][1].at == (5, 0)   # y defaulted, no token for it
-    proc = app.process(['s', 'build', 't'], config={'at': {'x': 5, 'y': 9}})
+    at_cfg.clear(); at_cfg.update({'at': {'x': 5, 'y': 9}})
+    proc = app.process(['s', 'build', 't'])
     assert proc.instances[1][1].at == (5, 9)
     # an unknown config key triggers the "where does it live?" search; a table
     # command whose plan fails to BUILD (here two indistinguishable zero-operand
     # groups) is skipped, and the search still reports the key isn't an option
     lazy = appeal.Appeal('cfg2', lazy=True)
-    @lazy.global_command()
+    @lazy.global_command(config={'unknownkey': 1})
     class C2:
         def __init__(self, *, verbose=False):
             self.verbose = verbose
@@ -3298,7 +3303,7 @@ def test_init_config_layering_edges():
     def bad_cmd(a: fancy = None, b: fancy = None):
         pass
     try:
-        lazy.process(['good', 't'], config={'unknownkey': 1})
+        lazy.process(['good', 't'])
         assert False
     except DataErr as e:
         assert "isn't an option" in str(e)
@@ -3310,7 +3315,7 @@ def test_init_config_layering_edges():
             raise ValueError("must be non-negative")
         return (x, flag)
     app2 = appeal.Appeal('cfg3')
-    @app2.global_command()
+    @app2.global_command(config={'at': {'x': -5}})
     class Config2:
         def __init__(self, *, at: grp2 = None):
             self.at = at
@@ -3318,7 +3323,7 @@ def test_init_config_layering_edges():
     def go(t):
         pass
     try:
-        app2.process(['go', 't'], config={'at': {'x': -5}}).result
+        app2.process(['go', 't']).result
         assert False
     except DataErr as e:
         assert str(e) == 'config: must be non-negative'

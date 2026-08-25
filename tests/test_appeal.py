@@ -4339,9 +4339,10 @@ def test_config_layering():
     # strict keys, argv's conversion pipeline, config provenance
     import appeal as _appeal
     app = _appeal.Appeal(name='cfg')
+    cfg = {}
 
     if GENERIC_SPELLINGS:
-        @app.global_command()
+        @app.global_command(config=cfg)
         class Config:
             def __init__(self, source='.', *, verbose=False,
                          jobs: int = 1, include: list[str] = (),
@@ -4355,7 +4356,7 @@ def test_config_layering():
         # same layering coverage minus the 3.9 spellings: the
         # repeatable rides accumulator, the dict kind is counted
         needs_39('dict[K,V] config layering')
-        @app.global_command()
+        @app.global_command(config=cfg)
         class Config:
             def __init__(self, source='.', *, verbose=False,
                          jobs: int = 1,
@@ -4372,7 +4373,8 @@ def test_config_layering():
         layer['define'] = {'x': 1}
     # instances[0] is the help/version precommand era; the global
     # class-as-app Config is the next invocation (new-engine logging)
-    proc = app.process(['src'], config=layer)
+    cfg.clear(); cfg.update(layer)
+    proc = app.process(['src'])
     c = proc.instances[1][1]
     assert (c.source, c.verbose, c.jobs) == ('src', True, 4)
     assert c.include == ['a', 'b']
@@ -4380,12 +4382,14 @@ def test_config_layering():
         assert c.define == {'x': 1}
 
     # argv wins, whole: repeatables REPLACE, never append
-    proc = app.process(['src', '--jobs', '9', '-i', 'z'], config=layer)
+    cfg.clear(); cfg.update(layer)
+    proc = app.process(['src', '--jobs', '9', '-i', 'z'])
     c = proc.instances[1][1]
     assert c.jobs == 9 and c.include == ['z']
 
     # absent from both: the default fills
-    proc = app.process(['src'], config={})
+    cfg.clear()
+    proc = app.process(['src'])
     assert proc.instances[1][1].jobs == 1
 
     # strict keys, each flavor loud and saying why
@@ -4396,8 +4400,9 @@ def test_config_layering():
             ({'target': 'x'}, 'positional argument'),
             ({'build': {}}, 'is a command'),
             ({'colour': 1}, "isn't an option")):
+        cfg.clear(); cfg.update(bad)
         try:
-            app.process(['src', 'build', 't'], config=bad).result
+            app.process(['src', 'build', 't']).result
             assert False, f'expected AppealDataError for {bad}'
         except AppealDataError as e:
             assert not isinstance(e, UsageError)   # data, not usage
@@ -4406,34 +4411,27 @@ def test_config_layering():
     # values convert in stage 2, through the ordinary pipeline,
     # with config provenance; bools use the strict spellings
     app2 = _appeal.Appeal(name='one')
-    @app2.global_command()
+    cfg2 = {}
+    @app2.global_command(config=cfg2)
     def solo(*, jobs: int = 1, verbose=False):
         return (jobs, verbose)
-    assert app2.process([], config={'jobs': 4}).result == (4, False)
+    cfg2.update({'jobs': 4})
+    assert app2.process([]).result == (4, False)
+    cfg2.clear(); cfg2.update({'jobs': 'banana'})
     try:
-        app2.process([], config={'jobs': 'banana'}).result
+        app2.process([]).result
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert str(e).startswith('config:'), e
+    cfg2.clear(); cfg2.update({'verbose': 'maybe'})
     try:
-        app2.process([], config={'verbose': 'maybe'}).result
+        app2.process([]).result
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert 'boolean' in str(e), e
-    # verbose: false means absent: the default fills (and a
-    # **kwargs option would stay an absent key)
-    assert app2.process([], config={'verbose': 'off'}).result == (1, False)
-
-    # a commands-only program has nowhere for config to land
-    app3 = _appeal.Appeal(name='n')
-    @app3.command()
-    def go():
-        return 'went'
-    try:
-        app3.process(['go'], config={'anything': 1}).result
-        assert False, 'expected AppealDataError'
-    except AppealDataError as e:
-        assert 'no global command' in str(e), e
+    # verbose: false means absent: the default fills
+    cfg2.clear(); cfg2.update({'verbose': 'off'})
+    assert app2.process([]).result == (1, False)
 
 
 def test_command_name_underscores_become_dashes():
@@ -4773,7 +4771,8 @@ def test_flag_explicit_boolean():
 
     # THE POINT: the command line can turn OFF what config turned on
     app2 = _appeal.Appeal(name='layer')
-    @app2.global_command()
+    vcfg = {}
+    @app2.global_command(config=vcfg)
     def top(*, verbose=False):
         print('verbose', verbose)
     @app2.command()
@@ -4781,11 +4780,13 @@ def test_flag_explicit_boolean():
         pass
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app2.process(['--verbose=false', 'work'], config={'verbose': True}).result
+        vcfg.clear(); vcfg.update({'verbose': True})
+        app2.process(['--verbose=false', 'work']).result
     assert out.getvalue().strip() == 'verbose False'
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        app2.process(['work'], config={'verbose': True}).result
+        vcfg.clear(); vcfg.update({'verbose': True})
+        app2.process(['work']).result
     assert out.getvalue().strip() == 'verbose True'
 
 
@@ -5382,14 +5383,14 @@ def test_appeal_error_umbrella():
 
     # a bad config boolean carries the usage it always meant to
     app3 = _appeal.Appeal(name='t3')
-    @app3.global_command()
+    @app3.global_command(config={'verbose': 'maybe'})
     def top(*, verbose=False):
         pass
     @app3.command()
     def work():
         pass
     try:
-        app3.process(['work'], config={'verbose': 'maybe'}).result
+        app3.process(['work']).result
         assert False, 'expected AppealDataError'
     except _appeal.AppealDataError as e:
         assert "can't read 'maybe'" in str(e)
@@ -5406,36 +5407,35 @@ def test_config_group_options_and_empty_config():
     def wh(x: int, *, deep: int = 0):
         return (x, deep)
     seen = []
-    def make():
+    def make(cfg=None):
         app = Appeal(name='cfg')
         seen.clear()
-        @app.global_command()
+        @app.global_command(config=cfg)
         def top(*, where: wh = None):
             seen.append(where)
         @app.command()
         def go():
             pass
         return app
-    make().process(['go'], config={'where': {'x': 1, 'deep': 3}}).result
+    make({'where': {'x': 1, 'deep': 3}}).process(['go']).result
     assert seen[0] == (1, 3), seen
-    make().process(['go'], config={'where': {'x': 1}}).result
+    make({'where': {'x': 1}}).process(['go']).result
     assert seen[0] == (1, 0), seen
     # atomic per option: argv naming the group wins WHOLE--the
     # config's inner option must not leak in
-    make().process(['--where', '9', 'go'],
-                   config={'where': {'x': 1, 'deep': 3}})
+    make({'where': {'x': 1, 'deep': 3}}).process(['--where', '9', 'go'])
     assert seen[0] == (9, 0), seen
     # unknown keys still refuse, by name
     try:
-        make().process(['go'], config={'where': {'x': 1, 'zz': 2}}).result
+        make({'where': {'x': 1, 'zz': 2}}).process(['go']).result
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert 'zz' in str(e)
     # a scoped INNER option refuses like a scoped top-level one:
     # a mapping has no position
-    def top2_factory():
+    def top2_factory(cfg=None):
         app = Appeal(name='sc')
-        @app.global_command()
+        @app.global_command(config=cfg)
         def top2(*, w1: wh = None, w2: wh = None):
             pass
         @app.command()
@@ -5443,22 +5443,11 @@ def test_config_group_options_and_empty_config():
             pass
         return app
     try:
-        top2_factory().process(['go2'], config={'w1': {'x': 1, 'deep': 3}}).result
+        top2_factory({'w1': {'x': 1, 'deep': 3}}).process(['go2']).result
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'scoped' in str(e) and 'deep' in str(e)
 
-    # commands-only app: empty config no-ops, nonempty refuses
-    app = Appeal(name='solo')
-    @app.command()
-    def solo():
-        return 'ran'
-    assert app.process(['solo'], config={}).result == 'ran'
-    try:
-        app.process(['solo'], config={'x': 1}).result
-        assert False, 'expected AppealDataError'
-    except AppealDataError as e:
-        assert 'no global command' in str(e)
 
 
 def test_config_error_provenance_is_structural():
@@ -5468,9 +5457,9 @@ def test_config_error_provenance_is_structural():
     # a bad positional (count='banana') flipped to AppealDataError
     # merely because config supplied option 'a' and the letter a
     # appears in the message.
-    def make():
+    def make(cfg=None):
         app = Appeal(name='m')
-        @app.global_command()
+        @app.global_command(config=cfg)
         def top(count: int, *, a='', level: int = 0):
             pass
         @app.command()
@@ -5480,7 +5469,7 @@ def test_config_error_provenance_is_structural():
     # a bad ARGV positional stays a usage error, config or not
     for config in (None, {'a': 'x'}):
         try:
-            make().process(['banana', 'go'], config=config).result
+            make(config).process(['banana', 'go']).result
             assert False, 'expected UsageError'
         except AppealDataError as e:
             # unprefixed canonical (ruled 2026-07-25; matches 0.6.4,
@@ -5489,7 +5478,7 @@ def test_config_error_provenance_is_structural():
             assert not str(e).startswith('config:')
     # a bad CONFIG value converts, and says so
     try:
-        make().process(['1', 'go'], config={'level': 'banana'}).result
+        make({'level': 'banana'}).process(['1', 'go']).result
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert type(e) is AppealDataError
@@ -5499,14 +5488,15 @@ def test_config_error_provenance_is_structural():
     def wh(x: int, *, deep: int = 0):
         return (x, deep)
     app = Appeal(name='m3')
-    @app.global_command()
+    cfg3 = {'where': {'x': 'nope'}}
+    @app.global_command(config=cfg3)
     def top3(*, where: wh = None):
         pass
     @app.command()
     def go3():
         pass
     try:
-        app.process(['go3'], config={'where': {'x': 'nope'}}).result
+        app.process(['go3']).result
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert str(e).startswith('config:') and e.param == 'x'
@@ -5522,14 +5512,14 @@ def test_config_scoped_refusal():
     def child(p, *, flavor=''):
         return (p, flavor)
     app = _appeal.Appeal(name='t')
-    @app.global_command()
+    @app.global_command(config={'flavor': 'sour'})
     def mg(a, b: child = None, c: child = None):
         pass
     @app.command()
     def work():
         pass
     try:
-        app.process(['work'], config={'flavor': 'sour'}).result
+        app.process(['work']).result
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'position decides' in str(e)
@@ -6335,6 +6325,65 @@ def test_precommand_index_conflict_raises():
         out.append(('extra', e))
     ok.process(['-v', '-e', 'go'])
     assert out == [('E', True), ('extra', True), ('go',)], out
+
+
+def test_precommand_config_bound_dicts():
+    # config binds to a precommand via @precommand(config=<dict>) (Larry,
+    # 2026-08-25): you bind the dict at decoration and fill it before dispatch
+    # (Appeal holds the SAME object), and its values layer onto THAT
+    # precommand's options (defaults < config < argv).  No global slot, no
+    # process(config=): each precommand routes to its own dict.
+    import appeal as _appeal
+    # (1) bind empty, fill late
+    cfg = {}
+    app = _appeal.Appeal('one')
+    @app.precommand(config=cfg)
+    class App:
+        def __init__(self, *, jobs: int = 1, verbose=False):
+            self.jobs = jobs
+            self.verbose = verbose
+    @app.command()
+    def build(t):
+        return t
+    cfg.update({'jobs': '4', 'verbose': 'yes'})       # e.g. read from disk
+    c = app.process(['build', 'x']).instances[1][1]
+    assert (c.jobs, c.verbose) == (4, True)
+    c = app.process(['--jobs', '9', 'build', 'x']).instances[1][1]
+    assert c.jobs == 9                                # argv wins, whole
+
+    # (2) two precommands, each its own dict -- "config into two of them"
+    a_cfg, b_cfg = {}, {}
+    seen = []
+    app2 = _appeal.Appeal('two')
+    @app2.precommand(config=a_cfg)
+    def alpha(*, host='localhost'):
+        seen.append(('alpha', host))
+    @app2.precommand(config=b_cfg)
+    def beta(*, size: int = 0):
+        seen.append(('beta', size))
+    @app2.command()
+    def go():
+        seen.append('go')
+    a_cfg.update({'host': 'h'})
+    b_cfg.update({'size': '5'})
+    app2.process(['go'])
+    assert seen == [('alpha', 'h'), ('beta', 5), 'go'], seen
+
+    # (3) strict keys are per-precommand: a key that isn't this precommand's
+    # option is a loud error
+    bad = {'nope': 1}
+    app3 = _appeal.Appeal('three')
+    @app3.precommand(config=bad)
+    def only(*, real=False):
+        pass
+    @app3.command()
+    def work():
+        pass
+    try:
+        app3.process(['work'])
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert "isn't an option" in str(e), e
 
 
 def test_subcommand():
@@ -7304,10 +7353,12 @@ def test_readme_examples():
             out = io.StringIO()
             try:
                 with contextlib.redirect_stdout(out):
-                    if config is None:
-                        app.process(list(argv)).result
-                    else:
-                        app.process(list(argv), config=dict(config)).result
+                    if config is not None:
+                        # config now binds to a precommand: fill the example's
+                        # bound dict (which it registered via config=...)
+                        bound = namespace['config']
+                        bound.clear(); bound.update(config)
+                    app.process(list(argv)).result
             except Exception as e:
                 raise AssertionError(
                     f'{where} {argv!r} raised: {e}') from e

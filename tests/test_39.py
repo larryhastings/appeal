@@ -261,19 +261,19 @@ def test_config_mapping_option():
     # dict[K,V] through the config layer: a mapping (and only a
     # mapping) shapes into KEY=VALUE occurrences
     seen = []
-    def make_app():
+    def make_app(cfg=None):
         app = Appeal(name='cfgm')
-        @app.global_command()
+        @app.global_command(config=cfg)
         def top(*, env: dict[str, str] = None):
             seen.append(env)
         @app.command()
         def go():
             pass
         return app
-    make_app().process(['go'], config={'env': {'k': 'v'}}).result
+    make_app({'env': {'k': 'v'}}).process(['go']).result
     assert seen == [{'k': 'v'}], seen
     try:
-        make_app().process(['go'], config={'env': 5}).result
+        make_app({'env': 5}).process(['go']).result
         assert False, 'expected AppealDataError'
     except appeal.AppealDataError as e:
         assert 'mapping' in str(e), e

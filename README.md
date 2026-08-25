@@ -125,8 +125,9 @@ APIs--it runs all the old tests--but adds a bounty of new marquee powers:
 * **A class as your whole program**: `__init__` handles the
   global options, decorated methods are the commands.  The
   old "preparers" are gone, it *just works.*
-* **Config layering**: hand `main()` a dict of settings from
-  your config file; the command line still wins.
+* **Config layering**: bind a dict of settings to a precommand
+  (`@app.precommand(config=...)`), fill it from your config
+  file; the command line still wins.
 * An interactive **REPL**, turning your command-line interface
   into a mini-shell.
 * **MCP support.**  Writing tools for AI robots?  Appeal will
@@ -1977,14 +1978,19 @@ row's values to parameters *by name*, read_mapping-style.
 ### Config layering
 
 New in 1.0, and better than calling `read_mapping`
-yourself for the common case: hand the config dict directly to
-`main()` (or `process()`, or `parse()`):
+yourself for the common case: **bind a config dict to a
+precommand** and its option values layer from it.  You bind the
+dict when you register the precommand and fill it later--Appeal
+holds the same object, so an empty dict you `.update()` before
+`main()` is seen:
 
 ```Python
 import appeal
 app = appeal.Appeal(name='edit')
 
-@app.global_command()
+config = {}                       # bind it now, fill it before main()
+
+@app.global_command(config=config)
 def global_command(*, editor='vi', verbose=False):
     print(f"editor={editor} verbose={verbose}")
 
@@ -1992,16 +1998,18 @@ def global_command(*, editor='vi', verbose=False):
 def work(file):
     print(f"editing {file}")
 
-config = {'editor': 'emacs'}      # you read this from your rc file
-app.main(config=config)
+config.update({'editor': 'emacs'})   # you read this from your rc file
+app.main()
 ```
 
 The layering rules are fixed and unknobbed:
 
-* Config supplies **the global command's options only**.
-  Config holds program-wide settings; the command line names
-  the work.  One dict--if you have several layers (system,
-  user, project), merge them yourself first.
+* Config supplies **that precommand's options only**.  Config
+  holds program-wide settings; the command line names the work.
+  Bind a different dict to each precommand that wants one--no
+  single global slot, no guessing which precommand a mapping is
+  for.  If you have several layers (system, user, project),
+  merge them into the one dict yourself first.
 * Precedence is **defaults < config < args**, atomic per
   option: an option the command-line mentions wins *whole*
   (repeatable options replace, never append--the command line
@@ -2033,7 +2041,7 @@ simultaneously (imagine an app server handling commands for
 many users, each with their own config):
 
 ```Python
-processor = app.parse(args, config=config)   # stage 1: parse only
+processor = app.parse(args)                  # stage 1: parse only
 status = processor.execute()                 # stage 2: run the commands
 ```
 
@@ -2050,7 +2058,8 @@ one wins, and the rest adopt the winner.)
 `app.instances` is a convenience alias for the latest run's.
 `app.process(args)` is parse-plus-execute in one call, and
 `app.main(args)` is `process()` plus polite error printing
-plus the exit-code protocol.  Every layer takes `config=`.
+plus the exit-code protocol.  Config isn't passed here--bind it
+per precommand via `@app.precommand(config=...)`.
 
 
 ## Standalone Scripts: The North Star
@@ -2320,14 +2329,14 @@ Used as a decorator.  Renames how one positional parameter (or
 option metavar) displays in usage: `@app.parameter('path',
 usage='FILE')`.
 
-`Appeal.main(args=None, config=None)`
+`Appeal.main(args=None)`
 
 Processes a command-line and calls your command functions.
 Catches data errors and prints them politely (to stdout, with
 usage); returns the exit status (also usable as
 `sys.exit(app.main())`).  `args` defaults to `sys.argv[1:]`.
 
-`Appeal.process(args=None, config=None)`
+`Appeal.process(args=None)`
 
 Like `main()`, but catches nothing and returns the last
 command's return value.  The automation entry point.  `args`
