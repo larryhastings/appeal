@@ -45,7 +45,6 @@ one command-line string.
 | annotation = `tuple[T1, T2, ...Tn]` on a positional param | one slot consuming n operands, building a tuple; elements recurse (converters, nested tuples).  `tuple[T, ...]` (variable-length) refused by name--use `*args`. |
 | annotation = `tuple[T1, ...Tn]` on an option | a multi-operand value option building a tuple (`--span 3 4`); elements must be terminals; `tuple[T, ...]` refused by name--use `list[T]` |
 | converter subclassing `Option` | repeatable option with a custom fold (v1's protocol; v1 spelled this `MultiOption`, now an alias): `init(default)` once, `option(...)` per occurrence--its signature defines the per-occurrence operands, each a required terminal, converted; zero and multi-operand occurrences both work (`--pt 3 4`)--and `render()` produces the value.  **If the option is never given, the class is never instantiated**: the parameter's default passes through untouched.  Only meaningful on options; refused by name elsewhere. |
-| converter subclassing `StrictOption` | same protocol, AT MOST ONCE: a second occurrence is "specified more than once" (ruled 2026-07-09: strictness is opt-in, by name--this is the only place repetition still errors; v1 spelled this `Option`) |
 | default value, no annotation | converter is `type(default)` if in `{str, int, float}`, else `str` |
 | default value is a `list`, no annotation | a group inferred from the element types: `b=[0, 0.0]` takes an int and a float and produces a list (v1's corpus) |
 
@@ -56,10 +55,11 @@ one command-line string.
   probed: parameter `n` has only `-n`; `--n` doesn't exist).  An
   option that ends up with no strings at all (one-char name, letter
   taken) is a named config error.
-* **Options don't repeat** (v1, probed): a flag, value option, or
-  `Option`-class option given twice is `UsageError: specified more
-  than once`.  Only the repeatable kinds collect occurrences
-  (`list[T]`, `dict[K, V]`, `MultiOption`).
+* **Repetition is last-one-wins** (ruled 2026-07-09): a flag or a
+  single-value option given twice keeps the *last* occurrence--the
+  command line can always override or subtract, and a repeated flag is
+  idempotent.  Only the repeatable kinds *collect* occurrences
+  (`list[T]`, `dict[K, V]`, and `Option` subclasses).
 * Short name: the parameter's first letter (`-v`), assigned first-
   declared-first-served (walk order: a rule's own options, then its
   children's, depth-first); an option whose letter is taken gets no
@@ -96,15 +96,15 @@ one command-line string.
 * **`@app.parameter(name, *, usage=...)`** renames one parameter
   wherever it shows: an operand's name in usage lines and help
   tables, or an option's metavar (`[-t|--times COUNT]`--the rename
-  is literal, unadorned by `positional_argument_usage_format`).
+  is literal, replacing the default `<NAME>` decoration).
   v1's API, extended--v1's `@app.parameter` only reached operands; the
   option metavar was unrenamable.  Decorate a converter directly
   to rename its parameters.  `argument` is v1's deprecated alias,
   kept.  Naming a parameter the function doesn't have is a config
   error.
 * An option's own parameters are its operands: `def serve(*, port: int)`
-  gives `--port port` (the operand shows the parameter name, per
-  `positional_argument_usage_format`).  An option converter with
+  gives `--port <PORT>` (the operand shows the parameter name,
+  decorated by default).  An option converter with
   several parameters consumes several operands per use, each shown
   by its own parameter name (`--where x y`; v1, probed).
   Parameters with defaults make those operands *optional*--the
@@ -173,9 +173,9 @@ one command-line string.
   could claim it, the forced window claims its forcer
   immediately, and forcing happens **at most once per key per
   line** (ruled: chain-conjuring only ever made all-defaults
-  husks).  A capacity-full window makes a second occurrence
-  "specified more than once"; an occurrence with nowhere to go
-  errors, naming the option.  The gate rule exempts scoped keys
+  husks).  An occurrence with nowhere to go--no window can claim it--errors,
+  naming the option (the "only becomes available if you specify ..."
+  availability message).  The gate rule exempts scoped keys
   (their placement is the interval model's business).  Unique
   option strings keep flat recognition unchanged: one declaring
   window is every position's nearest.  In help, a duplicated
@@ -324,22 +324,19 @@ polite `main()` handling catches the whole data family.
 
 ## Help
 
-Usage lines render an operand as its **parameter name**
-(`[-t|--times times]`, `[--width width]`)--v1's default, restored.
-The exact rendering is the constructor knob
-`positional_argument_usage_format` (default `'{name}'`; the only
-interpolations are `{name}` and `{name.upper()}`, so `'<{name}>'`
-gives `<times>` and `'{name.upper()}'` gives `TIMES`).  It decorates
-positional operands and option operands (opargs) alike; an explicit
-`@app.parameter(usage=...)` rename is literal and overrides the
-format outright.  Usage lines wrap at whole units--a bracket group
-never splits across lines--with continuations aligned under the
-first.
+Usage lines render an operand as its **parameter name, bracketed and
+upper-cased**: `[-t|--times <TIMES>]`, `<WIDTH>`.  That's the default
+`argument_decoration` presentation transform (`<{name.upper()}>`);
+an explicit `@app.parameter(usage=...)` rename replaces it, literally.
+It decorates positional operands and option operands (opargs) alike.
+Usage lines wrap at whole units--a bracket group never splits across
+lines--with continuations aligned under the first.
 
 `-h` and `--help` exist automatically (v1, probed): they print the
-usage line, then the command's docstring re-wrapped to the margin
-at *run time* by the embedded word-wrap trio (bake the formatter,
-not the text; indented paragraphs pass through intact).  Help wins
+usage line, then the command's docstring rendered to the margin at
+*run time* through big's markdown + stylesheet pipeline (imported
+lazily, so the success path never pays for it; indented paragraphs
+pass through intact).  Help wins
 even when required operands are missing, exits successfully, and
 never appears in the usage line.  The user's options always win
 the strings: claim `-h` and help keeps only `--help`; claim
@@ -447,9 +444,9 @@ converter may depend on an earlier command's effects).  A
 have already run, like `make` stopping mid-build.  A nonzero int
 return halts dispatch and becomes the result (v1's early-exit
 contract, now uniform across every command on the line).
-`app.parse(args)` returns the stage-1 artifact--a `Processor`,
-v1's name returned leaner--and `processor.execute()` is stage 2;
-`app.process()` is both, fused.  The Processor's `instances` list
+`app.process(args)` parses and runs, returning the `Processor` for
+that run; a whole-line structural pre-scan validates the command set
+before any command runs (there is no separate public parse-only call).  The Processor's `instances` list
 is the execution log, one `(command, instance)` pair per command
 run, in order (the global command logs `(None, ...)`; instances
 arrive with class-based commands).
