@@ -6152,6 +6152,45 @@ def test_class_as_app_bic():
     assert type(instance).__name__ == 'Job'
 
 
+def test_class_default_method_binds():
+    # a class-as-app's DEFAULT command, when it's a method, binds to the
+    # constructed instance exactly as a named method command does (the
+    # default slot goes through the same owner-derivation + self-binding).
+    import appeal as _appeal
+    out = []
+    app = _appeal.Appeal(name='git-ish')
+
+    @app.precommand()
+    class MyApp:
+        def __init__(self, *, verbose=False):
+            self.verbose = verbose
+
+        @app.command()
+        def push(self, remote):
+            out.append(('push', remote, self.verbose))
+
+        @app.default()
+        def status(self):
+            out.append(('status', self.verbose))
+
+    app.process(['-v', 'push', 'origin'])
+    assert out == [('push', 'origin', True)], out
+    out.clear()
+    app.process(['-v'])                       # no command named -> the default
+    assert out == [('status', True)], out
+    # a plain-function default still works (no class claims it, no self)
+    out.clear()
+    app2 = _appeal.Appeal(name='plain')
+    @app2.command()
+    def go(a):
+        pass
+    @app2.default()
+    def fallback():
+        out.append('fell-back')
+    app2.process([])
+    assert out == ['fell-back'], out
+
+
 def test_subcommand():
     # @app.subcommand(parent, name=) (ruled 2026-08-10): parent
     # is a command word PATH string or None, EXPLICIT always--

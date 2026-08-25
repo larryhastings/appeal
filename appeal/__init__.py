@@ -1547,6 +1547,11 @@ class Appeal:
                                 f"at {place} (the same-world "
                                 f"rule)")
                     claim(child)
+                # a node's DEFAULT command may itself be a method of the
+                # class (same slot-agnostic membership as a command)
+                dfn = node._node_default
+                if dfn is not None and id(dfn) in members:
+                    owners[id(dfn)] = key
             claim(self)
 
     def option(self, name, *options, annotation=None,
@@ -2272,7 +2277,10 @@ class Appeal:
             # -- it processes pre-command options; it doesn't answer a bare line.
             if self._default is not None:
                 if dry:
-                    d_plan = self._build(self._default)
+                    owner = self._method_owner.get(id(self._default))
+                    if owner is None:               # a self-method no class
+                        _refuse_orphan_method(self._default)   # claimed: refuse
+                    d_plan = self._build(self._default, method_of=owner)
                     dcls = build_converters([d_plan])[_converter_key(d_plan)]
                     built.append(dcls)
                 else:
