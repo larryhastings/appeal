@@ -6191,6 +6191,42 @@ def test_class_default_method_binds():
     assert out == ['fell-back'], out
 
 
+def test_precommand_methods_and_hoist():
+    # methods of a class-as-app can be precommand ERAS: they bind to the
+    # constructed instance, and the class's own precommand is hoisted to run
+    # before them (the wand) so the instance exists -- even though Python
+    # registers the in-body method decorators before the class's.
+    import appeal as _appeal
+    out = []
+    app = _appeal.Appeal('demo')
+
+    @app.precommand()
+    class App:
+        def __init__(self, *, v=False):
+            out.append(('init', v)); self.v = v
+        @app.precommand()
+        def first(self):
+            out.append(('first', self.v))
+        @app.precommand()
+        def second(self):
+            out.append(('second', self.v))
+        @app.command()
+        def go(self):
+            out.append(('go',))
+
+    # a standalone function precommand registered AFTER the class (so it is
+    # _precommands[-1]) must not displace the class as the app it belongs to
+    @app.precommand()
+    def extra(*, e=False):
+        out.append(('extra', e))
+
+    app.process(['-v', '-e', 'go'])
+    # class constructs first, its method-eras follow in order (each with self),
+    # then the standalone function era, then the command
+    assert out == [('init', True), ('first', True),
+                   ('second', True), ('extra', True), ('go',)], out
+
+
 def test_subcommand():
     # @app.subcommand(parent, name=) (ruled 2026-08-10): parent
     # is a command word PATH string or None, EXPLICIT always--

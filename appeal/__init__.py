@@ -1508,13 +1508,21 @@ class Appeal:
         """
         owners = self._method_owner
         classes = []                    # (cls, mount node)
-        if self._impl is not None and _is_class_command(self._impl):
-            classes.append((self._impl, self))
+        seen = set()
+        def add_class(fn, mount):
+            # a class mounted in ANY slot (precommand era, command, default);
+            # dedup so a class that is both _impl and a precommand counts once
+            if (fn is not None and _is_class_command(fn)
+                    and id(fn) not in seen):
+                seen.add(id(fn))
+                classes.append((fn, mount))
+        add_class(self._impl, self)     # the global command (incl bare @app)
         def find(node):
+            for pre in node._precommands:
+                add_class(pre, node)    # a class precommand era
+            add_class(node._node_default, node)
             for child in node._children.values():
-                impl = child._impl
-                if impl is not None and _is_class_command(impl):
-                    classes.append((impl, child))
+                add_class(child._impl, child)
                 find(child)
         find(self)
         for cls, mount in classes:
@@ -1552,6 +1560,12 @@ class Appeal:
                 dfn = node._node_default
                 if dfn is not None and id(dfn) in members:
                     owners[id(dfn)] = key
+                # a precommand ERA may also be a method/inner class of the
+                # class (the class's own precommand isn't in its own __dict__,
+                # so it never self-claims)
+                for pre in node._precommands:
+                    if pre is not None and id(pre) in members:
+                        owners[id(pre)] = key
             claim(self)
 
     def option(self, name, *options, annotation=None,
@@ -2122,9 +2136,36 @@ class Appeal:
             pre = self._precommand_plan()
             if pre is not None:
                 plans.append(pre)
-        for era in self._precommands:
-            plans.append(self._build(era))
+        for era in self._ordered_precommands():
+            owner = self._method_owner.get(id(era))
+            if owner is None:                       # a self-method no class
+                _refuse_orphan_method(era)          # claimed: refuse by name
+            plans.append(self._build(era, method_of=owner))
         return plans
+
+    def _ordered_precommands(self):
+        """
+        Registration order, with one adjustment (Larry's wand, 2026-08-25):
+        a class precommand runs before any precommand that is a member (method,
+        inner class, or BIC) of that class -- a member can't get its instance
+        until the class has built it.  Minimal perturbation of registration
+        order: a class currently sitting after one of its own members is moved
+        to just before its first member.
+        """
+        order = list(self._precommands)
+        owners = self._method_owner
+        for cls in [p for p in order if _is_class_command(p)]:
+            key = getattr(cls, '__qualname__', None)
+            members = [i for i, p in enumerate(order)
+                       if p is not cls and owners.get(id(p)) == key]
+            if not members:
+                continue
+            first = min(members)
+            ci = order.index(cls)
+            if ci > first:
+                order.pop(ci)
+                order.insert(first, cls)
+        return order
 
     def process(self, args=None, config=None):
         """
@@ -2170,6 +2211,8 @@ class Appeal:
         result = inherited
         for cls, era_plan in zip(precommands, era_plans):   # head eras, in order
             conv = cls()
+            if cls.binds is not None and not dry:   # a method/BIC precommand:
+                conv.bound = env.get(cls.binds)     # self is its class's instance
             # -h/--help/-V/--version is Appeal's own metadata precommand: its
             # body sys.exit()s the help/version page and outranks parsing, so it
             # must run even in the dry pre-scan -- otherwise the pre-scan would
