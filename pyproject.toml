@@ -28,10 +28,11 @@ dynamic = [
     'description',
     ]
 dependencies = [
-    # only consulted at emission time (big.snip carves the
-    # runtime snippets); parsing in-process never imports it,
-    # and emitted scripts need neither big nor appeal
-    "big >= 0.14",
+    # help, usage, and error output render through big's markdown +
+    # stylesheet pipeline; 0.15 adds the StyledText node the help tables
+    # rely on.  (Argument parsing itself never imports big -- only
+    # presentation does, lazily, so the success path stays fast.)
+    "big >= 0.15",
 ]
 
 [project.urls]
