@@ -3418,6 +3418,34 @@ def test_init_config_layering_edges():
         assert str(e) == 'config: must be non-negative'
 
 
+def test_help_collapses_blank_line_runs():
+    # a code block in a docstring can preserve two blank lines in a row, which
+    # render_baked_help collapses (\n\n\n -> \n\n) so help output never shows a
+    # gaping gap
+    import appeal, io, contextlib
+    from big.stylesheet import strip_styles
+    app = appeal.Appeal('p')
+    @app.command()
+    def go(x):
+        """Summary.
+
+        Example:
+
+        ```
+        line one
+
+
+        line two
+        ```
+
+        Done.
+        """
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.help('go')
+    assert '\n\n\n' not in strip_styles(out.getvalue()), out.getvalue()
+
+
 def test_presentation_fiddly_reachable():
     import appeal, io, contextlib
     from big.stylesheet import strip_styles
