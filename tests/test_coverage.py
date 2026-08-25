@@ -2680,6 +2680,59 @@ def test_oparg_name_fallbacks():
     assert '--pt' in strip_styles(build_plan(cmd2).usage())
 
 
+def test_backend_availability_and_counts():
+    import appeal
+    from appeal.backend import build_converters, _converter_key
+    from appeal import build_plan, execute
+    def run(f, argv):
+        plan = build_plan(f)
+        word = plan.name.replace('_', '-')
+        cls = build_converters([plan])[_converter_key(plan)]
+        try:
+            return ('ok', execute({word: cls}, [word] + list(argv)))
+        except appeal.AppealDataError as e:
+            return ('usage', str(e))
+    # _valid_counts renders a group option's valid operand counts, including
+    # the optional-leaf ({0, 1}) branch: grp(a, b=0) accepts 1 or 2
+    def grp(a: int, b: int = 0):
+        return (a, b)
+    def f1(*, g: grp = None, tail=''):
+        return g
+    assert run(f1, ['-g']) == ('usage', 'option -g takes 1 or 2')
+    # _own_shape skips a RepeatInstruction: a *args-bearing group summoned by
+    # its own option, starved of its fixed operand, names that operand
+    def sub(first: int, *rest: int, tag=False):
+        return (first, rest, tag)
+    def d3(g: sub = None, tail=''):
+        return g
+    assert run(d3, ['--tag']) == \
+        ('usage', '--tag only becomes available if you specify <FIRST>')
+    # _own_shape reads a PreOptionInstruction (a nested-group chain); when the
+    # starved converter typed no option of its own, the hint is 'expected ...'
+    def leaf(x: int, *, flag=False):
+        return (x, flag)
+    def mid(a: int, inner: leaf = None):
+        return (a, inner)
+    def d5(m: mid = None, tail=''):
+        return m
+    assert run(d5, ['--flag']) == ('usage', 'expected <A>')
+    # a group's single-oparg VALUE option whose string the command ALSO owns
+    # is shadowed (the command's own wins) when building the group's PreOptions
+    def vgrp(x: int, *, level: str = 'info'):
+        return (x, level)
+    def owns_level(g: vgrp = None, *, level: str = 'info'):
+        return (g, level)
+    assert run(owns_level, ['--level', 'debug', '5']) == ('ok', ((5, 'info'), 'debug'))
+    # the same shadow at a NESTED subchain level (grandparent -> parent -> leaf)
+    def leaf2(x: int, *, flag=False):
+        return (x, flag)
+    def mid2(inner: leaf2 = None, *, flag=False):
+        return (inner, flag)
+    def owns_flag(m: mid2 = None, *, flag=False):
+        return (m, flag)
+    assert run(owns_flag, ['--flag']) == ('ok', (None, True))
+
+
 def test_frontend_signature_resolution():
     from appeal.frontend import signature, build_plan, subtree_option_keys
     def fn(x):
@@ -2714,6 +2767,88 @@ def test_frontend_parameter_dunders():
     assert "Parameter 'x'" in repr(Parameter('x', k))    # Parameter.__repr__
 
 
+def test_frontend_reachable_edges():
+    import sys
+    from appeal.frontend import (_resolve, build_plan, _clone_tree, Plan,
+                                 dereference_annotated, _is_repeat_group)
+    # _resolve: a __func__-bearing object with no proxied __code__ and no
+    # __self__ (a classmethod object) -> (underlying func, skip-first)
+    def plain(cls, x):
+        return x
+    func, skip = _resolve(classmethod(plain))
+    assert func is plain and skip is True
+    # _resolve: a class defining __new__ (with params) but not __init__
+    class NewOnly:
+        def __new__(cls, x):
+            return super().__new__(cls)
+    fn, drop = _resolve(NewOnly)
+    assert drop is True
+    # sole_terminal_slot: a plan with a terminal AND a nested group that
+    # itself has a terminal has more than one operand -> not transparent
+    def inner(x: int):
+        return x
+    def outer(a: int, b: inner = None):
+        return (a, b)
+    top = build_plan(outer)
+    assert top.sole_terminal_slot() is None
+    # _clone_tree recurses into nested-group (Plan) slot children
+    assert isinstance(_clone_tree(top), Plan)
+    # dereference_annotated short-circuits when 'typing' isn't imported
+    saved = sys.modules.pop('typing', None)
+    try:
+        assert dereference_annotated(int) is int
+    finally:
+        if saved is not None:
+            sys.modules['typing'] = saved
+    # _is_repeat_group: a recipe vocabulary product (split()) is a terminal,
+    # not a repeat group
+    from appeal import split
+    assert _is_repeat_group(split()) is False
+    # extra_overrides merges into (empty) decoration overrides for a param
+    def f(x, y=1):
+        return (x, y)
+    try:
+        build_plan(f, extra_overrides={'x': []})
+    except Exception as e:
+        assert 'x' in str(e)      # reaches the merge loop, then refuses 'x'
+
+
+def test_frontend_reachable_edges_2():
+    import appeal
+    from appeal.frontend import build_plan
+    from appeal.load import read_mapping
+    # table_entry for a nullary option (a zero-arg converter as a flag)
+    def north():
+        return 'N'
+    def cmd(*, direction: north = None):
+        return direction
+    app = appeal.Appeal('c')
+    app(cmd)
+    assert '--direction' in app.complete(['c'], '--dir')
+    # a completion callable whose inspect.signature() raises (a bare builtin)
+    # is tolerated: the structural check treats it as unknown-arity
+    class BadCompl:
+        completions = staticmethod(range)
+    def uses(a: BadCompl = None):
+        return a
+    try:
+        build_plan(uses)
+    except appeal.AppealConfigurationError as e:
+        assert 'consumes' in str(e)   # signature unreadable -> arity check path
+    # a fold used as a POSITIONAL, fed a scalar (not a list) through the read
+    # driver, wraps it as a single occurrence
+    def cmd2(tags: appeal.accumulator[str] = []):
+        return tags
+    assert read_mapping(build_plan(cmd2), {'tags': 'solo'}) == ['solo']
+    # a zero-width group option whose string the command also owns is shadowed
+    # in the reachability check (the command's own wins, no clash raised)
+    def zg(*, flag=False):
+        return flag
+    def cmd3(x: zg = None, *, flag=False):
+        return (x, flag)
+    build_plan(cmd3)
+
+
 def test_backend_more_errors():
     import appeal
     from appeal.backend import build_converter, build_converters, _converter_key
@@ -2744,6 +2879,91 @@ def test_backend_more_errors():
     def h(*, tag: appeal.accumulator[str] = ()):
         pass
     assert both2(h, ['--tag'])[0] == 'usage'
+
+    # -- conjured converter-group fold/value options, value-count errors --
+    from appeal import accumulator, MultiOption
+    # a conjured VALUE option at end of line requires its value
+    class HasName:
+        def __init__(self, *, name: str = ''):
+            self.name = name
+    def cn(gg: HasName, x='x'):
+        return x
+    assert both2(cn, ['--name']) == ('usage', "option '--name' requires a value")
+    # a conjured 0-oparg fold (counter) refuses an attached =value
+    class HasVerbose:
+        def __init__(self, *, verbose: appeal.counter() = 0):
+            self.verbose = verbose
+    def cv(gg: HasVerbose, x='x'):
+        return x
+    assert both2(cv, ['--verbose=3']) == \
+        ('usage', "option '--verbose' doesn't take a value")
+    # a conjured multi-oparg fold given too few values ('N values' wording)
+    class HasPt:
+        def __init__(self, *, pt: accumulator[int, int] = []):
+            self.pt = pt
+    def cp(gg: HasPt, x='x'):
+        return x
+    assert both2(cp, ['--pt', '1']) == \
+        ('usage', "option '--pt' requires 2 values")
+    # a fold with an OPTIONAL oparg tail: minimum met at end-of-line breaks
+    # out cleanly (no error) rather than demanding the optional operand
+    class Pair(MultiOption):
+        def init(self, default):
+            self.v = []
+        def option(self, a, b=''):
+            self.v.append((a, b))
+        def __call__(self):
+            return self.v
+    class HasPair:
+        def __init__(self, *, pr: Pair = []):
+            self.pr = pr
+    def cpr(gg: HasPair, x='x'):
+        return x
+    assert both2(cpr, ['--pr', 'A']) == ('ok', 'x')
+    # a fold buried in a NESTED positional chain: too few values, and the
+    # optional-tail break, both through ConjureChainBinding
+    def enfant(*, pt: accumulator[int, int] = []):
+        return pt
+    def parent(e: enfant = None):
+        return e
+    def gp(p: parent = None, y='y'):
+        return (p, y)
+    assert both2(gp, ['--pt', '1']) == \
+        ('usage', "option '--pt' requires a value")
+    def enfant2(*, pr: Pair = []):
+        return pr
+    def parent2(e: enfant2 = None):
+        return e
+    def gp2(p: parent2 = None, y='y'):
+        return (p, y)
+    assert both2(gp2, ['--pr', 'A']) == ('ok', ([('A', '')], 'y'))
+
+    # a multi-operand group used as an OPTION can't take an attached =value
+    def point(x: int, y: int):
+        return (x, y)
+    def opt_group(*, tail, at: point = None):
+        return (at, tail)
+    assert both2(opt_group, ['-a=1', 'T']) == \
+        ('usage', "option '-a' takes several values; separate them "
+                  "with spaces, not '='")
+    # the trailing-reservation scan spans a multi-operand group option
+    # (GroupBinding) and an optional[group] value option (tuple converter)
+    # to find the trailing operand past them
+    assert both2(opt_group, ['-a', '1', '2', 'T']) == ('ok', ((1, 2), 'T'))
+    from appeal import optional
+    def opt_group2(*, tail, at: optional[point] = None):
+        return (at, tail)
+    assert both2(opt_group2, ['-a', '1', '2', 'T'])[0] in ('ok', 'usage')
+    # a group whose constructor raises ValueError is a polite usage error
+    # ('not a valid <group>') rather than a traceback
+    class Picky:
+        def __init__(self, x):
+            if x == 'no':
+                raise ValueError("nope")
+            self.x = x
+    def uses_picky(p: Picky, y='y'):
+        return (p.x, y)
+    assert both2(uses_picky, ['no']) == ('usage', 'not a valid Picky: nope')
 
 
 def test_backend_execute_edges():
@@ -2971,13 +3191,82 @@ def test_init_reachable_edges():
     assert 'Global derived prose' in o3.getvalue()
 
 
+def test_init_more_reachable_edges():
+    import appeal, io, contextlib
+    Cfg = appeal.AppealConfigurationError
+    # _plan on the root returns the global plan directly
+    app = appeal.Appeal('x')
+    @app.command()
+    def go(a):
+        pass
+    assert app._plan() is app.global_plan
+    # a BARE app (global command via @app, empty command table) whose tier-1
+    # doc= override replaces the derived program prose
+    bare = appeal.Appeal('b', doc="Overridden summary.\n\nBody paragraph.\n")
+    @bare
+    def solo(x):
+        "Original summary."
+    o = io.StringIO()
+    with contextlib.redirect_stdout(o):
+        bare.help()
+    assert 'Overridden summary' in o.getvalue()
+    # _mcp_instance: a non-class program with config refuses (nothing to
+    # construct); with no config it simply returns None
+    fn_app = appeal.Appeal('c')
+    @fn_app
+    def prog(x):
+        pass
+    try:
+        fn_app._mcp_instance({'k': 1})
+        assert False
+    except Cfg as e:
+        assert 'no class to construct' in str(e)
+    assert fn_app._mcp_instance(None) is None
+    # plan_for resolves a nested subcommand by deep walk (matches[0])
+    nested = appeal.Appeal('n')
+    sub = nested.command('db')
+    @sub.command()
+    def add(a):
+        pass
+    assert nested.plan_for('add') is not None
+    # option() on a bound app method (help's knobs) refuses an unknown param
+    knobs = appeal.Appeal('k')
+    @knobs.command()
+    def go(a):
+        pass
+    try:
+        knobs.option('nope', '-x')(knobs.help)
+        assert False
+    except Cfg as e:
+        assert "no parameter 'nope'" in str(e)
+    # option() on the bound help/version precommand allows only help/version
+    try:
+        knobs.option('bogus', '-b')(knobs.help_and_version_precommand)
+        assert False
+    except Cfg as e:
+        assert 'precommand has no parameter' in str(e)
+    # mcp() on a BARE app (no command table) serves the global plan itself;
+    # closed stdin makes the server loop return at once
+    import io as _io, sys as _sys
+    bareapp = appeal.Appeal('bare')
+    @bareapp
+    def prog(x: int):
+        "A prog."
+    saved = _sys.stdin
+    _sys.stdin = _io.StringIO("")
+    try:
+        bareapp.mcp()
+    finally:
+        _sys.stdin = saved
+
+
 def test_presentation_fiddly_reachable():
     import appeal, io, contextlib
     from big.stylesheet import strip_styles
     # _dedent_lines: a line already at the margin -> nothing to strip
     from appeal.presentation import _dedent_lines
     assert _dedent_lines(['a', '  b']) == ['a', '  b']
-    # listing_pieces: a bare multi-command line prints the terse listing
+    # a bare multi-command line prints the terse command listing
     app = appeal.Appeal('pile')
     @app.command()
     def add(item): "Add."
@@ -3000,6 +3289,23 @@ def test_presentation_fiddly_reachable():
     # a malformed def-list in prose (formatted term) passes through as text
     from appeal.presentation import render_markdown_help
     assert 'term' in render_markdown_help("term *x*\n: def\n")
+    # _transform_definition_lists: a def-list-shaped run whose term is
+    # formatted refuses to parse -> the run passes through verbatim
+    from appeal.presentation import _transform_definition_lists
+    src = "*bold*\n: a def\n"
+    assert _transform_definition_lists(src, lambda e: "RENDERED") == src
+    # a shared converter option at slot 0 (nothing before it, an
+    # argument after) qualifies with '(before <ARG>)' -- the after-only
+    # branch of the position qualifier
+    from appeal.frontend import build_plan
+    from appeal.presentation import merge_docs
+    def fancy(width, *, dotted=False):
+        return (width, dotted)
+    def draw(a: fancy = None, mid: int = 0, b: fancy = None):
+        return (a, mid, b)
+    quals = [strip_styles(d) for d, _ in merge_docs(build_plan(draw))['options']]
+    assert any('(before <MID>)' in q for q in quals), quals
+    assert any('(after <MID>)' in q for q in quals), quals
     # a nested group inside an option: option_subtree recurses into the
     # option's converter's own group operand
     def inner(x: int):
