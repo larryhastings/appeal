@@ -123,8 +123,9 @@ compiles once into a small internal plan, and a streaming scanner runs
 that plan. It's dramatically faster and the semantics are finally nailed
 down (there's a whole section at the end for the fussy rules). Also new:
 Markdown help, the `stylesheet=` coloring model, the MCP server,
-`process()` returning an inspectable `Processor`, and eager validation of
-your whole command tree at startup. See the *Changelog* at the end for the
+`process()` returning an inspectable `Processor`, per-precommand config
+layering (`@app.precommand(config=...)`), and eager validation of your
+whole command tree at startup. See the *Changelog* at the end for the
 full list.
 
 ### How fast, exactly
@@ -698,12 +699,28 @@ with history. Handy for exploratory tools.
 
 ## Reading config files
 
-`app.process(argv, config=...)` layers a configuration dict under the
-command line: defaults, then config, then argv--argv always wins, whole
-values at a time. Config only ever supplies *option* values; it never
-changes structure, and a config key that isn't an option is an error, by
-name. (Appeal reads no file formats itself--you hand it a dict, from
-wherever you like: TOML, JSON, environment, your choice.)
+Bind a configuration dict to a precommand with `@app.precommand(config=...)`,
+and its option values layer under the command line: defaults, then config,
+then argv--argv always wins, whole values at a time. You bind the dict when
+you register the precommand and fill it later (Appeal holds the *same*
+object), so an empty dict you `.update()` before `main()` is seen:
+
+```Python
+settings = {}                       # bind now, fill before main()
+
+@app.precommand(config=settings)
+def main(*, editor='vi', jobs: int = 1):
+    ...
+
+settings.update(read_my_rc_file())  # e.g. TOML/JSON/environ--your choice
+app.main()
+```
+
+Config only ever supplies *option* values; it never changes structure, and a
+key that isn't one of that precommand's options is an error, by name. Each
+precommand that wants config binds its own dict--there's no single global
+slot and nothing to guess about which precommand a mapping is for. (Appeal
+reads no file formats itself--you hand it a dict, from wherever you like.)
 
 
 ## Running a command from a dict, a list, or a CSV
@@ -1191,12 +1208,12 @@ child `Appeal` (or the function) so you can nest.
 
 ### Running
 
-* `app.main(args=None, config=None)` — for scripts. Reads `sys.argv[1:]`
-  (or `args`), runs, prints errors politely, and calls `sys.exit()` with the
-  command's return code. Does not return.
-* `app.process(args=None, config=None)` → `Processor` — runs and returns the
-  `Processor` for that run (below) instead of exiting. `config` layers a
-  dict of option defaults under the command line.
+* `app.main(args=None)` — for scripts. Reads `sys.argv[1:]` (or `args`),
+  runs, prints errors politely, and calls `sys.exit()` with the command's
+  return code. Does not return.
+* `app.process(args=None)` → `Processor` — runs and returns the `Processor`
+  for that run (below) instead of exiting. (Config isn't passed here--bind
+  it per precommand with `@app.precommand(config=...)`.)
 * `app.repl(*, prompt=None, banner=None)` — an interactive prompt that runs
   commands line by line.
 
@@ -1204,8 +1221,8 @@ child `Appeal` (or the function) so you can nest.
 
 * `.result` — the command's return value.
 * `.instances` — the `[(command, instance), ...]` execution log, in order.
-* `proc(args, config=None)` — a Processor is itself callable; `process()` is
-  the shortcut that builds one, calls it, and returns it.
+* `proc(args)` — a Processor is itself callable; `process()` is the shortcut
+  that builds one, calls it, and returns it.
 
 ### AI, schema, and completion
 
@@ -1372,6 +1389,12 @@ completion, and a REPL. The full itemized list:
 * A **REPL** (`app.repl()`).
 * Run a command from structured data: `read_mapping` / `read_iterable` /
   `read_csv`, through the same converters.
+* **Config layering binds per precommand**: `@app.precommand(config=<dict>)`
+  layers that dict's values under the command line (defaults < config <
+  argv). You bind the dict at registration and fill it before `main()`
+  (Appeal holds the same object). Each precommand routes to its own dict:
+  there's no `process(config=)` and no single "global command" slot, so
+  config can split across several precommands with nothing to guess.
 
 **API**
 
