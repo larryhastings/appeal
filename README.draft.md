@@ -538,42 +538,67 @@ invocation, to handle program-wide options before any command:
 
 ```Python
 @app.precommand()
-def main(*, config=None, verbose=False):
+def setup(*, verbose=False):
     ...
 ```
 
-Now `script.py --verbose push` runs `main(verbose=True)` and then `push`.
+Now `script.py --verbose push` runs `setup(verbose=True)` and then `push`.
 (A precommand with a required positional argument, and nothing else, is how
 you write a single-function program you invoke with no command word--that's
 the Quickstart at the top.)
 
+Precommand is **repeatable**: decorate several and they run front-to-back,
+each its own era, before any command. They run in registration order; pass
+`index=` to place one explicitly.
+
+A precommand doesn't have to be a function--it can also be a **method**, a
+**class**, or a bound inner class. A class precommand constructs an instance
+(see *Make a whole program out of a class*), and that class's own methods and
+inner classes can themselves be precommands that bind to the instance. When
+they are, Appeal runs the class's precommand before any of its members'--it
+has to, since they need the instance the class builds.
+
+To feed a config file into a precommand's options, bind a dict to it with
+`@app.precommand(config=...)`--see *Reading config files*.
+
 
 ## Make a whole program out of a class
 
-Sometimes the commands share state. Make the class the program: its
-`__init__` is the global command, and its methods are the commands.
+Sometimes the commands share state. Make the class the program: decorate it
+with `@app.precommand()`, and its `__init__` becomes the global command.
+Appeal constructs one instance per run, and the class's methods--decorated
+with `@app.command()` like any other command--bind to that instance:
 
 ```Python
 app = appeal.Appeal()
-app_class, command_method = app.app_class()
 
-@app_class()
+@app.precommand()
 class Tool:
     def __init__(self, *, verbose=False):
         self.verbose = verbose
 
-    @command_method()
+    @app.command()
     def status(self):
         ...
 
-    @command_method()
+    @app.command()
     def deploy(self, target):
         ...
 ```
 
 `script.py --verbose deploy prod` constructs `Tool(verbose=True)` and then
-calls `.deploy('prod')` on it. The instance carries your shared state; the
-methods are ordinary commands.
+calls `.deploy('prod')` on it. `self` is the real object, so the commands
+share state through it.
+
+`@app.default()` works on a method too--the command that runs when the line
+names none binds to the instance just like the others. Nested classes and
+bound inner classes become subcommand trees, constructed through the parent
+instance. And a method can be a `@app.precommand()` era of its own class,
+running (bound) before the commands.
+
+(For code written against Appeal 0.6, `app.app_class()` returns
+`(app_class, command_method)` decorators--a thin compatibility shim over
+exactly this.)
 
 
 # Documenting, coloring, completing, and configuring
