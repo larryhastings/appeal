@@ -619,7 +619,11 @@ def _config_apply(conv, table, global_plan, config, plan_for):
             v = cfg_conv.kwargs[k]
             if isinstance(v, (_Conv, _Opt)):
                 cfg_conv.kwargs[k] = v()
-    except UsageError as e:                     # provenance: it came from config
+    except (UsageError, ValueError, TypeError) as e:
+        # provenance: it came from config.  A group value builds LATE here, so
+        # its converter's own ValueError/TypeError (a helper saying "bad value")
+        # surfaces raw -- catch it too, exactly as the command-line render does,
+        # so config reads politely instead of tracing back.
         raise AppealDataError(f"config: {e}", getattr(e, 'usage', None) or usage,
                               param=getattr(e, 'param', None)) from None
     for k, v in cfg_conv.kwargs.items():
@@ -822,12 +826,18 @@ class Appeal:
     Decoration only records; the plans are built and compiled at
     first use (see "Laziness and late binding" in the grammar doc).
     """
-    def __init__(self, name=None, *, parent=None,
-                 stylesheet=None, version=None, repeat=False,
-                 errors=None, script=_sys.argv[0],
-                 margin=None,
+    def __init__(self, name=None, *,
+                 default_mappings=default_mappings(),
                  default_options=_DEFAULT_OPTIONS,
-                 default_mappings=default_mappings(), doc=None, lazy=False):
+                 doc=None,
+                 errors=None,
+                 lazy=False,
+                 margin=None,
+                 parent=None,
+                 repeat=False,
+                 script=_sys.argv[0],
+                 stylesheet=None,
+                 version=None):
         from .frontend import Decorations
         self.name = name
         # the command tree (v1's model, restored 2026-07-18 by

@@ -3302,6 +3302,26 @@ def test_init_config_layering_edges():
         assert False
     except DataErr as e:
         assert "isn't an option" in str(e)
+    # a group option's converter raising ValueError at its (deferred) render
+    # reads politely as a config error, exactly as the command line does --
+    # not a raw traceback
+    def grp2(x: int, *, flag=False):
+        if x < 0:
+            raise ValueError("must be non-negative")
+        return (x, flag)
+    app2 = appeal.Appeal('cfg3')
+    @app2.global_command()
+    class Config2:
+        def __init__(self, *, at: grp2 = None):
+            self.at = at
+    @app2.command()
+    def go(t):
+        pass
+    try:
+        app2.process(['go', 't'], config={'at': {'x': -5}}).result
+        assert False
+    except DataErr as e:
+        assert str(e) == 'config: must be non-negative'
 
 
 def test_presentation_fiddly_reachable():
