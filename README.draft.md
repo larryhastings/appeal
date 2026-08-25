@@ -1159,13 +1159,46 @@ caught up front, before anything runs; but a *conversion* error partway down
 the line doesn't un-run a command that already ran. A command that returns a
 nonzero integer halts the rest of the line (it's an exit code).
 
-## Appeal and POSIX
+## Command-line parsing rules (POSIX-like, with extensions)
 
-Appeal follows the POSIX Utility Syntax Guidelines where they apply--single
-`-` short options bundle, `--` ends option processing, `--opt=value` and
-`-ovalue` both work--with the deliberate departures documented above (the
-negative-number rule, options-recognized-anywhere, converter groups). It is
-not bug-for-bug argparse.
+Appeal's line syntax is POSIX/GNU-like: if you know how `ls` and `grep` read
+their arguments, you already know most of it. It is *not* bug-for-bug
+argparse.
+
+**What it honors, from the POSIX Utility Syntax Guidelines and GNU:**
+
+* Short options are a single dash and one letter (`-v`); long options are two
+  dashes and a name (`--verbose`).
+* Short flags **bundle**: `-abc` is `-a -b -c`. (See *Short-option
+  bundling*.)
+* An option's value may be **attached** or **separate**: `-j4`, `-j 4`,
+  `--jobs=4`, and `--jobs 4` all pass `4` to `--jobs`.
+* `--` **ends option processing**: everything after it is a positional
+  argument, even if it starts with a dash.
+
+**The extensions and deliberate departures:**
+
+* **Options are recognized anywhere on the line**, freely interleaved with
+  positional arguments--not "all options, then all arguments." `sync -v a b`
+  and `sync a b -v` and `sync a -v b` are the same. (An option only *maps*
+  where its converter is in scope--see *Eras and regions*.)
+* **`--opt=value` / `-o=value` is only for options that take exactly one
+  value.** A multi-operand option (`--where X Y`) refuses the attached form;
+  give its values space-separated. `=` with nothing after it (`--name=`) is
+  the empty string.
+* **Flags take an explicit boolean with `=`**: `--verbose=false` turns off
+  what a config file turned on--exactly `true` or `false`, nothing else.
+* **A `-`-then-digit token is disambiguated**, so `-5` can be a negative
+  number *or* short options depending on what's defined. (See *How a
+  `-`-then-digit token is read*.)
+* **Converters can consume several operands** (`--where X Y`), and an
+  all-optional converter can be *conjured* by one of its own options. (See
+  *Conjuring*.)
+* **Positionals fill left to right, greedily**, skipping an optional only to
+  reach a required *trailing* argument (`cp SRC... DST`). (See *Fill left to
+  right, and never skip to skip*.)
+* **Dispatch is streaming**: commands run as the scanner reaches them, left
+  to right. (See *Streaming dispatch*.)
 
 
 # Reference
