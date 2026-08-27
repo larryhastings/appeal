@@ -2282,7 +2282,7 @@ class ReadmeTests(AppealTestsBase):
         self.exec_readme(
             'Specifying An Option More Than Once',
             1,
-            "fgrep -p=weightless",
+            "fgrep -p weightless",
             "fgrep pattern=['weightless']",
             )
 
@@ -2315,7 +2315,7 @@ class ReadmeTests(AppealTestsBase):
         self.exec_readme(
             'Specifying An Option More Than Once',
             2,
-            "fgrep -p=8",
+            "fgrep -p 8",
             "fgrep pattern=[8]",
             )
 
@@ -2331,7 +2331,7 @@ class ReadmeTests(AppealTestsBase):
         self.exec_readme(
             'Specifying An Option More Than Once',
             2,
-            "fgrep --pattern 2 -p 4 --pattern=6 -p=8 -p 10",
+            "fgrep --pattern 2 -p 4 --pattern=6 -p 8 -p 10",
             "fgrep pattern=[2, 4, 6, 8, 10]",
             )
 
@@ -2554,7 +2554,7 @@ class ReadmeTests(AppealTestsBase):
         self.exec_readme(
             'Options that map other options',
             0,
-            "inception -o=1965 -v",
+            "inception -o 1965 -v",
             "inception option=[1965, True]",
             )
 
@@ -2647,7 +2647,7 @@ class ReadmeTests(AppealTestsBase):
         self.exec_readme(
             'Positional parameters that only consume options',
             0,
-            "mixin -l=elective",
+            "mixin -l elective",
             "mixin log=<Logging verbose=False log_level=elective>",
             )
 
@@ -3159,14 +3159,19 @@ class OptionParsingTests(AppealTestsBase):
         self.assertEqual(app.process(shlex.split("c -f")).result, 'hello')
 
     def test_short_option_equals_value(self):
-        # -f=X is also valid for the same optional-oparg shape.
+        # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-08-27, getopt-pure):
+        # '=' is NOT a separator for short options.  v1 stripped it
+        # (-f=joe was 'joe'); getopt/click/docopt do not, and neither
+        # does v2 now--'-f=joe' binds the rest of the token VERBATIM,
+        # '=' and all, so f is '=joe'.  ('=' remains the separator for
+        # the LONG spelling, --pattern=6.)
         app = self.app
         def with_default(value='hello'):
             return value
         @app.command()
         def c(*, f:with_default=''):
             return f
-        self.assertEqual(app.process(shlex.split("c -f=joe")).result, 'joe')
+        self.assertEqual(app.process(shlex.split("c -f=joe")).result, '=joe')
 
     def test_short_option_concat_binds_rest(self):
         # DELIBERATE v1 -> v2 DIVERGENCE (ruled 2026-07-09):
@@ -3181,10 +3186,10 @@ class OptionParsingTests(AppealTestsBase):
         self.assertEqual(app.process(shlex.split("c -fjoe")).result, 'joe')
 
     def test_short_option_concat_takes_rest_verbatim(self):
-        # DELIBERATE v1 -> v2 DIVERGENCE (same ruling): the rest
-        # is the oparg VERBATIM--only a '=' immediately after the
-        # option letter is a separator.  -fjoe=extra is
-        # -f 'joe=extra' (think -DNAME=1).
+        # DELIBERATE v1 -> v2 DIVERGENCE (same ruling): the rest of
+        # the token is the oparg VERBATIM.  Nothing in it is a
+        # separator--not even a '='--so -fjoe=extra is -f 'joe=extra'
+        # (think -DNAME=1).
         app = self.app
         @app.command()
         def c(*, f=''):

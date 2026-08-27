@@ -2971,8 +2971,8 @@ def test_backend_more_errors():
     def opt_group(*, tail, at: point = None):
         return (at, tail)
     assert both2(opt_group, ['-a=1', 'T']) == \
-        ('usage', "option '-a' takes several values; separate them "
-                  "with spaces, not '='")
+        ('usage', "option '-a' takes several values; it must be last in "
+                  "a bundle with its values as separate words")
     # the trailing-reservation scan spans a multi-operand group option
     # (GroupBinding) and an optional[group] value option (tuple converter)
     # to find the trailing operand past them
@@ -3031,10 +3031,14 @@ def test_backend_option_value_errors():
     def a(*, flag=False): return flag
     status, msg = both(a, ['--flag=x'])
     assert status == 'usage' and 'true' in msg and 'false' in msg, (status, msg)
-    # a counter takes no value, so an attached one is refused
-    def cnt(*, v: appeal.counter() = 0): return v
-    status, msg = both(cnt, ['-v=5'])
+    # a counter takes no value: the LONG '--count=5' is refused with
+    # "doesn't take a value"; the SHORT '-c=5' is getopt-pure, so '='
+    # parses as an unknown short option
+    def cnt(*, count: appeal.counter() = 0): return count
+    status, msg = both(cnt, ['--count=5'])
     assert status == 'usage' and "doesn't take a value" in msg, (status, msg)
+    status, msg = both(cnt, ['-c=5'])
+    assert status == 'usage' and "'-='" in msg, (status, msg)
     # a value option at end of line has nothing to consume
     def b(*, name: str = ''): return name
     status, msg = both(b, ['--name'])

@@ -1182,12 +1182,15 @@ argparse.
   positional arguments--not "all options, then all arguments." `sync -v a b`
   and `sync a b -v` and `sync a -v b` are the same. (An option only *maps*
   where its converter is in scope--see *Eras and regions*.)
-* **`--opt=value` / `-o=value` is only for options that take exactly one
+* **The long `--opt=value` form is only for options that take exactly one
   value.** A multi-operand option (`--where X Y`) refuses the attached form;
   give its values space-separated. `=` with nothing after it (`--name=`) is
-  the empty string.
-* **Flags take an explicit boolean with `=`**: `--verbose=false` turns off
-  what a config file turned on--exactly `true` or `false`, nothing else.
+  the empty string. `=` is a *long*-option separator only: on the short
+  spelling `-o=value` binds the literal oparg `=value` (getopt-style, like
+  `-DNAME=1`); use `-ovalue` or `-o value` to attach a bare value.
+* **Flags take an explicit boolean with `=`, long spelling only**:
+  `--verbose=false` turns off what a config file turned on--exactly `true`
+  or `false`, nothing else.
 * **A `-`-then-digit token is disambiguated**, so `-5` can be a negative
   number *or* short options depending on what's defined. (See *How a
   `-`-then-digit token is read*.)

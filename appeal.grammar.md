@@ -118,11 +118,12 @@ one command-line string.
   valid-counts English, naming the option (v1: "grabs whenever one
   exists, then may fail").  The same rule covers `Option`/
   `MultiOption` subclasses whose `option()` has defaulted
-  parameters (v1, probed).  Attachment: `--name=value` and `-x=value`
-  work whenever the option takes exactly one operand; the bare
-  concatenated short form (`-j5`) additionally requires that one
-  operand to be *optional* (v1, probed: "-p8 isn't allowed, -p must
-  be last because it takes an argument").  An option that can take
+  parameters (v1, probed).  Attachment: the long `--name=value` form
+  works whenever the option takes exactly one operand.  For short
+  options `=` is *not* a separator (getopt-pure, ruled 2026-08-27):
+  the concatenated form `-jvalue` binds the rest of the token as the
+  oparg--required or optional, unlike v1--and `-j=value` binds the
+  literal oparg `=value` (think `-DNAME=1`).  An option that can take
   several operands stands last in its bundle, unattached.
 * `--name=value` and `--name value` are equivalent for single-operand
   options.

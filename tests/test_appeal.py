@@ -461,8 +461,8 @@ def test_option_errors_name_the_typed_spelling():
         return (name, verbose)
     assert run_both(flag, ['x', '--verbose=maybe']) == (
         'usage', "option '--verbose' expected 'true' or 'false'")
-    assert run_both(flag, ['x', '-v=maybe']) == (
-        'usage', "option '-v' expected 'true' or 'false'")
+    # ('-v=maybe' no longer reaches the bool converter: getopt-pure,
+    # '-v' is a flag and '=maybe' parses as more short options.)
     def value(*, color: str = None):
         return color
     assert run_both(value, ['--color']) == (
@@ -2035,13 +2035,15 @@ def test_greedy_opargs():
     # negative numbers for free
     got = run_both(make, ['-j', '-5'])
     assert got == ('ok', ((), -5, False)), got
-    # attachment: bare concat and '=' both work when the one
-    # operand is optional
+    # attachment: bare concat binds the rest of the token
     got = run_both(make, ['-j5'])
     assert got == ('ok', ((), 5, False)), got
+    # getopt-pure (2026-08-27): '=' is NOT a short-option separator, so
+    # '-j=5' binds '=5' verbatim, which the int converter rejects
     got = run_both(make, ['-j=5'])
-    assert got == ('ok', ((), 5, False)), got
-    # '=' hands over exactly one token; greed doesn't continue
+    assert got[0] == 'usage', got
+    # the LONG form keeps '=': it hands over exactly one token; greed
+    # doesn't continue
     got = run_both(make, ['--jobs=5', 'q'])
     assert got == ('ok', (('q',), 5, False)), got
     # last in a bundle, then greedy
@@ -4705,9 +4707,17 @@ def test_bundled_flags():
     assert got == ('ok', (True, 5)), got
     got = run_both(g, ['-n5'])
     assert got == ('ok', (False, 5)), got
+    # getopt-pure (2026-08-27): '=' is NOT a separator for short
+    # options.  The rest of the token binds VERBATIM, '=' and all, so
+    # '-n=5' feeds the int converter '=5', which fails.
     got = run_both(g, ['-n=5'])
-    assert got == ('ok', (False, 5)), got
-    # ...verbatim: '=' is a separator only right after the letter
+    assert got[0] == 'usage', got
+    # a str option shows the verbatim bind plainly
+    def s(*, color='D'):
+        return color
+    got = run_both(s, ['-c=blue'])
+    assert got == ('ok', '=blue'), got
+    # '-dNAME=1' passes 'NAME=1' whole (think '-DNAME=1')
     def h(*, define=''):
         return define
     got = run_both(h, ['-dNAME=1'])
@@ -4728,38 +4738,51 @@ def sub_run(argv, capture_output=True, text=True, **kw):
 
 
 def test_attached_equals_value_rules():
-    # ruled (Larry, 2026-08-25): the `--opt=value` / `-x=value` attached form
-    # is legal ONLY for options that take exactly one oparg.  A multi-oparg
-    # option refuses it (its values can't be jammed into one token), long or
-    # short.  A single-oparg option accepts it, and `=` with nothing after it
-    # means the empty string.
+    # ruled (Larry, 2026-08-25), amended getopt-pure (2026-08-27):
+    # the LONG `--opt=value` attached form is legal only for options
+    # that take exactly one oparg--a multi-oparg option refuses it,
+    # "separate them with spaces, not '='".  For SHORT options `=` is
+    # NOT a separator at all: the rest of the token binds verbatim, so
+    # `-x=v` is the oparg `=v`, and a multi-oparg short still can't
+    # carry an attached value ("must be last in a bundle").
     import appeal as _appeal
 
     def point(x: int, y: int):
         return (x, y)
 
-    # multi-oparg option: attached `=` is illegal, both spellings
+    # multi-oparg option: the LONG attached `=` is illegal, and names '='
     app = _appeal.Appeal('m')
     @app.command()
     @app.option('at', '-2', '--at')          # a digit short, too
     def cmd(*, at: point = None):
         return at
-    for tok in ('--at=5', '-2=5', '-2='):
+    try:
+        app.process(['cmd', '--at=5'])
+        assert False, 'expected refusal for --at=5'
+    except AppealDataError as e:
+        assert 'takes several values' in str(e), e
+        assert "not '='" in str(e), e
+    # the SHORT multi-oparg still refuses an attached value, but for the
+    # bundling reason--nothing may follow it in the token
+    for tok in ('-2=5', '-2='):
         try:
             app.process(['cmd', tok])
             assert False, f'expected refusal for {tok!r}'
         except AppealDataError as e:
             assert 'takes several values' in str(e), (tok, e)
-            assert "not '='" in str(e), (tok, e)
+            assert 'must be last in a bundle' in str(e), (tok, e)
 
-    # single-oparg option: attached `=` works; `=` with nothing is empty string
+    # single-oparg option: the LONG attached `=` works, and `=` with
+    # nothing after it is the empty string
     app2 = _appeal.Appeal('s')
     @app2.command()
     def cmd2(*, name: str = 'D'):
         return name
     assert app2.process(['cmd2', '--name=hi']).result == 'hi'
     assert app2.process(['cmd2', '--name=']).result == ''
-    assert app2.process(['cmd2', '-n=']).result == ''
+    # ...but the SHORT `-n=` binds '=' verbatim (getopt-pure)
+    assert app2.process(['cmd2', '-n=']).result == '='
+    assert app2.process(['cmd2', '-n=hi']).result == '=hi'
 
 
 def test_flag_explicit_boolean():
@@ -4775,8 +4798,11 @@ def test_flag_explicit_boolean():
         return verbose
     assert run_both(f, ['--verbose=true']) == ('ok', True)
     assert run_both(f, ['--verbose=false']) == ('ok', False)
-    assert run_both(f, ['-v=false']) == ('ok', False)
-    assert run_both(f, ['-v=true']) == ('ok', True)
+    # getopt-pure (2026-08-27): the explicit-boolean '=' form is
+    # LONG-only.  '-v=false' reads '-v' (the flag) then tries '=' as
+    # the next short option, which is unknown.
+    got = run_both(f, ['-v=false'])
+    assert got[0] == 'usage' and "'-='" in got[1], got
     assert run_both(f, ['-v']) == ('ok', True)
     assert run_both(f, []) == ('ok', False)
     # only those two spellings, loudly
@@ -4814,7 +4840,7 @@ def test_flag_explicit_boolean():
         return (x, keep)
     def rep(*args: item):
         return args
-    assert run_both(rep, ['-k=false', '1', '-k=true', '2']) == \
+    assert run_both(rep, ['--keep=false', '1', '--keep=true', '2']) == \
         ('ok', ((1, False), (2, True)))
 
     # THE POINT: the command line can turn OFF what config turned on

@@ -558,21 +558,23 @@ fgrep('boogaloo', color='green')
 
 Some option syntax worth knowing, all demonstrated on `--color`:
 
-* `--color blue` and `--color=blue` both work.  So do
-  `-c blue` and `-c=blue`.
-* A flag takes an explicit boolean with `=` only:
-  `--ignore-case=false` and `--ignore-case=true` (exactly those
-  two spellings--this is not the place for `yes`, `si`, or
-  `naturally`).  A bare flag still means `True`; the explicit
-  form exists so the command line can turn *off* what a config
-  file turned on (see [Config layering](#config-layering)).
+* `--color blue` and `--color=blue` both work.  For the short
+  spelling it's `-c blue` or `-cblue`--the `=` form is a
+  *long*-option convention only, exactly as in getopt.
+* A flag takes an explicit boolean with `=`, on the long
+  spelling only: `--ignore-case=false` and `--ignore-case=true`
+  (exactly those two spellings--this is not the place for
+  `yes`, `si`, or `naturally`).  A bare flag still means
+  `True`; the explicit form exists so the command line can turn
+  *off* what a config file turned on (see
+  [Config layering](#config-layering)).
 * Short options bundle: `-vxz` means `-v -x -z`.  A short
   option that takes one oparg ends its bundle, and binds
   either the next string (`-ic blue`) or the rest of its own
-  token, getopt-style: `-cblue`, `-icblue`, and `-c=blue` all
-  mean `blue`.  The rest binds *verbatim*--only a `=`
-  immediately after the option letter is a separator, so
-  `-dNAME=1` passes `NAME=1` whole (think `-DNAME=1`).
+  token, getopt-style: `-cblue` and `-icblue` both mean `blue`.
+  The rest binds *verbatim*--the `=` is not a separator here, so
+  `-cblue` is `blue` but `-c=blue` is the literal oparg `=blue`,
+  and `-dNAME=1` passes `NAME=1` whole (think `-DNAME=1`).
 * Repeating an option is fine, and the last one wins:
   `--color red --color blue` means blue, exactly as in getopt,
   argparse, and click--it's what lets a shell alias bake in a
@@ -1640,7 +1642,8 @@ optional:
 
 An optional oparg is *greedy*: when `-j` has a next string, it
 takes it--whatever it looks like.  So `make -j 5` is five
-jobs, and so are `make -j5` and `make -j=5`.  The flip side of
+jobs, and so is `make -j5` (or, on the long spelling,
+`make --jobs=5`).  The flip side of
 greed is that `make all -j install` hands `install` to `-j`
 and fails loudly--`invalid value for 'jobs'`--rather than
 quietly guessing you meant it as a target.  If `-j` should not
@@ -2475,8 +2478,9 @@ things POSIX allows, and allows some things POSIX disallows.
 * POSIX requires that, if a short option has a single *optional*
   oparg, the oparg must be concatenated directly onto the option:
   if `-j` takes an optional oparg, `-j5` is the only permissible
-  spelling.  Appeal supports that spelling--plus `-j=5` and
-  `-j 5`.  Note that the space-separated form is *greedy*: `-j`
+  spelling.  Appeal supports that spelling--plus `-j 5`, and
+  `--jobs=5` on the long spelling.  Note that the space-separated
+  form is *greedy*: `-j`
   followed by another string consumes it as the oparg, which is
   what POSIX definitely does *not* want.  I feel Appeal's
   consistency is more important than supporting this syntactic

@@ -990,13 +990,6 @@ class Engine:
             binding = self.handlers.get(opt)
             if binding is None:
                 raise UsageError(f"unknown option {opt!r}", None)
-            if chars[i + 1:i + 2] == '=':               # -v=false / -n=5: explicit
-                if _takes_many(binding):
-                    raise UsageError(
-                        f"option {opt!r} takes several values; separate them "
-                        f"with spaces, not '='", None)
-                binding.invoke(self, chars[i + 2:], opt)  # value for THIS option
-                return
             if self._nullary(binding):                  # no oparg: keep bundling
                 binding.invoke(self, spelling=opt)
                 i += 1
