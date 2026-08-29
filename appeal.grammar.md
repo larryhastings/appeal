@@ -32,7 +32,7 @@ one command-line string.
 | positional param, with default | optional operand (may promote--see grouping) |
 | `*args` | zero-or-more repetition of `slot(args)`.  A converter with several parameters and/or its own options makes each instance a **group**: a fixed-size chunk of operands, with the group's options bound to instances by **window** (see Options).  Staged: group parameters must be required terminals (fixed instance size). |
 | keyword-only, with default | an **option** (`--name`), not an operand |
-| keyword-only, **no** default | a **required trailing operand** (the `cp SRC... DST` shape); several allowed; all must precede any defaulted keyword-only param; simple converters only, same rule as `*args`.  **New in v2**: v1 refuses these signatures outright (probed: `ConfigurationError`) |
+| keyword-only, **no** default | **rejected** (`ConfigurationError`): keyword-only params map to options, and options are always optional, so they must have a default (the 0.6.4 rule).  For the `cp SRC... DST` shape--a required operand after an absorbing group--use a converter group: the group's `*args` absorbs, a plain positional after it is reserved from the end |
 | `**kwargs` | legal: it receives `@app.option` declarations for parameters not in the signature.  Absent ones simply aren't passed (v1, probed: `F a {}`)--a deliberate asymmetry with real parameters, whose defaults DO fill: `'verbose' in kwargs` is the only place "given at all?" is observable.  Repeatable kinds (`list[T]`, `dict[K, V]`, `MultiOption`) route too.  NOT an arbitrary-option sink: undeclared options stay unknown.  Bare `**kwargs` gets nothing. |
 | positional-only marker `/` | no grammatical meaning (deliberately, ask the author of PEP 570) |
 | no annotation | `str`--the identity terminal |
@@ -251,11 +251,14 @@ From the linear order of terminal slots, group boundaries are computed:
   a call).  Note this can only arise through converter recursion--
   Python syntax already forbids a defaulted positional before a
   required one in a single signature.
-* Trailing required operands (keyword-only, no default) **reserve**
-  their count from the end: in `cp(*src, dst)`, `dst` always gets the
-  last operand, `src` gets the rest.  Reservation is not promotion:
-  in `f(a, b='B', *, z)`, two operands mean `a` and `z`, skipping
-  `b`--unambiguous, because `z` is filled from the end.
+* A required leaf operand that **follows an absorbing converter**
+  (one with its own `*args`) is a **trailing operand**: it **reserves**
+  its count from the end.  In `cp(src, dst)` with `src` an absorbing
+  group (`def src(*words)`), `dst` always gets the last operand and
+  `src` gets the rest.  Reservation is not promotion: the absorbing
+  group can be empty, so two operands mean `src=()` and `dst`, filled
+  from the end.  (The keyword-only-no-default spelling for this is
+  gone; use a converter group.)
 * The set of **valid operand counts** falls out of the fold, and the
   wrong-count error message is that set phrased as English.
 * **Distribution rule (the counting decision):** slots fill left to
@@ -668,9 +671,11 @@ errors that 1.0 accepts are the two documented supersets below.
   strict superset.  Option-forces-group-entry is v1 semantics,
   kept--v2's first cut wrongly errored there, and the differential
   fuzz against installed v1 caught it.
-* **Trailing operands are new**: keyword-only-no-default parameters
-  are a `ConfigurationError` in v1 (verified against 0.6.4); no v1
-  program can notice the new meaning.
+* **Trailing operands come from converter groups**: a required leaf
+  after an absorbing group reserves from the end.  (The
+  keyword-only-no-default spelling once meant this too, but that
+  left the grammar 2026-08-29--back to the 0.6.4 rule that
+  keyword-only params are options and must have a default.)
 * **Converter-depth grammar** (July 2026, task #10): a `*args`
   converter is an *absorbing* nonterminal--it takes the most the
   slots after it can spare (v1, probed: `pair(a, *rest)` fed the
@@ -679,14 +684,12 @@ errors that 1.0 accepts are the two documented supersets below.
   satisfied" shape--a required argument after the absorber--is
   satisfiable under completable distribution: the automaton
   reserves suffix minimums (the superset pattern again).
-  Trailing arguments inside converters are v2-new, the **uniform
-  end-reservation rule**: a trailing argument reserves from the
-  end of the command's stream wherever it sits in the tree;
-  counts sum tree-wide, tokens fill in traversal order (= stream
-  order: an inner converter's trailing consumes before its
-  outer's).  Still refused by name: trailing inside an *option's*
-  converter (its arguments are consumed inline--no end to reserve
-  from), and windowed groups on `*args` inside a converter.
+  A trailing operand (a required leaf after an absorbing group)
+  follows the **uniform end-reservation rule**: it reserves from the
+  end of the command's stream wherever it sits in the tree; counts
+  sum tree-wide, tokens fill in traversal order (= stream order: an
+  inner converter's trailing consumes before its outer's).  Still
+  refused by name: windowed groups on `*args` inside a converter.
 * **Option operands went v1-greedy** (July 2026, un-deferred from
   the streaming-driver exile): optional opargs consume
   unconditionally to the converter's maximum.  Before this fix v2

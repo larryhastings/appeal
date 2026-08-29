@@ -74,8 +74,11 @@ import unittest
 
 
 from big import test
+import os.path
 
-appeal_dir = str(test.preload('appeal'))
+# big >= 0.15: preload() returns the imported module; the repo root is
+# its package parent
+appeal_dir = os.path.dirname(os.path.dirname(test.preload('appeal').__file__))
 
 import appeal
 

@@ -180,19 +180,20 @@ def test_annotated_is_dereferenced_everywhere():
     from typing import Annotated
     def upper(s): return s.upper()
     def halve(s): return int(s) // 2
+    # (a reserved trailing operand is a plain leaf--the same Terminal
+    # dereference path as the positional `a`--so no separate site here)
     def f(a: Annotated[int, halve],                      # positional
           t: tuple[Annotated[int, halve], str] = None,   # tuple element
           *args: Annotated[str, upper],                  # *args
-          dst: Annotated[str, upper],                    # trailing operand
           opt: Annotated[int, halve] = 0,                # option
           inc: list[Annotated[str, upper]] = (),         # list element
           dmap: dict[Annotated[str, upper],              # dict key
                      Annotated[int, halve]] = None,      # dict value
           ):
-        return (a, t, args, dst, opt, inc, dmap)
+        return (a, t, args, opt, inc, dmap)
     got = run_both(f, ['8', '2', 'x', 'mid', 'end',
                        '--opt', '10', '--inc', 'ab', '--dmap', 'k=8'])
-    assert got == ('ok', (4, (1, 'x'), ('MID',), 'END', 5, ['AB'], {'K': 4})), got
+    assert got == ('ok', (4, (1, 'x'), ('MID', 'END'), 5, ['AB'], {'K': 4})), got
 
 
 def test_annotated_is_the_one_blessed_typing_import():

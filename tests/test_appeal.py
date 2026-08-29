@@ -18,11 +18,13 @@ from big import test
 # the local checkout beats any installed appeal; preload() imports
 # the package and ASSERTS it came from the checkout, so a stray
 # site-packages v1 fails loudly instead of testing the wrong code
-repo_dir = str(test.preload('appeal'))
-
 import os.path
 import subprocess
 import sys
+
+# preload returns the module; the repo root (for the git-archive
+# differential tests below) is the parent of the package directory
+repo_dir = os.path.dirname(os.path.dirname(test.preload('appeal').__file__))
 
 if sys.version_info < (3, 7):
     # subprocess.run's capture_output= and text= keywords are 3.7+; Appeal
@@ -57,7 +59,12 @@ def hello(name, greeting='hello'):
 def serve(host, port: int = 8080, *, verbose=False, retries: int = 1, config=''):
     return (host, port, verbose, retries, config)
 
-def cp(*src, dst):
+def _sources(*src):
+    return src
+
+def cp(src: _sources, dst):
+    # a required trailing operand (dst) after an absorbing group (src):
+    # the getopt `cp SRC... DST` shape, spelled with a converter group
     return (src, dst)
 
 def add(a: int, b: int):
@@ -67,9 +74,10 @@ def middle(a, b='B', c='C', d=None):
     # note: no annotation + default None -> str converter
     return (a, b, c, d)
 
-def skipper(a, b='B', *, z):
-    # trailing operand + middle optional: reservation, not promotion
-    return (a, b, z)
+def skipper(a, rest: _sources, z):
+    # required leading (a) + absorbing middle (rest) + required trailing
+    # (z): both ends are reserved, the middle absorbs whatever's left
+    return (a, rest, z)
 
 
 # converters (nonterminals) for the recursion tests
@@ -127,7 +135,9 @@ def test_plan_star_args():
     assert plan.minimum == 1          # dst
     assert plan.maximum is None
     assert plan.valid_counts is None
-    assert plan.slots[0].repeat
+    # src is now an absorbing GROUP (the _sources converter, whose own
+    # slot repeats); dst is the reserved trailing operand
+    assert plan.slots[0].child.slots[0].repeat
     assert plan.slots[1].trailing
 
 def test_plan_options():
@@ -471,11 +481,15 @@ def test_option_errors_name_the_typed_spelling():
         'usage', "option '-c' requires a value")
 
 def test_simple_converters_on_star_args_and_trailing():
-    def upper(s): return s.upper()
-    def f(*src: upper, dst: upper):
-        return (src, dst)
-    got = run_both(f, ['a', 'b', 'z'])
-    assert got == ('ok', (('A', 'B'), 'Z')), got
+    # a converter on the absorbing group's elements, plus a leaf
+    # converter (int) on the reserved trailing operand.  (End-
+    # reservation reserves leaf Terminals--a custom converter on the
+    # trailing would be a group, which isn't reserved.)
+    def uppers(*src): return tuple(s.upper() for s in src)
+    def f(src: uppers, n: int):
+        return (src, n)
+    got = run_both(f, ['a', 'b', '3'])
+    assert got == ('ok', (('A', 'B'), 3)), got
 
 def test_no_forbidden_skip():
     # DO NOT REMOVE OR MODIFY THIS TEST.
@@ -2161,16 +2175,21 @@ def test_options_inside_converters():
     assert got[1] == ('--dashed only becomes available if you '
                       'specify <R> <G> and <B>'), got
 
-def test_plan_trailing_does_not_promote():
-    # reservation is not promotion: z is filled from the end, so
-    # two operands mean (a, z), skipping b--unambiguous
-    def f(a, b='B', *, z):
-        return (a, b, z)
+def test_plan_trailing_reserved_past_absorbing_group():
+    # reservation: a required trailing operand (z) is filled from the
+    # END, past an absorbing group--so the group can be empty and two
+    # operands mean (a, z), the middle absorbing nothing
+    def absorb(*rest):
+        return rest
+    def f(a, rest: absorb, z):
+        return (a, rest, z)
     plan = build_plan(f)
     named = {s.name: s for s in plan.slots}
-    assert not named['b'].required
     assert named['z'].trailing
-    assert plan.valid_counts == {2, 3}
+    assert plan.minimum == 2
+    assert plan.maximum is None
+    assert run_both(f, ['a', 'z']) == ('ok', ('a', (), 'z'))
+    assert run_both(f, ['a', 'm', 'z']) == ('ok', ('a', ('m',), 'z'))
 
 def test_plan_promotes_group_before_required():
     # a converter group's trailing default is promoted to required
@@ -2332,8 +2351,8 @@ PARITY_CASES = [
     (cp,    ['dest'],                       ('ok', ((), 'dest'))),
     (cp,    [],                             None),
     (middle, ['a'],                         ('ok', ('a', 'B', 'C', None))),
-    (skipper, ['x', 'y'],                   ('ok', ('x', 'B', 'y'))),
-    (skipper, ['x', 'mid', 'y'],            ('ok', ('x', 'mid', 'y'))),
+    (skipper, ['x', 'y'],                   ('ok', ('x', (), 'y'))),
+    (skipper, ['x', 'mid', 'y'],            ('ok', ('x', ('mid',), 'y'))),
     (skipper, ['x'],                        None),
     (middle, ['a', 'b', 'c', 'd'],          ('ok', ('a', 'b', 'c', 'd'))),
     # ---- converter recursion ----
@@ -3572,8 +3591,12 @@ def test_prescan_dry_live_agree():
         if rng.random() < 0.4:
             parts.append('*args'); star = True
         kw = []
-        if star and rng.random() < 0.5:
-            kw.append('dest')                       # trailing (after *args)
+        if star:
+            rng.random()                            # (once gated a trailing
+                                                    # `dest` after *args; that
+                                                    # spelling retired 2026-08-29
+                                                    # --call kept so the RNG
+                                                    # stream is unchanged)
         if rng.random() < 0.6:
             kw.append('verbose=False')              # flag option
         if rng.random() < 0.5:
@@ -3828,9 +3851,11 @@ def test_differential_fuzz_converter_group_conversion_and_arity():
             decls.append(f's{s}: g{rng.randrange(ng)}' if rng.random() < 0.55
                          else f's{s}: {rng.choice(LEAF)}')
         r = rng.random()
-        if r < 0.25:
-            decls += ['*', 'z: int']; names.append('z')
-        elif r < 0.45:
+        # (r < 0.25 once emitted a `*, z: int` trailing operand; that
+        # keyword-only-no-default spelling left the grammar 2026-08-29.
+        # Threshold kept so the RNG stream--and every other program--is
+        # unchanged.)
+        if 0.25 <= r < 0.45:
             ok = [j for j in range(ng) if done[j][1] >= 1]
             if ok:
                 decls.append(f'*rest: g{rng.choice(ok)}'); names.append('rest')
@@ -4148,27 +4173,25 @@ def test_converter_restrictions_named():
     got = run_both(cmd, ['x', 'z'])
     assert got == ('ok', (('x', ()), 'z')), got
 
-    def has_trailing(x, *, z):
-        return (x, z)
-    def cmd2(a: has_trailing):
-        return a
-    # trailing arguments inside converters are in the grammar now:
-    # the uniform end-reservation rule
-    got = run_both(cmd2, ['x', 'zz'])
-    assert got == ('ok', ('x', 'zz')), got
+    # a required trailing operand after an absorbing converter is
+    # reserved from the end (the uniform end-reservation rule)
+    def cmd2(a: has_star, z):
+        return (a, z)
+    got = run_both(cmd2, ['x', 'y', 'zz'])
+    assert got == ('ok', (('x', ('y',)), 'zz')), got
 
 
 def test_converter_depth_grammar():
     # task #10's rulings, pinned
 
-    # THE composition ruling (Larry, 2026-07-08): "if recurse2 has
-    # a trailing argument, but it has a positional parameter
-    # annotated with int_float, and int_float also has a trailing
-    # argument, int_float trailing consumes first, then recurse2
-    # trailing."
-    def int_float(i: int, *, f: float):
+    # THE composition ruling (Larry, 2026-07-08): a required trailing
+    # operand at each level is reserved from the end; the inner
+    # converter's reservation comes off first, then the outer's.  (The
+    # trailing operands are plain positionals now--a converter group is
+    # the only spelling for "required operand after an absorbing one".)
+    def int_float(i: int, f: float):
         return (i, f)
-    def recurse2(a: int_float, *, z):
+    def recurse2(a: int_float, z):
         return (a, z)
     got = run_both(recurse2, ['1', '2.5', 'zz'])
     assert got == ('ok', ((1, 2.5), 'zz')), got
@@ -4180,14 +4203,15 @@ def test_converter_depth_grammar():
     # reservations come off the end first
     def gulp(a, *rest):
         return (a, rest)
-    def cmd(g: gulp, *, last):
+    def cmd(g: gulp, last):
         return (g, last)
     got = run_both(cmd, ['a', 'b', 'c', 'zz'])
     assert got == ('ok', (('a', ('b', 'c')), 'zz')), got
     got = run_both(cmd, ['a', 'zz'])
     assert got == ('ok', (('a', ()), 'zz')), got
 
-    # refusals that remain, by name
+    # refusals that remain, by name: a keyword-only parameter with no
+    # default (it maps to an option, and options are always optional)
     def opt_group(width: float = 1.0, *, tail):
         return (width, tail)
     def bad(x='X', *, g: opt_group = None):
@@ -4196,7 +4220,7 @@ def test_converter_depth_grammar():
         build_plan(bad)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert 'no end to reserve from' in str(e), e
+        assert 'must have a default' in str(e), e
 
     def wide(p: int, q: int):
         return (p, q)
@@ -6827,9 +6851,11 @@ def test_merge_docs():
         [('-v|--verbose', ['Print more output.'])]
     assert c['commands'] == []
 
-    # a keyword-only-no-default parameter is a trailing operand:
-    # documenting it under Arguments is correct
-    def trailing_ok(a, *, required_kw):
+    # a required trailing operand (reserved from the end, past an
+    # absorbing group) documents under Arguments
+    def _absorb(*src):
+        return src
+    def trailing_ok(a: _absorb, required_kw):
         """
         # Arguments
         required_kw

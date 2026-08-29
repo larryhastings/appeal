@@ -421,20 +421,25 @@ fifty filenames--as many as they want!  They'd all be
 collected in a tuple and passed in to `fgrep()` in the
 `filenames` parameter.
 
-One more parameter shape, new in Appeal 1.0: a
-*keyword-only parameter without a default value*.  On the
-command-line, options are always optional (we'll get to
-that)--so a keyword-only parameter that *must* be supplied
-can't be an option.  Instead, it becomes a *required trailing
-argument*: it's filled from the *end* of the command-line.
-This is how you write `cp`:
+One more shape worth knowing: a command like `cp`, which takes
+one or more sources and then a required destination at the
+*end*.  Python won't let you write `def cp(*src, dest)` with
+`dest` as a positional, and a keyword-only parameter maps to an
+*option*--always optional (we'll get to that)--so that's no
+help either.  The Appeal way is a *converter group*: a
+converter whose `*args` absorbs the sources, with `dest` an
+ordinary positional after it.  Appeal reserves `dest` from the
+*end* of the command-line, so the group leaves room for it:
 
 ```Python
 import appeal
 app = appeal.Appeal()
 
+def sources(*src):
+    return src
+
 @app.command()
-def cp(*src, dest):
+def cp(src: sources, dest):
     print(f"cp {src} {dest}")
 
 app.main()
@@ -442,12 +447,11 @@ app.main()
 
 The usage reads:
 
-    cp [src]... dest
+    cp [<SRC>]... <DEST>
 
-Run `script.py cp a b c`, and Appeal calls `cp('a', 'b',
-dest='c')`--the *last* argument lands in `dest`, and everything
-before it is collected into `src`.  (Appeal 0.6 refused
-this signature; 1.0 makes it mean the obvious thing.)
+Run `script.py cp a b c`, and Appeal fills `src` with `('a',
+'b')` and `dest` with `'c'`--the *last* argument lands in
+`dest`, and everything before it is collected by the group.
 
 
 ## Options, Opargs, And Keyword-Only Parameters

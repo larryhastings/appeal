@@ -10,7 +10,7 @@
 
 from big import test
 
-appeal_dir = test.preload('appeal')
+test.preload('appeal')
 
 import contextlib
 import io
@@ -623,10 +623,13 @@ def test_read_group_shapes():
         return pts
     assert read_mapping(rpt2, {'pts': [[1, 2], [3, 4]]}) == ((1, 2), (3, 4))
 
-    # a trailing (required keyword-only) parameter reads by name
-    def trail(a, *, k):
-        return (a, k)
-    assert read_mapping(trail, {'a': 1, 'k': 'v'}) == (1, 'v')
+    # a required trailing operand (reserved past an absorbing group)
+    # reads by name
+    def _rest(*rest):
+        return rest
+    def trail(front: _rest, k):
+        return (front, k)
+    assert read_mapping(trail, {'front': [1, 2], 'k': 'v'}) == ((1, 2), 'v')
 
     # a required group with nothing present: defaults throughout,
     # and ITS required parameters complain by path
@@ -676,9 +679,12 @@ def test_read_sequence_shapes():
             assert False, 'expected AppealDataError'
         except AppealDataError as e:
             assert complaint in str(e), (rows, str(e))
-    # position-feeding can't reach keyword-only names (v1's corpus)
-    def trail(a, *, k):
-        return (a, k)
+    # position-feeding can't reach a trailing operand or keyword-only
+    # names (v1's corpus)
+    def _absorb(*xs):
+        return xs
+    def trail(front: _absorb, k):        # k is a reserved trailing operand
+        return (front, k)
     def opt(a, *, k=1):
         return (a, k)
     def kw(a, **kwargs):
@@ -1126,13 +1132,15 @@ def test_read_group_option_and_nesting_shapes():
     def rpt(*pts: pairfn):
         return pts
     assert read_iterable(rpt, [[[1, 2], [3, 4]]]) == [((1, 2), (3, 4))]
-    # a group with its own trailing argument and options, read
-    # from a sequence: the tail is reserved, the options default
-    def tg(a, *, k):
-        return (a, k)
+    # a group with a trailing operand (reserved past an absorbing
+    # group), read from a sequence: the tail is reserved off the end
+    def _absorb(*xs):
+        return xs
+    def tg(items: _absorb, k):
+        return (items, k)
     def f2(g: tg):
         return g
-    assert read_mapping(f2, {'g': ['x', 'kv']}) == ('x', 'kv')
+    assert read_mapping(f2, {'g': ['x', 'kv']}) == (('x',), 'kv')
     def wh(x: int, *, deep: int = 0):
         return (x, deep)
     def f3(g: wh):
@@ -2968,17 +2976,19 @@ def test_backend_more_errors():
     # a multi-operand group used as an OPTION can't take an attached =value
     def point(x: int, y: int):
         return (x, y)
-    def opt_group(*, tail, at: point = None):
+    def _absorb(*rest):
+        return rest
+    def opt_group(items: _absorb, tail, *, at: point = None):
         return (at, tail)
     assert both2(opt_group, ['-a=1', 'T']) == \
         ('usage', "option '-a' takes several values; it must be last in "
                   "a bundle with its values as separate words")
     # the trailing-reservation scan spans a multi-operand group option
     # (GroupBinding) and an optional[group] value option (tuple converter)
-    # to find the trailing operand past them
+    # to find the trailing operand past them (tail is reserved from the end)
     assert both2(opt_group, ['-a', '1', '2', 'T']) == ('ok', ((1, 2), 'T'))
     from appeal import optional
-    def opt_group2(*, tail, at: optional[point] = None):
+    def opt_group2(items: _absorb, tail, *, at: optional[point] = None):
         return (at, tail)
     assert both2(opt_group2, ['-a', '1', '2', 'T'])[0] in ('ok', 'usage')
     # a group whose constructor raises ValueError is a polite usage error
@@ -2991,6 +3001,41 @@ def test_backend_more_errors():
     def uses_picky(p: Picky, y='y'):
         return (p.x, y)
     assert both2(uses_picky, ['no']) == ('usage', 'not a valid Picky: nope')
+
+
+def test_trailing_reservation_scan_option_kinds():
+    # enter()'s reservation scan skips options of every binding kind
+    # (and their opargs) to find the trailing operand at the end; an
+    # option the converter doesn't own is the scan's boundary.  Driven
+    # through a converter-group trailing (the surviving spelling).
+    import appeal
+    from appeal import build_plan, execute
+    from appeal.backend import build_converters, _converter_key
+    def run(fn, argv):
+        plan = build_plan(fn)
+        word = plan.name.replace('_', '-')
+        cls = build_converters([plan])[_converter_key(plan)]
+        try:
+            return ('ok', execute({word: cls}, [word] + list(argv)))
+        except appeal.AppealDataError as e:
+            return ('usage', str(e))
+    def absorb(*rest):
+        return rest
+    def cmd(front: absorb, dst, *, flag=False, name: str = '',
+            tally: appeal.counter() = 0, tags: appeal.accumulator = []):
+        return (front, dst, flag, name, tally, tags)
+    # a flag (span 0), a leaf value option, a counter and an accumulator
+    # (MultiBindings), a long '--opt=value', all skipped to reserve dst
+    got = run(cmd, ['a', '--flag', '--name', 'N', '-t',
+                    '--tags', 'x', '--name=M', 'DST'])
+    assert got[0] == 'ok' and got[1][1] == 'DST', got
+    # '--' encountered mid-scan
+    got = run(cmd, ['a', '--', 'DST'])
+    assert got[0] == 'ok' and got[1][1] == 'DST', got
+    # an option the converter doesn't own is the scan boundary: a long
+    # one, then a short one (each then a real "unknown option" error)
+    assert run(cmd, ['a', 'DST', '--bogus'])[0] == 'usage'
+    assert run(cmd, ['a', 'DST', '-Z'])[0] == 'usage'
 
 
 def test_backend_execute_edges():

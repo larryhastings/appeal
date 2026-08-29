@@ -285,8 +285,10 @@ class Slot:
                   still be promoted to required by grouping)
     default       the default value, or NO_DEFAULT
     repeat        True for *args
-    trailing      True for a keyword-only-no-default parameter
-                  (a required trailing operand, filled from the end)
+    trailing      True for a required leaf operand reserved from the
+                  END--one that follows an absorbing (*args) converter,
+                  so the absorber leaves room for it (filled last, by
+                  keyword)
 
     count_options and suffix_after are the counting automaton's
     tables, computed by build's analysis pass:
@@ -1114,8 +1116,7 @@ def _child_for(parameter, memo, stack):
     # probed: pair(a, *rest) fed the whole remaining line--an
     # earlier comment here claimed v1 read these as one-operand
     # terminals; it doesn't.)
-    return _build(annotation, None, memo, stack, top=False,
-                  allow_trailing=True)
+    return _build(annotation, None, memo, stack, top=False)
 
 
 def _operand_converters(callable, context, what, skip_self=False,
@@ -1565,7 +1566,7 @@ def _decorations_of(memo):
 
 
 def _build(callable, name, memo, stack, top, skip_first=False,
-           allow_trailing=None, default_options=default_options,
+           default_options=default_options,
            app=None, extra_overrides=None):
     if callable in stack:
         cycle = ' -> '.join(getattr(c, '__name__', repr(c)) for c in stack)
@@ -1581,8 +1582,6 @@ def _build(callable, name, memo, stack, top, skip_first=False,
         if not name:
             raise AppealConfigurationError(f"can't determine a name for {callable!r}")
 
-    if allow_trailing is None:
-        allow_trailing = top
     signature = inspect.signature(callable)
     stack = stack + (callable,)
     decorations = _decorations_of(memo)
@@ -1598,9 +1597,7 @@ def _build(callable, name, memo, stack, top, skip_first=False,
     usage_names = decorations.usage_for(callable)
 
     slots = []
-    trailing_slots = []
     options = []
-    seen_defaulted_kwonly = False
     has_kwargs = False
 
     parameters = list(signature.parameters.values())
@@ -1663,40 +1660,15 @@ def _build(callable, name, memo, stack, top, skip_first=False,
             continue
 
         if kind is inspect.Parameter.KEYWORD_ONLY:
-            if not has_default and not allow_trailing:
-                raise AppealConfigurationError(
-                    f"converter {name!r}: trailing argument "
-                    f"{parameter.name!r} isn't in the grammar here--"
-                    f"only positional converters may carry trailing "
-                    f"arguments (an option's arguments are consumed "
-                    f"inline; there's no end to reserve from)")
             if not has_default:
-                # keyword-only with no default: a *required trailing
-                # operand* (the `cp SRC... DST` shape).  Must precede
-                # any defaulted keyword-only parameter.
-                if seen_defaulted_kwonly:
-                    raise AppealConfigurationError(
-                        f"parameter {parameter.name!r}: required trailing arguments "
-                        f"(keyword-only, no default) must come before all options "
-                        f"(keyword-only with defaults)")
-                annotation = parameter.annotation
-                if annotation is inspect.Parameter.empty:
-                    child = Terminal(str)
-                else:
-                    # simple converters only, same rule as *args
-                    child = Terminal(_leaf_callable(
-                        annotation, f"parameter {parameter.name!r}"))
-                trailing_slots.append(Slot(
-                    parameter.name,
-                    usage_names.pop(parameter.name, parameter.name),
-                    child,
-                    required=True,
-                    default=NO_DEFAULT,
-                    trailing=True,
-                    ))
-                continue
-
-            seen_defaulted_kwonly = True
+                # keyword-only parameters map to options, and options are
+                # always optional--so they must have a default.  (For a
+                # required trailing operand, take it as a positional
+                # through a converter.)
+                raise AppealConfigurationError(
+                    f"keyword-only parameter {parameter.name!r} must have a "
+                    f"default: it maps to an option, and options are always "
+                    f"optional")
             # `default` is the value the parameter gets when the
             # option isn't given: ALWAYS the parameter's own default
             # (v1: ungiven kwargs simply aren't passed).
@@ -1780,15 +1752,12 @@ def _build(callable, name, memo, stack, top, skip_first=False,
             f"and there's no **kwargs to deliver them into (v1's rule: "
             f"such options need a **kwargs to land in)")
 
-    slots = slots + trailing_slots
     # uniform end-reservation: a required leaf operand that FOLLOWS an
     # absorbing converter (one that consumes unboundedly -- its own *args) is
     # reserved from the END, so the absorber leaves room for it.  It's a named
     # param, so it's delivered by keyword like any other trailing operand.
     absorbing = False
     for slot in slots:
-        if slot.trailing:
-            continue
         if (absorbing and slot.required
                 and isinstance(slot.child, Terminal)):
             slot.trailing = True

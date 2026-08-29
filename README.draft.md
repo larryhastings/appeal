@@ -420,18 +420,24 @@ def cat(*files):
 
 `cat a.txt b.txt c.txt` gives `files=('a.txt', 'b.txt', 'c.txt')`. Annotate
 it (`*files: pathlib.Path`) to convert every element. And you can put a
-*required trailing* argument after `*args` by making it keyword-only with
-no default--the `cp SRC... DST` shape:
+*required trailing* argument after a greedy group--the `cp SRC... DST`
+shape--with a converter group: a converter whose `*args` absorbs the
+sources, then an ordinary positional after it. (A keyword-only parameter
+maps to an option, and options are always optional, so it can't be the
+required trailing one.)
 
 ```Python
+def sources(*src):
+    return src
+
 @app.command()
-def cp(*sources, dest):
+def cp(src: sources, dest):
     ...
 ```
 
-`cp a b c /backup` fills `sources=('a','b','c')` and `dest='/backup'`.
+`cp a b c /backup` fills `src=('a','b','c')` and `dest='/backup'`.
 Appeal reserves the last argument for `dest` before handing the rest to
-`*sources`.
+the `sources` group.
 
 
 ## Turn several words into one value
@@ -926,7 +932,7 @@ cookbook is "how," this is "exactly how."
 | positional parameter, no default | required argument |
 | positional parameter, with default | optional argument |
 | `*args` | zero-or-more repetition |
-| keyword-only, no default | required *trailing* argument (`cp SRC... DST`) |
+| keyword-only, no default | **error**: options are always optional, so give it a default (for the `cp SRC... DST` shape, use a converter group) |
 | keyword-only, with default | option |
 | annotation = `int`/`float`/callable | a converter (one word in, one value out) |
 | annotation = `bool` default | a flag (presence stores `not default`) |
