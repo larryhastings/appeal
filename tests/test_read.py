@@ -1,6 +1,9 @@
 from big import test
+import pathlib
 
-appeal_dir = test.preload('appeal')
+# big >= 0.15: preload() returns the imported module; the repo root
+# is its package parent (pathlib.Path(module.__file__).parents[1]).
+appeal_dir = pathlib.Path(test.preload('appeal').__file__).parents[1]
 
 import appeal
 import big.all as big
