@@ -345,6 +345,12 @@ def run(*, verbose: appeal.counter() = 0):
 `run -v` prints `1`, `run -vvv` prints `3`. `counter()` is one of Appeal's
 built-in **MultiOptions**--options designed to be given more than once.
 
+In full it's `counter(delta=1, clamp=None)`: each occurrence adds `delta`
+to a running value that starts at the parameter's default, and `clamp` is
+a barrier the value stops on from either side--`counter(1, 2)` caps at 2,
+`counter(-1, 0)` counts down and stops at 0. `delta` needn't be a number:
+`counter('ba')` on a default of `'a'` spells `'a'`, `'aba'`, `'ababa'`.
+
 
 ## Collect a list
 
@@ -1320,7 +1326,9 @@ Annotate a parameter with one of these to shape its conversion.
 
 * `appeal.optional[T]` — mark an option's oparg optional (the `make -j`
   case): absent → the parameter default, bare → `T()`, given → `T(value)`.
-* `appeal.counter(*, max=None, step=1)` — count occurrences (`-vvv` → `3`).
+* `appeal.counter(delta=1, clamp=None)` — add `delta` per occurrence,
+  starting from the parameter's default (`-vvv` → `3`).  `delta` needn't be
+  a number; `clamp` is a barrier the value stops on, from either side.
 * `appeal.accumulator` — collect each occurrence into a list (like
   `list[T]`).
 * `appeal.mapping` — collect `KEY=VALUE` occurrences into a dict (like

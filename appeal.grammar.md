@@ -384,8 +384,10 @@ v1's library converters, all semantics probed against 0.6.4:
 `validate(*values, type=None)` (an allowlist; rejects with "must
 be one of ..."), `validate_range(start, stop=None, *, type=None,
 clamp=False)` (one argument means 0..start; clamp pins instead of
-erroring), `counter(*, max=None, step=1)` (a repeatable flag
-counting occurrences x step, capped), and the annotatable classes
+erroring), `counter(delta=1, clamp=None)` (a repeatable flag
+that starts at the parameter's default and adds `delta` per
+occurrence--`delta` needn't be numeric; `clamp` is a barrier the
+value stops on, approached from either side), and the annotatable classes
 `accumulator` / `mapping` (subscriptable: `accumulator[int, str]`
 collects tuples, `mapping[int, str, float]` maps keys to tuples;
 they're just `MultiOption` subclasses, so the fold machinery does

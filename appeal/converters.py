@@ -239,25 +239,42 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
     return validate_range_converter
 
 
-def counter(*, max=None, step=1):
+def counter(delta=1, clamp=None):
     """
-    Creates a repeatable flag-like option that counts occurrences:
-    -v -v -v with step=2 gives 6, capped at max.
+    Creates a repeatable flag-like option that accumulates: it starts
+    at the parameter's own default, and every occurrence adds `delta`.
+    The classic is `-v -v -v` with the default `delta=1`, giving 3.
+
+    `delta` needn't be a number--anything the running value supports
+    with `+` works, so `counter('ba')` on a parameter defaulting to
+    'a' spells 'a', 'aba', 'ababa'.
+
+    `clamp` (default None: no clamping) is a BARRIER the value stops
+    on, approached from either side--so it caps a counter that climbs
+    (`counter(1, 2)` gives 1, 2, 2, 2...) and floors one that falls
+    (`counter(-1, 0)` stops dead at 0).  No direction to declare, and
+    nothing numeric assumed when you don't use it.
     """
-    ceiling = max
 
     class Counter(MultiOption):
         recipe = True
 
         def init(self, default):
-            self.value = default if isinstance(default, int) else 0
+            self.value = default
 
         def option(self):
-            self.value += step
+            value = self.value
+            new_value = value + delta
+            if clamp is not None:
+                # the barrier: pin the value when this step would
+                # carry it ACROSS clamp, whichever way it's heading
+                is_greater = (value <= clamp) and (new_value > clamp)
+                is_less = (value >= clamp) and (new_value < clamp)
+                if is_greater or is_less:
+                    new_value = clamp
+            self.value = new_value
 
         def __call__(self):
-            if ceiling is not None and self.value > ceiling:
-                return ceiling
             return self.value
     Counter.__name__ = 'counter'
     return Counter

@@ -1075,6 +1075,16 @@ Appeal would call
 fgrep(verbose=3)
 ```
 
+`counter()` takes two optional parameters,
+`counter(delta=1, clamp=None)`.  Each occurrence adds
+`delta` to a running value that *starts at the
+parameter's own default*--and `delta` needn't be a
+number, anything the value supports with `+` works.
+`clamp` (default `None`: no clamping) is a barrier the
+value stops on, approached from either side:
+`counter(1, 2)` climbs 1, 2 and then stays at 2, and
+`counter(-1, 0)` counts down and stops dead at 0.
+
 `accumulator` handles options that take a single oparg.
 It remembers them all and returns them in a single list--
 the same job as `list[str]`.  Using crazy science magic
@@ -2394,7 +2404,7 @@ The converter vocabulary: `appeal.split(*separators)`,
 `appeal.file(mode='r', *, buffering=-1, encoding=None, errors=None, newline=None, opener=None)`,
 `appeal.validate(*values, type=None)`,
 `appeal.validate_range(start, stop=None, *, type=None, clamp=False)`,
-`appeal.counter(*, max=None, step=1)`, `appeal.accumulator`,
+`appeal.counter(delta=1, clamp=None)`, `appeal.accumulator`,
 `appeal.mapping`, and the classes `appeal.Option` (repeatable;
 `appeal.MultiOption` is its alias) and `appeal.StrictOption`
 (at most once).

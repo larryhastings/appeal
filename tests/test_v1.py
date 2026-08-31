@@ -208,7 +208,7 @@ def pick30(number:appeal.validate_range(30)):
 def pick60(number:appeal.validate_range(-30, 30)):
     return (pick60, number)
 
-def verbosity(*, verbose:appeal.counter(max=9, step=2)=0):
+def verbosity(*, verbose:appeal.counter(delta=2, clamp=9)=0):
     return (verbosity, verbose)
 
 def boolpos(v:bool):
@@ -2748,13 +2748,15 @@ class BugfixRegressionTests(AppealTestsBase):
         self.app = appeal.Appeal(version="0.5")
 
     def test_counter_negative_step(self):
-        # counter() with a negative step used to crash.  option() computed
-        # "min if self.step > 0 else max", and in the negative case "max"
-        # resolved to the (float) max parameter rather than the builtin,
-        # producing a non-callable.
+        # counter() with a negative step used to crash.  0.6.4's option()
+        # computed "min if self.step > 0 else max", and in the negative
+        # case "max" resolved to the (float) max PARAMETER rather than the
+        # builtin, producing a non-callable.  1.0 renamed the parameters
+        # (step -> delta, max -> clamp), so the builtin can't be shadowed,
+        # and the clamp is a direction-agnostic barrier--no min/max pick.
         app = self.app
         @app.command()
-        def cmd(*, v:appeal.counter(step=-1)=0):
+        def cmd(*, v:appeal.counter(delta=-1)=0):
             return v
         self.assertEqual(app.process(shlex.split("cmd -v -v")).result, -2)
 
@@ -3085,7 +3087,7 @@ class ConverterVocabularyTests(AppealTestsBase):
     def test_counter_max(self):
         app = self.app
         @app.command()
-        def c(*, v:appeal.counter(max=2)=0):
+        def c(*, v:appeal.counter(clamp=2)=0):
             return v
         self.assertEqual(app.process(shlex.split("c -v -v -v -v")).result, 2)
 

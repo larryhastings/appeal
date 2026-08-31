@@ -3011,9 +3011,40 @@ def test_split_matches_v1_multisplit_semantics():
     # so v1's docstring is the spec, not its behavior.)
     assert split()('  a  b ') == ['a', 'b']
 
+def test_counter_delta_and_clamp():
+    # counter(delta=1, clamp=None), ruled by Larry 2026-08-29.  The
+    # running value STARTS at the parameter's own default (0.6.4 did
+    # this; the 1.0 rewrite had regressed it to "int or 0") and each
+    # occurrence adds delta.
+    def anagram(*, s: appeal.counter('ba') = 'a'):
+        return s
+    # delta needn't be a number--anything the value supports with '+'
+    assert run_both(anagram, []) == ('ok', 'a')
+    assert run_both(anagram, ['-s']) == ('ok', 'aba')
+    assert run_both(anagram, ['-s', '-s']) == ('ok', 'ababa')
+    assert run_both(anagram, ['-ss']) == ('ok', 'ababa')      # bundled
+    # the default rides through verbatim, whatever its type
+    def start_at(*, n: appeal.counter() = 40):
+        return n
+    assert run_both(start_at, ['-n', '-n']) == ('ok', 42)
+
+    # clamp is a BARRIER the value stops on, approached from EITHER
+    # side--no direction declared, nothing numeric assumed when unused.
+    def climb(*, v: appeal.counter(1, 2) = 0):
+        return v
+    assert [run_both(climb, ['-v'] * k)[1] for k in range(5)] == [0, 1, 2, 2, 2]
+    def fall(*, v: appeal.counter(-1, 0) = 3):
+        return v
+    assert [run_both(fall, ['-v'] * k)[1] for k in range(6)] == [3, 2, 1, 0, 0, 0]
+    # clamp=0 is a real bound, not a falsy no-op (the `if clamp:` trap)
+    def floor_at_zero(*, v: appeal.counter(-1, 0) = 0):
+        return v
+    assert run_both(floor_at_zero, ['-v', '-v']) == ('ok', 0)
+
+
 def test_converter_vocabulary():
     # v1's vocabulary, all outputs probed against shipping 0.6.4
-    def verbosity(*, verbose: appeal.counter(max=9, step=2) = 0):
+    def verbosity(*, verbose: appeal.counter(delta=2, clamp=9) = 0):
         return verbose
     assert run_both(verbosity, ['-v', '-v', '-v']) == ('ok', 6)
     assert run_both(verbosity, ['-v'] * 6) == ('ok', 9)     # capped
