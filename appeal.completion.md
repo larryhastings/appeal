@@ -2,23 +2,23 @@
 
 *Originally a proposal; every decision point is marked ⚖ and
 numbered, and all eight were ruled on 2026/07/07 (rulings inline,
-marked ✔).  As of 2026/07/08 it is IMPLEMENTED--completion and
-colorization both; bash, zsh, and fish--and Part 3 below is the user
-walkthrough.*
+marked ✔).  As of 2026/07/08 it was IMPLEMENTED--completion and
+colorization both; bash, zsh, and fish--and Part 3 below is the
+user walkthrough, kept current.*
 
-Terms used below, defined first: **the north star** is Appeal 1.0's
-standing rule that every feature must work in generated standalone
-scripts or refuse by name.  **Scissors** snippets are marked,
-self-contained source regions one project borrows from another;
-appeal's own script-side code isn't scissored--it all lives in
-appeal/runtime.py, which is streamed whole into every standalone
-script.
+*Currency note (2026-08-29): Appeal has since become
+interpreter-only--standalone script emission is gone, so every
+"north star"/standalone/scissors/runtime.py passage below is
+historical (annotated in place).  Part 2's `Theme` design shipped
+and was then SUPERSEDED by the 2026-08-09 theme lift
+(`Appeal(stylesheet=)`, role markup, big.StyleSheet); the current
+color story is appeal.documentation.md §4.  Part 1's rulings
+(reentry protocol, `completions` attribute, `app.completion(shell)`)
+and Part 3's walkthrough remain accurate.*
+
 **Reentry** means a program being called back by the shell's
 completion function to answer "what could come next?" from its own
-tables.  **The trio** is big's word-wrap trio (wrap_words /
-split_text_with_code / merge_columns), which formats help text at
-runtime.  **SGR** strings are raw ANSI escape codes
-(`\x1b[1;36m`).
+tables.
 
 
 ## Part 1: shell completion
@@ -32,8 +32,8 @@ nothing in value positions or after `--`), command words at the
 command position, help topics.  Empty list = "no opinion", which
 shells treat as "fall back to filenames."  Tested, shipping.
 
-What's missing is everything around it: how the shell asks, how
-values complete, and how standalone scripts join in.
+What was missing (all since built) was everything around it: how
+the shell asks, and how values complete.
 
 ### The reentry protocol (how bash asks your program)
 
@@ -112,8 +112,9 @@ violations refused by name:
         ...
     branch.completions = lambda prefix: git_branches(prefix)
 
-Emission is free: converters reach standalone scripts by being
-imported, and the attribute rides along--lambdas included.
+*(Historical: "emission is free"--converters reached standalone
+scripts by import, the attribute riding along.  Standalone is gone;
+in-process the attribute simply lives on your converter.)*
 
 * `validate(...)` products get it automatically (their values).
 * `appeal.validate_range(1, 5)` with int type could offer '1'..'5'
@@ -139,7 +140,11 @@ one stays "no opinion" -> filenames.  Also: should the automatic
 
 ✔ **RULED: yes to both.**
 
-### Standalone scripts (the north star)
+### Standalone scripts (historical)
+
+*(This section is history: standalone script emission was built,
+shipped completion as ruled, and was later deleted wholesale when
+Appeal went interpreter-only.  Kept for the ruling record.)*
 
 The emitted script must complete too.  The engine's `_scan` +
 candidate logic is small and table-driven; proposal: it moves into
@@ -153,10 +158,18 @@ refusal rules).
 It's maybe a day of work.  I propose: same release, because the
 north star's whole point is that features don't get to skip it.
 
-✔ **RULED: same release.**
+✔ **RULED: same release.**  *(Since mooted: no more standalone.)*
 
 
-## Part 2: colorization
+## Part 2: colorization (SUPERSEDED--historical)
+
+*(This whole part records the ORIGINAL colorization design.  It
+shipped, and was then replaced by the 2026-08-09 theme lift: the
+`Theme` class, the symbolic mini-language, and `theme=` are all
+gone.  Today color is `Appeal(stylesheet=)`--a composed
+big.StyleSheet over role markup; themes are plain data dicts.
+The current guide is appeal.documentation.md §4.  The
+paint-after-layout principle below survived and still holds.)*
 
 ### What gets colored
 
@@ -293,14 +306,17 @@ opinions about its values:
     flavor.completions = lambda prefix='': (
         'vanilla', 'chocolate', 'pistachio')
 
-    @app.global_command()
+    @app.precommand()
     def scoop(cone, taste: flavor = 'vanilla', *, sprinkles=False):
         """
         Serves a scoop.
 
-        Arguments:
-          cone: which cone to fill.
-          taste: which flavor to serve.
+        # Arguments
+        cone
+        : Which cone to fill.
+
+        taste
+        : Which flavor to serve.
         """
         print('scoop', cone, taste, sprinkles)
 
@@ -308,9 +324,7 @@ opinions about its values:
         import sys
         sys.exit(app.main())
 
-Install it on your PATH as `scoop` (or use the standalone script
-`app.standalone()` emits--completion works identically there; the
-engine and the reentry protocol travel inside the script).
+Install it on your PATH as `scoop`.
 
 The `completions` attribute is the whole value-completion
 protocol: always a callable, taking the partial word typed so far
@@ -367,10 +381,10 @@ completion).
 Consequences worth knowing:
 
 * **Startup time is completion latency.**  Every TAB pays one
-  interpreter start plus your program's imports.  Standalone
-  scripts are brisk (they import almost nothing); an in-process
-  program that imports heavy things at module level will feel it
-  at the TAB key.
+  interpreter start plus your program's imports.  `import appeal`
+  itself is a few milliseconds (the completion path loads none of
+  the help machinery); a program that imports heavy things at
+  module level will feel it at the TAB key.
 * **The reentry only fires on a bare command line.**  An exported
   `_APPEAL_COMPLETE` in your environment can only perturb
   argument-less runs; anything with arguments parses normally.
@@ -398,7 +412,8 @@ protocol-tested but not shell-verified.  First fish user gets to
 confirm it--or file the bug.)
 
 
-## Build order (as ruled)
+## Build order (as ruled--all since shipped; step 4's standalone
+## half was later deleted with the interpreter-only pivot)
 
 0. **Composable documentation first** (proposal §8.7)--it hasn't
    shipped, the current help renderer is a stopgap, and

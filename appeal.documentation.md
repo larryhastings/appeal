@@ -29,7 +29,7 @@ details after the `:` are Markdown.
 
     app = appeal.Appeal(name='serve')
 
-    @app.global_command()
+    @app.precommand()
     def serve(host, port: int = 8080, *, verbose=False):
         """
         Serves the thing.
@@ -60,23 +60,19 @@ details after the `:` are Markdown.
 
     Serves the thing.
 
-    Longer prose about serving.  This paragraph, and any
-    other prose, is the page's documentation block.
+    Longer prose about serving.  This paragraph, and any other
+    prose, is the page's documentation block.
 
     Arguments
     ---------
 
-    <HOST>
-        The host to serve on.
-
-    <PORT>
-        The port.  Defaults to 8080.
+    <HOST>  The host to serve on.
+    <PORT>  The port.  Defaults to 8080.
 
     Options
     -------
 
-    -v|--verbose
-        Print more output.
+    -v|--verbose  Print more output.
 
 The rules, all of them:
 
@@ -93,8 +89,7 @@ The rules, all of them:
 * Entries are validated against your program's grammar, at build
   time, loudly: naming something that isn't a parameter is an
   error; documenting an option under `Arguments` (or vice versa)
-  is an error.  A keyword-only parameter *without* a default is a
-  required trailing operand, so it belongs under `Arguments`.
+  is an error.
 * Terms render as their command-line **displays**: `host` becomes
   `<HOST>`, `verbose` becomes `-v|--verbose`.
 * The docstring's section order doesn't matter; the page's order
@@ -126,7 +121,7 @@ every command using it inherits that documentation:
         """
         return (x, y)
 
-    @app.global_command()
+    @app.precommand()
     def plot(label, p: point = (0.0, 0.0), *, verbose=False):
         """
         Plots a labeled point.
@@ -200,7 +195,7 @@ default).  Replace it to taste:
         '{commands}\n'
     )
 
-    @app.global_command()
+    @app.precommand()
     def terse(thing, *, loud=False):
         """
         Does the thing, tersely.
@@ -251,7 +246,7 @@ your terminal's own light/dark scheme keeps it legible),
              | StyleSheet(appeal.dark_cool_theme))
     app = appeal.Appeal(name='vivid', stylesheet=sheet)
 
-    @app.global_command()
+    @app.precommand()
     def vivid(image, *, contrast: float = 1.0):
         """
         Renders vividly.
@@ -289,12 +284,11 @@ Two guarantees worth knowing:
   page strips back to the monochrome page byte-for-byte.
   Piping `--help` through `sed -e 's/\x1b\[[0-9;]*m//g'`
   proves it, if you're the proving kind.
-* **The roles travel.**  A standalone script bakes the role
-  markup, not escape codes, and re-decides at *its* runtime--
-  emitting on a terminal doesn't color output that lands in a
-  pipe.  (A script bakes the default decision; a live composed
-  `stylesheet=` is refused at emission--it's made of functions
-  and can't ride a script.)
+* **Roles, not escapes.**  The page is built as structural role
+  markup ("this span is an option"), and escape codes enter only
+  at print time, per the stylesheet decision above--so the same
+  page colors on a terminal and stays clean into a pipe, decided
+  per stream, every time.
 
 ## 5: Your docs, elsewhere
 
@@ -328,7 +322,7 @@ spelling for an optional option-argument, `optional[T]` (ruled
 
     app = appeal.Appeal(name='make')
 
-    @app.global_command()
+    @app.precommand()
     def make(*targets, jobs: optional[int] = 1):
         """
         Builds the targets.
@@ -349,8 +343,10 @@ spelling for an optional option-argument, `optional[T]` (ruled
 
 Absent, the parameter's own default fills (`1`).  Bare `-j`
 gives `int()`--zero--your sentinel for "no limit".  With a
-value, `make -j 5` is five jobs, `make -j5` and `make -j=5`
-too.  An option whose parameter is NOT wrapped in `optional[]`
+value, `make -j 5` is five jobs, and so are `make -j5` and
+`make --jobs=5`.  (Not `-j=5`: `=` is a long-option separator
+only--on a short option the rest of the token binds verbatim,
+so `-j=5` hands the int converter `=5`.)  An option whose parameter is NOT wrapped in `optional[]`
 requires its value, full stop--`optional[T]` is the marked case,
 exactly like make's man page marks `-j [jobs]`.
 
