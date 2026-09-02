@@ -520,8 +520,11 @@ v1), groups recurse--a group reads a sub-mapping under its
 parameter's name, or (v1's other spelling) flat keys at the same
 level; a sequence-shaped group reads a nested sequence.  Defaults
 fill absent keys (v1 0.6.4 demanded every key: a bug, fixed);
-extra keys are ignored (v1); missing required keys and bad values
-are `AppealDataError`s carrying the path (`at s.port`).  Booleans
+unrecognized keys raise by name, judged against the whole tree
+(strict=True, ruled 2026-08-29--a deliberate v1 divergence: v1
+ignored extras, which survives as strict=False); missing required
+keys and bad values are `AppealDataError`s carrying the path
+(`at s.port`).  Booleans
 parse strictly: real bools, `true/false/yes/no/on/off/1/0`--never
 truthiness (`'false'` must not mean True; v1 crashed on flags
 outright).  `*args` reads a sequence (v1 refused); `list[T]`,

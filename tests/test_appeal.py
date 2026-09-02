@@ -14,17 +14,18 @@
 #     appeal2, or big--and they must work.
 
 from big import test
+from big.builtin import load
 
-# the local checkout beats any installed appeal; preload() imports
+# the local checkout beats any installed appeal; load() imports
 # the package and ASSERTS it came from the checkout, so a stray
 # site-packages v1 fails loudly instead of testing the wrong code
 import os.path
 import subprocess
 import sys
 
-# preload returns the module; the repo root (for the git-archive
+# load returns the module; the repo root (for the git-archive
 # differential tests below) is the parent of the package directory
-repo_dir = os.path.dirname(os.path.dirname(test.preload('appeal').__file__))
+repo_dir = os.path.dirname(os.path.dirname(load('appeal').__file__))
 
 if sys.version_info < (3, 7):
     # subprocess.run's capture_output= and text= keywords are 3.7+; Appeal
@@ -3489,8 +3490,29 @@ def test_read_mapping():
     assert got == ('h', 99, 5), got                       # v1
     got = read_mapping(basic, {'host': 'h', 'port': 99, 'retries': 5})
     assert got == ('h', 99, 5), got                       # v1: converters always apply
-    got = read_mapping(basic, {'host': 'h', 'extra': 'ignored'})
-    assert got == ('h', 8080, 1), got                     # extras: v1; defaults: v2 fix
+    # strict by default (ruled 2026-08-29, a deliberate v1 divergence:
+    # fail loud; v1's ignore-extras survives as strict=False)
+    try:
+        read_mapping(basic, {'host': 'h', 'extra': 'junk'})
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert "'extra'" in str(e), e
+    got = read_mapping(basic, {'host': 'h', 'extra': 'junk'}, strict=False)
+    assert got == ('h', 8080, 1), got                     # defaults: v2 fix
+    # strict judges against the WHOLE tree: nested and flat spellings
+    # both stay legal, and the refusal names the path
+    def point(x: int, y: int):
+        return (x, y)
+    def plot(p: point):
+        return p
+    assert read_mapping(plot, {'x': 1, 'y': 2}) == (1, 2)          # flat
+    try:
+        read_mapping(plot, {'p': {'x': 1, 'y': 2, 'z': 3}})
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert "'z'" in str(e) and 'at p' in str(e), e
+    assert read_mapping(plot, {'p': {'x': 1, 'y': 2, 'z': 3}},
+                        strict=False) == (1, 2)
     try:
         read_mapping(basic, {'port': 1})
         assert False, 'expected AppealDataError'
@@ -6457,6 +6479,79 @@ def test_precommand_index_conflict_raises():
         out.append(('extra', e))
     ok.process(['-v', '-e', 'go'])
     assert out == [('E', True), ('extra', True), ('go',)], out
+
+
+def test_precommand_config_strict_knob():
+    # ruled 2026-08-29: config key vetting is strict by default (a
+    # typo'd key raises); strict=False takes the keys that are this
+    # era's options and IGNORES the rest--adapting an existing rc
+    # file that also carries non-CLI junk (an LRU list, geometry...)
+    import appeal as _appeal
+
+    def build(strict):
+        app = _appeal.Appeal(name='rc')
+        cfg = {}
+        kwargs = {'config': cfg} if strict is None else \
+                 {'config': cfg, 'strict': strict}
+        @app.precommand(**kwargs)
+        def top(*, verbose=False):
+            print('verbose', verbose)
+        @app.command()
+        def work():
+            return 'worked'
+        return app, cfg
+
+    rc_file = {'verbose': True, 'lru': ['a.txt', 'b.txt'], 'geometry': '80x24'}
+
+    # default: strict, the junk raises and names itself
+    app, cfg = build(None)
+    cfg.update(rc_file)
+    try:
+        app.process(['work'])
+        assert False, 'expected AppealDataError'
+    except _appeal.AppealDataError as e:
+        assert "'lru'" in str(e) or "'geometry'" in str(e), e
+
+    # strict=False: verbose layers, the junk is ignored
+    import io, contextlib
+    app, cfg = build(False)
+    cfg.update(rc_file)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert app.process(['work']).result == 'worked'
+    assert out.getvalue().strip() == 'verbose True'
+    # ...and argv still outranks the layered value
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.process(['--verbose=false', 'work'])
+    assert out.getvalue().strip() == 'verbose False'
+
+    # a SCOPED option name (declared by several windows--a converter
+    # reused across sibling slots) can't layer from config at all:
+    # strict raises by design; lenient skips it like any other
+    # unlayerable key.  Vetted directly--the branch is the point.
+    from appeal import build_plan
+    from appeal import _config_vet
+    def child(p=0, *, flag=False):
+        return (p, flag)
+    def scoped_top(a: child = None, b: child = None):
+        return (a, b)
+    plan = build_plan(scoped_top)
+    try:
+        _config_vet(plan, frozenset(), {'flag': True})
+        assert False, 'expected refusal'
+    except _appeal.AppealConfigurationError as e:
+        assert 'scoped' in str(e), e
+    assert _config_vet(plan, frozenset(), {'flag': True},
+                       strict=False) == {}
+
+    # strict= without config= is meaningless, refused by name
+    app3 = _appeal.Appeal(name='x')
+    try:
+        app3.precommand(strict=False)
+        assert False, 'expected AppealConfigurationError'
+    except _appeal.AppealConfigurationError as e:
+        assert 'config=' in str(e), e
 
 
 def test_precommand_config_bound_dicts():

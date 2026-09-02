@@ -1957,8 +1957,10 @@ it reads the names of the callable's parameters, pulls values
 out of the mapping using those names, converts them per the
 annotations--converters always apply, already-typed values
 included--and calls the callable.  Parameters with defaults
-are optional; parameters without are required; extra keys in
-the mapping are ignored.  This works especially well with
+are optional; parameters without are required; a key that
+names nothing in the callable's tree raises, by name--pass
+`strict=False` to ignore such keys instead (for reading a
+slice of somebody else's document).  This works especially well with
 classes decorated with `dataclasses.dataclass`: a few lines
 define a typed configuration object, and `read_mapping` fills
 it straight from your config file.

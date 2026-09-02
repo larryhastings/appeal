@@ -430,12 +430,16 @@ _inspect = _LazyInspect()
 from types import MethodType as _MethodType
 
 
-def _config_vet(plan, table_words, config, command_plan_for=None):
+def _config_vet(plan, table_words, config, command_plan_for=None,
+                strict=True):
     """
     Config layering's stage 1 (strict keys--"either this is ours,
     or it isn't"): every key must name a global-command option.
     Returns {key: the OptionRule}, or raises naming the offender--
     a config file is end-user input, so loudness is UsageError.
+    strict=False (ruled 2026-08-29, the rc-file-adaptation case)
+    instead SKIPS every key that can't layer: take what's mine,
+    ignore the rest.
     """
     from .frontend import all_options
     from .frontend import Terminal
@@ -456,6 +460,8 @@ def _config_vet(plan, table_words, config, command_plan_for=None):
     for key, value in config.items():
         if key in scoped or (key in options
                              and options[key].key in plan.scoped_keys):
+            if not strict:
+                continue
             # refused BY DESIGN (ruled 2026-07-09): position is
             # the essence of a scoped option, and a mapping has no
             # position--the two transports don't compose.  (The
@@ -471,6 +477,8 @@ def _config_vet(plan, table_words, config, command_plan_for=None):
         rule = options.get(key)
         if rule is not None:
             vetted[key] = rule
+            continue
+        if not strict:
             continue
         if key in table_words:
             raise AppealDataError(
@@ -503,7 +511,7 @@ def _config_vet(plan, table_words, config, command_plan_for=None):
     return vetted
 
 
-def _config_apply(conv, table, plan, config, plan_for):
+def _config_apply(conv, table, plan, config, plan_for, strict=True):
     """
     Layer a precommand era's BOUND config mapping onto its already-parsed
     converter (the one engine): defaults < config < argv, atomic per option.
@@ -514,7 +522,7 @@ def _config_apply(conv, table, plan, config, plan_for):
     carry 'config:' provenance (an option argv already gave wins whole).
     """
     from .load import _read_bool
-    vetted = _config_vet(plan, frozenset(table), config, plan_for)
+    vetted = _config_vet(plan, frozenset(table), config, plan_for, strict)
     given = set(conv.kwargs)            # options (folds included) all live here now
     usage = plan.usage()
 
@@ -1357,7 +1365,7 @@ class Appeal:
         return decorator
     default_command = default           # transitional alias for the old name
 
-    def precommand(self, *, index=-1, config=None):
+    def precommand(self, *, index=-1, config=None, strict=None):
         """
         Register a precommand era.  A class here is class-as-app (its __init__
         is the era's grammar; its methods/inner classes bind to the instance).
@@ -1370,7 +1378,16 @@ class Appeal:
         holds the SAME object, so an empty dict you .update() later is seen.
         None (the default) means this era takes no config -- the -h/--help/
         --version precommand simply leaves it None and opts out for free.
+
+        strict= (Larry, 2026-08-29) governs the bound mapping's key vetting:
+        True (the default) raises on any key that isn't one of this era's
+        options; strict=False takes the keys that are and ignores the rest
+        (adapting an existing rc file that also holds non-CLI junk).  It
+        only means something with config=, and is refused without it.
         """
+        if strict is not None and config is None:
+            raise AppealConfigurationError(
+                "precommand(): strict= only means something with config=")
         def decorator(callable):
             if index == -1:
                 self._precommands.append(callable)
@@ -1378,7 +1395,8 @@ class Appeal:
                 self._precommands.insert(index, callable)
                 self._precommand_explicit.add(id(callable))
             if config is not None:
-                self._precommand_config[id(callable)] = config
+                self._precommand_config[id(callable)] = (
+                    config, True if strict is None else strict)
             self._impl = self._precommands[-1]
             self._invalidate()
             return callable
@@ -2229,7 +2247,8 @@ class Appeal:
             # It's a no-op unless help/version was actually requested.
             is_meta = getattr(era_plan.callable, 'precommand', False)
             proc = backend.Engine(argv[pos:], conv, table, dry=dry and not is_meta)
-            cfg = self._precommand_config.get(id(era_plan.callable))
+            bound = self._precommand_config.get(id(era_plan.callable))
+            cfg, cfg_strict = bound if bound else (None, True)
             if cfg and not dry:
                 # this era has a BOUND config mapping: parse argv, merge config
                 # for options argv didn't set, THEN invoke (argv wins, whole).
@@ -2237,14 +2256,16 @@ class Appeal:
                 # dry pre-scan validates argv alone (config is a live-only merge).
                 proc.enter(conv)
                 proc._loop()
-                _config_apply(conv, table, era_plan, cfg, self.plan_for)
+                _config_apply(conv, table, era_plan, cfg, self.plan_for,
+                              cfg_strict)
                 result = proc.root()
             else:
                 if dry and cfg:
                     # config KEY vetting is structural -- fire its refusals in the
                     # pre-scan, before the command portion is parsed (the value
                     # merge stays live, above)
-                    _config_vet(era_plan, frozenset(table), cfg, self.plan_for)
+                    _config_vet(era_plan, frozenset(table), cfg,
+                                self.plan_for, cfg_strict)
                 result = proc.run()
             if dry:                                 # pre-scan: no instances, no
                 pos += proc.consumed                # halt (scan the whole line)

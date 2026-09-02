@@ -13,8 +13,8 @@
 # In-process API only: these aren't part of the command-line grammar.
 #
 # v1 parity where v1 0.6.4 works (probed): values pulled by name,
-# converters always applied (already-typed values included), extra
-# keys ignored, nested groups readable BOTH as a sub-mapping under
+# converters always applied (already-typed values included), nested
+# groups readable BOTH as a sub-mapping under
 # the group's name AND as flat keys at the same level.  Where v1 is
 # broken (defaults didn't fill; flags crashed; *args refused;
 # read_iterable raised TypeError), v2 does the obvious thing.
@@ -83,28 +83,28 @@ def _convert(converter, value, path):
               path)
 
 
-def _read_child(child, value, path):
+def _read_child(child, value, path, strict):
     "A group's value: a mapping or a sequence, its choice."
     if isinstance(value, Mapping):
-        return _read_group(child, value, path)
+        return _read_group(child, value, path, strict)
     if _is_sequence(value):
-        return _read_sequence(child, list(value), path)
+        return _read_sequence(child, list(value), path, strict)
     if child.minimum <= 1 and (child.maximum is None
                                or child.maximum >= 1):
         # a scalar, for a group that can take exactly one: the
         # single-parameter converter (datestamp(text)) reads its
         # one value in place--v1 applied converters, always
-        return _read_sequence(child, [value], path)
+        return _read_sequence(child, [value], path, strict)
     _fail(f"expected a mapping or a sequence, got {value!r}", path)
 
 
-def _option_value(o, value, path):
+def _option_value(o, value, path, strict):
     if o.kind == 'flag':
         return _read_bool(value, path)
     if o.kind == 'nullary':
         return o.converters[0]() if _read_bool(value, path) else o.default
     if o.kind == 'group':
-        return _read_child(o.child, value, path)
+        return _read_child(o.child, value, path, strict)
     if o.kind == 'value':
         if len(o.converters) == 1:
             return _convert(o.converters[0], value, path)
@@ -171,14 +171,27 @@ def _subtree_names(plan):
     return names
 
 
-def _read_group(plan, mapping, path):
-    args, kwargs = _read_group_args(plan, mapping, path)
+def _vet_keys(plan, mapping, path):
+    "strict: every key must be a parameter name somewhere in the tree."
+    claimed = _subtree_names(plan)
+    for key in mapping:
+        if key not in claimed:
+            _fail(f"unrecognized key {key!r}", path or 'the mapping')
+
+
+def _read_group(plan, mapping, path, strict, boundary=True):
+    # the strict check runs at MAPPING-OBJECT boundaries only: a flat
+    # read (v1's other spelling) re-reads the PARENT's dict, whose
+    # other keys are the parent's business, not ours
+    if strict and boundary:
+        _vet_keys(plan, mapping, path)
+    args, kwargs = _read_group_args(plan, mapping, path, strict)
     if plan.callable is tuple:
         return tuple(args)
     return plan.callable(*args, **kwargs)
 
 
-def _read_group_args(plan, mapping, path):
+def _read_group_args(plan, mapping, path, strict):
     args = []
     kwargs = {}
     for slot in plan.slots:
@@ -192,7 +205,8 @@ def _read_group_args(plan, mapping, path):
             if isinstance(child, Terminal):
                 args.extend(_convert(child.converter, v, here) for v in value)
             else:
-                args.extend(_read_child(child, v, here) for v in value)
+                args.extend(_read_child(child, v, here, strict)
+                            for v in value)
             continue
 
         if isinstance(child, Terminal):
@@ -211,20 +225,22 @@ def _read_group_args(plan, mapping, path):
         # a group: a sub-mapping/sequence under its own name, or
         # (v1's other spelling) flat keys at this level
         if slot.name in mapping:
-            args.append(_read_child(child, mapping[slot.name], here))
+            args.append(_read_child(child, mapping[slot.name], here, strict))
         elif _subtree_names(child) & mapping.keys():
-            args.append(_read_group(child, mapping, path))
+            args.append(_read_group(child, mapping, path, strict,
+                                    boundary=False))
         elif slot.required:
             # nothing of its present: defaults throughout (its own
             # required parameters will complain by path)
-            args.append(_read_group(child, {}, here))
+            args.append(_read_group(child, {}, here, strict))
         else:
             args.append(slot.default)
 
     option_defaults = {}
     for o in plan.options:
         if o.name in mapping:
-            kwargs[o.name] = _option_value(o, mapping[o.name], _sub(path, o.name))
+            kwargs[o.name] = _option_value(o, mapping[o.name],
+                                           _sub(path, o.name), strict)
         elif not o.kwargs_delivered:
             option_defaults.setdefault(o.name, o.default)
     for name, default in option_defaults.items():
@@ -233,7 +249,7 @@ def _read_group_args(plan, mapping, path):
     return args, kwargs
 
 
-def _read_sequence(plan, items, path, call=True):
+def _read_sequence(plan, items, path, strict, call=True):
     n = len(items)
     trailing = [s for s in plan.slots if s.trailing]
     reserved = items[n - len(trailing):] if trailing else []
@@ -258,7 +274,8 @@ def _read_sequence(plan, items, path, call=True):
                 if isinstance(child, Terminal):
                     args.append(_convert(child.converter, value, here))
                 else:
-                    args.append(_read_child(child, value, here))
+                    args.append(_read_child(child, value, here,
+                                            strict))
             i += take
             continue
 
@@ -272,7 +289,7 @@ def _read_sequence(plan, items, path, call=True):
         if isinstance(child, Terminal):
             args.append(_convert(child.converter, value, here))
         else:
-            args.append(_read_child(child, value, here))
+            args.append(_read_child(child, value, here, strict))
 
     if i < len(body):
         _fail(f"{len(body) - i} leftover value(s)", path or 'the sequence')
@@ -292,7 +309,7 @@ def _read_sequence(plan, items, path, call=True):
     return plan.callable(*args, **kwargs)
 
 
-def _read_fold(cls, data):
+def _read_fold(cls, data, strict):
     """
     An Option subclass as the callable: the protocol, read-side--
     init(default) once, option() per occurrence (an Option reads
@@ -310,10 +327,12 @@ def _read_fold(cls, data):
     for index, occurrence in enumerate(occurrences):
         path = f'{cls.__name__}[{index}]'
         if isinstance(occurrence, Mapping):
-            args, kwargs = _read_group_args(plan, occurrence, path)
+            if strict:
+                _vet_keys(plan, occurrence, path)
+            args, kwargs = _read_group_args(plan, occurrence, path, strict)
         elif _is_sequence(occurrence):
             args, kwargs = _read_sequence(plan, list(occurrence),
-                                          path, call=False)
+                                          path, strict, call=False)
         else:
             _fail(f"expected a mapping or a sequence, got "
                   f"{occurrence!r}", path)
@@ -321,23 +340,25 @@ def _read_fold(cls, data):
     return instance()
 
 
-def read_mapping(callable, mapping):
+def read_mapping(callable, mapping, *, strict=True):
     """
     Call `callable` with values pulled from `mapping` by parameter
     name, converted per its signature--the command-line metaphor
     pointed at a config file.  Groups (converter annotations) read
     a sub-mapping under their parameter's name, or flat keys at the
-    same level; defaults fill absent keys; extra keys are ignored.
-    An Option subclass folds: it reads a sequence of occurrences,
-    option() per element.
+    same level; defaults fill absent keys.  A key nothing in the
+    tree claims raises (ruled 2026-08-29: fail loud by default);
+    strict=False ignores such keys instead--for reading a slice of
+    somebody else's document.  An Option subclass folds: it reads
+    a sequence of occurrences, option() per element.
     """
     if is_option(callable):
-        return _read_fold(callable, mapping)
+        return _read_fold(callable, mapping, strict)
     plan = callable if isinstance(callable, Plan) else build_plan(callable)
     if not isinstance(mapping, Mapping):
         raise AppealDataError(
             f"read_mapping needs a mapping, got {type(mapping).__name__}")
-    return _read_group(plan, mapping, '')
+    return _read_group(plan, mapping, '', strict)
 
 
 def _reject_unfeedable(plan):
@@ -357,12 +378,13 @@ def _reject_unfeedable(plan):
             f"parameter {plan.var_keyword!r}")
 
 
-def read_iterable(callable, iterable):
+def read_iterable(callable, iterable, *, strict=True):
     """
     Call `callable` once per row of `iterable`, values pulled by
     position within each row; returns the list of results.  Empty
     rows are skipped.  Keyword-only parameters (and **kwargs) can't
     be position-fed and are configuration errors (v1's corpus).
+    strict= governs nested mappings inside rows, as in read_mapping.
     """
     plan = callable if isinstance(callable, Plan) else build_plan(callable)
     _reject_unfeedable(plan)
@@ -370,16 +392,17 @@ def read_iterable(callable, iterable):
     for row in iterable:
         if not row:
             continue
-        results.append(_read_sequence(plan, list(row), ''))
+        results.append(_read_sequence(plan, list(row), '', strict))
     return results
 
 
-def read_csv(callable, reader, *, first_row_map=None):
+def read_csv(callable, reader, *, first_row_map=None, strict=True):
     """
     read_iterable for csv.reader-style input: the first row is the
     headings.  Without first_row_map the headings are discarded and
     rows feed positionally; with it, each heading maps to a
-    parameter name and rows feed read_mapping-style.
+    parameter name and rows feed read_mapping-style (strict= as in
+    read_mapping).
     """
     plan = callable if isinstance(callable, Plan) else build_plan(callable)
     rows = iter(reader)
@@ -389,12 +412,12 @@ def read_csv(callable, reader, *, first_row_map=None):
         return []
     if first_row_map is None:
         _reject_unfeedable(plan)
-        return [_read_sequence(plan, list(row), '')
+        return [_read_sequence(plan, list(row), '', strict)
                 for row in rows if row]
     try:
         names = [first_row_map[h] for h in headings]
     except KeyError as e:
         raise AppealDataError(
             f"read_csv: heading {e.args[0]!r} isn't in first_row_map")
-    return [_read_group(plan, dict(zip(names, row)), '')
+    return [_read_group(plan, dict(zip(names, row)), '', strict)
             for row in rows if row]

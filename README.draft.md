@@ -754,7 +754,10 @@ app.main()
 ```
 
 Config only ever supplies *option* values; it never changes structure, and a
-key that isn't one of that precommand's options is an error, by name. Each
+key that isn't one of that precommand's options is an error, by name--unless
+you pass `@app.precommand(config=settings, strict=False)`, which takes the
+keys that are and ignores the rest (kind to an existing rc file that also
+holds non-CLI junk, an LRU list, window geometry...). Each
 precommand that wants config binds its own dict--there's no single global
 slot and nothing to guess about which precommand a mapping is for. (Appeal
 reads no file formats itself--you hand it a dict, from wherever you like.)
@@ -1314,11 +1317,13 @@ child `Appeal` (or the function) so you can nest.
 
 The same command, same converters, no command-line string:
 
-* `app.read_mapping(callable, mapping)` — run `callable` from a
-  `{parameter: value}` dict.
-* `app.read_iterable(callable, iterable)` — run it from an argv-style list.
-* `app.read_csv(callable, reader, *, first_row_map=None)` — run it per row
-  of a CSV reader.
+* `app.read_mapping(callable, mapping, *, strict=True)` — run `callable`
+  from a `{parameter: value}` dict.  An unrecognized key raises, by name;
+  `strict=False` ignores it instead (reading a slice of a larger document).
+* `app.read_iterable(callable, iterable, *, strict=True)` — run it from an
+  argv-style list.
+* `app.read_csv(callable, reader, *, first_row_map=None, strict=True)` —
+  run it per row of a CSV reader.
 
 ### The converter vocabulary
 
