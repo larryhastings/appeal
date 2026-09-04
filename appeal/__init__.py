@@ -430,6 +430,56 @@ _inspect = _LazyInspect()
 from types import MethodType as _MethodType
 
 
+def _merge_era_options(plans):
+    """
+    The precommands parse as ONE merged era (Larry, 2026-09-03): every
+    era's options are recognized together at the head of the line, so
+    `foo -q --version` works no matter which precommand maps which.
+    One namespace needs one owner per string.  A string the user WROTE
+    twice--a long (from a parameter name) or an explicit @app.option
+    claim--in two different eras is a build error naming both owners.
+    An AUTO-proposed short yields instead: explicit claims trump it,
+    and among autos the first-declared era keeps the letter and later
+    ones simply go without--the same rule the letters already follow
+    inside one plan.
+    """
+    from .frontend import all_options
+    written = {}                        # string the user wrote -> plan
+    autos = []                          # (plan, option, short), era order
+    for plan in plans:
+        seen = set()
+        for owner, option in all_options(plan):
+            if id(option) in seen:
+                # a shared rule revisited (all_options dedupes plans,
+                # but belt and braces--the frontend twin's rule)
+                continue   # pragma: no cover
+            seen.add(id(option))
+            auto = () if getattr(option, 'explicit', False) else \
+                   getattr(option, 'auto_shorts', ())
+            for s in tuple(option.strings):
+                if s in auto:
+                    autos.append((plan, option, s))
+                    continue
+                prior = written.get(s)
+                if prior is None:
+                    written[s] = plan
+                    continue
+                if prior is plan:       # scoped within one era: ruled there
+                    continue
+                raise AppealConfigurationError(
+                    f"option {s!r} is declared by two precommands "
+                    f"({prior.name!r} and {plan.name!r}); the precommands "
+                    f"parse as one era, so an option string needs one owner")
+    claimed = dict(written)
+    for plan, option, s in autos:
+        prior = claimed.get(s)
+        if prior is None or prior is plan:
+            claimed[s] = plan
+            continue
+        option.strings = tuple(t for t in option.strings if t != s)
+    return plans
+
+
 def _config_vet(plan, table_words, config, command_plan_for=None,
                 strict=True):
     """
@@ -2146,7 +2196,8 @@ class Appeal:
         The ordered head eras' plans (Larry's repeatable precommand, 2026-08-21):
         the help/version precommand at the head (when default_mappings mapped
         anything to it), then each precommand the user registered, front-to-back.
-        Empty when there's no head at all.  scan_command_set scans them in order.
+        Empty when there's no head at all.  The precommands parse as ONE merged
+        era (Larry, 2026-09-03)--see _merge_era_options.
         """
         self._finalize()
         plans = []
@@ -2159,7 +2210,7 @@ class Appeal:
             if owner is None:                       # a self-method no class
                 _refuse_orphan_method(era)          # claimed: refuse by name
             plans.append(self._build(era, method_of=owner))
-        return plans
+        return _merge_era_options(plans)
 
     def _ordered_precommands(self):
         """
@@ -2236,48 +2287,72 @@ class Appeal:
         # nothing (the line stopped at the parent), keep it -- result is "the
         # last command that ran" (Larry, 2026-08-24), not None.
         result = inherited
-        for cls, era_plan in zip(precommands, era_plans):   # head eras, in order
-            conv = cls()
-            if cls.binds is not None and not dry:   # a method/BIC precommand:
-                conv.bound = env.get(cls.binds)     # self is its class's instance
-            # -h/--help/-V/--version is Appeal's own metadata precommand: its
-            # body sys.exit()s the help/version page and outranks parsing, so it
-            # must run even in the dry pre-scan -- otherwise the pre-scan would
-            # validate (and reject) a command portion that help would preempt.
-            # It's a no-op unless help/version was actually requested.
-            is_meta = getattr(era_plan.callable, 'precommand', False)
-            proc = backend.Engine(argv[pos:], conv, table, dry=dry and not is_meta)
-            bound = self._precommand_config.get(id(era_plan.callable))
-            cfg, cfg_strict = bound if bound else (None, True)
-            if cfg and not dry:
-                # this era has a BOUND config mapping: parse argv, merge config
-                # for options argv didn't set, THEN invoke (argv wins, whole).
-                # Config only adds OPTION values, never changes structure, so the
-                # dry pre-scan validates argv alone (config is a live-only merge).
+        if precommands:
+            # ONE MERGED ERA (Larry, 2026-09-03): every precommand's options
+            # are recognized together at the head of the line, so
+            # `foo -q --version` parses no matter which precommand maps which
+            # string (string ownership settled at build by _merge_era_options).
+            # Recognition merges; INVOCATION stays front-to-back in
+            # registration order, each converter fed the values the shared
+            # parse bound to it.  Positional appetite fills left-to-right
+            # across the seams--the ordinary law, applied to one long era.
+            convs = [cls() for cls in precommands]
+            proc = backend.Engine(argv[pos:], convs[0], table, dry=dry)
+            for conv in convs:
                 proc.enter(conv)
+            try:
                 proc._loop()
-                _config_apply(conv, table, era_plan, cfg, self.plan_for,
-                              cfg_strict)
-                result = proc.root()
+            except UsageError:
+                # a sibling precommand's structural shortfall (a bare app's
+                # required operands, say) must not outrank -h/--version:
+                # options are recognized anywhere, so a requested help is
+                # already bound--let the metadata precommand exit first,
+                # then let the error stand
+                if dry:
+                    for era_plan, conv in zip(era_plans, convs):
+                        if getattr(era_plan.callable, 'precommand', False):
+                            conv()
+                raise
+            pos += proc.consumed                    # the whole era's tokens
+            if dry:
+                # pre-scan: structural only, no instances, no halt -- except
+                # Appeal's own metadata precommand (-h/--help/--version),
+                # whose body sys.exit()s the help/version page and outranks
+                # validation; it must fire here, before the command portion is
+                # parsed, or `foo -h badcmd` would error instead of helping.
+                # (No-op unless requested; its grammar is all str-level, so
+                # the dry pass's raw values convert correctly at invoke.)
+                for era_plan, conv in zip(era_plans, convs):
+                    bound = self._precommand_config.get(id(era_plan.callable))
+                    if bound:
+                        # config KEY vetting is structural -- fire its
+                        # refusals in the pre-scan (the value merge is live)
+                        _config_vet(era_plan, frozenset(table), bound[0],
+                                    self.plan_for, bound[1])
+                    if getattr(era_plan.callable, 'precommand', False):
+                        conv()
             else:
-                if dry and cfg:
-                    # config KEY vetting is structural -- fire its refusals in the
-                    # pre-scan, before the command portion is parsed (the value
-                    # merge stays live, above)
-                    _config_vet(era_plan, frozenset(table), cfg,
-                                self.plan_for, cfg_strict)
-                result = proc.run()
-            if dry:                                 # pre-scan: no instances, no
-                pos += proc.consumed                # halt (scan the whole line)
-                continue
-            if cls.constructs is not None:          # a global class-as-app: its
-                env[cls.constructs] = result        # methods bind to this instance
-            holder.instances.append(               # eras log (None, instance-or-None)
-                (None, result if cls.constructs is not None else None))
-            pos += proc.consumed                    # this era's tokens are done;
-            if _halts(result):                      # advance BEFORE halting so a
-                return result, pos                  # nonzero-int return doesn't
-                                                    # leave its own tokens behind
+                for cls, era_plan, conv in zip(precommands, era_plans, convs):
+                    if cls.binds is not None:       # a method/BIC precommand:
+                        conv.bound = env.get(cls.binds)  # self is its class's
+                                                         # instance, built by an
+                                                         # earlier invocation
+                    bound = self._precommand_config.get(id(era_plan.callable))
+                    if bound:
+                        # a BOUND config mapping: argv parsed already; merge
+                        # config for options argv didn't set, THEN invoke
+                        # (argv wins, whole)
+                        _config_apply(conv, table, era_plan, bound[0],
+                                      self.plan_for, bound[1])
+                    result = conv()
+                    if cls.constructs is not None:  # a global class-as-app: its
+                        env[cls.constructs] = result   # methods bind to this
+                    holder.instances.append(        # eras log (None,
+                        (None, result               #  instance-or-None)
+                         if cls.constructs is not None else None))
+                    if _halts(result):              # pos already advanced, so a
+                        return result, pos          # nonzero-int return doesn't
+                                                    # leave era tokens behind
         dispatched = False              # did a command word of THIS node run?
         while pos < len(argv):
             word = argv[pos]

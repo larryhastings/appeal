@@ -546,6 +546,25 @@ Because a mapping is a tree, sibling branches may each have a
 parameter named `x`--address them with the nested spelling.  The
 flat spelling reads the current level and is for shallow configs.
 
+## Precommands
+
+`@app.precommand()` is repeatable: each registration is another head
+era, invoked front-to-back (registration order; `index=` places one
+explicitly) before any command.  Their options all PARSE as one
+merged region at the head of the line (ruled 2026-09-03), so
+`foo -q --version` works no matter which precommand maps which
+string, in either spelling order.  One region means one owner per
+string: two precommands that WROTE the same option name (a long from
+a parameter, or an explicit @app.option claim) are a build error
+naming both; an auto-proposed short letter simply yields to the
+first claimant--the same first-declared-wins rule the letters follow
+inside one plan.  Invocation is unchanged: each precommand receives
+the values the shared parse bound to it, positional appetite fills
+left-to-right across the seams, and a halting return (help/version)
+still stops the line.  Precommand options do NOT survive into the
+command portion: the merged region ends at the first command word
+(matching argparse, click, and git itself--probed 2026-09-03).
+
 ## Config layering
 
 A dict **bound to a precommand** with `@app.precommand(config=...)`

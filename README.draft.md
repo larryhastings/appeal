@@ -560,8 +560,12 @@ you write a single-function program you invoke with no command word--that's
 the Quickstart at the top.)
 
 Precommand is **repeatable**: decorate several and they run front-to-back,
-each its own era, before any command. They run in registration order; pass
-`index=` to place one explicitly.
+in registration order (pass `index=` to place one explicitly), before any
+command. Their options all *parse* together as one region at the head of
+the line--`script.py -q --version` works no matter which precommand maps
+which option, in either spelling order. One region means one owner per
+option string: two precommands writing the same option name is a build
+error (an auto-assigned short letter simply goes to the first, as always).
 
 A precommand doesn't have to be a function--it can also be a **method**, a
 **class**, or a bound inner class. A class precommand constructs an instance

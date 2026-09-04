@@ -6481,6 +6481,103 @@ def test_precommand_index_conflict_raises():
     assert out == [('E', True), ('extra', True), ('go',)], out
 
 
+def test_precommands_parse_as_one_merged_era():
+    # ruled (Larry, 2026-09-03): every precommand's options are
+    # recognized together at the head of the line--`foo -q --version`
+    # works no matter which precommand maps which string, in any
+    # spelling order.  Invocation stays front-to-back.
+    import appeal as _appeal
+    import io, contextlib
+
+    def build():
+        app = _appeal.Appeal(name='foo', version='9.9')
+        @app.precommand()
+        def settings(*, quiet=False):
+            print(f'settings quiet={quiet}')
+        @app.command()
+        def work():
+            return 'worked'
+        return app
+
+    for argv in (['-q', '--version'], ['--version', '-q']):
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                build().process(argv)
+            assert False, 'expected SystemExit (version prints + halts)'
+        except SystemExit:
+            assert '9.9' in out.getvalue(), (argv, out.getvalue())
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            build().process(['-q', '-h'])
+        assert False, 'expected SystemExit (help page)'
+    except SystemExit:
+        assert 'usage:' in out.getvalue(), out.getvalue()
+    # plain dispatch unchanged: quiet layers, work runs
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert build().process(['-q', 'work']).result == 'worked'
+    assert out.getvalue().strip() == 'settings quiet=True'
+
+    # -h/--version still preempt a sibling precommand's structural
+    # shortfall (a bare app's required operand)
+    app2 = _appeal.Appeal(name='srv')
+    @app2.precommand()
+    def serve(host, *, verbose=False):
+        print('serving', host)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            app2.process(['-h'])
+        assert False, 'expected SystemExit'
+    except SystemExit:
+        assert 'usage:' in out.getvalue(), out.getvalue()
+
+    # one era needs one owner per string: a string the user WROTE in
+    # two precommands is a build error naming both
+    app3 = _appeal.Appeal(name='dup', default_mappings=None)
+    @app3.precommand()
+    def one(*, quiet=False): pass
+    @app3.precommand()
+    def two(*, quiet=False): pass
+    @app3.command()
+    def w(): pass
+    try:
+        app3.process(['w'])
+        assert False, 'expected AppealConfigurationError'
+    except _appeal.AppealConfigurationError as e:
+        assert "'--quiet'" in str(e) and 'one era' in str(e), e
+
+    # ...but an AUTO short yields, first-declared-first-served: quiet
+    # keeps -q, quota goes long-only--the same rule as within one plan
+    app4 = _appeal.Appeal(name='yield', default_mappings=None)
+    @app4.precommand()
+    def qa(*, quiet=False): print(f'quiet={quiet}')
+    @app4.precommand()
+    def qb(*, quota: int = 0): print(f'quota={quota}')
+    @app4.command()
+    def go(): return 'went'
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert app4.process(['-q', '--quota', '7', 'go']).result == 'went'
+    assert out.getvalue() == 'quiet=True\nquota=7\n', out.getvalue()
+
+    # a converter shared across sibling slots INSIDE one precommand is
+    # that era's own scoped business; the merge pass skips the
+    # revisited rule rather than seeing a phantom collision
+    app5 = _appeal.Appeal(name='sc', default_mappings=None)
+    def child5(p=0, *, flag=False):
+        return (p, flag)
+    @app5.precommand()
+    def top5(a: child5 = None, b: child5 = None):
+        pass
+    @app5.command()
+    def w5():
+        pass
+    assert app5.global_plans()
+
+
 def test_precommand_config_strict_knob():
     # ruled 2026-08-29: config key vetting is strict by default (a
     # typo'd key raises); strict=False takes the keys that are this
