@@ -2683,8 +2683,12 @@ class Appeal:
                 continue
             if words == ['quit'] or words == ['exit']:
                 return
+            # the session survives everything except the user leaving
+            # (ruled 2026-09-03, the Sol review): a command's failure,
+            # its bugs, and the help machinery's sys.exit all print
+            # and CONTINUE--quit and ^D are the only doors out.
             try:
-                result = self.process(words)
+                result = self.process(words).result
             except AppealDataError as e:
                 print(f"{sheet.render(style('error', 'error:'))} {e}")
                 usage = getattr(e, 'usage', None)
@@ -2692,7 +2696,23 @@ class Appeal:
                     print(f"usage: {sheet.render(usage)}")
             except AppealConfigurationError as e:
                 print(f"{sheet.render(style('error', 'configuration error:'))} {e}")
+            except AppealError as e:
+                # CommandError and kin: the command said no.  Its exit
+                # code means nothing to a session that isn't exiting.
+                print(f"{sheet.render(style('error', 'error:'))} {e}")
+            except SystemExit:
+                pass        # -h/--version printed their page already
+            except KeyboardInterrupt:
+                print()
+            except Exception:
+                # an ordinary bug in a command: the traceback is the
+                # useful part--print it like Python's own REPL would
+                import traceback
+                traceback.print_exc()
             else:
+                # a value the command RETURNED, printed exactly as
+                # print() would (ruled: this is the program's REPL,
+                # not Python's--no repr, no quotes)
                 if result is not None:
                     print(result)
 

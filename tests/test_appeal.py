@@ -4740,27 +4740,63 @@ _PRECOMPILE_RUNNER = (
 
 
 def test_repl():
-    # §8.9: read a line, parse it like a command line, loop
+    # §8.9, hardened per the Sol review (2026-09-03): the session
+    # survives everything except the user leaving--a CommandError, an
+    # ordinary bug, even -h's sys.exit print and CONTINUE; a returned
+    # value prints via print() (this is the program's REPL, not
+    # Python's--no repr, no quotes).  The transcript is pinned
+    # EXACTLY: substring checks are how the old Processor-repr leak
+    # shipped.
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, 'r.py')
         with open(path, 'wt', encoding='utf-8') as f:
             f.write(
                 'import appeal\n'
-                "app = appeal.Appeal(name='calc')\n"
+                "app = appeal.Appeal(name='calc', version='2.0')\n"
+                '@app.command()\n'
+                'def add(a: int, b: int):\n'
+                '    return a + b\n'
                 '@app.command()\n'
                 'def greet(name):\n'
                 "    return f'hello, {name}'\n"
+                '@app.command()\n'
+                'def divide(a: int, b: int):\n'
+                '    if b == 0:\n'
+                '        raise appeal.CommandError("no dividing by zero")\n'
+                '    return a // b\n'
+                '@app.command()\n'
+                'def crash():\n'
+                "    raise RuntimeError('cosmic rays')\n"
                 "app.repl(banner='ready')\n")
         env = dict(os.environ)
         env['PYTHONPATH'] = os.getcwd()
         r = sub_run(
             [sys.executable, path],
-            input='greet world\nbogus\nquit\n',
+            input=('add 2 3\ngreet world\nbogus\ndivide 1 0\ncrash\n'
+                   'add 1 1\nquit\n'),
             capture_output=True, text=True, env=env)
         assert r.returncode == 0, r.stderr
-        assert 'ready' in r.stdout
-        assert 'hello, world' in r.stdout
-        assert "unknown command 'bogus'" in r.stdout
+        assert r.stdout == (
+            'ready\n'
+            'calc> 5\n'                                   # print(result)
+            'calc> hello, world\n'                        # bare, no quotes
+            "calc> error: unknown command 'bogus'\n"
+            'calc> error: no dividing by zero\n'          # CommandError,
+            'calc> '                                      #  session lives;
+            'calc> 2\n'                                   #  crash too
+            'calc> '), repr(r.stdout)
+        # the crash's traceback went to stderr, and only stderr
+        assert 'RuntimeError: cosmic rays' in r.stderr, r.stderr
+        assert 'Traceback' in r.stderr
+
+        # -h prints its page and the session KEEPS GOING
+        r = sub_run(
+            [sys.executable, path],
+            input='-h\nadd 3 4\nquit\n',
+            capture_output=True, text=True, env=env)
+        assert r.returncode == 0, r.stderr
+        assert 'usage:' in r.stdout
+        assert 'calc> 7\n' in r.stdout, repr(r.stdout)
 
 
 def test_converter_error_names_child_parameter():

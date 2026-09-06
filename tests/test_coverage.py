@@ -221,6 +221,38 @@ def test_repl_in_process():
     result, out = drive(['exit'])
     assert result is None
 
+    # THE SESSION SURVIVES (ruled 2026-09-03, the Sol review):
+    # a CommandError, an ordinary bug, -h's sys.exit, even a ^C
+    # raised mid-command all print and CONTINUE
+    @app.command()
+    def sad():
+        raise appeal.CommandError('the command said no')
+    @app.command()
+    def buggy():
+        raise RuntimeError('oops')
+    @app.command()
+    def interrupted():
+        raise KeyboardInterrupt
+    import io as _io
+    stderr = sys.stderr
+    err = _io.StringIO()
+    sys.stderr = err
+    try:
+        result, out = drive(['sad', 'buggy', '-h', 'interrupted',
+                             'add 4 4', 'quit'])
+    finally:
+        sys.stderr = stderr
+    assert 'error: the command said no' in out, out
+    assert 'RuntimeError: oops' in err.getvalue()   # traceback, stderr
+    assert 'usage:' in out                          # -h printed its page
+    assert '8' in out, out                          # ...and we kept going
+
+    # the Processor's repr is for debugging, not the REPL's output
+    # (the Sol review's original symptom)
+    p = app.process(['add', '1', '1'])
+    assert repr(p).startswith('<Processor result=')
+    assert '<Processor' not in out
+
 
 # ---------------------------------------------------------------------
 # completion reentry, in-process: the environment IS the protocol
