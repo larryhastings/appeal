@@ -155,6 +155,16 @@ def signature(callable):
         import inspect
         return _adopt(inspect.signature(callable), inspect)
 
+    # a wrapper wearing the face of the function it wraps
+    # (functools.wraps sets __wrapped__): the PUBLIC signature is the
+    # wrapped function's, so the command's grammar doesn't silently
+    # collapse to (*args, **kwargs).  Follow the chain--exactly
+    # inspect.signature's rule: recursion walks nested wrappers, and
+    # a level's own explicit __signature__ (checked above) wins.
+    wrapped = getattr(callable, '__wrapped__', None)
+    if wrapped is not None:
+        return signature(wrapped)
+
     try:
         func, skip = _resolve(callable)
     except _Uninspectable:

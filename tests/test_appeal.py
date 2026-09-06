@@ -6481,6 +6481,75 @@ def test_precommand_index_conflict_raises():
     assert out == [('E', True), ('extra', True), ('go',)], out
 
 
+def test_wrapped_commands_keep_their_grammar():
+    # Sol review #3 (fixed 2026-09-03): the signature reader follows
+    # __wrapped__ (functools.wraps), so a decorated command's grammar
+    # is the WRAPPED function's--not (*args, **kwargs).  Dispatch
+    # still calls the wrapper; only the signature comes from inside.
+    import functools
+    import appeal as _appeal
+    from appeal import build_plan
+    from big.stylesheet import strip_styles
+
+    calls = []
+    def noisy(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            calls.append(fn.__name__)
+            return fn(*args, **kwargs)
+        return wrapper
+
+    @noisy
+    def count(n: int, *, loud=False):
+        return (n, loud)
+    # conversion, option mapping, arity, and the wrapper actually runs
+    assert run_both(count, ['5', '--loud']) == ('ok', (5, True))
+    assert calls and calls[-1] == 'count'
+    got = run_both(count, [])
+    assert got == ('usage', "missing argument 'n'"), got
+    assert '--loud' in strip_styles(build_plan(count).usage())
+
+    # nested wrappers unwrap all the way down
+    @noisy
+    @noisy
+    def twice(x: int):
+        return x * 2
+    assert run_both(twice, ['21']) == ('ok', 42)
+
+    # a wrapper's own explicit __signature__ outranks its __wrapped__
+    # (inspect.signature's rule)
+    import inspect as _inspect
+    @noisy
+    def hidden(a: int, b: int):
+        return (a, b)
+    hidden.__signature__ = _inspect.Signature([
+        _inspect.Parameter('solo', _inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                           annotation=int)])
+    plan = build_plan(hidden)
+    assert [s.name for s in plan.slots] == ['solo']
+
+    # a wrapped CONVERTER keeps its grammar too
+    @noisy
+    def pair(x: int, y: int):
+        return (x, y)
+    def place(p: pair, label):
+        return (p, label)
+    assert run_both(place, ['3', '4', 'here']) == ('ok', ((3, 4), 'here'))
+
+    # and a wrapped METHOD command still binds self and keeps its
+    # grammar (membership derivation already unwraps __wrapped__)
+    app = _appeal.Appeal(name='w', default_mappings=None)
+    @app.precommand()
+    class Ctx:
+        def __init__(self, *, verbose=False):
+            self.verbose = verbose
+        @app.command()
+        @noisy
+        def go(self, times: int):
+            return ('went', times, self.verbose)
+    assert app.process(['--verbose', 'go', '3']).result == ('went', 3, True)
+
+
 def test_precommands_parse_as_one_merged_era():
     # ruled (Larry, 2026-09-03): every precommand's options are
     # recognized together at the head of the line--`foo -q --version`
