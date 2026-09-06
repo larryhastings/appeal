@@ -45,8 +45,16 @@ one command-line string.
 | annotation = `tuple[T1, T2, ...Tn]` on a positional param | one slot consuming n operands, building a tuple; elements recurse (converters, nested tuples).  `tuple[T, ...]` (variable-length) refused by name--use `*args`. |
 | annotation = `tuple[T1, ...Tn]` on an option | a multi-operand value option building a tuple (`--span 3 4`); elements must be terminals; `tuple[T, ...]` refused by name--use `list[T]` |
 | converter subclassing `Option` | repeatable option with a custom fold (v1's protocol; v1 spelled this `MultiOption`, now an alias): `init(default)` once, `option(...)` per occurrence--its signature defines the per-occurrence operands, each a required terminal, converted; zero and multi-operand occurrences both work (`--pt 3 4`)--and `render()` produces the value.  **If the option is never given, the class is never instantiated**: the parameter's default passes through untouched.  Only meaningful on options; refused by name elsewhere. |
+| annotation = `X | None` (builtin union, 3.10+) | the converter is X--the None arm is the type checker's (it's the default's type).  Only the BUILTIN spelling per the house typing stance; `typing.Optional`/`typing.Union` stay unsupported, and a union of two real types (`int | str`) is refused by name (fixed 2026-09-03, Sol review #4) |
 | default value, no annotation | converter is `type(default)` if in `{str, int, float}`, else `str` |
 | default value is a `list`, no annotation | a group inferred from the element types: `b=[0, 0.0]` takes an int and a float and produces a list (v1's corpus) |
+
+**Postponed annotations** (PEP 563, `from __future__ import
+annotations`) are evaluated back to objects in the function's own
+module globals--the signature reader and the backend's direct
+annotation reads both resolve them--so postponed programs read
+identically to plain ones (fixed 2026-09-03, Sol review #4).  A
+string that doesn't evaluate is refused by name at build.
 
 ## Options
 

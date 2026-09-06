@@ -6481,6 +6481,111 @@ def test_precommand_index_conflict_raises():
     assert out == [('E', True), ('extra', True), ('go',)], out
 
 
+def test_postponed_annotations():
+    # Sol review #4 (fixed 2026-09-03): `from __future__ import
+    # annotations` (PEP 563) stores annotations as source text; the
+    # reader (and the backend's direct annotation reads) evaluate the
+    # strings back in the function's own module globals, so postponed
+    # programs parse identically to plain ones.
+    import sys as _sys
+    if _sys.version_info < (3, 7):
+        print('  (postponed annotations need Python 3.7; not run)')
+        return
+    import appeal as _appeal
+
+    def load(source):
+        ns = {}
+        exec(compile(source, '<postponed>', 'exec'), ns)
+        return ns
+
+    ns = load('''
+from __future__ import annotations
+import functools
+import appeal
+
+def celsius(text: str) -> float:
+    return float(text)
+
+def cmd(n: int, temp: celsius = 0.0, *, loud: bool = False,
+        tags: appeal.accumulator[int] = []):
+    return (n, temp, loud, tags)
+
+def wrapped(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return fn(*args, **kwargs)
+    return wrapper
+
+@wrapped
+def double(x: int):
+    return x * 2
+
+class Pair:
+    def __init__(self, x: int, y: int):
+        self.pair = (x, y)
+
+def uses_pair(p: Pair, label: str):
+    return (p.pair, label)
+
+def broken(q: NoSuchName = None):
+    return q
+''')
+
+    # functions: leaves, a custom converter, a flag, a repeatable
+    got = run_both(ns['cmd'], ['7', '3.5', '--loud', '--tags', '1'])
+    assert got == ('ok', (7, 3.5, True, [1])), got
+    # a wraps-decorated callable under postponed annotations
+    assert run_both(ns['double'], ['21']) == ('ok', 42)
+    # a class converter (its __init__ annotations are postponed too)
+    got = run_both(ns['uses_pair'], ['3', '4', 'here'])
+    assert got == ('ok', ((3, 4), 'here')), got
+    # an unresolvable name is refused by name, at build
+    from appeal import build_plan
+    try:
+        build_plan(ns['broken'])
+        assert False, 'expected AppealConfigurationError'
+    except _appeal.AppealConfigurationError as e:
+        assert 'NoSuchName' in str(e) and "'q'" in str(e), e
+    # a MANUAL string annotation beside a real one (no future import):
+    # only the string is evaluated, the object rides through
+    def manual(a: "int", b: float):
+        return (a, b)
+    assert run_both(manual, ['1', '2.5']) == ('ok', (1, 2.5))
+
+
+def test_union_none_annotations():
+    # Sol review #4, second half (ruled via the house typing stance):
+    # the builtin `X | None` spelling (PEP 604, 3.10+) reads as the
+    # converter X--the None arm is for the type checker, it is the
+    # default's type.  typing.Optional/typing.Union stay unsupported,
+    # and a union of two real types is refused by name.
+    import sys as _sys
+    if _sys.version_info < (3, 10):
+        print('  (X | None needs Python 3.10; not run)')
+        return
+    import appeal as _appeal
+
+    def fetch(url, *, retries: int | None = None):
+        return (url, retries)
+    assert run_both(fetch, ['u', '--retries', '5']) == ('ok', ('u', 5))
+    assert run_both(fetch, ['u']) == ('ok', ('u', None))
+    # positional twin, and None | X order-insensitivity
+    def find(needle: str | None = None, depth: None | int = 0):
+        return (needle, depth)
+    assert run_both(find, ['x', '3']) == ('ok', ('x', 3))
+    assert run_both(find, []) == ('ok', (None, 0))
+    # a union of two real types: which converter?  refused by name,
+    # at build--it's a configuration error, not a user's usage error
+    def bad(*, x: int | str = 0):
+        return x
+    from appeal import build_plan
+    try:
+        build_plan(bad)
+        assert False, 'expected AppealConfigurationError'
+    except _appeal.AppealConfigurationError as e:
+        assert 'X | None' in str(e), e
+
+
 def test_wrapped_commands_keep_their_grammar():
     # Sol review #3 (fixed 2026-09-03): the signature reader follows
     # __wrapped__ (functools.wraps), so a decorated command's grammar

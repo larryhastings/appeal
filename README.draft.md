@@ -25,10 +25,11 @@ config files, and it can turn your commands into an MCP server so an AI can
 call them as tools--all from that same one function signature.
 
 Appeal runs on Python 3.6 and up. A few of the shorthand spellings in this
-document--`list[str]`, `dict[K, V]`, `tuple[int, int]`, and `X | None`--are
-themselves 3.9-or-newer syntax; on older Pythons reach for the equivalent
-`appeal.accumulator` / `appeal.mapping` / `typing` forms instead. Everything
-else works everywhere.
+document need newer Pythons--`list[str]`, `dict[K, V]`, and `tuple[int,
+int]` are 3.9-or-newer syntax, and `X | None` is 3.10-or-newer; on older
+Pythons reach for the equivalent `appeal.accumulator` / `appeal.mapping`
+forms instead. Everything else works everywhere, including
+`from __future__ import annotations`.
 
 
 ## Quickstart

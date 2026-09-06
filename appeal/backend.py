@@ -342,6 +342,20 @@ class ValueBinding:
 _oparg_converters_cache = {}
 
 
+def _annotations_of(host):
+    """
+    __annotations__ with any postponed strings (PEP 563,
+    `from __future__ import annotations`) evaluated back to objects--
+    the backend reads annotations directly off functions for speed,
+    so it must resolve them the same way the signature reader does.
+    """
+    annotations = getattr(host, '__annotations__', {}) or {}
+    if any(type(v) is str for v in annotations.values()):
+        from .frontend import _evaluate_postponed
+        annotations = _evaluate_postponed(annotations, host)
+    return annotations
+
+
 def _oparg_converters(factory):
     """
     A MultiOption's per-occurrence oparg converters, from its option()
@@ -353,7 +367,7 @@ def _oparg_converters(factory):
         option = factory.option
         code = option.__code__
         names = code.co_varnames[1:code.co_argcount]    # skip self
-        annotations = option.__annotations__
+        annotations = _annotations_of(option)
         converters = tuple(annotations.get(name, str) for name in names)
         minimum = len(names) - len(option.__defaults__ or ())   # optional tail
         cached = (converters, minimum)
@@ -1253,7 +1267,7 @@ def _child_converters(plan):
     and group options), as callable -> a representative parameter name.  Feeds
     fixup_converters: one wire-up per child, its callable read off `annotations`.
     """
-    annotations = getattr(_params_host(plan.callable), '__annotations__', {}) or {}
+    annotations = _annotations_of(_params_host(plan.callable))
     children = {}
     for slot in plan.slots:
         if not isinstance(slot.child, Terminal):
@@ -1323,7 +1337,7 @@ def _build_class(plan, classes):
     def register(self, processor):
         # a tuple[...]/list[...] group's converter is the builtin tuple/list,
         # which has no __annotations__ (and no options to look up anyway)
-        annotations = getattr(type(self).converter, '__annotations__', {})
+        annotations = _annotations_of(type(self).converter)
         items = []
         for name, kind, extra, strings in option_specs:
             if kind == 'flag':

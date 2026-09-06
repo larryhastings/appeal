@@ -146,6 +146,29 @@ def _resolve(callable):
     raise _Uninspectable                        # a builtin/uninspectable callable
 
 
+def _evaluate_postponed(annotations, func):
+    """
+    `from __future__ import annotations` (PEP 563) stores every
+    annotation as its source TEXT.  The grammar needs the objects
+    back, so evaluate each string in the function's own module
+    globals--the rule inspect.signature(eval_str=True) applies.  A
+    string that doesn't evaluate is refused by name.
+    """
+    globalns = getattr(func, '__globals__', None) or {}
+    resolved = dict(annotations)
+    for name, value in annotations.items():
+        if type(value) is not str:
+            continue
+        try:
+            resolved[name] = eval(value, globalns)
+        except Exception as e:
+            from . import AppealConfigurationError
+            raise AppealConfigurationError(
+                f"parameter {name!r}: can't evaluate postponed "
+                f"annotation {value!r} ({type(e).__name__}: {e})")
+    return resolved
+
+
 def signature(callable):
     # exotic callables that publish their own signature (functools.partial,
     # C accelerators, decorators that set it): defer to real inspect -- rare,
@@ -192,6 +215,8 @@ def signature(callable):
     n_required_pos = n_positional - len(defaults)
     kwdefaults = func.__kwdefaults__ or {}
     annotations = func.__annotations__
+    if any(type(v) is str for v in annotations.values()):
+        annotations = _evaluate_postponed(annotations, func)
 
     names = co.co_varnames
     params = []
@@ -234,6 +259,7 @@ def signature(callable):
 # the signature/Parameter slice this module reads, exposed as `inspect`
 # so the analysis below reads naturally.
 import sys as _sys
+import types as _types
 inspect = _sys.modules[__name__]
 
 def _oparg_names(o):
@@ -715,10 +741,24 @@ def dereference_annotated(annotation):
     # typing IS loaded, the local import is free (already in sys.modules).
     import sys
     typing = sys.modules.get('typing')
-    if typing is None:
-        return annotation
-    if type(annotation) is type(typing.Annotated[int, str]):
+    if typing is not None and \
+            type(annotation) is type(typing.Annotated[int, str]):
         return annotation.__metadata__[-1]
+    # X | None (PEP 604 builtin unions, 3.10+): the None arm is for the
+    # type checker--it's the default's type--and X is the converter.
+    # Only the BUILTIN spelling; typing.Optional/typing.Union stay
+    # unsupported, per the house typing stance.  A union of two real
+    # types is refused by name: which converter would it be?
+    union = getattr(_types, 'UnionType', None)
+    if union is not None and isinstance(annotation, union):
+        arms = [a for a in annotation.__args__ if a is not type(None)]
+        if len(arms) != 1:
+            from . import AppealConfigurationError
+            raise AppealConfigurationError(
+                f"annotation {annotation!r}: a union isn't a converter"
+                f"--only `X | None` is in the grammar (the None arm is "
+                f"for the type checker; X converts)")
+        return dereference_annotated(arms[0])
     return annotation
 
 
