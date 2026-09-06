@@ -86,6 +86,11 @@ class DataError(AppealError):
     """
     def __init__(self, message, usage=None, param=None):
         super().__init__(message)
+        # usage: the error's TRAILER--a callable usage(file) -> str that
+        # renders what prints under the message (a `usage: <line>`, or a
+        # base-help page) for that output stream, or None.  Attached at
+        # the dispatch boundary (see _run_node); the catchers (run_main,
+        # the REPL) call it with their error stream.
         self.usage = usage
         # the parameter/option name the error is ABOUT, when one
         # is knowable--structural provenance, so callers (the
@@ -203,13 +208,13 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         sheet = resolve_stylesheet(stylesheet, error_stream())
         return sheet.render(style('error', 'error:'))
 
-    def print_usage(usage):
-        # usage is a styled string; render it (colored on a tty, plain
-        # otherwise) like the error prefix and help do -- errors ride the
-        # pipeline too (ruled 2026-08-06)
-        from .presentation import resolve_stylesheet
-        sheet = resolve_stylesheet(stylesheet, error_stream())
-        print(f"usage: {sheet.render(usage)}", file=error_stream())
+    def print_trailer(trailer):
+        # trailer is a callable usage(file) -> str: it renders itself
+        # (colored on a tty, plain otherwise, wrapped to the stream) for
+        # the error stream -- errors ride the pipeline too (2026-08-06)
+        text = trailer(error_stream())
+        if text:
+            print(text, file=error_stream())
 
     try:
         result = parse(list(args))
@@ -235,7 +240,7 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
     except AppealDataError as e:
         print(f"{error_prefix()} {e}", file=error_stream())
         if e.usage:
-            print_usage(e.usage)
+            print_trailer(e.usage)
         return 2
     except AppealConfigurationError:
         raise               # a bug in the program: traceback
@@ -493,6 +498,30 @@ def _merge_era_options(plans):
     return plans
 
 
+def _line_trailer(stylesheet, usage_markup):
+    """
+    A UsageError trailer (see UsageError.usage): renders `usage: <line>`
+    for the output stream it's handed--stylesheet is the app's spec, so
+    color is decided against that stream (a tty gets color, a pipe plain).
+    """
+    def trailer(file):
+        from .presentation import resolve_stylesheet
+        return 'usage: ' + resolve_stylesheet(stylesheet, file).render(
+            usage_markup)
+    return trailer
+
+
+def _overview_trailer(node):
+    """
+    A UsageError trailer: renders `node`'s base help page (the command
+    overview, as `help` with no topic) for the output stream--what an
+    unknown command earns (ruled 2026-09-06).
+    """
+    def trailer(file):
+        return node._overview_text(file)
+    return trailer
+
+
 def _config_vet(plan, table_words, config, command_plan_for=None,
                 strict=True):
     """
@@ -587,7 +616,8 @@ def _config_apply(conv, table, plan, config, plan_for, strict=True):
     from .load import _read_bool
     vetted = _config_vet(plan, frozenset(table), config, plan_for, strict)
     given = set(conv.kwargs)            # options (folds included) all live here now
-    usage = plan.usage()
+    usage = None            # the era hook attaches the trailer (the program
+                            # usage line--config errors are era errors)
 
     def tokens_for(rule, value, provenance):
         kind = rule.kind
@@ -675,7 +705,7 @@ def _config_apply(conv, table, plan, config, plan_for, strict=True):
         # report "missing argument" -- expected and irrelevant.  Any OTHER error
         # is about a config value (options validate eagerly) -> config: provenance.
         if not str(e).startswith('missing argument'):
-            raise AppealDataError(f"config: {e}", getattr(e, 'usage', None) or usage,
+            raise AppealDataError(f"config: {e}", getattr(e, 'usage', None),
                                   param=getattr(e, 'param', None)) from None
     try:
         # render the config VALUES here (not at conv()) so a conversion failure
@@ -689,7 +719,7 @@ def _config_apply(conv, table, plan, config, plan_for, strict=True):
         # its converter's own ValueError/TypeError (a helper saying "bad value")
         # surfaces raw -- catch it too, exactly as the command-line render does,
         # so config reads politely instead of tracing back.
-        raise AppealDataError(f"config: {e}", getattr(e, 'usage', None) or usage,
+        raise AppealDataError(f"config: {e}", getattr(e, 'usage', None),
                               param=getattr(e, 'param', None)) from None
     for k, v in cfg_conv.kwargs.items():
         conv.kwargs.setdefault(k, v)
@@ -1244,12 +1274,10 @@ class Appeal:
             print(_inspect.getdoc(fn))
             return
         if topic not in table:
-            from .frontend import command_set_usage
-            raise UsageError(
-                f"unknown command {topic!r}"
-                f"{did_you_mean(topic, table)}",
-                command_set_usage(root._prog(), root._display_global(),
-                                  root._decoration_entry()))
+            err = UsageError(f"unknown command {topic!r}"
+                             f"{did_you_mean(topic, table)}")
+            err.usage = _overview_trailer(root)     # the overview page
+            raise err
         # render the topic's page directly from plans (the one engine has no
         # baked-help compile step).  A topic that is itself a command SET shows
         # its subcommand listing (like `prog topic --help`); a leaf shows its
@@ -1742,6 +1770,59 @@ class Appeal:
         return completions_set(self.plans, self.global_plan, words, prefix,
                             repeat=self.repeat, sets=sets or None)
 
+    def _overview_text(self, file, suppress=frozenset()):
+        """
+        The base help page rendered for `file` (color and width decided
+        against it) and RETURNED, not printed--the command overview for
+        a set, the --help page for a bare app.  help() prints it to
+        stdout; an unknown command's trailer renders it to the error
+        stream (see _overview_trailer).
+        """
+        from .presentation import (render_help_page, help_margin)
+        table = self._table()
+        if table:
+            from .frontend import command_set_usage
+            from .presentation import summary, command_set_corpus
+            entries = [(w, summary(c)) for w, c in table.items()]
+            corpus = command_set_corpus(
+                self.global_plan, entries,
+                doc=self._program_doc_override())
+            return render_help_page(
+                command_set_usage(self._prog(), self._display_global(),
+                                  self._decoration_entry()),
+                corpus, self.templates,
+                margin=help_margin(self.margin, file),
+                file=file, stylesheet=self.stylesheet,
+                suppress=suppress).rstrip('\n')
+        from .presentation import merge_docs, parse_docstring
+        plan = self.plan
+        corpus = merge_docs(plan)
+        override = self.root.doc
+        if override is not None:
+            # tier 1 overrides a bare app's prose too; the
+            # signature-bound sections stay with the command
+            parsed = parse_docstring(override, '<program documentation>')
+            corpus['summary'] = parsed['summary']
+            corpus['documentation'] = parsed['documentation']
+        return render_help_page(
+            plan.usage(), corpus, self.templates,
+            margin=help_margin(self.margin, file),
+            file=file, stylesheet=self.stylesheet,
+            suppress=suppress).rstrip('\n')
+
+    def _program_usage_markup(self):
+        """
+        The program's usage LINE markup--the trailer content for an
+        era-level error (a bad program-wide option) and an unknown
+        option: the command-set line for a set, the plan's usage for a
+        bare app.
+        """
+        if self._table():
+            from .frontend import command_set_usage
+            return command_set_usage(self._prog(), self._display_global(),
+                                     self._decoration_entry())
+        return self.plan.usage()
+
     def help(self, topic='', *, usage=True, summary=True, doc=True):
         """
         Print usage documentation on a specific command.
@@ -1772,41 +1853,7 @@ class Appeal:
         suppress = frozenset(suppress)
         if topic:
             return self._help_topic_page(topic, suppress)
-        table = self._table()
-        if table:
-            from .frontend import command_set_usage
-            from .presentation import summary, command_set_corpus
-            from .presentation import render_help_page
-            entries = [(w, summary(c)) for w, c in table.items()]
-            corpus = command_set_corpus(
-                self.global_plan, entries,
-                doc=self._program_doc_override())
-            from .presentation import help_margin
-            text = render_help_page(
-                command_set_usage(self._prog(), self._display_global(),
-                                  self._decoration_entry()),
-                corpus, self.templates,
-                margin=help_margin(self.margin, _sys.stdout),
-                file=_sys.stdout, stylesheet=self.stylesheet,
-                suppress=suppress).rstrip('\n')
-        else:
-            from .presentation import merge_docs, parse_docstring
-            from .presentation import help_margin, render_help_page
-            plan = self.plan
-            corpus = merge_docs(plan)
-            override = self.root.doc
-            if override is not None:
-                # tier 1 overrides a bare app's prose too; the
-                # signature-bound sections stay with the command
-                parsed = parse_docstring(override, '<program documentation>')
-                corpus['summary'] = parsed['summary']
-                corpus['documentation'] = parsed['documentation']
-            text = render_help_page(
-                plan.usage(), corpus, self.templates,
-                margin=help_margin(self.margin, _sys.stdout),
-                file=_sys.stdout, stylesheet=self.stylesheet,
-                suppress=suppress).rstrip('\n')
-        print(text)
+        print(self._overview_text(_sys.stdout, suppress))
         # returns None: help is a COMMAND implementation now
         # (ruled 2026-07-25), and a command's return value is its
         # exit status--text would sys.exit(text).  Capture stdout
@@ -2360,6 +2407,7 @@ class Appeal:
         # last command that ran" (Larry, 2026-08-24), not None.
         result = inherited
         if precommands:
+          try:
             # ONE MERGED ERA (Larry, 2026-09-03): every precommand's options
             # are recognized together at the head of the line, so
             # `foo -q --version` parses no matter which precommand maps which
@@ -2425,6 +2473,15 @@ class Appeal:
                     if _halts(result):              # pos already advanced, so a
                         return result, pos          # nonzero-int return doesn't
                                                     # leave era tokens behind
+          except AppealDataError as e:
+            # an era-level error (a bad program-wide option, a config value):
+            # attach the program usage line unless a deeper site already spoke
+            # (decision B, 2026-09-06)
+            if e.usage is None:
+                e.usage = _line_trailer(self.stylesheet,
+                                        self._program_usage_markup())
+            raise
+
         dispatched = False              # did a command word of THIS node run?
         while pos < len(argv):
             word = argv[pos]
@@ -2438,7 +2495,15 @@ class Appeal:
                 elif not top:
                     return result, pos          # pop back: a parent may own it
                 else:
-                    raise _unexpected(word, table)
+                    err = _unexpected(word, table)
+                    # a leading dash-token is an unknown OPTION (program usage
+                    # line, decision B); a bare word is an unknown COMMAND (the
+                    # overview page, decision A)
+                    err.usage = (_line_trailer(self.stylesheet,
+                                               self._program_usage_markup())
+                                 if word.startswith('-')
+                                 else _overview_trailer(self))
+                    raise err
             c = table[word]
             if dry:
                 owner = self._method_owner.get(id(c))
@@ -2454,7 +2519,19 @@ class Appeal:
             if cls.binds is not None and not dry:   # a method command: self is the
                 conv.bound = env.get(cls.binds)     # instance a parent constructed
             proc = backend.Engine(argv[pos:], conv, table, dry=dry)
-            result = proc.run()
+            try:
+                result = proc.run()
+            except AppealDataError as e:
+                # any error while filling THIS command: attach its usage line,
+                # prefixed like --help's page (deepest-command-wins: an inner
+                # subcommand already set it).  Derived here, on the error path
+                # only--never on the hot/dry path (it would perturb the
+                # first-parse lock race).
+                if e.usage is None:
+                    markup = self.plan_for(word).usage(
+                        f'{self._prog()} {word}')
+                    e.usage = _line_trailer(self.stylesheet, markup)
+                raise
             dispatched = True
             if dry:                                 # pre-scan: no instances, no
                 pos += proc.consumed                # halt, but keep recursing
@@ -2486,7 +2563,12 @@ class Appeal:
                     return result, pos
                 tok = argv[pos]
                 pool = proc.handlers if tok.startswith('-') else table
-                raise _unexpected(tok, pool)
+                err = _unexpected(tok, pool)
+                err.usage = (_line_trailer(self.stylesheet,
+                                           self._program_usage_markup())
+                             if tok.startswith('-')      # an unknown option
+                             else _overview_trailer(self))   # an unknown command
+                raise err
 
         if not dispatched:
             # the line stopped at this node without naming a subcommand of it.
@@ -2691,9 +2773,10 @@ class Appeal:
                 result = self.process(words).result
             except AppealDataError as e:
                 print(f"{sheet.render(style('error', 'error:'))} {e}")
-                usage = getattr(e, 'usage', None)
-                if usage:
-                    print(f"usage: {sheet.render(usage)}")
+                if e.usage:
+                    text = e.usage(_sys.stdout)     # the REPL prints to stdout
+                    if text:
+                        print(text)
             except AppealConfigurationError as e:
                 print(f"{sheet.render(style('error', 'configuration error:'))} {e}")
             except AppealError as e:

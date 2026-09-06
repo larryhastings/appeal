@@ -280,8 +280,7 @@ class LiveBinding:
             return
         if value not in ('true', 'false'):          # ruled: only these two
             raise UsageError(
-                f"option {(spelling or self.name)!r} expected 'true' or 'false'",
-                None)
+                f"option {(spelling or self.name)!r} expected 'true' or 'false'")
         self.instance.kwargs[self.name] = (value == 'true')
 
 
@@ -306,7 +305,7 @@ class ValueBinding:
             return
         if value is None:
             if processor.peek() is None:
-                raise UsageError(f"option {name!r} requires a value", None)
+                raise UsageError(f"option {name!r} requires a value")
             value = processor.advance()                 # raw: no option check
         # value options convert eagerly, per occurrence: a repeated option
         # validates EVERY value (ruled 2026-08-16, "not called validate for
@@ -317,13 +316,13 @@ class ValueBinding:
         if not leaves:                                  # a nullary converter
             if value is not None:                       # (--north): presence IS
                 raise UsageError(                       # the value; '=' is refused
-                    f"option {name!r} doesn't take a value", None)
+                    f"option {name!r} doesn't take a value")
             return constructor()
         texts = [value] if value is not None else []    # =value/attached is first
         while len(texts) < len(leaves):
             if processor.peek() is None:
                 raise UsageError(
-                    f"option {name!r} requires {len(leaves)} values", None)
+                    f"option {name!r} requires {len(leaves)} values")
             texts.append(processor.advance())           # raw grab
         args = [processor._cv(leaf, text, self.name)
                 for leaf, text in zip(leaves, texts)]
@@ -335,8 +334,7 @@ class ValueBinding:
             return constructor(*args)               # ValueError/TypeError is a
         except (ValueError, TypeError) as e:        # polite usage error
             name = getattr(constructor, '__name__', 'converter')
-            raise UsageError(f"not a valid {name}: {str(e) or name}",
-                             None) from None
+            raise UsageError(f"not a valid {name}: {str(e) or name}") from None
 
 
 _oparg_converters_cache = {}
@@ -403,7 +401,7 @@ class MultiBinding:
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)
                 raise UsageError(
-                    f"option {name!r} doesn't take a value", None)
+                    f"option {name!r} doesn't take a value")
             opargs = [processor._cv(self.converters[0], value, self.name)]
         else:
             # grab the required opargs; then any OPTIONAL ones greedily, so long
@@ -416,8 +414,7 @@ class MultiBinding:
                         need = self.minimum
                         raise UsageError(
                             f"option {name!r} requires "
-                            f"{'a value' if need == 1 else f'{need} values'}",
-                            None)
+                            f"{'a value' if need == 1 else f'{need} values'}")
                     break                               # optional tail: stop
                 opargs.append(processor._cv(converter, processor.advance(),
                                             self.name))
@@ -426,7 +423,7 @@ class MultiBinding:
         try:
             instance.option(*opargs)
         except (ValueError, TypeError) as e:    # wrap the option body's error
-            raise UsageError(f"{self.name}: {e}", None)
+            raise UsageError(f"{self.name}: {e}")
 
 
 class GroupBinding:
@@ -496,7 +493,7 @@ class ConjureValueBinding:
         if value is None:
             if processor.peek() is None:
                 raise UsageError(
-                    f"option {(spelling or self.name)!r} requires a value", None)
+                    f"option {(spelling or self.name)!r} requires a value")
             value = processor.advance()             # raw: no option check
         obj.kwargs[self.name] = processor._cv(self.converter, value, self.name)
 
@@ -535,7 +532,7 @@ class ConjureFoldBinding:
         if value is not None:                           # =value / attached
             if not self.converters:
                 raise UsageError(
-                    f"option {name!r} doesn't take a value", None)
+                    f"option {name!r} doesn't take a value")
             opargs = [processor._cv(self.converters[0], value, self.name)]
         else:
             for k, converter in enumerate(self.converters):
@@ -545,8 +542,7 @@ class ConjureFoldBinding:
                         need = self.minimum
                         raise UsageError(
                             f"option {name!r} requires "
-                            f"{'a value' if need == 1 else f'{need} values'}",
-                            None)
+                            f"{'a value' if need == 1 else f'{need} values'}")
                     break
                 opargs.append(processor._cv(converter, processor.advance(),
                                             self.name))
@@ -555,7 +551,7 @@ class ConjureFoldBinding:
         try:
             instance.option(*opargs)
         except (ValueError, TypeError) as e:
-            raise UsageError(f"{self.name}: {e}", None)
+            raise UsageError(f"{self.name}: {e}")
 
 
 class ConjureChainBinding:
@@ -605,7 +601,7 @@ class ConjureChainBinding:
                     if tok is None or tok == '--':
                         if k < minimum:
                             raise UsageError(
-                                f"option {name!r} requires a value", None)
+                                f"option {name!r} requires a value")
                         break
                     opargs.append(processor._cv(conv, processor.advance(),
                                                 self.name))
@@ -613,12 +609,12 @@ class ConjureChainBinding:
                 try:
                     instance.option(*opargs)
                 except (ValueError, TypeError) as e:
-                    raise UsageError(f"{self.name}: {e}", None)
+                    raise UsageError(f"{self.name}: {e}")
         elif self.converter is not None:                # a value option
             if value is None:
                 if processor.peek() is None:
                     raise UsageError(
-                        f"option {name!r} requires a value", None)
+                        f"option {name!r} requires a value")
                 value = processor.advance()
             parent.kwargs[self.name] = processor._cv(
                 self.converter, value, self.name)
@@ -725,7 +721,7 @@ class Converter:
                 except (ValueError, TypeError) as e:
                     name = getattr(type(v).converter, '__name__', 'converter')
                     raise UsageError(
-                        f"not a valid {name}: {e or name}", None) from None
+                        f"not a valid {name}: {e or name}") from None
             if isinstance(v, Option):
                 return v()
             return v
@@ -992,11 +988,11 @@ class Engine:
             if binding is None:
                 longs = [k for k in self.handlers if k.startswith('--')]
                 raise UsageError(
-                    f"unknown option {tok!r}{did_you_mean(tok, longs)}", None)
+                    f"unknown option {tok!r}{did_you_mean(tok, longs)}")
             if value is not None and _takes_many(binding):
                 raise UsageError(
                     f"option {tok!r} takes several values; separate them with "
-                    f"spaces, not '='", None)
+                    f"spaces, not '='")
             binding.invoke(self, value, tok)
             return
         # short: -x, a flag bundle -vd, or an attached value -uF
@@ -1006,14 +1002,14 @@ class Engine:
             opt = '-' + chars[i]
             binding = self.handlers.get(opt)
             if binding is None:
-                raise UsageError(f"unknown option {opt!r}", None)
+                raise UsageError(f"unknown option {opt!r}")
             if self._nullary(binding):                  # no oparg: keep bundling
                 binding.invoke(self, spelling=opt)
                 i += 1
             elif chars[i + 1:] and _takes_many(binding):  # -gp: an attached value,
                 raise UsageError(                         # but this option needs
                     f"option {opt!r} takes several values; it must be last in "  # several -- it must
-                    f"a bundle with its values as separate words", None)         # be last, words apart
+                    f"a bundle with its values as separate words")         # be last, words apart
             else:                                       # takes a value: rest is it
                 binding.invoke(self, chars[i + 1:] or None, opt)
                 return
@@ -1039,7 +1035,7 @@ class Engine:
                                                     # no default == required
             self.queue.popleft()                    # reserved off the end, keyword
             if not arg.owner.reserve:               # too few operands
-                raise UsageError(f"missing argument {arg.name!r}", None)
+                raise UsageError(f"missing argument {arg.name!r}")
             raw = arg.owner.reserve.pop(0)
             arg.owner.kwargs[arg.name] = self._cv(arg.converter, raw, arg.name)
             return
@@ -1064,8 +1060,7 @@ class Engine:
                         # isn't a valid one -- name the option and its counts
                         raise UsageError(
                             f"option {arg.owner._opt_display} takes "
-                            f"{_count_list(_valid_counts(arg.owner._optarg_root))}",
-                            None)
+                            f"{_count_list(_valid_counts(arg.owner._optarg_root))}")
                     self.queue.popleft()
                     arg.owner.args.append(
                         _positional_default(arg.owner, arg.name))
@@ -1079,12 +1074,12 @@ class Engine:
                     if arg.owner._summoned and not arg.owner.args:
                         # an option summoned this converter but no operand ever
                         # arrived: the option wasn't available yet (Case A/B)
-                        raise UsageError(_availability_message(arg.owner), None)
+                        raise UsageError(_availability_message(arg.owner))
                     if arg.owner._window and arg.owner.args:
                         raise UsageError(
                             f"wrong number of arguments: "
-                            f"{len(arg.owner.args)} left over", None)
-                    raise UsageError(f"missing argument {arg.name!r}", None)
+                            f"{len(arg.owner.args)} left over")
+                    raise UsageError(f"missing argument {arg.name!r}")
                 self.queue.popleft()
                 if self.queue and isinstance(self.queue[0], RepeatInstruction):
                     self.queue.popleft()             # end a *args of leaves -- no
@@ -1123,7 +1118,7 @@ class Engine:
             else:
                 self.queue.popleft()                 # nothing to build here
                 if arg.required:
-                    raise UsageError(f"missing argument {arg.name!r}", None)
+                    raise UsageError(f"missing argument {arg.name!r}")
                 if self.queue and isinstance(self.queue[0], RepeatInstruction):
                     self.queue.popleft()             # end the *args -- no phantom
                 else:                                # element; a plain optional
@@ -1161,9 +1156,9 @@ def _unexpected(token, candidates=()):
     if token.startswith('-') and token not in ('-', '--'):
         longs = [c for c in candidates if c.startswith('--')]
         return UsageError(
-            f"unknown option {token!r}{did_you_mean(token, longs)}", None)
+            f"unknown option {token!r}{did_you_mean(token, longs)}")
     return UsageError(
-        f"unknown command {token!r}{did_you_mean(token, candidates)}", None)
+        f"unknown command {token!r}{did_you_mean(token, candidates)}")
 
 
 def execute(commands, argv, *, precommands=(), repeat=False):
@@ -1186,7 +1181,7 @@ def execute(commands, argv, *, precommands=(), repeat=False):
             return result
         pos += processor.consumed
     if not precommands and not argv:
-        raise UsageError("no command given", None)
+        raise UsageError("no command given")
     while pos < len(argv):
         word = argv[pos]
         converter_cls = commands.get(word)

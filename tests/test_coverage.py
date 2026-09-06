@@ -2125,7 +2125,8 @@ def test_run_main_themed_and_set_completion():
     os.environ['TERM'] = 'xterm-256color'
     tty = FakeTTY()
     def parse_bad(argv):
-        raise UsageError('nope', 'prog x')
+        # usage is now a trailer callable usage(file) -> str
+        raise UsageError('nope', lambda file: 'usage: prog x')
     try:
         # stylesheet=None: auto--the fake tty (and willing TERM)
         # gets appeal_theme over the ANSI 16
@@ -3451,7 +3452,10 @@ def test_error_usage_rendered_clean():
             app.main(['work'])
         except SystemExit:
             pass
-    assert 'usage: top' in out.getvalue(), out.getvalue()
+    # config errors are era errors: the PROGRAM usage line (decision B,
+    # 2026-09-06), which carries the precommand's own --jobs option
+    assert 'usage: r ' in out.getvalue(), out.getvalue()
+    assert '--jobs' in out.getvalue(), out.getvalue()
     assert '⦃' not in out.getvalue(), out.getvalue()   # no role markup
     # the REPL: same styled-usage handling, against stdout
     lines = iter(['work'])
@@ -3468,7 +3472,7 @@ def test_error_usage_rendered_clean():
             app.repl()
     finally:
         builtins.input = orig
-    assert 'error:' in o.getvalue() and 'usage: top' in o.getvalue()
+    assert 'error:' in o.getvalue() and 'usage: r ' in o.getvalue()
     assert '⦃' not in o.getvalue(), o.getvalue()
 
 

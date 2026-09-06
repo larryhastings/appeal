@@ -4739,6 +4739,77 @@ _PRECOMPILE_RUNNER = (
     '    app.main()\n')
 
 
+def test_usage_attached_on_error():
+    # Restored (Larry, 2026-09-06): a UsageError prints the error AND a
+    # trailer.  The catcher (run_main) renders it to the error stream;
+    # this pins the trailer each error shape earns.  (The old engine
+    # dropped the usage threading; every raise site passed None, so
+    # nothing printed--the Quickstart's promised usage line was fiction.)
+    import appeal as _appeal
+    import io, contextlib
+
+    def cli(app, argv):
+        # main() with the error stream captured (non-tty -> plain text);
+        # main() sys.exit()s its code
+        err = io.StringIO()
+        code = None
+        with contextlib.redirect_stderr(err):
+            try:
+                app.main(argv)
+            except SystemExit as e:
+                code = e.code
+        return code, err.getvalue()
+
+    # a bare app: the error earns the program's own usage line
+    bare = _appeal.Appeal(name='greet', default_mappings=None)
+    @bare.precommand()
+    def greet(name, count: int = 1, *, loud=False):
+        pass
+    code, text = cli(bare, [])
+    assert code == 2, text
+    assert "error: missing argument 'name'" in text
+    assert 'usage: greet [-l|--loud] <NAME> [<COUNT>]' in text, text
+    # a conversion error earns it too (decision D)
+    code, text = cli(bare, ['bob', 'nope'])
+    assert "invalid value for 'count'" in text
+    assert 'usage: greet [-l|--loud] <NAME> [<COUNT>]' in text, text
+
+    # a command-set app
+    app = _appeal.Appeal(name='calc', default_mappings=None)
+    @app.command()
+    def add(a: int, b: int):
+        "Add."
+        return a + b
+
+    # a command error: THAT command's usage line, prefixed like --help
+    code, text = cli(app, ['add', '1'])
+    assert "missing argument 'b'" in text
+    assert 'usage: calc add <A> <B>' in text, text
+    code, text = cli(app, ['add', '1', 'nope'])
+    assert 'usage: calc add <A> <B>' in text, text
+
+    # an unknown command earns the base help page (decision A)
+    code, text = cli(app, ['bogus'])
+    assert "error: unknown command 'bogus'" in text
+    assert 'usage: calc <COMMAND>' in text and 'Commands' in text, text
+    assert 'add' in text and 'Add.' in text, text     # the listing
+
+    # an unknown OPTION at top earns the program usage line, not the page
+    code, text = cli(app, ['--nope'])
+    assert "unknown option '--nope'" in text
+    assert 'usage: calc <COMMAND>' in text
+    assert 'Commands' not in text, text               # a line, not the page
+
+    # a CommandError carries NO trailer--the command line was fine
+    app2 = _appeal.Appeal(name='c', default_mappings=None)
+    @app2.command()
+    def go():
+        raise _appeal.CommandError('nope')
+    code, text = cli(app2, ['go'])
+    assert 'error: nope' in text
+    assert 'usage:' not in text, text
+
+
 def test_repl():
     # §8.9, hardened per the Sol review (2026-09-03): the session
     # survives everything except the user leaving--a CommandError, an
@@ -4780,10 +4851,23 @@ def test_repl():
             'ready\n'
             'calc> 5\n'                                   # print(result)
             'calc> hello, world\n'                        # bare, no quotes
+            # an unknown command earns the base help page (decision A)
             "calc> error: unknown command 'bogus'\n"
-            'calc> error: no dividing by zero\n'          # CommandError,
-            'calc> '                                      #  session lives;
-            'calc> 2\n'                                   #  crash too
+            'usage: calc <COMMAND>\n'
+            '\n'
+            'Commands\n'
+            '--------\n'
+            '\n'
+            'add\n'
+            'greet\n'
+            'divide\n'
+            'crash\n'
+            "version  Print the program's version.\n"
+            'help     Print usage documentation on a specific command.\n'
+            # a CommandError carries NO usage--the command line was fine
+            'calc> error: no dividing by zero\n'
+            'calc> '                                      #  crash -> stderr,
+            'calc> 2\n'                                   #  session lives
             'calc> '), repr(r.stdout)
         # the crash's traceback went to stderr, and only stderr
         assert 'RuntimeError: cosmic rays' in r.stderr, r.stderr
@@ -7834,6 +7918,13 @@ def test_doc_examples():
             continue
         session = {}                    # the doc reads as one session
         for i, (section, example) in enumerate(_doc_examples(path)):
+            if (not GENERIC_SPELLINGS
+                    and any(g in example for g in
+                            ('list[', 'dict[', 'tuple[', '| None'))):
+                # these spellings are 3.9+ (3.10+ for `| None`); the docs
+                # say so.  Count them out on older Pythons, never silently.
+                needs_39(f'{doc} example {i}')
+                continue
             _run_doc_example(example, f'<{doc} example {i}>', session)
             ran += 1
     assert ran, 'no doc examples found--the convention broke'
