@@ -431,6 +431,18 @@ _inspect = _LazyInspect()
 from types import MethodType as _MethodType
 
 
+def _stamp_decoration(plan, entry):
+    "Stamp the operand-placeholder shape onto a plan tree (see _build)."
+    from .frontend import Terminal
+    plan.decoration = entry
+    for s in plan.slots:
+        if not isinstance(s.child, Terminal):
+            _stamp_decoration(s.child, entry)
+    for o in plan.options:
+        if o.kind == 'group':
+            _stamp_decoration(o.child, entry)
+
+
 def _merge_era_options(plans):
     """
     The precommands parse as ONE merged era (Larry, 2026-09-03): every
@@ -1236,7 +1248,8 @@ class Appeal:
             raise UsageError(
                 f"unknown command {topic!r}"
                 f"{did_you_mean(topic, table)}",
-                command_set_usage(root._prog(), root._display_global()))
+                command_set_usage(root._prog(), root._display_global(),
+                                  root._decoration_entry()))
         # render the topic's page directly from plans (the one engine has no
         # baked-help compile step).  A topic that is itself a command SET shows
         # its subcommand listing (like `prog topic --help`); a leaf shows its
@@ -1253,7 +1266,8 @@ class Appeal:
                 node.global_plan, entries,
                 doc=node._program_doc_override())
             text = render_help_page(
-                command_set_usage(node._prog(), node._display_global()),
+                command_set_usage(node._prog(), node._display_global(),
+                                  node._decoration_entry()),
                 corpus, node.templates, margin=help_margin(node.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=node.stylesheet,
                 suppress=suppress).rstrip('\n')
@@ -1769,7 +1783,8 @@ class Appeal:
                 doc=self._program_doc_override())
             from .presentation import help_margin
             text = render_help_page(
-                command_set_usage(self._prog(), self._display_global()),
+                command_set_usage(self._prog(), self._display_global(),
+                                  self._decoration_entry()),
                 corpus, self.templates,
                 margin=help_margin(self.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=self.stylesheet,
@@ -1856,7 +1871,8 @@ class Appeal:
                   merge_docs(self.plan_for(word)))
                  for word in table]
         return man_page(prog, corpus,
-                        command_set_usage(prog, self._display_global()),
+                        command_set_usage(prog, self._display_global(),
+                                          self._decoration_entry()),
                         command_pages=pages, version=version)
 
     def schema(self, format, version):
@@ -2010,7 +2026,25 @@ class Appeal:
                      app=self.root,
                      decorations=self.root._decorations, **kwargs)
         plan.auto_help = self._help_enabled
+        entry = self._decoration_entry()
+        if entry is not None:
+            _stamp_decoration(plan, entry)
         return plan
+
+    def _decoration_entry(self):
+        """
+        The operand-placeholder SHAPE this app renders (ruled Larry,
+        2026-09-03: the argument_decoration stylesheet entry is
+        tweakable--"it's in the stylesheet precisely so users can
+        tweak it").  An explicitly-given sheet's entry wins; the
+        automatic default (stylesheet=None) and stylesheet=False
+        keep the stock <NAME>, because the shape bakes into layout
+        at build time and must not vary per stream.
+        """
+        sheet = self.stylesheet
+        if sheet is None or sheet is False:
+            return None
+        return sheet.get('argument_decoration')
 
     def _node_for(self, word):
         """

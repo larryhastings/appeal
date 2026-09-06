@@ -466,7 +466,7 @@ class Plan:
                  'certain', 'var_keyword', 'constructs', 'binds',
                  'tree_trailing', 'scoped_keys', 'auto_help',
                  'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0',
-                 'bound_inner')
+                 'bound_inner', 'decoration')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
@@ -474,6 +474,10 @@ class Plan:
         # knob, stamped at build time; False suppresses the
         # automatic help option entirely).
         self.auto_help = True
+        # the operand-placeholder SHAPE: the app stylesheet's
+        # argument_decoration entry, stamped by the app at build
+        # (None: the stock <NAME>)
+        self.decoration = None
         self.windowed = False   # True: a *args group; options bind by window
         self.gated = False      # True on the top plan: barriers exist somewhere
         self.certain = True     # False: this group might never be entered
@@ -552,8 +556,10 @@ class Plan:
             # argument_decoration transform) and tagged 'argument'
             # (the color role).  An explicit @app.parameter rename
             # rides the same decoration (ruled 2026-08-24: one uniform
-            # decoration).
-            return style('argument', decorate_argument(name))
+            # decoration; the SHAPE follows the app's stylesheet,
+            # ruled 2026-09-03).
+            return style('argument',
+                         decorate_argument(name, self.decoration))
 
         def name_text(slot):
             return _arg(slot.usage_name)
@@ -678,7 +684,7 @@ class Plan:
         return n
 
 
-def command_set_usage(prog, global_plan):
+def command_set_usage(prog, global_plan, decoration=None):
     """
     The usage LINE for a multi-command program: the program name,
     the global command's options and operands (if any), and the
@@ -693,7 +699,8 @@ def command_set_usage(prog, global_plan):
         rest = global_plan.usage().partition(' ')[2]
         if rest:
             parts.append(rest)
-    parts.append(style('argument', decorate_argument('command')))
+    parts.append(style('argument',
+                       decorate_argument('command', decoration)))
     return ' '.join(parts)
 
 

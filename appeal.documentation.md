@@ -269,6 +269,15 @@ a pipe).  To recolor one thing, extend a shipped theme:
 `tools/theme_lab.py` renders a sample page under every theme,
 built to be hacked on.
 
+One entry is shape, not color: **`argument_decoration`** is how an
+operand's name becomes its placeholder (`host` -> `<HOST>`).  Put
+your own entry in the sheet you pass and usage lines, help tables,
+and the command placeholder all follow it--
+`dict(appeal.uncolored_theme, argument_decoration=('T', 'T'))`
+renders operands bare.  Shape is decided at build (it's baked into
+layout), so only an explicitly-given sheet changes it; the automatic
+default below keeps `<HOST>`.
+
 `stylesheet=None` (the default) means: decide per stream, at
 print time, the same way CPython itself decides
 (`PYTHON_COLORS` beats `NO_COLOR` beats `FORCE_COLOR`, then

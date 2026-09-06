@@ -6481,6 +6481,71 @@ def test_precommand_index_conflict_raises():
     assert out == [('E', True), ('extra', True), ('go',)], out
 
 
+def test_argument_decoration_follows_the_stylesheet():
+    # ruled (Larry, 2026-09-03): the operand placeholder's SHAPE is
+    # the stylesheet's argument_decoration entry--"it's in the
+    # stylesheet precisely so users can tweak it."  An explicitly-
+    # given sheet's entry shapes usage lines, help tables, and the
+    # command-set placeholder; the automatic default keeps the stock
+    # <NAME> (the shape bakes into layout at build and must not vary
+    # per stream).
+    import io, contextlib, re
+    import appeal as _appeal
+    from big.markdown import markdown_defaults
+    from big.stylesheet import StyleSheet, ansi_16_color_palette, transforms
+
+    def rendered(app, argv):
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                app.process(argv)
+        except SystemExit:
+            pass
+        return re.sub('\x1b\\[[0-9;]*m', '', out.getvalue())
+
+    bare = dict(_appeal.uncolored_theme, argument_decoration=('T', 'T'))
+    sheet = (markdown_defaults | transforms | ansi_16_color_palette
+             | StyleSheet(bare))
+
+    def build(stylesheet):
+        app = _appeal.Appeal(name='serve', stylesheet=stylesheet)
+        @app.precommand()
+        def serve(host, port: int = 8080):
+            pass
+        return app
+
+    stock = rendered(build(None), ['-h'])
+    assert 'usage: serve <HOST> [<PORT>]' in stock, stock
+    custom = rendered(build(sheet), ['-h'])
+    assert 'usage: serve host [port]' in custom, custom
+    assert '<HOST>' not in custom, custom       # the table rows follow too
+
+    # the command-set placeholder follows the same shape
+    app = _appeal.Appeal(name='prog', stylesheet=sheet)
+    @app.command()
+    def push(target):
+        pass
+    listing = rendered(app, ['-h'])
+    assert 'usage: prog command' in listing, listing
+
+    # groups follow it too--positional converter groups AND group
+    # options (the stamp walks the whole plan tree)
+    def point(x: int, y: int):
+        return (x, y)
+    app2 = _appeal.Appeal(name='draw', stylesheet=sheet)
+    @app2.precommand()
+    def draw(where: point, shape='dot', *, at: point = None):
+        pass
+    page = rendered(app2, ['-h'])
+    assert '<X>' not in page and '<SHAPE>' not in page, page
+    assert ' x ' in page or '[x' in page or 'x y' in page, page
+
+    # decorate_argument also takes a raw (in, out) pair directly
+    from appeal.presentation import decorate_argument
+    assert decorate_argument('host', ('T', 'T')) == 'host'
+    assert decorate_argument('host') == '<HOST>'
+
+
 def test_stringized_annotations_refused():
     # Ruled (Larry, 2026-09-03, reversing an earlier session's eval
     # support): Appeal reads annotation OBJECTS.  A string where an

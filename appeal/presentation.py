@@ -376,9 +376,9 @@ def _style_span(*args, **kwargs):
     return style(*args, **kwargs)
 
 
-_argument_decoration_sheet = None
+_decoration_sheets = {}
 
-def decorate_argument(name):
+def decorate_argument(name, entry=None):
     # render a RAW operand name through the argument_decoration
     # transform (host -> <HOST>), the single definition of operand
     # placeholder decoration.  Applied EARLY--baked into the text--so
@@ -386,11 +386,25 @@ def decorate_argument(name):
     # the usage wrap sees real widths, both colored and plain (ruled
     # 2026-08-24).  Color stays a late, per-theme concern (the
     # 'argument'/'oparg' roles); only the decoration bakes in here.
-    global _argument_decoration_sheet
-    if _argument_decoration_sheet is None:
-        _argument_decoration_sheet = transforms | StyleSheet(
-            {'argument_decoration': uncolored_theme['argument_decoration']})
-    return _argument_decoration_sheet.render(
+    #
+    # The SHAPE is the caller's stylesheet entry (ruled 2026-09-03:
+    # "it's in the stylesheet precisely so users can tweak it")--
+    # entry is the app sheet's 'argument_decoration' definition,
+    # stamped onto its plans at build; None means the stock shape.
+    # Bake-time, deliberately: the per-stream automatic default
+    # (stylesheet=None) keeps the stock shape, because layout must
+    # not vary per stream.
+    if entry is None:
+        pair = uncolored_theme['argument_decoration']
+    elif hasattr(entry, 'replacement'):     # a StyleSheet definition
+        pair = tuple(entry.args) + (entry.replacement,)
+    else:
+        pair = tuple(entry)
+    sheet = _decoration_sheets.get(pair)
+    if sheet is None:
+        sheet = transforms | StyleSheet({'argument_decoration': pair})
+        _decoration_sheets[pair] = sheet
+    return sheet.render(
         style('argument_decoration', escape_styles(name)))
 
 
@@ -1052,7 +1066,8 @@ def merge_docs(plan, command_names=None):
         # decorated into its placeholder (host -> <HOST>) and tagged
         # with the 'argument' role.  Built structurally here; injected
         # as a StyledText term (no post-layout reparse).
-        return style('argument', decorate_argument(s.usage_name))
+        return style('argument',
+                     decorate_argument(s.usage_name, plan.decoration))
 
     def flanks(p, index):
         # the nearest argument display before/after slot index, at
@@ -1081,7 +1096,7 @@ def merge_docs(plan, command_names=None):
         ns = {}
         for inner in child.options:
             rowkey = id(inner)
-            display = _option_display(inner)
+            display = _option_display(inner, plan.decoration)
             ns.setdefault(inner.name, ('option', display, rowkey))
             option_rows.append(
                 (rowkey, '  ' * depth + display, (None, None)))
@@ -1111,8 +1126,12 @@ def merge_docs(plan, command_names=None):
         for o in p.options:
             if o.name not in namespace:
                 rowkey = id(o)
-                namespace[o.name] = ('option', _option_display(o), rowkey)
-                option_rows.append((rowkey, _option_display(o), anchors))
+                namespace[o.name] = ('option',
+                                     _option_display(o, plan.decoration),
+                                     rowkey)
+                option_rows.append((rowkey,
+                                    _option_display(o, plan.decoration),
+                                    anchors))
             if o.child is not None:
                 for name, value in option_subtree(o.child, 1).items():
                     namespace.setdefault(name, value)
@@ -1136,7 +1155,8 @@ def merge_docs(plan, command_names=None):
                     # (An explicit rename on the inner parameter
                     # still wins the *display*.)
                     display = (style('argument',
-                                     decorate_argument(inner.usage_name))
+                                     decorate_argument(inner.usage_name,
+                                                       plan.decoration))
                                if inner.usage_name != inner.name
                                else arg_name(s))
                     child_override = (s.name, display)
@@ -1305,7 +1325,7 @@ def summary(callable):
     return doc.splitlines()[0] if doc else ''
 
 
-def _option_display(o):
+def _option_display(o, decoration=None):
     """
     The option as shown in help tables, role-tagged:
     '⦃option⦙-t⦄|⦃option⦙--times⦄ ⦃oparg⦙<TIMES>⦄'.  Built
@@ -1319,7 +1339,7 @@ def _option_display(o):
         names = ([o.usage_name] if o.usage_name is not None
                  else _oparg_names(o))
         for name in names:
-            bits.append(style('oparg', decorate_argument(name)))
+            bits.append(style('oparg', decorate_argument(name, decoration)))
     return ' '.join(bits)
 
 

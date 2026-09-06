@@ -713,12 +713,10 @@ prose blocks--see `appeal.documentation.md`.
 
 ## Color
 
-Appeal colors its help and errors through a **stylesheet**--a plain data
-dict mapping semantic names (like "usage" or "heading") to colors, resolved
-per output stream at print time. `Appeal(stylesheet=...)` sets it;
-`stylesheet=None` picks colors per stream automatically (and never colors a
-pipe); `stylesheet=False` never colors at all. It's Appeal's own layer--no
-Rich, no plugins.
+Appeal colors its help and errors through a **stylesheet**.
+`Appeal(stylesheet=...)` sets it; `stylesheet=None` picks colors per
+stream automatically (and never colors a pipe); `stylesheet=False` never
+colors at all. It's Appeal's own layer--no Rich, no plugins.
 
 
 ## Tab completion
@@ -1240,9 +1238,9 @@ A precise listing of the public surface. Everything here lives directly on
 
 ```Python
 Appeal(name=None, *, version=None, stylesheet=None, errors=None,
-       repeat=False, lazy=False, script='-', margin=79, doc=None,
-       default_options=..., default_mappings=...,
-       positional_argument_usage_format='<{name.upper()}>')
+       repeat=False, lazy=False, script=sys.argv[0], margin=None,
+       doc=None, parent=None,
+       default_options=..., default_mappings=...)
 ```
 
 The program. Construct one, decorate your functions onto it, and call
@@ -1250,15 +1248,18 @@ The program. Construct one, decorate your functions onto it, and call
 
 * `name` — the program name shown in usage. Defaults to the script's name.
 * `version` — the version string reported by `--version` / `print_version()`.
-* `stylesheet` — the coloring stylesheet (a data dict). `None` picks colors
-  per output stream automatically; `False` never colors. See *Color*.
+* `stylesheet` — the coloring stylesheet. `None` picks colors per output
+  stream automatically; `False` never colors. See *Color*.
 * `errors` — where diagnostics go. Defaults to `sys.stderr`; a live knob.
 * `repeat` — whether the program's set of commands may *cycle* on one line.
 * `lazy` — `False` (the default) compiles every command's plan at first
   `process()`/`main()`, surfacing configuration errors at startup. `True`
   restores build-on-demand.
-* `script`, `margin`, `doc`, `positional_argument_usage_format` — usage and
-  help-layout knobs.
+* `script`, `margin`, `doc` — usage and help-layout knobs. (How an operand
+  renders in usage--`host` → `<HOST>`--is the stylesheet's
+  `argument_decoration` entry, not a constructor knob: put your own entry
+  in the sheet you pass and every usage line, help table, and the
+  `command` placeholder follow it.)
 * `default_options`, `default_mappings` — the automatic `-x`/`--long`
   derivation policy; pass `None` to suppress the automatic short/long
   options, or a factory to customize. See `appeal.default_mappings`.
@@ -1500,8 +1501,9 @@ completion, and a REPL. The full itemized list:
 * `process()` returns an inspectable **`Processor`** (`.result`,
   `.instances`), in the spirit of `subprocess.Popen`; it's callable, one run,
   not reusable.
-* `Appeal(...)` gained `stylesheet=`, `errors=`, `margin=`, `lazy=`, and
-  `positional_argument_usage_format=`.
+* `Appeal(...)` gained `stylesheet=`, `errors=`, `margin=`, and `lazy=`;
+  0.6's `positional_argument_usage_format=` knob became the stylesheet's
+  `argument_decoration` entry.
 * `@app.subcommand(parent, ...)`, `@app.argument`/`@app.parameter`, and
   `app.app_class()` added; `@app.option` gained `annotation=`/`default=`.
 * Two renames: `global_command` → **`precommand`**, and `default_command` →
