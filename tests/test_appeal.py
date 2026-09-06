@@ -6481,76 +6481,54 @@ def test_precommand_index_conflict_raises():
     assert out == [('E', True), ('extra', True), ('go',)], out
 
 
-def test_postponed_annotations():
-    # Sol review #4 (fixed 2026-09-03): `from __future__ import
-    # annotations` (PEP 563) stores annotations as source text; the
-    # reader (and the backend's direct annotation reads) evaluate the
-    # strings back in the function's own module globals, so postponed
-    # programs parse identically to plain ones.
+def test_stringized_annotations_refused():
+    # Ruled (Larry, 2026-09-03, reversing an earlier session's eval
+    # support): Appeal reads annotation OBJECTS.  A string where an
+    # object belongs--`from __future__ import annotations` (PEP 563)
+    # or hand-stringizing--raises NotImplementedError with this exact
+    # text.  Stringized annotations are going away (PEP 649); Appeal
+    # won't grow support for them.
     import sys as _sys
-    if _sys.version_info < (3, 7):
-        print('  (postponed annotations need Python 3.7; not run)')
-        return
-    import appeal as _appeal
-
-    def load(source):
-        ns = {}
-        exec(compile(source, '<postponed>', 'exec'), ns)
-        return ns
-
-    ns = load('''
-from __future__ import annotations
-import functools
-import appeal
-
-def celsius(text: str) -> float:
-    return float(text)
-
-def cmd(n: int, temp: celsius = 0.0, *, loud: bool = False,
-        tags: appeal.accumulator[int] = []):
-    return (n, temp, loud, tags)
-
-def wrapped(fn):
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        return fn(*args, **kwargs)
-    return wrapper
-
-@wrapped
-def double(x: int):
-    return x * 2
-
-class Pair:
-    def __init__(self, x: int, y: int):
-        self.pair = (x, y)
-
-def uses_pair(p: Pair, label: str):
-    return (p.pair, label)
-
-def broken(q: NoSuchName = None):
-    return q
-''')
-
-    # functions: leaves, a custom converter, a flag, a repeatable
-    got = run_both(ns['cmd'], ['7', '3.5', '--loud', '--tags', '1'])
-    assert got == ('ok', (7, 3.5, True, [1])), got
-    # a wraps-decorated callable under postponed annotations
-    assert run_both(ns['double'], ['21']) == ('ok', 42)
-    # a class converter (its __init__ annotations are postponed too)
-    got = run_both(ns['uses_pair'], ['3', '4', 'here'])
-    assert got == ('ok', ((3, 4), 'here')), got
-    # an unresolvable name is refused by name, at build
     from appeal import build_plan
-    try:
-        build_plan(ns['broken'])
-        assert False, 'expected AppealConfigurationError'
-    except _appeal.AppealConfigurationError as e:
-        assert 'NoSuchName' in str(e) and "'q'" in str(e), e
-    # a MANUAL string annotation beside a real one (no future import):
-    # only the string is evaluated, the object rides through
+
+    MESSAGE = "Appeal doesn't support stringized annotations"
+
+    # hand-stringized: one string among real annotations, any Python
     def manual(a: "int", b: float):
         return (a, b)
-    assert run_both(manual, ['1', '2.5']) == ('ok', (1, 2.5))
+    try:
+        build_plan(manual)
+        assert False, 'expected NotImplementedError'
+    except NotImplementedError as e:
+        assert str(e) == MESSAGE, e
+
+    # the future import stringizes EVERY annotation (3.7+)
+    if _sys.version_info >= (3, 7):
+        ns = {}
+        exec(compile(
+            'from __future__ import annotations\n'
+            'def cmd(n: int, *, loud: bool = False):\n'
+            '    return (n, loud)\n', '<postponed>', 'exec'), ns)
+        try:
+            build_plan(ns['cmd'])
+            assert False, 'expected NotImplementedError'
+        except NotImplementedError as e:
+            assert str(e) == MESSAGE, e
+
+    # a stringized MultiOption option() hits the backend's own
+    # annotation read; same refusal
+    import appeal as _appeal
+    class Tally(_appeal.MultiOption):
+        def init(self, default): self.v = []
+        def option(self, n: "int"): self.v.append(n)
+        def __call__(self): return self.v
+    def uses(*, t: Tally = ()):
+        return t
+    try:
+        run_both(uses, ['-t', '1'])
+        assert False, 'expected NotImplementedError'
+    except NotImplementedError as e:
+        assert str(e) == MESSAGE, e
 
 
 def test_union_none_annotations():

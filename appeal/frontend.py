@@ -146,29 +146,6 @@ def _resolve(callable):
     raise _Uninspectable                        # a builtin/uninspectable callable
 
 
-def _evaluate_postponed(annotations, func):
-    """
-    `from __future__ import annotations` (PEP 563) stores every
-    annotation as its source TEXT.  The grammar needs the objects
-    back, so evaluate each string in the function's own module
-    globals--the rule inspect.signature(eval_str=True) applies.  A
-    string that doesn't evaluate is refused by name.
-    """
-    globalns = getattr(func, '__globals__', None) or {}
-    resolved = dict(annotations)
-    for name, value in annotations.items():
-        if type(value) is not str:
-            continue
-        try:
-            resolved[name] = eval(value, globalns)
-        except Exception as e:
-            from . import AppealConfigurationError
-            raise AppealConfigurationError(
-                f"parameter {name!r}: can't evaluate postponed "
-                f"annotation {value!r} ({type(e).__name__}: {e})")
-    return resolved
-
-
 def signature(callable):
     # exotic callables that publish their own signature (functools.partial,
     # C accelerators, decorators that set it): defer to real inspect -- rare,
@@ -216,7 +193,12 @@ def signature(callable):
     kwdefaults = func.__kwdefaults__ or {}
     annotations = func.__annotations__
     if any(type(v) is str for v in annotations.values()):
-        annotations = _evaluate_postponed(annotations, func)
+        # a string where an object belongs--`from __future__ import
+        # annotations` (PEP 563), or hand-stringized.  Ruled (Larry,
+        # 2026-09-03): refused, not evaluated--stringized annotations
+        # are going away (PEP 649), and Appeal reads objects.
+        raise NotImplementedError(
+            "Appeal doesn't support stringized annotations")
 
     names = co.co_varnames
     params = []

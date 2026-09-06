@@ -28,8 +28,10 @@ Appeal runs on Python 3.6 and up. A few of the shorthand spellings in this
 document need newer Pythons--`list[str]`, `dict[K, V]`, and `tuple[int,
 int]` are 3.9-or-newer syntax, and `X | None` is 3.10-or-newer; on older
 Pythons reach for the equivalent `appeal.accumulator` / `appeal.mapping`
-forms instead. Everything else works everywhere, including
-`from __future__ import annotations`.
+forms instead. Everything else works everywhere. (One deliberate
+refusal: stringized annotations--`from __future__ import annotations`,
+or strings written by hand--raise `NotImplementedError`; Appeal reads
+annotation objects.)
 
 
 ## Quickstart

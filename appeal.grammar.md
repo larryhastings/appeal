@@ -49,12 +49,13 @@ one command-line string.
 | default value, no annotation | converter is `type(default)` if in `{str, int, float}`, else `str` |
 | default value is a `list`, no annotation | a group inferred from the element types: `b=[0, 0.0]` takes an int and a float and produces a list (v1's corpus) |
 
-**Postponed annotations** (PEP 563, `from __future__ import
-annotations`) are evaluated back to objects in the function's own
-module globals--the signature reader and the backend's direct
-annotation reads both resolve them--so postponed programs read
-identically to plain ones (fixed 2026-09-03, Sol review #4).  A
-string that doesn't evaluate is refused by name at build.
+**Stringized annotations are refused** (ruled 2026-09-03): a string
+where an object belongs--whether from `from __future__ import
+annotations` (PEP 563) or hand-stringizing--raises
+`NotImplementedError("Appeal doesn't support stringized
+annotations")` at build.  Appeal reads annotation OBJECTS; stringized
+annotations are going away (PEP 649), and Appeal won't grow support
+for them.
 
 ## Options
 

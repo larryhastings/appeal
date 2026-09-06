@@ -344,15 +344,18 @@ _oparg_converters_cache = {}
 
 def _annotations_of(host):
     """
-    __annotations__ with any postponed strings (PEP 563,
-    `from __future__ import annotations`) evaluated back to objects--
-    the backend reads annotations directly off functions for speed,
-    so it must resolve them the same way the signature reader does.
+    __annotations__, refusing strings.  The backend reads annotations
+    directly off functions for speed; a string where an object belongs
+    (PEP 563's future import, or hand-stringizing) is refused exactly
+    as the signature reader refuses it (ruled 2026-09-03).
     """
     annotations = getattr(host, '__annotations__', {}) or {}
     if any(type(v) is str for v in annotations.values()):
-        from .frontend import _evaluate_postponed
-        annotations = _evaluate_postponed(annotations, host)
+        # the frontend refuses stringized annotations on every callable
+        # it wires, so this twin never fires--belt and braces, kept so
+        # the ruling holds even if a backend-first path ever appears
+        raise NotImplementedError(   # pragma: no cover
+            "Appeal doesn't support stringized annotations")
     return annotations
 
 
