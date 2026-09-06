@@ -805,9 +805,11 @@ the value back instead of an exit.
 ## MCP: your commands as AI tools
 
 Because your commands are already precisely typed functions, Appeal can hand
-them to an AI. `app.schema()` produces a JSON schema of every command and
-its parameters; `app.mcp()` runs a Model Context Protocol server exposing
-them as callable tools. An LLM sees the same `deploy(target, *, workers:
+them to an AI. `app.schema('mcp')` produces standard JSON Schema for every
+command (and `app.schema('appeal')` the full description--usage, option
+spellings, arities, docs; the machine-readable twin of `--help`);
+`app.mcp()` runs a Model Context Protocol server exposing your commands as
+callable tools. An LLM sees the same `deploy(target, *, workers:
 int)` a human sees on the command line--names, types, help and all--and
 calls it the same way. No second definition, no adapter: the signature that
 built your CLI builds your tool schema.
@@ -1309,8 +1311,12 @@ child `Appeal` (or the function) so you can nest.
 
 ### AI, schema, and completion
 
-* `app.schema()` — a JSON schema describing every command and its
-  parameters.
+* `app.schema(format)` — the program's machine-readable schema; `format`
+  is required. `'appeal'` is the full description (usage, operands,
+  options with their spellings, arities, defaults, docs--the lossless
+  form, pairing with `read_mapping()`); `'mcp'` is standard JSON Schema,
+  one per command, the projection an MCP client validates arguments
+  against.
 * `app.mcp(*, config=None, version=None)` — run a Model Context Protocol
   server exposing your commands as tools.
 * `app.completion(shell)` — emit a completion script for `'bash'`, `'zsh'`,
@@ -1352,7 +1358,9 @@ Annotate a parameter with one of these to shape its conversion.
   values on the given separators.
 * `appeal.file(mode='r', *, buffering=-1, encoding=None, errors=None,
   newline=None, opener=None)` — open the argument as a file (`-` is
-  stdin/stdout), handed to your function open and closed for you.
+  stdin/stdout), handed to your function open. Closing it is yours, and
+  always *safe*: on `-`, close flushes and goes inert instead of closing
+  the process's real stream.
 * `appeal.convert(converter, text, name, usage=None)` — run a converter
   by hand, the way Appeal does internally.
 * `appeal.Option` (alias `appeal.MultiOption`) — the base class for writing
@@ -1471,7 +1479,8 @@ completion, and a REPL. The full itemized list:
 
 **New capabilities**
 
-* **MCP server** (`app.mcp()`) and **JSON schema** (`app.schema()`).
+* **MCP server** (`app.mcp()`) and **machine-readable schemas**
+  (`app.schema('appeal')` / `app.schema('mcp')`).
 * **Tab completion** (`app.completion(shell)` / `app.complete(...)`).
 * A **REPL** (`app.repl()`).
 * Run a command from structured data: `read_mapping` / `read_iterable` /

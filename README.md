@@ -2163,9 +2163,10 @@ A few things to know:
   dependency-free script, per the north star.
 
 The machine-readable twin of `--help` is also available
-directly: `app.schema()` describes your whole program as plain
-JSON-safe data--usage, arguments, options, types, docs.
-`schema()` tells a machine what a command accepts;
+directly: `app.schema('appeal')` describes your whole program
+as plain JSON-safe data--usage, arguments, options, types,
+docs--and `app.schema('mcp')` renders standard JSON Schema per
+command.  A schema tells a machine what a command accepts;
 `read_mapping` runs the command from the JSON object the
 machine sends back.
 
@@ -2372,7 +2373,7 @@ unparsed Processor you can drive yourself.
 
 The latest run's `(command, instance)` log.
 
-`Appeal.help()` / `Appeal.schema()` / `Appeal.documentation(format)`
+`Appeal.help()` / `Appeal.schema(format)` / `Appeal.documentation(format)`
 
 The help page (printed); the JSON-safe program description
 (returned); and the docs rendered in a named format--only
@@ -2619,11 +2620,10 @@ changes, all of them:
   behavior, uniformly enforced), and 0.6's occasional
   internal-repr error messages are now English.
 
-And the additions, one more time, in list form: standalone
-script emission, tab completion, composed help with templates
-and themes, cycling, class-as-app, config layering,
-`name=`, required trailing arguments, `list[T]`/`dict[K, V]`/
-`tuple[...]` spellings, the REPL, MCP servers, `app.schema()`--
+And the additions, one more time, in list form: tab
+completion, composed help with templates and themes, cycling,
+class-as-app, config layering, `name=`, `list[T]`/`dict[K, V]`/
+`tuple[...]` spellings, the REPL, MCP servers, `app.schema(format)`--
 and speed: cold start (build plus first parse) is roughly 10x
 faster than 0.6, warm parses roughly 700x, and a
 standalone script pays about 2.6ms of total startup where a

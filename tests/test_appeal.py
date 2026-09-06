@@ -3391,7 +3391,7 @@ def test_mcp_schema_agrees_with_read_mapping():
     # properties used the presentation-only usage rename (describe
     # required COUNT, reader wanted count), and converter groups
     # were advertised as opaque strings.
-    from appeal.mcp import mcp_input_schema
+    from appeal.schema import mcp_input_schema
 
     def pt(x: int, y: int):
         return (x, y)
@@ -3409,7 +3409,7 @@ def test_mcp_schema_agrees_with_read_mapping():
     # usage rename; the rename rides in describe() as 'usage'
     assert set(s['properties']) == {'count', 'spot', 'where'}
     assert s['required'] == ['count', 'spot']
-    from appeal.mcp import describe as describe
+    from appeal.schema import describe as describe
     op = describe(plan)['operands'][0]
     assert (op['name'], op['usage']) == ('count', 'COUNT')
     # a strict group (min 2) advertises its real structure...
@@ -3471,7 +3471,7 @@ def test_schema():
     def run(target):
         "Runs the target."
         return target
-    got = app.schema()
+    got = app.schema('appeal')
     json.dumps(got)
     assert got['name'] == 'tool'
     assert got['commands']['run']['summary'] == 'Runs the target.'

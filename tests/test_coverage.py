@@ -406,7 +406,7 @@ def test_completion_table_repeat_group_completions():
 
 
 def test_schema_branches():
-    from appeal.mcp import mcp_input_schema
+    from appeal.schema import mcp_input_schema
 
     class Fancy(appeal.Option):
         def init(self, default):
@@ -469,7 +469,23 @@ def test_schema_branches():
     @app.command()
     def go(x: int, *, where: sub = None):
         return x
-    described = app.schema()
+    # schema(format) is REQUIRED--no default (ruled 2026-09-03), and
+    # the formats are named strings: 'appeal' (the full description)
+    # and 'mcp' (standard JSON Schema per command)
+    try:
+        app.schema()
+        assert False, 'expected TypeError (format has no default)'
+    except TypeError:
+        pass
+    try:
+        app.schema('yaml')
+        assert False, 'expected AppealConfigurationError'
+    except appeal.AppealConfigurationError as e:
+        assert "'appeal'" in str(e) and "'mcp'" in str(e), e
+    js = app.schema('mcp')
+    for word, entry in js.items():
+        assert entry['type'] == 'object' and 'properties' in entry, (word, entry)
+    described = app.schema('appeal')
     assert described['global']['options']
     assert any(o.get('group') for o in
                described['commands']['go']['options'])
@@ -760,7 +776,7 @@ def test_schema_leaf_fallbacks():
     # multi-operand value option: 'array' (dict[K,V]'s 'object'
     # is pinned in test_39's territory)
     import pathlib
-    from appeal.mcp import mcp_input_schema
+    from appeal.schema import mcp_input_schema
     def pairfn(a: int, b: int):
         return (a, b)
     def cmd(p: pathlib.Path, *, spot: pairfn = None):
@@ -773,7 +789,7 @@ def test_schema_leaf_fallbacks():
     assert props['spot']['type'] == 'array'
     # an option metavar rename rides along as 'usage'
     from appeal.frontend import Decorations
-    from appeal.mcp import describe as describe
+    from appeal.schema import describe as describe
     def q(*, level: int = 0):
         return level
     d = Decorations()
@@ -955,8 +971,12 @@ def test_plan_and_schema_properties():
     def top(x: int, *, verbose=False):
         return x
     assert app.plan is app.global_plan
-    described = app.schema()
+    described = app.schema('appeal')
     assert described['operands'][0]['name'] == 'x'
+    # the bare-app 'mcp' flavor: one JSON Schema, keyed by the program
+    js = app.schema('mcp')
+    (word, entry), = js.items()
+    assert entry['type'] == 'object' and 'x' in entry['properties'], js
     @app.command()
     def go():
         pass
@@ -2389,7 +2409,7 @@ def test_entry_points_default_to_sys_argv():
 #                          not-VAR_KEYWORD fall-through is dead
 
 def test_branch_schema_and_read_edges():
-    from appeal.mcp import mcp_input_schema
+    from appeal.schema import mcp_input_schema
     from appeal.load import read_mapping
 
     # a *args converter with parameters is a per-instance GROUP,
@@ -2440,7 +2460,7 @@ def test_branch_schema_and_read_edges():
 
 
 def test_schema_degenerate_group_transparent():
-    from appeal.mcp import mcp_input_schema
+    from appeal.schema import mcp_input_schema
     # a single-operand chain collapses to the innermost leaf (0.6.4's
     # degenerate annotation tree; ruled 2026-08-16): a: mything ->
     # otherthing -> int schemas as a plain integer, not an object
@@ -2718,7 +2738,7 @@ def test_optional_parameterize_refusals():
 def test_degenerate_leaf_type_non_degenerate():
     # the schema's degenerate-chain collapse returns None for the
     # shapes that AREN'T a single non-repeating operand
-    from appeal.mcp import _degenerate_leaf_type
+    from appeal.schema import _degenerate_leaf_type
     one_each = {'operand_counts': {'minimum': 1, 'maximum': 1}}
     assert _degenerate_leaf_type({**one_each, 'operands': []}) is None
     assert _degenerate_leaf_type(

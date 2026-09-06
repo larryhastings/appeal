@@ -386,7 +386,8 @@ _LAZY_REEXPORTS = {
     'completion_reentry': 'completion', 'completion_script': 'completion',
     '_split_arg_string': 'completion',
     'read_csv': 'load', 'read_iterable': 'load', 'read_mapping': 'load',
-    'describe': 'mcp', 'describe_set': 'mcp', 'run_mcp': 'mcp',
+    'describe': 'schema', 'describe_set': 'schema',
+    'mcp_input_schema': 'schema', 'run_mcp': 'mcp',
 }
 
 
@@ -1858,17 +1859,38 @@ class Appeal:
                         command_set_usage(prog, self._display_global()),
                         command_pages=pages, version=version)
 
-    def schema(self):
+    def schema(self, format):
         """
-        The program described as JSON-safe data--the machine-
-        readable twin of --help.  Pairs with read_mapping() to run
-        a command from a JSON object.
+        The program's machine-readable schema, in the `format` you
+        name (no default--say which):
+
+        'appeal' -- the full description: every command's usage,
+        operands, options with their spellings, arities, defaults,
+        and docs.  The machine-readable twin of --help; pairs with
+        read_mapping() to run a command from the object a machine
+        sends back.
+
+        'mcp' -- standard JSON Schema (type/properties/required),
+        one per command keyed by command word, the projection an
+        MCP client validates tool arguments against.  Lossy on
+        purpose: JSON Schema can't spell option strings or arity
+        windows; 'appeal' is the lossless form.
         """
-        from .mcp import describe, describe_set
+        from .schema import describe, describe_set, mcp_input_schema
         table = self._table()
-        if not table:
-            return describe(self.plan)
-        return describe_set(self.plans, self.global_plan, self._prog())
+        if format == 'appeal':
+            if not table:
+                return describe(self.plan)
+            return describe_set(self.plans, self.global_plan,
+                                self._prog())
+        if format == 'mcp':
+            if not table:
+                return {self._prog(): mcp_input_schema(self.plan)}
+            return {word: mcp_input_schema(self.plan_for(word))
+                    for word in table}
+        raise AppealConfigurationError(
+            f"schema(): unknown format {format!r}; the formats are "
+            f"'appeal' and 'mcp'")
 
     def read_mapping(self, callable, mapping):
         "v1's API: call `callable` with values pulled from `mapping`."
@@ -2533,8 +2555,9 @@ class Appeal:
         Runs until stdin closes.
         """
         from .load import read_mapping
-        from .mcp import mcp_input_schema, run_mcp
+        from .mcp import run_mcp
         from .presentation import summary
+        from .schema import mcp_input_schema
         table = self._table()
         if self._subs:
             raise AppealConfigurationError(

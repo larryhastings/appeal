@@ -44,7 +44,9 @@ There are three moving parts, and they run in this order:
 Everything else is a consumer of those three: **`presentation.py`** renders
 help/usage/errors, **`converters.py`** is the type vocabulary,
 **`load.py`** runs a command from structured data instead of a string, and
-**`mcp.py`** / **`completion.py`** serve MCP tools and shell completion.
+**`schema.py`** describes the plan tree as plain data (the `app.schema(format)`
+formats); **`mcp.py`** / **`completion.py`** serve MCP tools and shell
+completion (the MCP server consumes schema.py's JSON-Schema projection).
 None of them are on the fast path of a successful parse.
 
 ## The one mental key: instructions, a queue, and a handler table
@@ -198,8 +200,13 @@ tables carry their role coloring structurally, as big `StyledText` nodes.
 * **`load.py`** (~400 lines) — `read_mapping` / `read_iterable` / `read_csv`:
   run a command from a dict, a list, or a CSV row, through the *same*
   converters, no command line involved.
-* **`mcp.py`** (~340 lines) — serve the commands as MCP tools (stdio, stdlib
-  only); the class-as-app constructs once at server startup.
+* **`schema.py`** (~260 lines) — the plan tree as plain data: the full
+  description (`app.schema('appeal')`) and the JSON-Schema projection
+  (`app.schema('mcp')`) both live here; generic machinery, MCP is one
+  consumer.
+* **`mcp.py`** (~150 lines) — serve the commands as MCP tools (stdio, stdlib
+  only), schemas from schema.py; the class-as-app constructs once at
+  server startup.
 * **`completion.py`** (~560 lines) — shell tab completion off the same plans.
 
 ## The dispatcher and the Processor: two passes
