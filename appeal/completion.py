@@ -265,7 +265,7 @@ def _completion_scan(options, words, maximum=None, boundary=None,
         # the parse.  A bad token (unknown char, misplaced multi-value
         # option) gets no opinion at all--completion never raises.
         try:
-            carved = list(parse_short_options(word, flag, oparg, opargs))
+            carved = list(parse_short_options(word, (flag, oparg, opargs)))
         except UsageError:
             continue
         for option, arg in carved:

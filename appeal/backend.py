@@ -214,12 +214,12 @@ def _is_float(text):
         return False
 
 
-def parse_short_options(s, flag, oparg, opargs):
+def parse_short_options(s, classifiers):
     """
     Carve a short-option token (-v, -vd, -uFILE) into (option, arg)
-    pairs, one per short option, yielded left to right.  flag, oparg,
-    and opargs are containers of option CHARS: the options taking no
-    oparg (these bundle), exactly one, and two or more.
+    pairs, one per short option, yielded left to right.  classifiers
+    is a sequence of three containers of option CHARS: the options
+    taking no oparg (these bundle), exactly one, and two or more.
 
     arg is the option's attached oparg (a string), or None--meaning
     the oparg(s), if the option takes any, are the following words on
@@ -228,13 +228,14 @@ def parse_short_options(s, flag, oparg, opargs):
     rest of the token, ending the bundle; a multi-oparg option must be
     last in the bundle, its values all words of their own.
 
-    Each pair is yielded before the next char is classified--on
-    purpose: invoking one option can map the next (-me: -m enters a
-    group that registers -e), so the membership arguments may be live
-    views of the current option table.  A char in none of the three
-    is an unknown option: UsageError, like the misplaced multi-oparg
-    option.  (The up-front ValueErrors are caller bugs: this function
-    only accepts a short-option token.)
+    classifiers is re-read for every char, and each pair is yielded
+    before the next char is classified--on purpose: invoking one
+    option can map the next (-me: -m enters a group that registers
+    -e), so the caller may rewrite the contents of classifiers
+    mid-carve.  A char in none of the three is an unknown option:
+    UsageError, like the misplaced multi-oparg option.  (The up-front
+    ValueErrors are caller bugs: this function only accepts a
+    short-option token.)
     """
     l = list(s)
     l.reverse()
@@ -246,6 +247,7 @@ def parse_short_options(s, flag, oparg, opargs):
 
     while l:
         option = l.pop()
+        flag, oparg, opargs = classifiers
         if option in flag:
             arg = None
         elif option in oparg:
@@ -261,31 +263,6 @@ def parse_short_options(s, flag, oparg, opargs):
         else:
             raise UsageError(f"unknown option '-{option}'")
         yield (option, arg)
-
-
-class ShortOptionKind:
-    """
-    A live membership view for parse_short_options: char c is in the
-    view iff -c is in the engine's handler table RIGHT NOW and takes
-    this view's number of opargs ('flag' none, 'oparg' one, 'opargs'
-    several).  Live because invoking one option in a bundle can
-    register the next.
-    """
-    def __init__(self, engine, kind):
-        self.engine = engine
-        self.kind = kind
-
-    def __contains__(self, option):
-        binding = self.engine.handlers.get('-' + option)
-        if binding is None:
-            return False
-        if self.engine._nullary(binding):
-            kind = 'flag'
-        elif _takes_many(binding):
-            kind = 'opargs'
-        else:
-            kind = 'oparg'
-        return kind == self.kind
 
 
 def _operand_list(names):
@@ -895,17 +872,31 @@ class Engine:
     def _parses_as_shorts(self, tok):
         "Would tok fully parse as a short-option bundle?  Structural, no side effects."
         try:
-            for _ in parse_short_options(tok, *self._short_kinds()):
+            for _ in parse_short_options(tok, self._short_classifiers()):
                 pass
             return True
         except UsageError:
             return False
 
-    def _short_kinds(self):
-        "The three live membership views parse_short_options carves against."
-        return (ShortOptionKind(self, 'flag'),
-                ShortOptionKind(self, 'oparg'),
-                ShortOptionKind(self, 'opargs'))
+    def _short_classifiers(self):
+        """
+        The classifiers for parse_short_options, from the handler
+        table as it stands RIGHT NOW: the short-option chars taking no
+        opargs, exactly one, and two or more.
+        """
+        flag = set()
+        oparg = set()
+        opargs = set()
+        for string, binding in self.handlers.items():
+            if len(string) != 2:
+                continue
+            if self._nullary(binding):
+                flag.add(string[1])
+            elif _takes_many(binding):
+                opargs.add(string[1])
+            else:
+                oparg.add(string[1])
+        return [flag, oparg, opargs]
 
     def _owns_option(self, tok):
         "Does this option token name one of the converter's registered options?"
@@ -1066,14 +1057,17 @@ class Engine:
                     f"spaces, not '='")
             binding.invoke(self, value, tok)
             return
-        # short: -x, a flag bundle -vd, or an attached value -uF.  the
-        # views are live and the carving lazy: invoking one option can
-        # map the next (-me: -m enters a group that registers -e)
-        for option, arg in parse_short_options(tok, *self._short_kinds()):
+        # short: -x, a flag bundle -vd, or an attached value -uF.
+        # invoking a flag can map new options (-me: -m enters a group
+        # that registers -e), so after each one we rewrite the
+        # classifiers' contents; the carve reads them fresh per char
+        classifiers = self._short_classifiers()
+        for option, arg in parse_short_options(tok, classifiers):
             opt = '-' + option
             binding = self.handlers[opt]
             if self._nullary(binding):                  # no oparg: a flag
                 binding.invoke(self, spelling=opt)
+                classifiers[:] = self._short_classifiers()
             else:                                       # arg attached, or None:
                 binding.invoke(self, arg, opt)          # oparg(s) are next words
 

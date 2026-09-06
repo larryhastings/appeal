@@ -1860,7 +1860,7 @@ def test_parse_short_options_directly():
     from appeal.backend import parse_short_options
     from appeal import UsageError
     def carve(s):
-        return list(parse_short_options(s, 'abcde', 'x', 'z'))
+        return list(parse_short_options(s, ('abcde', 'x', 'z')))
     assert carve('-a') == [('a', None)]
     assert carve('-abc') == [('a', None), ('b', None), ('c', None)]
     assert carve('-abxzzz') == [('a', None), ('b', None), ('x', 'zzz')]
@@ -1884,6 +1884,14 @@ def test_parse_short_options_directly():
             assert False, f'expected ValueError for {bad!r}'
         except ValueError:
             pass
+    # the classifiers are re-read per char, so the caller may rewrite
+    # them mid-carve--how the parser handles a bundle whose first
+    # option maps its second (-me: -m enters a group registering -e)
+    classifiers = [set('m'), set(), set()]
+    carver = parse_short_options('-me', classifiers)
+    assert next(carver) == ('m', None)
+    classifiers[0].add('e')
+    assert next(carver) == ('e', None)
 
 
 def test_completion_bad_candidates_and_fish():
