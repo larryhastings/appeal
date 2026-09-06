@@ -7688,49 +7688,79 @@ def test_single_terminal_transparency():
 
 def _doc_examples(md_path):
     """
-    Extract runnable examples from a doc.  The convention,
-    inherited from v1's README tests: an example is a code block
-    whose first line is `import appeal` and whose last line calls
-    app.main (that line is replaced with `pass`).  A block
-    preceded by an HTML comment containing 'pending' is skipped
-    (a documented example awaiting a ruling).  Returns a list of
-    (section, source) pairs; the section is the doc's most recent
-    heading line, hashes stripped.
+    Extract EVERY Python example from a doc (ruled 2026-09-03: no
+    untested examples).  Two block styles:
+
+    * A backquote-tagged Python block (the READMEs): parsed as a
+      real block--open tag to the closing backquotes (the old
+      convention read straight through a block's end looking for
+      app.main(), fusing prose and later blocks into one giant
+      "example").  Blocks run as ONE SESSION per doc: a shared
+      namespace carries definitions forward, the way a reader
+      reads--a block that starts fresh (import appeal, a new app)
+      naturally begins again.
+    * The legacy indented convention (the explainer docs): a block
+      from a bare `import appeal` line to the line calling
+      app.main(), unchanged.
+
+    Any line calling app.main() is replaced with `pass` (the
+    harness runs programs, not processes).  A block preceded by an
+    HTML comment containing 'pending' is skipped (a documented
+    example awaiting a ruling).  Returns (section, source) pairs;
+    the section is the doc's most recent heading line.
     """
     import textwrap
     with open(md_path, 'rt', encoding='utf-8') as f:
         lines = f.read().split('\n')
     examples = []
-    example = []
+    fenced = None                   # inside a backquoted Python block
+    indented = None                 # inside a legacy indented example
     pending = False
     section = None
+
+    def neuter_main(line):
+        stripped = line.strip()
+        if stripped.startswith(('app.main(', 'sys.exit(app.main')):
+            return line[:len(line) - len(line.lstrip())] + 'pass', True
+        return line, False
+
     for line in lines:
         stripped = line.strip()
+        if fenced is not None:
+            if stripped == '```':
+                source = textwrap.dedent('\n'.join(fenced))
+                if pending:
+                    pending = False
+                else:
+                    examples.append((section, source))
+                fenced = None
+            else:
+                line, _ = neuter_main(line)
+                fenced.append(line)
+            continue
+        if indented is not None:
+            line, was_main = neuter_main(line)
+            indented.append(line)
+            if was_main:
+                if pending:
+                    pending = False
+                else:
+                    examples.append(
+                        (section, textwrap.dedent('\n'.join(indented))))
+                indented = None
+            continue
         if line.startswith('##'):
             section = line.lstrip('#').strip()
-            continue
-        if stripped.startswith('<!--') and 'pending' in stripped:
+        elif stripped.startswith('<!--') and 'pending' in stripped:
             pending = True
-            continue
-        if stripped == 'import appeal':
-            example = [line]
-            continue
-        if not example:
-            continue
-        if stripped.startswith(('app.main(', 'sys.exit(app.main')):
-            prefix = line[:len(line) - len(line.lstrip())]
-            example.append(prefix + 'pass')
-            if pending:
-                pending = False
-            else:
-                examples.append((section, textwrap.dedent('\n'.join(example))))
-            example = []
-            continue
-        example.append(line)
+        elif stripped.lower() == '```python':
+            fenced = []
+        elif stripped == 'import appeal':
+            indented = [line]
     return examples
 
 
-def _run_doc_example(source, where):
+def _run_doc_example(source, where, namespace=None):
     """
     The bit-rot guard, one example: exec it, then force the whole
     pipeline--build every plan, merge every docstring, render the
@@ -7738,7 +7768,8 @@ def _run_doc_example(source, where):
     don't ship.  Returns the example's namespace.
     """
     import io, contextlib
-    namespace = {}
+    if namespace is None:
+        namespace = {}
     try:
         exec(compile(source, where, 'exec'), namespace)
     except Exception as e:
@@ -7758,14 +7789,16 @@ def _run_doc_example(source, where):
 
 def test_doc_examples():
     appeal_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    docs = ('appeal.completion.md', 'appeal.documentation.md')
+    docs = ('appeal.completion.md', 'appeal.documentation.md',
+            'README.draft.md')
     ran = 0
     for doc in docs:
         path = os.path.join(appeal_dir, doc)
         if not os.path.exists(path):
             continue
+        session = {}                    # the doc reads as one session
         for i, (section, example) in enumerate(_doc_examples(path)):
-            _run_doc_example(example, f'<{doc} example {i}>')
+            _run_doc_example(example, f'<{doc} example {i}>', session)
             ran += 1
     assert ran, 'no doc examples found--the convention broke'
 
@@ -7787,7 +7820,7 @@ README_DRIVES = {
          'fgrep WM_CREATE window.c'),
         (['fgrep', 'WM_CREATE'], None, 'fgrep WM_CREATE None'),
     ],
-    ('Default Values And `*args`', 2): [
+    ('Default Values And `*args`', 4): [
         (['cp', 'a', 'b', 'c'], None, "cp ('a', 'b') c"),
     ],
     ('Options, Opargs, And Keyword-Only Parameters', 0): [
@@ -7800,7 +7833,7 @@ README_DRIVES = {
     ('Commands, The Global Command, And Subcommands', 0): [
         (['db', 'main', 'deploy', '9'], None, 'db main\ndeploy 9'),
     ],
-    ('Commands, The Global Command, And Subcommands', 1): [
+    ('Commands, The Global Command, And Subcommands', 2): [
         (['add-item', '3'], None, 'added 3'),
     ],
     ('Cycling: several commands on one line', 0): [
@@ -7837,7 +7870,7 @@ README_DRIVES = {
         (['recurse2', 'xyz'], None,
          "recurse2 a='xyz' b=[(0, 0), '', False]"),
     ],
-    ('Recursive Converters', 2): [
+    ('Recursive Converters', 3): [
         (['twice', '-v', '1', '2', 'x', '3', '4', 'y'], None,
          "twice a=[(1, 2.0), 'x', True] b=[(3, 4.0), 'y', False]"),
     ],
@@ -7881,6 +7914,7 @@ def test_readme_examples():
     assert examples, 'no README examples found--the convention broke'
     counters = {}
     driven = 0
+    session = {}                        # the doc reads as one session
     for section, example in examples:
         index = counters.get(section, 0)
         counters[section] = index + 1
@@ -7890,7 +7924,7 @@ def test_readme_examples():
             # the README documents these as 3.9+ spellings
             needs_39(f'README example {section}')
             continue
-        namespace = _run_doc_example(example, where)
+        namespace = _run_doc_example(example, where, session)
         for argv, config, expected in README_DRIVES.get((section, index), ()):
             app = namespace['app']
             out = io.StringIO()

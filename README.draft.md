@@ -754,7 +754,10 @@ settings = {}                       # bind now, fill before main()
 def main(*, editor='vi', jobs: int = 1):
     ...
 
-settings.update(read_my_rc_file())  # e.g. TOML/JSON/environ--your choice
+def read_my_rc_file():              # e.g. TOML/JSON/environ--your choice
+    return {'editor': 'emacs', 'jobs': 4}
+
+settings.update(read_my_rc_file())
 app.main()
 ```
 
@@ -770,14 +773,31 @@ reads no file formats itself--you hand it a dict, from wherever you like.)
 
 ## Running a command from a dict, a list, or a CSV
 
-The same function, invoked without a command line at all. `load.py`'s
+The same functions, invoked without a command line at all. `load.py`'s
 readers run a command from structured data, routed through the *same*
 converters:
 
 ```Python
-app.read_mapping(deploy, {'target': 'prod', 'workers': '4'})
-app.read_iterable(deploy, ['prod', '--workers', '4'])
-app.read_csv(deploy, csv_reader)
+import appeal
+app = appeal.Appeal()
+
+@app.command()
+def deploy(target, *, workers: int = 1):
+    return (target, workers)
+
+# by NAME, from a mapping (options welcome):
+assert app.read_mapping(deploy, {'target': 'prod', 'workers': '4'}) \
+       == ('prod', 4)
+
+def grade(name, score: int):
+    return (name, score)
+
+# by POSITION, one call per row (positionals only--options can't be
+# position-fed); read_csv is the same over a csv.reader, the first
+# row being the headings:
+assert app.read_iterable(grade, [['ada', '99'], ['bob', '81']]) \
+       == [('ada', 99), ('bob', 81)]
+app.main()
 ```
 
 Write the parameter logic once; it validates identically whether the input
@@ -1236,7 +1256,7 @@ A precise listing of the public surface. Everything here lives directly on
 
 ### The `Appeal` object
 
-```Python
+```
 Appeal(name=None, *, version=None, stylesheet=None, errors=None,
        repeat=False, lazy=False, script=sys.argv[0], margin=None,
        doc=None, parent=None,

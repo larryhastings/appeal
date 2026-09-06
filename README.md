@@ -1107,7 +1107,7 @@ collect an option's occurrences however you like.  `Option`
 isn't useful by itself; it's an abstract base class.  Subclass
 it and override up to three methods:
 
-```Python
+```
 class Option:
 
     def init(self, default):
@@ -1432,7 +1432,7 @@ you supply the group's arguments:
 
 Appeal calls `recurse2()` like this:
 
-```Python
+```
 recurse2('pdq', my_converter(int('1'), float('2'), 'xyz', verbose=True))
 ```
 
@@ -1948,7 +1948,7 @@ for that.  Read your TOML/JSON/YAML/[Perky](https://pypi.org/project/perky/)
 file into a dict with whatever you like; Appeal's job starts
 once you have the dict:
 
-```Python
+```
 result = appeal.read_mapping(callable, mapping)
 ```
 
@@ -2060,76 +2060,42 @@ simultaneously (imagine an app server handling commands for
 many users, each with their own config):
 
 ```Python
-processor = app.parse(args)                  # stage 1: parse only
-status = processor.execute()                 # stage 2: run the commands
+import appeal
+app = appeal.Appeal()
+
+@app.command()
+def greet(name):
+    return f'hi, {name}'
+
+processor = app.process(['greet', 'world'])  # one run, inspected
+assert processor.result == 'hi, world'
 ```
 
-`app.parse()` fully parses the command-line and returns the
-Processor *without running anything*--if the line is
-malformed, it raises before any of your code runs.
-(Simultaneously means simultaneously: even threads racing the
-very first parse are safe.  Compilation runs lock-free--Appeal
-never holds a lock while calling your code--and a plain lock
-guards only the cache installs, so racing threads each build,
-one wins, and the rest adopt the winner.)
-`processor.execute()` then runs the commands left to right.
+`app.process()` runs one command line--a whole-line structural
+pre-scan validates every command's shape first, then the
+commands convert and run left to right--and returns the
+Processor.  (Simultaneously means simultaneously: even threads
+racing the very first parse are safe.  Compilation runs
+lock-free--Appeal never holds a lock while calling your
+code--and a plain lock guards only the cache installs, so
+racing threads each build, one wins, and the rest adopt the
+winner.)
 `processor.instances` is that run's `(command, instance)` log;
 `app.instances` is a convenience alias for the latest run's.
-`app.process(args)` is parse-plus-execute in one call, and
 `app.main(args)` is `process()` plus polite error printing
 plus the exit-code protocol.  Config isn't passed here--bind it
 per precommand via `@app.precommand(config=...)`.
 
 
-## Standalone Scripts: The North Star
+## Standalone Scripts: Removed
 
-Here is 1.0's defining feature.  Appeal can write your
-command-line parser out as a *standalone Python script:*
-
-```Python
-app.write_standalone('mytool.py')
-```
-
-The emitted script:
-
-* imports **nothing but the stdlib and your own module**--your
-  converters and command functions are imported by name;
-  Appeal's runtime (a few hundred lines: the token driver, the
-  help renderer, the completion engine) is embedded in the
-  script itself.  No appeal installed, no big installed, no
-  pip anything.
-* parses **exactly** like the in-process parser--it *is* the
-  same generated code, tested relentlessly against the
-  in-process implementation.
-* supports `--help` (your composed documentation, baked in),
-  your color theme (re-deciding at *its* runtime whether color
-  is appropriate), and tab completion.
-* is *fast*.  Appeal decides everything decidable ahead of
-  time and compiles the decisions to ordinary Python `if`
-  statements.  A standalone Appeal parser adds about 2.6ms to
-  Python's own startup; 0.6 added about 70ms.  (Warm
-  in-process parses are about 700x faster than 0.6's.)
-
-This "north star" disciplines the whole library: any feature
-that works in-process must either work in a standalone script
-or *refuse by name* at emission time.  Refusals are honest and
-specific: a lambda converter, a callable defined in
-`__main__`, a default value whose `repr` doesn't round-trip--
-each names its offender and what to do about it.  Nothing
-silently emits a script that behaves differently.
-
-(Emission is the one moment Appeal uses my
-[big](https://github.com/larryhastings/big) library--to carve
-its own runtime into the script.  The *emitted script* doesn't
-need big, and parsing in-process never touches it.)
-
-Note that the standalone script imports your module: your
-converters run at parse time, so they travel by import, not by
-copy.  Vocabulary converters (`appeal.split(':')`,
-`appeal.counter()`, `appeal.validate(...)`) travel as
-*recipes*--the factory call is re-run inside the script--so
-they work standalone even though they're closures.
-
+Earlier 1.0 development pursued emitting your parser as a
+standalone, dependency-free Python script--"the north star."
+That feature was removed during development: the engine went
+interpreter-only, and the speed the standalone script existed
+to buy is now the ordinary path--`import appeal` is a few
+milliseconds of stdlib-only core, and nothing heavy loads
+until help or another lazy feature is used.
 
 ## MCP: Your Commands As AI Tools
 
@@ -2394,11 +2360,6 @@ The interactive loop.
 Serve the program's commands as MCP tools over stdio, until
 stdin closes.
 
-`Appeal.standalone(*, argv0=None)` / `Appeal.write_standalone(path, *, argv0=None)` / `Appeal.standalone_mcp(*, argv0=None, config=None, version=None)`
-
-The standalone script's text; the same, written to a file; and
-the standalone MCP server's text.
-
 `appeal.read_mapping(callable, mapping)` / `appeal.read_iterable(callable, iterable)` / `appeal.read_csv(callable, reader, *, first_row_map=None)`
 
 The config-reading family, described above.  Also available as
@@ -2550,16 +2511,6 @@ things POSIX allows, and allows some things POSIX disallows.
   somewhere in its annotation tree, require at least one
   positional argument (otherwise "one more instance" would
   consume nothing, forever).
-* Generated parsers are real Python source.  If you're curious
-  what Appeal decided about your grammar:
-
-  ```Python
-  from appeal import build, compile_plan
-  print(compile_plan(build(your_function)).source)
-  ```
-
-  Tracebacks through a generated parser show its actual source
-  lines, too.
 
 
 ## What Changed From Appeal 0.6
