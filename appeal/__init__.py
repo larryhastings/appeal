@@ -131,7 +131,7 @@ AppealBaseException = AppealError
 # exceptions above, so re-exporting here is cycle-free and gives the engine
 # and the public API their names.
 from .converters import (
-    Option, MultiOption, convert, is_option, is_multioption,
+    Option, MultiOption, is_option, is_multioption,
     split, validate, validate_range, counter, file, optional,
     accumulator, mapping,
     )

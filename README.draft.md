@@ -1385,8 +1385,6 @@ Annotate a parameter with one of these to shape its conversion.
   stdin/stdout), handed to your function open. Closing it is yours, and
   always *safe*: on `-`, close flushes and goes inert instead of closing
   the process's real stream.
-* `appeal.convert(converter, text, name, usage=None)` — run a converter
-  by hand, the way Appeal does internally.
 * `appeal.Option` (alias `appeal.MultiOption`) — the base class for writing
   your own option converters; `is_option()` / `is_multioption()` test an
   annotation.

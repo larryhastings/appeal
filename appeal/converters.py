@@ -13,11 +13,13 @@ from . import (AppealConfigurationError, ConfigurationError,
                AppealDataError, DataError, UsageError)
 
 
-def convert(converter, text, name, usage=None):
+def convert(converter, text, name):
     """
     Run a terminal converter over one operand.  A ValueError or
     TypeError from the converter becomes a UsageError naming
-    the parameter and the offending text.
+    the parameter and the offending text.  (Appeal-internal: the
+    engine's per-operand conversion primitive.  The usage line is
+    attached later, at the dispatch boundary--see _run_node.)
     """
     try:
         return converter(text)
@@ -26,7 +28,7 @@ def convert(converter, text, name, usage=None):
         detail = str(e) or f'not a valid {converter_name}'
         raise UsageError(
             f"invalid value for {name!r}: {text!r} ({detail})",
-            usage, param=name) from None
+            param=name) from None
 
 
 class Option:
