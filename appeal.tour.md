@@ -44,8 +44,8 @@ There are three moving parts, and they run in this order:
 Everything else is a consumer of those three: **`presentation.py`** renders
 help/usage/errors, **`converters.py`** is the type vocabulary,
 **`load.py`** runs a command from structured data instead of a string, and
-**`schema.py`** describes the plan tree as plain data (the `app.schema(format)`
-formats); **`mcp.py`** / **`completion.py`** serve MCP tools and shell
+**`schema.py`** describes the plan tree as plain data (the `app.schema(format,
+version)` formats); **`mcp.py`** / **`completion.py`** serve MCP tools and shell
 completion (the MCP server consumes schema.py's JSON-Schema projection).
 None of them are on the fast path of a successful parse.
 
@@ -200,10 +200,10 @@ tables carry their role coloring structurally, as big `StyledText` nodes.
 * **`load.py`** (~400 lines) — `read_mapping` / `read_iterable` / `read_csv`:
   run a command from a dict, a list, or a CSV row, through the *same*
   converters, no command line involved.
-* **`schema.py`** (~260 lines) — the plan tree as plain data: the full
-  description (`app.schema('appeal')`) and the JSON-Schema projection
-  (`app.schema('mcp')`) both live here; generic machinery, MCP is one
-  consumer.
+* **`schema.py`** (~270 lines) — the plan tree as plain data: the full
+  description (`app.schema('appeal', '1.0')`) and the JSON-Schema
+  projection (`app.schema('mcp', '2024-11-05')`) both live here, with
+  the version inventories; generic machinery, MCP is one consumer.
 * **`mcp.py`** (~150 lines) — serve the commands as MCP tools (stdio, stdlib
   only), schemas from schema.py; the class-as-app constructs once at
   server startup.

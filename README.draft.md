@@ -805,9 +805,10 @@ the value back instead of an exit.
 ## MCP: your commands as AI tools
 
 Because your commands are already precisely typed functions, Appeal can hand
-them to an AI. `app.schema('mcp')` produces standard JSON Schema for every
-command (and `app.schema('appeal')` the full description--usage, option
-spellings, arities, docs; the machine-readable twin of `--help`);
+them to an AI. `app.schema('mcp', '2024-11-05')` produces standard JSON
+Schema for every command (and `app.schema('appeal', '1.0')` the full
+description--usage, option spellings, arities, docs; the machine-readable
+twin of `--help`);
 `app.mcp()` runs a Model Context Protocol server exposing your commands as
 callable tools. An LLM sees the same `deploy(target, *, workers:
 int)` a human sees on the command line--names, types, help and all--and
@@ -1311,12 +1312,14 @@ child `Appeal` (or the function) so you can nest.
 
 ### AI, schema, and completion
 
-* `app.schema(format)` — the program's machine-readable schema; `format`
-  is required. `'appeal'` is the full description (usage, operands,
-  options with their spellings, arities, defaults, docs--the lossless
-  form, pairing with `read_mapping()`); `'mcp'` is standard JSON Schema,
-  one per command, the projection an MCP client validates arguments
-  against.
+* `app.schema(format, version)` — the program's machine-readable schema;
+  both parameters are required, plain strings. `app.schema('appeal',
+  '1.0')` is the full description (usage, operands, options with their
+  spellings, arities, defaults, docs--the lossless form, pairing with
+  `read_mapping()`); `app.schema('mcp', '2024-11-05')` is standard JSON
+  Schema, one per command, the projection an MCP client validates
+  arguments against--its versions are the MCP protocol's revisions.
+  Unknown formats and versions are refused by name.
 * `app.mcp(*, config=None, version=None)` — run a Model Context Protocol
   server exposing your commands as tools.
 * `app.completion(shell)` — emit a completion script for `'bash'`, `'zsh'`,
@@ -1480,7 +1483,7 @@ completion, and a REPL. The full itemized list:
 **New capabilities**
 
 * **MCP server** (`app.mcp()`) and **machine-readable schemas**
-  (`app.schema('appeal')` / `app.schema('mcp')`).
+  (`app.schema('appeal', '1.0')` / `app.schema('mcp', '2024-11-05')`).
 * **Tab completion** (`app.completion(shell)` / `app.complete(...)`).
 * A **REPL** (`app.repl()`).
 * Run a command from structured data: `read_mapping` / `read_iterable` /

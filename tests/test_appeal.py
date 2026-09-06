@@ -3471,7 +3471,7 @@ def test_schema():
     def run(target):
         "Runs the target."
         return target
-    got = app.schema('appeal')
+    got = app.schema('appeal', '1.0')
     json.dumps(got)
     assert got['name'] == 'tool'
     assert got['commands']['run']['summary'] == 'Runs the target.'

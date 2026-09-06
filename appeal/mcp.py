@@ -10,12 +10,10 @@
 # machinery; this module is one consumer of it).
 
 from . import AppealError
-
-
-_MCP_VERSIONS = ('2024-11-05',)     # the protocol revisions this server
-                                    # speaks, oldest to newest; [-1] is
-                                    # offered when the client asks for one
-                                    # we don't
+from .schema import _MCP_VERSIONS      # the protocol revisions this
+                                       # server speaks, oldest to newest;
+                                       # [-1] is offered when the client
+                                       # asks for one we don't
 
 
 def run_mcp(tools, name, version='0'):

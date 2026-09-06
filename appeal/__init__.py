@@ -1859,31 +1859,47 @@ class Appeal:
                         command_set_usage(prog, self._display_global()),
                         command_pages=pages, version=version)
 
-    def schema(self, format):
+    def schema(self, format, version):
         """
-        The program's machine-readable schema, in the `format` you
-        name (no default--say which):
+        The program's machine-readable schema.  Both parameters are
+        required--name the format AND the version of it you can
+        consume (they're plain strings):
 
-        'appeal' -- the full description: every command's usage,
+            app.schema('appeal', '1.0')
+            app.schema('mcp', '2024-11-05')
+
+        'appeal' is the full description: every command's usage,
         operands, options with their spellings, arities, defaults,
-        and docs.  The machine-readable twin of --help; pairs with
-        read_mapping() to run a command from the object a machine
-        sends back.
+        and docs--the machine-readable twin of --help, pairing with
+        read_mapping().  Its version is Appeal's own (additions may
+        not bump it; breaking changes will).
 
-        'mcp' -- standard JSON Schema (type/properties/required),
-        one per command keyed by command word, the projection an
-        MCP client validates tool arguments against.  Lossy on
+        'mcp' is standard JSON Schema (type/properties/required),
+        one per command keyed by command word, the projection an MCP
+        client validates tool arguments against; its versions are
+        the MCP protocol's date-stamped revisions.  Lossy on
         purpose: JSON Schema can't spell option strings or arity
-        windows; 'appeal' is the lossless form.
+        windows--'appeal' is the lossless form.
         """
-        from .schema import describe, describe_set, mcp_input_schema
+        from .schema import (_APPEAL_VERSIONS, _MCP_VERSIONS,
+                             describe, describe_set, mcp_input_schema)
         table = self._table()
         if format == 'appeal':
+            if version not in _APPEAL_VERSIONS:
+                raise AppealConfigurationError(
+                    f"schema(): unknown 'appeal' schema version "
+                    f"{version!r}; this Appeal renders "
+                    f"{', '.join(map(repr, _APPEAL_VERSIONS))}")
             if not table:
                 return describe(self.plan)
             return describe_set(self.plans, self.global_plan,
                                 self._prog())
         if format == 'mcp':
+            if version not in _MCP_VERSIONS:
+                raise AppealConfigurationError(
+                    f"schema(): unknown 'mcp' schema version "
+                    f"{version!r}; this Appeal renders "
+                    f"{', '.join(map(repr, _MCP_VERSIONS))}")
             if not table:
                 return {self._prog(): mcp_input_schema(self.plan)}
             return {word: mcp_input_schema(self.plan_for(word))

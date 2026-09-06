@@ -22,6 +22,14 @@
 
 import inspect as _inspect
 
+# the schema versions this module can render.  APPEAL versions are
+# ours (breaking changes to the description bump it); MCP versions
+# are the protocol's own date-stamped revisions--the same inventory
+# run_mcp() negotiates with, so supporting a new revision is one
+# entry here plus whatever the new shape needs.
+_APPEAL_VERSIONS = ('1.0',)
+_MCP_VERSIONS = ('2024-11-05',)
+
 from .frontend import build_plan
 from .presentation import parse_docstring
 from .frontend import Terminal, NO_DEFAULT, Plan

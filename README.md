@@ -2163,10 +2163,11 @@ A few things to know:
   dependency-free script, per the north star.
 
 The machine-readable twin of `--help` is also available
-directly: `app.schema('appeal')` describes your whole program
-as plain JSON-safe data--usage, arguments, options, types,
-docs--and `app.schema('mcp')` renders standard JSON Schema per
-command.  A schema tells a machine what a command accepts;
+directly: `app.schema('appeal', '1.0')` describes your whole
+program as plain JSON-safe data--usage, arguments, options,
+types, docs--and `app.schema('mcp', '2024-11-05')` renders
+standard JSON Schema per command, versioned by the MCP
+protocol's own revisions.  A schema tells a machine what a command accepts;
 `read_mapping` runs the command from the JSON object the
 machine sends back.
 
@@ -2373,7 +2374,7 @@ unparsed Processor you can drive yourself.
 
 The latest run's `(command, instance)` log.
 
-`Appeal.help()` / `Appeal.schema(format)` / `Appeal.documentation(format)`
+`Appeal.help()` / `Appeal.schema(format, version)` / `Appeal.documentation(format)`
 
 The help page (printed); the JSON-safe program description
 (returned); and the docs rendered in a named format--only
@@ -2623,7 +2624,8 @@ changes, all of them:
 And the additions, one more time, in list form: tab
 completion, composed help with templates and themes, cycling,
 class-as-app, config layering, `name=`, `list[T]`/`dict[K, V]`/
-`tuple[...]` spellings, the REPL, MCP servers, `app.schema(format)`--
+`tuple[...]` spellings, the REPL, MCP servers, `app.schema()`'s
+two formats--
 and speed: cold start (build plus first parse) is roughly 10x
 faster than 0.6, warm parses roughly 700x, and a
 standalone script pays about 2.6ms of total startup where a

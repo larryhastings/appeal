@@ -469,23 +469,35 @@ def test_schema_branches():
     @app.command()
     def go(x: int, *, where: sub = None):
         return x
-    # schema(format) is REQUIRED--no default (ruled 2026-09-03), and
-    # the formats are named strings: 'appeal' (the full description)
-    # and 'mcp' (standard JSON Schema per command)
+    # schema(format, version): BOTH required, no defaults (ruled
+    # 2026-09-03)--the caller names the format and the version of it
+    # they can consume, as plain strings.  'appeal' versions are ours;
+    # 'mcp' versions are the protocol's date-stamped revisions.
     try:
         app.schema()
-        assert False, 'expected TypeError (format has no default)'
+        assert False, 'expected TypeError (no defaults)'
     except TypeError:
         pass
     try:
-        app.schema('yaml')
+        app.schema('appeal')
+        assert False, 'expected TypeError (version has no default)'
+    except TypeError:
+        pass
+    try:
+        app.schema('yaml', '1')
         assert False, 'expected AppealConfigurationError'
     except appeal.AppealConfigurationError as e:
         assert "'appeal'" in str(e) and "'mcp'" in str(e), e
-    js = app.schema('mcp')
+    for fam, bad in (('appeal', '9.9'), ('mcp', '1999-12-31')):
+        try:
+            app.schema(fam, bad)
+            assert False, 'expected AppealConfigurationError'
+        except appeal.AppealConfigurationError as e:
+            assert bad in str(e) and 'renders' in str(e), e
+    js = app.schema('mcp', '2024-11-05')
     for word, entry in js.items():
         assert entry['type'] == 'object' and 'properties' in entry, (word, entry)
-    described = app.schema('appeal')
+    described = app.schema('appeal', '1.0')
     assert described['global']['options']
     assert any(o.get('group') for o in
                described['commands']['go']['options'])
@@ -971,10 +983,10 @@ def test_plan_and_schema_properties():
     def top(x: int, *, verbose=False):
         return x
     assert app.plan is app.global_plan
-    described = app.schema('appeal')
+    described = app.schema('appeal', '1.0')
     assert described['operands'][0]['name'] == 'x'
     # the bare-app 'mcp' flavor: one JSON Schema, keyed by the program
-    js = app.schema('mcp')
+    js = app.schema('mcp', '2024-11-05')
     (word, entry), = js.items()
     assert entry['type'] == 'object' and 'x' in entry['properties'], js
     @app.command()
