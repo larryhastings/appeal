@@ -9,8 +9,9 @@
 # own), or not at all (error branches, rare shapes).  3.6-clean.
 
 from big import test
+from big.builtin import load
 
-test.preload('appeal')
+load('appeal')
 
 import contextlib
 import io
@@ -1934,6 +1935,81 @@ def test_child_kwargs_options_parity():
     assert both(h3, ['X', 'p', 'q', '--flavor', 'hot'],
                 decorations=d) == \
         ('ok', ('X', ('p', 'q', {'flavor': 'hot'})))
+
+
+def test_run_mcp_hardening():
+    # the Sol review's finding #2 (2026-09-03): one bad call never
+    # ends the session.  Expected command failures come back as tool
+    # results marked isError; unexpected exceptions come back as
+    # JSON-RPC internal errors; malformed and non-object requests get
+    # protocol errors; version negotiation never rubber-stamps.  The
+    # load-bearing regression: after EVERY failure below, a later
+    # call on the SAME server still succeeds.
+    import json as _json
+    import appeal
+    from appeal import run_mcp
+    def go(arguments):
+        x = arguments.get('x')
+        if x == 'sad':
+            raise appeal.CommandError("can't divide by zero")
+        if x == 'boom':
+            raise RuntimeError('cosmic rays')
+        return f'got {x}'
+    tools = {'go': ('Go places.',
+                    {'type': 'object', 'properties': {}}, go)}
+    lines = [
+        # version negotiation: a supported version echoes...
+        ('{"jsonrpc": "2.0", "id": 1, "method": "initialize", '
+         '"params": {"protocolVersion": "2024-11-05"}}'),
+        # ...an unsupported one gets the latest we DO speak
+        ('{"jsonrpc": "2.0", "id": 2, "method": "initialize", '
+         '"params": {"protocolVersion": "totally-unsupported"}}'),
+        # a command raising CommandError: a tool result, isError
+        ('{"jsonrpc": "2.0", "id": 3, "method": "tools/call", '
+         '"params": {"name": "go", "arguments": {"x": "sad"}}}'),
+        # an unexpected exception: internal error, loop survives
+        ('{"jsonrpc": "2.0", "id": 4, "method": "tools/call", '
+         '"params": {"name": "go", "arguments": {"x": "boom"}}}'),
+        # malformed JSON: parse error with id null, not silence
+        'this is not json',
+        # valid JSON, not an object: invalid request, not a crash
+        '[]',
+        '5',
+        # params/arguments that aren\'t objects: invalid params
+        '{"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": []}',
+        ('{"jsonrpc": "2.0", "id": 6, "method": "tools/call", '
+         '"params": {"name": "go", "arguments": [1, 2]}}'),
+        # THE REGRESSION: after all of the above, the server still serves
+        ('{"jsonrpc": "2.0", "id": 7, "method": "tools/call", '
+         '"params": {"name": "go", "arguments": {"x": "ok"}}}'),
+        ]
+    old_stdin = sys.stdin
+    out = io.StringIO()
+    try:
+        sys.stdin = io.StringIO('\n'.join(lines) + '\n')
+        with contextlib.redirect_stdout(out):
+            assert run_mcp(tools, 'prog', '1.0') == 0
+    finally:
+        sys.stdin = old_stdin
+    replies = [_json.loads(line) for line in out.getvalue().splitlines()]
+    by_id = {}
+    nulls = []
+    for r in replies:
+        if r.get('id') is None:
+            nulls.append(r)
+        else:
+            by_id[r['id']] = r
+    assert by_id[1]['result']['protocolVersion'] == '2024-11-05'
+    assert by_id[2]['result']['protocolVersion'] == '2024-11-05'
+    r3 = by_id[3]['result']
+    assert r3['isError'] and "can't divide by zero" in r3['content'][0]['text']
+    assert by_id[4]['error']['code'] == -32603
+    assert 'RuntimeError' in by_id[4]['error']['message']
+    codes = sorted(r['error']['code'] for r in nulls)
+    assert codes == [-32700, -32600, -32600], codes
+    assert by_id[5]['error']['code'] == -32602
+    assert by_id[6]['error']['code'] == -32602
+    assert by_id[7]['result']['content'][0]['text'] == 'got ok'
 
 
 def test_mcp_class_global_method_tools():
