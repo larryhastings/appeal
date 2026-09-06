@@ -238,7 +238,10 @@ def _mcp_object_schema(described):
         kind = option.get('kind')
         if kind == 'group':
             entry = group_entry(option['group'])
-        elif kind == 'flag':
+        elif kind in ('flag', 'nullary'):
+            # nullary is a value-producing flag: the reader reads it as a
+            # bool (True calls the zero-arg converter, False takes the
+            # default), so the schema must say boolean, not string
             entry = {'type': 'boolean'}
         elif option.get('mapping'):
             entry = {'type': 'object'}

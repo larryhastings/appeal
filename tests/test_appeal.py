@@ -3429,6 +3429,24 @@ def test_mcp_schema_agrees_with_read_mapping():
                                'where': {'x': 1, 'deep': 9}}) == \
         (5, (3, 4), (1, 9))
 
+    # a FLAG and a NULLARY option both schema as boolean, and the
+    # reader takes booleans for both (Sol review #7, 2026-09-06:
+    # nullary used to schema as string, contradicting the reader,
+    # which reads it as a bool)
+    def zap():
+        return 'ZAPPED'
+    def act(target, *, loud=False, boost: zap = None):
+        return (target, loud, boost)
+    s2 = mcp_input_schema(build_plan(act))
+    assert s2['properties']['loud'] == {'type': 'boolean'}
+    assert s2['properties']['boost'] == {'type': 'boolean'}
+    # schema-conforming booleans round-trip: True fires each, False
+    # takes the default
+    assert read_mapping(act, {'target': 't', 'loud': True,
+                              'boost': True}) == ('t', True, 'ZAPPED')
+    assert read_mapping(act, {'target': 't', 'loud': False,
+                              'boost': False}) == ('t', False, None)
+
 
 def test_schema():
     # the machine-readable twin of --help; pairs with read_mapping
