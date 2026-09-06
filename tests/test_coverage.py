@@ -1826,6 +1826,35 @@ def test_completion_candidate_edges():
     assert 'wipe' in app.complete(['db', 'main'], 'w')
 
 
+def test_completion_compact_short_options():
+    # completion must read a compact short token the same way the parser
+    # does: a flag keeps the bundle going, a value-option ends it (its
+    # value attached in the same token, or--if nothing's attached--in the
+    # following word).  Before the fix, completion saw only word[:2].
+    app = Appeal(name='comp')
+    @app.command()
+    def go(x, *, verbose=False, all=False, num: int = 0):
+        return x
+    # a bundle of flags: BOTH are consumed, neither is re-offered.
+    assert sorted(app.complete(['go', '-va'], '-')) == \
+        ['--help', '--num', '-h', '-n']
+    # an attached value satisfies the option--it's consumed, NOT pending,
+    # so -n isn't re-offered and positionals aren't suppressed.
+    assert sorted(app.complete(['go', '-n5'], '-')) == \
+        ['--all', '--help', '--verbose', '-a', '-h', '-v']
+    # a flag then a value-option with its value attached: both consumed.
+    assert sorted(app.complete(['go', '-vn5'], '-')) == \
+        ['--all', '--help', '-a', '-h']
+    # a value-option with NOTHING attached opens a pending: the value is
+    # the next word, so completion offers nothing here.
+    assert app.complete(['go', '-vn'], '') == []
+    # ...and the separated spelling behaves identically.
+    assert app.complete(['go', '-n'], '') == []
+    # an unknown char stops the walk (forgiving), but earlier chars count.
+    assert sorted(app.complete(['go', '-vz'], '-')) == \
+        ['--all', '--help', '--num', '-a', '-h', '-n']
+
+
 def test_completion_bad_candidates_and_fish():
     from appeal import completion_reentry
     def color(hue):

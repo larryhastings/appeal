@@ -233,16 +233,42 @@ def _completion_scan(options, words, maximum=None, boundary=None,
         if word == '--':
             force_positional = True
             continue
-        name = word.partition('=')[0] if word.startswith('--') else word[:2]
-        entry = options.get(name)
-        if entry is None:
+        if word.startswith('--'):
+            name = word.partition('=')[0]
+            entry = options.get(name)
+            if entry is None:
+                continue
+            key, nargs, repeatable = entry
+            if not repeatable:
+                used.add(name)
+                used.add(key)
+            if nargs and '=' not in word:
+                pending = (key, nargs, nargs)
             continue
-        key, nargs, repeatable = entry
-        if not repeatable:
-            used.add(name)
-            used.add(key)
-        if nargs and '=' not in word:
-            pending = (key, nargs, nargs)
+        # a short bundle: walk it char by char, exactly as the parser
+        # does (getopt-style).  A flag keeps the bundle going; a
+        # value-taking option ends it, binding the REST of the token as
+        # its attached value (`-n5`, `-n=5`)--or, if nothing's attached
+        # (`-n` last), its value comes from the following word(s), so a
+        # `pending` is opened.  (The old `word[:2]` saw only the first
+        # option and mistook an attached value for a next-word one.)
+        chars = word[1:]
+        i = 0
+        while i < len(chars):
+            name = '-' + chars[i]
+            entry = options.get(name)
+            if entry is None:
+                break                           # unknown short: forgiving stop
+            key, nargs, repeatable = entry
+            if not repeatable:
+                used.add(name)
+                used.add(key)
+            if not nargs:                       # a flag: keep bundling
+                i += 1
+                continue
+            if not chars[i + 1:]:               # value option, nothing attached:
+                pending = (key, nargs, nargs)   # the value is the next word(s)
+            break                               # attached or pending: token done
     return used, operands, pending, force_positional, None
 
 
