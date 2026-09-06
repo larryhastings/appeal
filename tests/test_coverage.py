@@ -1850,9 +1850,40 @@ def test_completion_compact_short_options():
     assert app.complete(['go', '-vn'], '') == []
     # ...and the separated spelling behaves identically.
     assert app.complete(['go', '-n'], '') == []
-    # an unknown char stops the walk (forgiving), but earlier chars count.
+    # an unknown char spoils the whole token (the parser would refuse
+    # the line); completion just has no opinion about it.
     assert sorted(app.complete(['go', '-vz'], '-')) == \
-        ['--all', '--help', '--num', '-a', '-h', '-n']
+        ['--all', '--help', '--num', '--verbose', '-a', '-h', '-n', '-v']
+
+
+def test_parse_short_options_directly():
+    from appeal.backend import parse_short_options
+    from appeal import UsageError
+    def carve(s):
+        return list(parse_short_options(s, 'abcde', 'x', 'z'))
+    assert carve('-a') == [('a', None)]
+    assert carve('-abc') == [('a', None), ('b', None), ('c', None)]
+    assert carve('-abxzzz') == [('a', None), ('b', None), ('x', 'zzz')]
+    assert carve('-abx') == [('a', None), ('b', None), ('x', None)]
+    assert carve('-abz') == [('a', None), ('b', None), ('z', None)]
+    try:
+        carve('-abzq')       # multi-oparg option isn't last in the bundle
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert 'must be last in a bundle' in str(e)
+    try:
+        carve('-abq')        # q: unknown option
+        assert False, 'expected UsageError'
+    except UsageError as e:
+        assert "unknown option '-q'" in str(e)
+    # the up-front guards reject tokens that aren't short options at
+    # all--caller bugs, so ValueError, not UsageError
+    for bad in ('not an option', '--long', '-'):
+        try:
+            carve(bad)
+            assert False, f'expected ValueError for {bad!r}'
+        except ValueError:
+            pass
 
 
 def test_completion_bad_candidates_and_fish():

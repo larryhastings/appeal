@@ -214,6 +214,80 @@ def _is_float(text):
         return False
 
 
+def parse_short_options(s, flag, oparg, opargs):
+    """
+    Carve a short-option token (-v, -vd, -uFILE) into (option, arg)
+    pairs, one per short option, yielded left to right.  flag, oparg,
+    and opargs are containers of option CHARS: the options taking no
+    oparg (these bundle), exactly one, and two or more.
+
+    arg is the option's attached oparg (a string), or None--meaning
+    the oparg(s), if the option takes any, are the following words on
+    the command line.  (A short option can't attach an EMPTY oparg;
+    only --long= can spell that.)  An oparg option's arg is the whole
+    rest of the token, ending the bundle; a multi-oparg option must be
+    last in the bundle, its values all words of their own.
+
+    Each pair is yielded before the next char is classified--on
+    purpose: invoking one option can map the next (-me: -m enters a
+    group that registers -e), so the membership arguments may be live
+    views of the current option table.  A char in none of the three
+    is an unknown option: UsageError, like the misplaced multi-oparg
+    option.  (The up-front ValueErrors are caller bugs: this function
+    only accepts a short-option token.)
+    """
+    l = list(s)
+    l.reverse()
+    if (l[-1] != '-') or (len(l) == 1):
+        raise ValueError(f'parse_short_options: invalid short option {s!r}')
+    l.pop()
+    if l[-1] == '-':
+        raise ValueError(f"parse_short_options: can't handle long option {s!r}")
+
+    while l:
+        option = l.pop()
+        if option in flag:
+            arg = None
+        elif option in oparg:
+            l.reverse()
+            arg = ''.join(l) or None
+            l.clear()
+        elif option in opargs:
+            if l:
+                raise UsageError(
+                    f"option '-{option}' takes several values; it must be "
+                    f"last in a bundle with its values as separate words")
+            arg = None
+        else:
+            raise UsageError(f"unknown option '-{option}'")
+        yield (option, arg)
+
+
+class ShortOptionKind:
+    """
+    A live membership view for parse_short_options: char c is in the
+    view iff -c is in the engine's handler table RIGHT NOW and takes
+    this view's number of opargs ('flag' none, 'oparg' one, 'opargs'
+    several).  Live because invoking one option in a bundle can
+    register the next.
+    """
+    def __init__(self, engine, kind):
+        self.engine = engine
+        self.kind = kind
+
+    def __contains__(self, option):
+        binding = self.engine.handlers.get('-' + option)
+        if binding is None:
+            return False
+        if self.engine._nullary(binding):
+            kind = 'flag'
+        elif _takes_many(binding):
+            kind = 'opargs'
+        else:
+            kind = 'oparg'
+        return kind == self.kind
+
+
 def _operand_list(names):
     "Render required operand names as '<A> <B> and <C>' (usage's default form)."
     toks = [f'<{n.upper()}>' for n in names]
@@ -820,21 +894,18 @@ class Engine:
 
     def _parses_as_shorts(self, tok):
         "Would tok fully parse as a short-option bundle?  Structural, no side effects."
-        chars = tok[1:]
-        i = 0
-        while i < len(chars):
-            binding = self.handlers.get('-' + chars[i])
-            if binding is None:                         # an unknown short: no
-                return False
-            if chars[i + 1:i + 2] == '=':               # -x=value: valid unless
-                return not _takes_many(binding)         # x needs several values
-            if self._nullary(binding):                  # a flag: keep bundling
-                i += 1
-                continue
-            # arg-taking: the rest (if any) is its attached oparg -- valid,
-            # unless it takes several values (those can't be attached)
-            return not (chars[i + 1:] and _takes_many(binding))
-        return True                                     # all consumed as flags
+        try:
+            for _ in parse_short_options(tok, *self._short_kinds()):
+                pass
+            return True
+        except UsageError:
+            return False
+
+    def _short_kinds(self):
+        "The three live membership views parse_short_options carves against."
+        return (ShortOptionKind(self, 'flag'),
+                ShortOptionKind(self, 'oparg'),
+                ShortOptionKind(self, 'opargs'))
 
     def _owns_option(self, tok):
         "Does this option token name one of the converter's registered options?"
@@ -995,24 +1066,16 @@ class Engine:
                     f"spaces, not '='")
             binding.invoke(self, value, tok)
             return
-        # short: -x, a flag bundle -vd, or an attached value -uF
-        chars = tok[1:]
-        i = 0
-        while i < len(chars):
-            opt = '-' + chars[i]
-            binding = self.handlers.get(opt)
-            if binding is None:
-                raise UsageError(f"unknown option {opt!r}")
-            if self._nullary(binding):                  # no oparg: keep bundling
+        # short: -x, a flag bundle -vd, or an attached value -uF.  the
+        # views are live and the carving lazy: invoking one option can
+        # map the next (-me: -m enters a group that registers -e)
+        for option, arg in parse_short_options(tok, *self._short_kinds()):
+            opt = '-' + option
+            binding = self.handlers[opt]
+            if self._nullary(binding):                  # no oparg: a flag
                 binding.invoke(self, spelling=opt)
-                i += 1
-            elif chars[i + 1:] and _takes_many(binding):  # -gp: an attached value,
-                raise UsageError(                         # but this option needs
-                    f"option {opt!r} takes several values; it must be last in "  # several -- it must
-                    f"a bundle with its values as separate words")         # be last, words apart
-            else:                                       # takes a value: rest is it
-                binding.invoke(self, chars[i + 1:] or None, opt)
-                return
+            else:                                       # arg attached, or None:
+                binding.invoke(self, arg, opt)          # oparg(s) are next words
 
     @staticmethod
     def _nullary(binding):

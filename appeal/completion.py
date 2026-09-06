@@ -10,8 +10,9 @@
 
 import os
 import sys
+from .backend import parse_short_options
 from .frontend import all_options, help_option_strings
-from . import AppealConfigurationError
+from . import AppealConfigurationError, UsageError
 from .frontend import Terminal
 
 
@@ -216,6 +217,20 @@ def _completion_scan(options, words, maximum=None, boundary=None,
     operands = 0
     pending = None
     force_positional = False
+    # the short-option chars by arity, for parse_short_options: no
+    # opargs (these bundle), exactly one, and two or more
+    flag = set()
+    oparg = set()
+    opargs = set()
+    for string, (key, nargs, repeatable) in options.items():
+        if len(string) != 2:
+            continue
+        if not nargs:
+            flag.add(string[1])
+        elif nargs == 1:
+            oparg.add(string[1])
+        else:
+            opargs.add(string[1])
     for index, word in enumerate(words):
         if pending:
             key, nargs, remaining = pending
@@ -245,30 +260,22 @@ def _completion_scan(options, words, maximum=None, boundary=None,
             if nargs and '=' not in word:
                 pending = (key, nargs, nargs)
             continue
-        # a short bundle: walk it char by char, exactly as the parser
-        # does (getopt-style).  A flag keeps the bundle going; a
-        # value-taking option ends it, binding the REST of the token as
-        # its attached value (`-n5`, `-n=5`)--or, if nothing's attached
-        # (`-n` last), its value comes from the following word(s), so a
-        # `pending` is opened.  (The old `word[:2]` saw only the first
-        # option and mistook an attached value for a next-word one.)
-        chars = word[1:]
-        i = 0
-        while i < len(chars):
-            name = '-' + chars[i]
-            entry = options.get(name)
-            if entry is None:
-                break                           # unknown short: forgiving stop
-            key, nargs, repeatable = entry
+        # a short bundle: carve it with the parser's own
+        # parse_short_options, so completion can never disagree with
+        # the parse.  A bad token (unknown char, misplaced multi-value
+        # option) gets no opinion at all--completion never raises.
+        try:
+            carved = list(parse_short_options(word, flag, oparg, opargs))
+        except UsageError:
+            continue
+        for option, arg in carved:
+            name = '-' + option
+            key, nargs, repeatable = options[name]
             if not repeatable:
                 used.add(name)
                 used.add(key)
-            if not nargs:                       # a flag: keep bundling
-                i += 1
-                continue
-            if not chars[i + 1:]:               # value option, nothing attached:
-                pending = (key, nargs, nargs)   # the value is the next word(s)
-            break                               # attached or pending: token done
+            if nargs and arg is None:           # nothing attached: the
+                pending = (key, nargs, nargs)   # value is the next word(s)
     return used, operands, pending, force_positional, None
 
 
