@@ -14,8 +14,10 @@
 ## (markdown_defaults supplies Unicode; big also ships
 ## markdown_ascii_glyphs).
 ##
-##     python3 tools/theme_lab.py            # all themes
-##     python3 tools/theme_lab.py dark_cool  # just one
+##     python3 tools/theme_lab.py            # palettes, then all themes
+##     python3 tools/theme_lab.py dark_cool  # just one theme
+##     python3 tools/theme_lab.py 16 256     # your terminal's raw
+##                                           # ANSI 16 / 256 colors
 ##
 ## The vocabulary (ruled 2026-08-06):
 ##   roles     program, command, option, argument, oparg
@@ -356,6 +358,56 @@ def render_sample(sheet, margin):
     return buf.getvalue()
 
 
+def print_ansi_16():
+    "The ANSI 16, straight SGR--what YOUR terminal makes of them."
+    print('The ANSI 16.  Terminals remap these to their own scheme;')
+    print('foreground code, bright foreground, then the backgrounds.')
+    print()
+    names = ('black', 'red', 'green', 'yellow',
+             'blue', 'magenta', 'cyan', 'white')
+    for i, name in enumerate(names):
+        normal, bright = 30 + i, 90 + i
+        print(f'  \x1b[{normal}m{normal}  {name:<8}sample\x1b[39m'
+              f'   \x1b[{bright}m{bright}  bright_{name:<8}sample\x1b[39m'
+              f'   \x1b[4{i}m  {40 + i}  \x1b[49m'
+              f' \x1b[10{i}m  {100 + i}  \x1b[49m')
+    print()
+
+
+def _cell_ink(n):
+    "black or white ink, whichever survives on 256-color cell n."
+    if n < 16:
+        luma = 1 if n in (7, 10, 11, 14, 15) else 0
+    elif n < 232:                       # the 6x6x6 cube
+        cube = n - 16
+        r, g, b = cube // 36, (cube // 6) % 6, cube % 6
+        luma = 1 if (3 * r + 6 * g + b) >= 24 else 0
+    else:                               # the grayscale ramp
+        luma = 1 if n >= 244 else 0
+    return 30 if luma else 97           # black ink on light, white on dark
+
+
+def print_ansi_256():
+    "The ANSI 256, as painted background cells."
+    print('The ANSI 256: 0-15 the sixteen, 16-231 the 6x6x6 color')
+    print('cube, 232-255 the grayscale ramp.')
+    print()
+    for start in range(0, 256, 16):
+        row = []
+        for n in range(start, start + 16):
+            row.append(f'\x1b[{_cell_ink(n)}m\x1b[48;5;{n}m {n:3} '
+                       f'\x1b[49m\x1b[39m')
+        print(''.join(row))
+    print()
+
+
+# the non-theme commands: raw palette swatches
+SWATCHES = {
+    '16': print_ansi_16,
+    '256': print_ansi_256,
+}
+
+
 def main(argv):
     from big.markdown import markdown_defaults
     from big.stylesheet import transforms
@@ -367,11 +419,14 @@ def main(argv):
     import shutil
     margin = shutil.get_terminal_size((79, 24)).columns
 
-    picks = argv or list(PAIRINGS)
+    picks = argv or list(SWATCHES) + list(PAIRINGS)
     for name in picks:
+        if name in SWATCHES:
+            SWATCHES[name]()
+            continue
         if name not in PAIRINGS:
-            sys.exit(f"unknown theme {name!r}; "
-                     f"the menu is {', '.join(PAIRINGS)}")
+            menu = ', '.join(list(SWATCHES) + list(PAIRINGS))
+            sys.exit(f"unknown theme {name!r}; the menu is {menu}")
         theme_dict, palette = PAIRINGS[name]
         # the composition, per the 2026-08-06 rulings:
         # markdown_defaults beneath (safety net), the transforms
