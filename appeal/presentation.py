@@ -420,7 +420,7 @@ appeal_markdown_defaults = {
     'heading_note':      ('T', '⦃blue⦙T⦄'),
     'heading_tip':       ('T', '⦃green⦙T⦄'),
     'heading_important': ('T', '⦃purple⦙T⦄'),
-    'heading_warning':   ('T', '⦃orange⦙T⦄'),
+    'heading_warning':   ('T', '⦃dark_yellow⦙T⦄'),
     'heading_caution':   ('T', '⦃red⦙T⦄'),
 }
 
@@ -455,7 +455,7 @@ uncolored_theme = {
     'important':         ('T', '⦃purple⦙T⦄'),
     'heading_important': ('T', '⦃bold⦙⦃purple⦙T⦄⦄'),
     'warning':           ('T', '⦃orange⦙T⦄'),
-    'heading_warning':   ('T', '⦃bold⦙⦃orange⦙T⦄⦄'),
+    'heading_warning':   ('T', '⦃bold⦙⦃dark_yellow⦙T⦄⦄'),
     'caution':           ('T', '⦃red⦙T⦄'),
     'heading_caution':   ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
     # the roles, attribute-only defaults

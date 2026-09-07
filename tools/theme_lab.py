@@ -104,7 +104,7 @@ appeal_markdown_defaults = {
     'important':         ('T', '⦃purple⦙T⦄'),
     'heading_important': ('T', '⦃bold⦙⦃purple⦙T⦄⦄'),
     'warning':           ('T', '⦃orange⦙T⦄'),
-    'heading_warning':   ('T', '⦃bold⦙⦃orange⦙T⦄⦄'),
+    'heading_warning':   ('T', '⦃bold⦙⦃dark_yellow⦙T⦄⦄'),
     'caution':           ('T', '⦃red⦙T⦄'),
     'heading_caution':   ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
     # the roles, attribute-only defaults
