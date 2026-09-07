@@ -7540,8 +7540,12 @@ def test_theme():
                      'oparg', 'summary', 'error', 'heading_color',
                      'code', 'term'):
             assert role in theme, role
-    # plain strips; appeal colors (ruled: code is green)
-    assert plain_theme['option'] == ('T', 'T')
+    # plain and uncolored are ONE structure over two palettes (ruled
+    # 2026-09-07: stripping is the PALETTE's job, and flattening the
+    # theme deleted the heading line art); appeal colors (ruled:
+    # code is green)
+    assert plain_theme == uncolored_theme
+    assert plain_theme is not uncolored_theme       # a red-pen copy
     assert 'cyan' in appeal_theme['option'][1]
     assert 'green' in appeal_theme['code'][1]
 
