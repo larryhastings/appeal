@@ -1917,6 +1917,76 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_converter_type_overrides():
+    # branch audit: validate(..., type=) and validate_range(..., type=)
+    # are the documented explicit-type overrides, and nothing ever
+    # passed them--inference ran every time
+    conv = appeal.validate(1, 2, 3, type=int)
+    assert conv('2') == 2
+    try:
+        conv('9')
+        assert False, 'expected ValueError'
+    except ValueError:
+        pass
+    rng = appeal.validate_range(0, 10, type=float)
+    assert rng('2.5') == 2.5
+
+
+def test_completion_repeatable_short_stays_offered():
+    # branch audit: a repeatable option (a counter) isn't used up by
+    # one appearance--completion must keep offering it
+    app = Appeal(name='rep')
+    @app.command()
+    def go(x, *, verbose: appeal.counter() = 0, quiet=False):
+        return (x, verbose)
+    got = app.complete(['go', '-v'], '-')
+    assert '-v' in got and '--verbose' in got, got
+    # while the one-shot flag next to it is used up as usual
+    got = app.complete(['go', '-q'], '-')
+    assert '-q' not in got and '--quiet' not in got, got
+
+
+def test_read_sequence_kwargs_option_stays_out():
+    # branch audit: a nested group whose plan carries a **kwargs-
+    # delivered @app.option, read from a SEQUENCE--a sequence can't
+    # deliver options at all, and the sink must stay empty rather
+    # than gaining an invented default.  (a top-level plan with
+    # options is refused by read_iterable outright; only a CHILD
+    # reaches _read_sequence wearing one.  The mapping read has the
+    # same guard, and a test.)
+    from appeal.frontend import Decorations, build_plan
+    def kg(a, **kws):
+        return (a, kws)
+    d = Decorations()
+    d.add_option(kg, 'zesty', ('--zesty',), annotation=str, default=None)
+    def h(x, s: kg = None):
+        return (x, s)
+    plan = build_plan(h, decorations=d)
+    got = appeal.read_mapping(plan, {'x': 'X', 's': ['a']})
+    assert got == ('X', ('a', {})), got
+
+
+def test_read_fold_mapping_occurrence_lenient():
+    # branch audit: a fold (Option subclass) read from mapping-shaped
+    # occurrences under strict=False--lenient reading drops the
+    # unrecognized key instead of raising
+    class acc(appeal.MultiOption):
+        def init(self, default):
+            self.values = []
+        def option(self, a: int, b: int = 0):
+            self.values.append((a, b))
+        def __call__(self):
+            return self.values
+    data = [{'a': '1', 'b': '2', 'zzz': 'not a parameter'}]
+    app = Appeal(name='fold')
+    assert app.read_mapping(acc, data, strict=False) == [(1, 2)]
+    try:
+        app.read_mapping(acc, data)
+        assert False, 'expected AppealDataError (strict default)'
+    except appeal.AppealDataError as e:
+        assert 'zzz' in str(e)
+
+
 def test_no_debris_ships():
     # flit builds the sdist from git's tracked-file list minus
     # pyproject's [tool.flit.sdist] excludes--so the published package

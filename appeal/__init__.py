@@ -1973,23 +1973,24 @@ class Appeal:
             f"schema(): unknown format {format!r}; the formats are "
             f"'appeal' and 'mcp'")
 
-    def read_mapping(self, callable, mapping):
+    def read_mapping(self, callable, mapping, *, strict=True):
         "v1's API: call `callable` with values pulled from `mapping`."
         from .load import read_mapping
         self._finalize()
-        return read_mapping(callable, mapping)
+        return read_mapping(callable, mapping, strict=strict)
 
-    def read_iterable(self, callable, iterable):
+    def read_iterable(self, callable, iterable, *, strict=True):
         "v1's API: call `callable` once per row; returns the results."
         from .load import read_iterable
         self._finalize()
-        return read_iterable(callable, iterable)
+        return read_iterable(callable, iterable, strict=strict)
 
-    def read_csv(self, callable, reader, *, first_row_map=None):
+    def read_csv(self, callable, reader, *, first_row_map=None, strict=True):
         "v1's API: read_iterable for csv.reader input (see read_csv)."
         from .load import read_csv
         self._finalize()
-        return read_csv(callable, reader, first_row_map=first_row_map)
+        return read_csv(callable, reader, first_row_map=first_row_map,
+                        strict=strict)
 
     def unnested(self):
         """
