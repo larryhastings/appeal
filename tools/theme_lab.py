@@ -126,11 +126,11 @@ def theme(**overrides):
 ## the seven themes.  Edit freely--this is the whole point.
 ##
 
-# plain: every span strips.  (Built mechanically: same keys, all
-# do-nothing.)
-plain_theme = {name: ('T', 'T') for name in appeal_markdown_defaults}
-plain_theme['codeblock'] = ('T', '⦃code⦙T⦄')
-plain_theme['oparg'] = ('T', '⦃argument⦙T⦄')
+# plain and uncolored are ONE structure over two palettes: the theme
+# emits the document (heading rules are TEXT), and the palette decides
+# what renders--uncolored_palette expresses bold/italic/underline but
+# no colors, plain_palette expresses nothing.
+plain_theme = dict(appeal_markdown_defaults)
 
 # uncolored: attributes, no color--the defaults, verbatim.
 uncolored_theme = dict(appeal_markdown_defaults)

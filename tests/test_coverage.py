@@ -1917,6 +1917,29 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_plain_and_uncolored_are_one_structure():
+    # plain and uncolored are ONE theme--the structural base--over two
+    # palettes (Larry's ruling, 2026-09-07).  The heading's line art
+    # is TEXT the theme emits, so both keep it; the palettes decide
+    # what else renders: uncolored expresses bold/italic/underline
+    # (no colors), plain expresses nothing at all.
+    from appeal.presentation import (plain_theme, uncolored_theme,
+                                     render_baked_help, _StyleSheet,
+                                     markdown_defaults, transforms)
+    from big.stylesheet import plain_palette, uncolored_palette
+    pieces = (('markdown', ('⦃heading2⦙Options⦄',)),)
+    def render(theme, palette):
+        sheet = (markdown_defaults | transforms | palette
+                 | _StyleSheet(theme))
+        return render_baked_help(pieces, margin=40, stylesheet=sheet)
+    plain = render(plain_theme, plain_palette)
+    assert plain == 'Options\n-------\n', repr(plain)
+    uncolored = render(uncolored_theme, uncolored_palette)
+    assert '-------' in uncolored              # same line art
+    assert '\x1b[1m' in uncolored              # bold renders...
+    assert '\x1b[36m' not in uncolored         # ...cyan doesn't
+
+
 def test_command_placeholder_wears_command_role():
     # the set usage line's <COMMAND> placeholder keeps the argument
     # DECORATION (a hole to fill) but wears the command ROLE, cross-

@@ -474,7 +474,12 @@ uncolored_theme = {
 }
 
 
-plain_theme = {name: ('T', 'T') for name in uncolored_theme}
+# plain and uncolored are ONE structure over two palettes: the theme
+# emits the document (heading rules are TEXT), and the palette decides
+# what renders--uncolored_palette expresses bold/italic/underline but
+# no colors, plain_palette expresses nothing.  A copy, so a red pen
+# on one can't silently edit the other.
+plain_theme = dict(uncolored_theme)
 
 
 def _theme(**overrides):
@@ -925,11 +930,6 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
     flush()
     return tuple(pieces)
 
-
-# plain: every span strips to its text (these two spans carry a
-# structural role even uncolored)
-plain_theme['codeblock'] = ('T', '⦃code⦙T⦄')
-plain_theme['oparg'] = ('T', '⦃argument⦙T⦄')
 
 
 import inspect as _inspect
