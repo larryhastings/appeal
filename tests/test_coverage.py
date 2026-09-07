@@ -1917,6 +1917,144 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_dispatch_more_shapes():
+    # branch audit: __init__'s one-way ifs, each pinned behaviorally.
+    # -V and --version both already belong to the program's own
+    # options: the version machinery mints nothing (no clobber)
+    def vg(*, vflag=False, version_word=False):
+        return (vflag, version_word)
+    appv = Appeal(name='vt', version='9.9')
+    appv.option('vflag', '-V')(vg)
+    appv.option('version_word', '--version')(vg)
+    appv.global_command()(vg)
+    assert appv.process(['-V']).result == (True, False)
+    # config replay: the synth carries no operands, so the required
+    # positional's "missing argument" is the benign, swallowed case
+    appc = Appeal(name='c7')
+    @appc.global_command(config={'verbose': True})
+    def top(src, *, verbose=False):
+        return (src, verbose)
+    assert appc.process(['hello']).result == ('hello', True)
+    # documentation() skips the doc body of an undocumented command
+    # (the heading still appears)
+    appd = Appeal(name='doc6')
+    @appd.command()
+    def bare(x):
+        return x
+    @appd.command()
+    def documented(y):
+        "Does a thing."
+        return y
+    md = appd.documentation('gfm')
+    assert 'bare' in md and 'Does a thing.' in md
+    # a class registered BEFORE its member: the ordering wand has
+    # nothing to move
+    appo = Appeal(name='ord')
+    class Db:
+        def __init__(self, label):
+            self.label = label
+        def wipe(self):
+            return ('wipe', self.label)
+    appo.command(name='db')(Db)
+    appo.subcommand('db')(Db.wipe)
+    assert appo.process(['db', 'x', 'wipe']).result == ('wipe', 'x')
+    # a command() tear-off never applied: the node exists without a
+    # callable, and the warm-up build simply skips it
+    appt = Appeal(name='t7')
+    @appt.command()
+    def real(x):
+        return x
+    unused = appt.command('ghost')
+    assert appt.process(['real', 'a']).result == 'a'
+    # the global-plan cache: the era path reused on a second run
+    appg = Appeal(name='gc')
+    @appg.global_command()
+    def gtop(*, trace=False):
+        return trace
+    @appg.command()
+    def run():
+        return 'ran'
+    assert appg.process(['run']).result == 'ran'
+    assert appg.process(['--trace', 'run']).result == 'ran'
+
+
+def test_precommand_wand_no_move_needed():
+    # branch audit: a member precommand registered AFTER its class
+    # (post-hoc, not from inside the class body)--registration order
+    # is already right, the wand has nothing to move
+    out = []
+    app = Appeal(name='wand')
+    @app.precommand()
+    class Aux:
+        def __init__(self, *, v=False):
+            out.append(('init', v))
+            self.v = v
+        @app.command()
+        def go(self):
+            out.append(('go',))
+    def later(self):
+        out.append(('later', self.v))
+    Aux.later = later
+    app.precommand()(Aux.later)
+    app.process(['-v', 'go'])
+    assert out == [('init', True), ('later', True), ('go',)], out
+
+
+def test_global_plan_install_loser_deterministic():
+    # branch audit: the losing side of the global-plan first-wins
+    # install.  The threaded race test can't be counted on to lose
+    # HERE specifically, so simulate it: "another thread" installs
+    # while this one is still building, and the build in flight must
+    # yield to the winner
+    app = Appeal(name='loser')
+    @app.global_command()
+    def g(*, t=False):
+        return t
+    app._finalize()
+    winner = {}
+    orig_build = app._build
+    def build_then_lose(*args, **kwargs):
+        plan = orig_build(*args, **kwargs)
+        if not winner:
+            app._build = orig_build             # intercept only once
+            winner['plan'] = app.global_plan    # the "other thread" installs
+        return plan
+    app._build = build_then_lose
+    assert app.global_plan is winner['plan']
+
+
+def test_trailer_contract_and_repl_data_errors():
+    # branch audit: a trailer may return None ("nothing to render for
+    # this stream"--the usage(file) -> str|None contract); both
+    # catchers print the message and skip the trailer quietly
+    app = Appeal(name='nt')
+    @app.command()
+    def go():
+        raise appeal.AppealDataError('dry error', usage=lambda file: None)
+    try:
+        app.main(['go'])
+        assert False, 'main() must exit'
+    except SystemExit as e:
+        assert e.code == 2
+    app2 = Appeal(name='nt2')
+    @app2.command()
+    def boom():
+        raise appeal.AppealDataError('repl error', usage=lambda file: None)
+    @app2.command()
+    def plain():
+        raise appeal.AppealDataError('plain error')     # no usage at all
+    out = io.StringIO()
+    real_stdin = sys.stdin
+    sys.stdin = io.StringIO('boom\nplain\n')
+    try:
+        with contextlib.redirect_stdout(out):
+            app2.repl()
+    finally:
+        sys.stdin = real_stdin
+    text = out.getvalue()
+    assert 'repl error' in text and 'plain error' in text
+
+
 def test_frontend_more_shapes():
     # branch audit: five frontend one-way ifs
     from appeal import build_plan

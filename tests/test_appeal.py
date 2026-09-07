@@ -6990,11 +6990,11 @@ def test_precommand_config_strict_knob():
         return (a, b)
     plan = build_plan(scoped_top)
     try:
-        _config_vet(plan, frozenset(), {'flag': True})
+        _config_vet(plan, frozenset(), {'flag': True}, None)
         assert False, 'expected refusal'
     except _appeal.AppealConfigurationError as e:
         assert 'scoped' in str(e), e
-    assert _config_vet(plan, frozenset(), {'flag': True},
+    assert _config_vet(plan, frozenset(), {'flag': True}, None,
                        strict=False) == {}
 
     # strict= without config= is meaningless, refused by name

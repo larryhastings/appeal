@@ -524,7 +524,7 @@ def _overview_trailer(node):
     return trailer
 
 
-def _config_vet(plan, table_words, config, command_plan_for=None,
+def _config_vet(plan, table_words, config, command_plan_for,
                 strict=True):
     """
     Config layering's stage 1 (strict keys--"either this is ours,
@@ -583,23 +583,22 @@ def _config_vet(plan, table_words, config, command_plan_for=None,
                 f"config: {key!r} is a positional argument; config "
                 f"supplies only options")
         # say where the key actually lives, if anywhere
-        if command_plan_for is not None:
-            for word in table_words:
-                try:
-                    p = command_plan_for(word)
-                except Exception:
-                    continue
-                if any(s.name == key for s in p.slots):
-                    raise AppealDataError(
-                        f"config: {key!r} is a positional argument "
-                        f"of {word!r}; config supplies only "
-                        f"global-command options")
-                if any(o.name == key
-                       for owner, o in all_options(p)):
-                    raise AppealDataError(
-                        f"config: {key!r} is an option of {word!r}; "
-                        f"config supplies only global-command "
-                        f"options (no per-command sections)")
+        for word in table_words:
+            try:
+                p = command_plan_for(word)
+            except Exception:
+                continue
+            if any(s.name == key for s in p.slots):
+                raise AppealDataError(
+                    f"config: {key!r} is a positional argument "
+                    f"of {word!r}; config supplies only "
+                    f"global-command options")
+            if any(o.name == key
+                   for owner, o in all_options(p)):
+                raise AppealDataError(
+                    f"config: {key!r} is an option of {word!r}; "
+                    f"config supplies only global-command "
+                    f"options (no per-command sections)")
         raise AppealDataError(
             f"config: {key!r} isn't an option of this program")
     return vetted
@@ -971,9 +970,11 @@ class Appeal:
             self._decorations = parent.root._decorations
             self._method_owner = parent._method_owner
             self._init_caches()
-            if name is not None:
-                parent._children[name] = self
-                parent._invalidate()
+            # parent= is internal plumbing (_child is its one caller),
+            # and a child always mounts under its command word
+            assert name is not None
+            parent._children[name] = self
+            parent._invalidate()
             return
         # whether Appeal supplies automatic help (v1's knob): the
         # per-command -h/--help option AND, for a program with
@@ -2479,8 +2480,9 @@ class Appeal:
           except AppealDataError as e:
             # an era-level error (a bad program-wide option, a config value):
             # attach the program usage line unless a deeper site already spoke
-            # (decision B, 2026-09-06)
-            if e.usage is None:
+            # (decision B, 2026-09-06).  No deeper site precedes an ERA error
+            # today--the guard keeps decision B's shape, belt-and-braces
+            if e.usage is None:     # pragma: no branch
                 e.usage = _line_trailer(self.stylesheet,
                                         self._program_usage_markup())
             raise
@@ -2776,7 +2778,10 @@ class Appeal:
                 result = self.process(words).result
             except AppealDataError as e:
                 print(f"{sheet.render(style('error', 'error:'))} {e}")
-                if e.usage:
+                # the dispatch boundary attaches a trailer to every
+                # escaping data error (restored 2026-09-06), so this
+                # is the str|None contract check, belt-and-braces
+                if e.usage:                         # pragma: no branch
                     text = e.usage(_sys.stdout)     # the REPL prints to stdout
                     if text:
                         print(text)
@@ -2827,10 +2832,12 @@ from .backend import (
     )
 
 
-if _sys.version_info < (3, 7):
+if _sys.version_info < (3, 7):      # pragma: no cover--coverage runs on
     # module-level __getattr__ (PEP 562) is 3.7+; on 3.6 it's never called,
     # so `from appeal import build_plan` (and the other lazy re-exports) would
     # fail.  Bind them eagerly here instead--at the cost of importing their
     # modules now, which on this legacy interpreter is a fair trade.
+    # (The pragma: these lines run ONLY on 3.6, and coverage runs on modern
+    # Python; the 3.6 test runs exercise them for real.)
     for _name in _LAZY_REEXPORTS:
         globals()[_name] = __getattr__(_name)

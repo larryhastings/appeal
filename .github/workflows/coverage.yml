@@ -40,8 +40,8 @@ jobs:
       with:
         name: appeal_htmlcov
         path: htmlcov/
-    # the line in the sand: today's true branch-mode score, so we can't
-    # backslide.  Raise to 100 when the 36-partial-branch audit lands.
-    - name: Fail if branch coverage regresses below 99%
+    # Appeal ships at 100% branch coverage (the 2026-09-07 audit):
+    # every if goes both ways under test, or wears a reasoned pragma
+    - name: Fail unless branch coverage is 100%
       run: |
-        coverage report -i --fail-under=99
+        coverage report -i --fail-under=100
