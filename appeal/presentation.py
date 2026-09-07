@@ -496,7 +496,7 @@ appeal_theme = _theme(
     summary   = ('T', '⦃bold⦙T⦄'),
     error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
     code      = ('T', '⦃green⦙T⦄'),          # ruled: code is green
-    marker    = ('T', '⦃yellow⦙T⦄'),
+    marker    = ('T', '⦃dark_purple⦙T⦄'),
     link      = ('T', '⦃underline⦙⦃blue⦙T⦄⦄'),
     heading_color = ('T', '⦃cyan⦙T⦄'),
 )
