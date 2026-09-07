@@ -232,11 +232,12 @@ PAIRINGS = {
 ## style -> layout), like a docstring--edit the Markdown freely.
 ##
 ## ROLE_PIECES simulates the OUTPUT of Appeal's flense (the
-## usage line, the Arguments/Options/Commands tables, the error
-## line)--hand-baked because the flense doesn't emit role spans
-## yet (that's the theme lift, waiting on these very colors),
-## and role markup can never ride a docstring anyway: the
-## pipeline ESCAPES delimiters found in source text, correctly.
+## usage lines, the Arguments/Options/Commands tables, the error
+## line).  The real pipeline emits these role spans now; the lab
+## keeps a hand-baked copy so one page showcases EVERY role and
+## stays freely editable.  (Role markup can never ride a
+## docstring anyway: the pipeline ESCAPES delimiters found in
+## source text, correctly.)
 ## The vocabulary is the layout grammar the flense will speak:
 ## role-styled words, ('indent', first, rest), and the
 ## definition-list markers--so the tables go through the real
@@ -323,6 +324,15 @@ ROLE_PIECES = (
         '[⦃option⦙-p⦄|⦃option⦙--port⦄ ⦃oparg⦙<PORT>⦄]',
         '⦃argument⦙<HOST>⦄',
     )),
+    # the SET flavor's usage line: the <COMMAND> placeholder keeps
+    # the argument DECORATION (a hole to fill) but wears the command
+    # ROLE, cross-referencing the listing's words below (ruled
+    # 2026-09-07)
+    ('markdown', (
+        ('indent', 'usage: ', '       '),
+        '⦃program⦙serve⦄',
+        '⦃command⦙<COMMAND>⦄',
+    )),
     ('markdown', _mark('summary',
         'Start the server, and serve until interrupted.')),
     ('markdown', (
@@ -360,7 +370,7 @@ def main(argv):
     from big.markdown import (layout_document, parse,
                               split_styles_document, style_document)
     from big.stylesheet import transforms
-    from appeal.runtime import render_baked_help
+    from appeal.presentation import render_baked_help
 
     document = split_styles_document(style_document(
         parse(SAMPLE_MARKDOWN)))
