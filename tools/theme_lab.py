@@ -230,8 +230,6 @@ PAIRINGS = {
 ## them freely to exercise more Markdown.
 ##
 
-WIDTH = 72
-
 DEMO_DOC = """\
 Start the server, and serve until interrupted.
 
@@ -295,7 +293,7 @@ share it and the monster falls back man-style:
 """
 
 
-def build_demo(stylesheet, errors):
+def build_demo(stylesheet, errors, margin):
     """
     The demo program.  Its overview page carries DEMO_DOC (the
     Markdown zoo) plus the set usage line and the Commands table;
@@ -304,7 +302,7 @@ def build_demo(stylesheet, errors):
     the error line and its usage trailer.
     """
     import appeal
-    app = appeal.Appeal(name='serve', version='1.0', margin=WIDTH,
+    app = appeal.Appeal(name='serve', version='1.0', margin=margin,
                         stylesheet=stylesheet, errors=errors)
 
     def top(*, verbose=False):
@@ -339,12 +337,12 @@ def build_demo(stylesheet, errors):
     return app
 
 
-def render_sample(sheet):
+def render_sample(sheet, margin):
     "The demo app's real output, styled by `sheet`, as one string."
     import contextlib
     import io
     buf = io.StringIO()
-    app = build_demo(sheet, buf)
+    app = build_demo(sheet, buf, margin)
     with contextlib.redirect_stdout(buf):
         app.process(['help'])
         print()
@@ -360,6 +358,13 @@ def render_sample(sheet):
 def main(argv):
     from big.markdown import markdown_defaults
     from big.stylesheet import transforms
+
+    # the demo's output is captured into a buffer before printing,
+    # and a buffer isn't a tty--so Appeal's own width detection can't
+    # see the terminal.  Measure it HERE, in the process that has it,
+    # and hand the width to the app.
+    import shutil
+    margin = shutil.get_terminal_size((79, 24)).columns
 
     picks = argv or list(PAIRINGS)
     for name in picks:
@@ -377,7 +382,7 @@ def main(argv):
         print(f'==  {name}_theme  (over {_palette_name(palette)})')
         print(bar)
         print()
-        print(render_sample(sheet))
+        print(render_sample(sheet, margin))
 
 
 def _palette_name(palette):
