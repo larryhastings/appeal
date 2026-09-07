@@ -308,21 +308,10 @@ class Slot:
                   so the absorber leaves room for it (filled last, by
                   keyword)
 
-    count_options and suffix_after are the counting automaton's
-    tables, computed by build's analysis pass:
-
-    count_options   the operand counts this slot can consume, sorted
-                    descending (a required terminal: (1,); an optional
-                    nonterminal: its child's valid counts plus 0).
-                    None for a repeat slot (it absorbs).
-    suffix_after    (counts, minimum) completable by the slots after
-                    this one; counts is a frozenset, or None meaning
-                    unbounded (a repeat slot follows).
     """
 
     __slots__ = ('name', 'usage_name', 'child', 'required', 'default',
-                 'repeat', 'trailing', 'count_options', 'suffix_after',
-                 'barrier')
+                 'repeat', 'trailing', 'barrier')
 
     def __init__(self, name, usage_name, child, required, default,
                  repeat=False, trailing=False):
@@ -333,8 +322,6 @@ class Slot:
         self.default = default
         self.repeat = repeat
         self.trailing = trailing
-        self.count_options = None
-        self.suffix_after = None
         self.barrier = False    # a group CERTAIN to consume operands:
                                 # options behind it wait for it (gate rule)
 
@@ -2080,15 +2067,17 @@ def _finalize_options(plan, default_options=default_options,
 
 def _analyze(plan):
     """
-    The counting automaton's tables.
+    The plan's operand-count footprint: minimum, maximum, and
+    valid_counts (trailing operands shift everything by their count).
 
-    Fills in, for every non-trailing slot:
-      * count_options -- the operand counts it can consume, sorted
-        descending (None for a repeat slot);
-      * suffix_after -- (counts, minimum) completable by the slots
-        after it: counts is a frozenset, or None meaning unbounded.
-    And on the plan: minimum, maximum, valid_counts (trailing
-    operands shift everything by their count).
+    valid_counts is the fold of every slot's possible counts--the
+    up-front arity gate, and the set the wrong-count message phrases
+    as English.  It is a SUPERSET of what the greedy left-to-right
+    fill accepts (f(a='A', p: pair='P') folds to {0, 1, 2, 3}, but
+    two operands fill a and starve pair): the fill rule is the
+    engine's, and it never skips a slot--see the grammar's
+    distribution rule.  (The retired completable-distribution
+    automaton kept per-slot tables here; ruled away 2026-08-20.)
     """
     non_trailing = [s for s in plan.slots if not s.trailing]
     n_trailing = sum(1 for s in plan.slots if s.trailing)
@@ -2096,58 +2085,50 @@ def _analyze(plan):
         s.child.tree_trailing for s in non_trailing
         if not isinstance(s.child, Terminal))
 
+    # each slot's possible operand counts, or None for one that
+    # absorbs unboundedly (a repeat slot, or a converter with *args)
+    slot_counts = []
     for slot in non_trailing:
         if slot.repeat:
-            slot.count_options = None
-            continue
-        if isinstance(slot.child, Terminal):
-            counts = (1,) if slot.required else (1, 0)
+            slot_counts.append(None)
+        elif isinstance(slot.child, Terminal):
+            slot_counts.append((1,) if slot.required else (1, 0))
         elif slot.child.valid_counts is None:
-            # an absorbing slot: its converter contains *args, so
-            # it consumes unboundedly--like a repeat slot, it takes
-            # what the slots after it don't need (v1 refused these
-            # shapes; v2's completable distribution reads them)
-            slot.count_options = None
-            continue
+            slot_counts.append(None)
         else:
-            # distribution runs in body space: a child subtree's
-            # trailing arguments come from the end of the whole
-            # command's stream, not from this window
+            # body space: a child subtree's trailing arguments come
+            # from the end of the whole command's stream, not from
+            # this window
             child_counts = set(slot.child.body_valid_counts)
             if not slot.required:
                 child_counts.add(0)
-            counts = tuple(sorted(child_counts, reverse=True))
-        slot.count_options = counts
+            slot_counts.append(tuple(sorted(child_counts, reverse=True)))
 
-    # suffix sets, built right to left
-    suffix = (frozenset({0}), 0)
-    for slot in reversed(non_trailing):
-        slot.suffix_after = suffix
-        counts, minimum = suffix
+    # the fold, right to left: (counts completable by the slots from
+    # here on, or None for unbounded; their minimum)
+    counts, minimum = frozenset({0}), 0
+    for slot, own in zip(reversed(non_trailing), reversed(slot_counts)):
         if slot.repeat:
-            suffix = (None, minimum)
-        elif slot.count_options is None:
+            counts = None
+        elif own is None:
             # absorbing: unbounded above its child's minimum (0 if
             # the slot is skippable)
-            floor = 0 if not slot.required else slot.child.body_minimum
-            suffix = (None, minimum + floor)
+            counts = None
+            minimum += 0 if not slot.required else slot.child.body_minimum
         elif counts is None:
-            suffix = (None, minimum + min(slot.count_options))
+            minimum += min(own)
         else:
-            suffix = (
-                frozenset(c + x for c in slot.count_options for x in counts),
-                minimum + min(slot.count_options),
-                )
+            counts = frozenset(c + x for c in own for x in counts)
+            minimum += min(own)
 
-    whole_counts, whole_minimum = suffix
     # the stream footprint: body plus every trailing argument in
     # the subtree (they all come from the end of the stream)
-    plan.minimum = whole_minimum + plan.tree_trailing
-    if whole_counts is None:
+    plan.minimum = minimum + plan.tree_trailing
+    if counts is None:
         plan.maximum = None
         plan.valid_counts = None
     else:
-        shifted = {c + plan.tree_trailing for c in whole_counts}
+        shifted = {c + plan.tree_trailing for c in counts}
         plan.maximum = max(shifted)
         plan.valid_counts = shifted
     _check_option_reachability(plan)

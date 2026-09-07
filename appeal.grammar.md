@@ -270,15 +270,19 @@ From the linear order of terminal slots, group boundaries are computed:
   gone; use a converter group.)
 * The set of **valid operand counts** falls out of the fold, and the
   wrong-count error message is that set phrased as English.
-* **Distribution rule (the counting decision):** slots fill left to
-  right; at each slot the parser consumes **as many operands as
-  possible**, subject to the total remaining count still being
-  completable by the slots after it (each slot's *suffix-count set*,
-  computed at build time).  This resolves every ambiguity
-  deterministically: in `f(a='A', p: pair='P')` two operands fill
-  `pair` (skipping `a`--taking `a` would strand one operand), while
-  three operands fill both.  An optional group is only entered if it
-  will consume at least one operand.
+* **Distribution rule (fill left to right):** slots fill strictly
+  left to right, each taking what it needs while operands remain.  A
+  slot is never skipped to reach a later one: in `f(a='A', p:
+  pair='P')`, one operand fills `a`; two operands fill `a` and then
+  starve `pair`, which is a usage error (fix the command line, not
+  the rule); three fill both.  There is no lookahead and no
+  completability search--adding an operand never *un-fills* an
+  earlier parameter, so a user can predict every fill by reading
+  the signature.  The one non-greedy move is the trailing
+  reservation above: required operands to the right of an optional
+  are pocketed from the end first, and the front fills greedily
+  from what remains.  (Ruled 2026-08-20, confirmed 2026-09-07;
+  the earlier "leftmost-maximal-completable" design is retired.)
 
 ## Laziness and late binding
 

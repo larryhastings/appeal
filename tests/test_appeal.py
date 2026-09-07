@@ -4194,11 +4194,10 @@ def test_double_dash_state_never_leaks():
 
 def test_plan_recursion():
     plan = build_plan(draw)
-    named = {s.name: s for s in plan.slots}
-    # where: required nonterminal, consumes exactly 4
-    assert named['where'].count_options == (4,)
-    # brush: optional nonterminal, child counts {3, 4}, plus skip
-    assert named['brush'].count_options == (4, 3, 0)
+    # where: required nonterminal, exactly 4; brush: optional
+    # nonterminal, {3, 4} or skipped--the fold is {5, 8, 9}.  (The
+    # per-slot tables the retired automaton kept are gone; the
+    # plan-level footprint is what the arity gate and schema read.)
     assert plan.valid_counts == {5, 8, 9}
 
 def test_plan_nested_optional_counts():
