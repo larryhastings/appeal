@@ -694,27 +694,24 @@ def _config_apply(conv, table, plan, config, plan_for, strict=True):
         synth += tokens_for(rule, config[name], name)
     if not synth:
         return
-    _Conv = Converter; _Opt = Option
     cfg_conv = type(conv)()
     proc = backend.Engine(synth, cfg_conv, table)
-    proc.enter(cfg_conv)
     try:
-        proc._loop()
+        proc.parse()
     except UsageError as e:
         # config supplies only options (vetted); its synth carries no operands,
         # so once the option tokens are consumed cfg_conv's required POSITIONALS
         # report "missing argument" -- expected and irrelevant.  Any OTHER error
-        # is about a config value (options validate eagerly) -> config: provenance.
+        # is structural -> config: provenance.
         if not str(e).startswith('missing argument'):
             raise AppealDataError(f"config: {e}", getattr(e, 'usage', None),
                                   param=getattr(e, 'param', None)) from None
     try:
-        # render the config VALUES here (not at conv()) so a conversion failure
+        # finish the config VALUES here (not at conv()) so a conversion failure
         # carries 'config:' provenance; then merge the finished values in
+        proc.resolve()
         for k in list(cfg_conv.kwargs):
-            v = cfg_conv.kwargs[k]
-            if isinstance(v, (_Conv, _Opt)):
-                cfg_conv.kwargs[k] = v()
+            cfg_conv.kwargs[k] = backend.finish(cfg_conv.kwargs[k])
     except (UsageError, ValueError, TypeError) as e:
         # provenance: it came from config.  A group value builds LATE here, so
         # its converter's own ValueError/TypeError (a helper saying "bad value")
@@ -758,6 +755,88 @@ def _refuse_orphan_method(callable):
             f"class?")
 
 
+class _Step:
+    """
+    One unit of execution the parcel/scan pass listed: an era (one
+    precommand converter of the merged head era), a command, a set's
+    default command, or the top-level listing.  execute() converts its
+    records in token order and calls the converter; the holder's log
+    and the class-as-app env are threaded through.
+    """
+    __slots__ = ('kind', 'node', 'cls', 'conv', 'proc', 'plan', 'config',
+                 'immediate', 'word', 'callable', 'done')
+    def __init__(self, kind, node, cls, conv, proc, plan=None, config=None,
+                 immediate=False, word=None, callable=None):
+        self.kind = kind
+        self.node = node
+        self.cls = cls
+        self.conv = conv
+        self.proc = proc
+        self.plan = plan
+        self.config = config
+        self.immediate = immediate
+        self.word = word
+        self.callable = callable
+        self.done = False
+
+    def attach_usage(self, e):
+        "A command's error wears its usage line (deepest-command-wins)."
+        if e.usage is None:
+            node = self.node
+            markup = node.plan_for(self.word).usage(
+                f'{node._prog()} {self.word}')
+            e.usage = _line_trailer(node.stylesheet, markup)
+
+    def execute(self, holder, env):
+        assert not self.done
+        self.done = True
+        node = self.node
+        if self.kind == 'listing':
+            node.help()                         # the set listing, to stdout
+            return 1
+        cls, conv = self.cls, self.conv
+        if cls.binds is not None:               # a method/BIC command: self is
+            conv.bound = env.get(cls.binds)     # its class's instance, built by
+                                                # an earlier step
+        if self.kind == 'era':
+            try:
+                if self.config:
+                    # a BOUND config mapping: argv parsed already; merge config
+                    # for options argv didn't set, THEN invoke (argv wins, whole)
+                    _config_apply(conv, node._table(), self.plan,
+                                  self.config[0], node.plan_for, self.config[1])
+                self.proc.resolve()             # the merged era's records
+                result = conv()
+            except AppealDataError as e:
+                if e.usage is None:             # decision B: the program line
+                    e.usage = _line_trailer(node.stylesheet,
+                                            node._program_usage_markup())
+                raise
+            if cls.constructs is not None:      # a global class-as-app: its
+                env[cls.constructs] = result    # methods bind to this
+            if holder is not None:
+                holder.instances.append(        # eras log (None,
+                    (None, result               #  instance-or-None)
+                     if cls.constructs is not None else None))
+            return result
+        if self.kind == 'default':
+            # a set's default command answers a BARE line: no operands
+            # reach it, so no conversion can fail here
+            result = self.proc.execute()
+            holder.instances.append((None, None))
+            return result
+        try:
+            result = self.proc.execute()
+        except AppealDataError as e:
+            self.attach_usage(e)
+            raise
+        if cls.constructs is not None:          # a class command: stash instance
+            env[cls.constructs] = result
+        instance = result if _is_class_command(self.callable) else None
+        holder.instances.append((holder._command_for(self.word), instance))
+        return result
+
+
 class Processor:
     """
     One execution of one command line--the object app.process() hands
@@ -784,23 +863,39 @@ class Processor:
         if not self.app.root._lazy:         # eager: build every command's plan
             self.app._compile_all()         # up front (once) so config errors
                                             # surface at startup, not on invoke
-        # whole-line STRUCTURAL pre-scan first (Larry, 2026-08-23): parcel and
-        # validate the ENTIRE command set -- every command's arity, oparg
-        # counts, unknown options -- running NO converter or command body.  A
-        # structural error anywhere aborts here, before the first command runs.
-        # Then the live pass converts and runs left to right (a later CONVERSION
-        # error doesn't un-run an earlier command; see [[streaming-dispatch]]).
-        # both passes visit the same converters in the same order, so the dry
-        # pass records each built converter class into `built` (traversal order)
-        # and the live pass pops them instead of rebuilding -- no plan or
-        # converter is built twice.  reverse() so a live pop() off the end
-        # yields them front-to-back.
-        built = []
-        self.app._run_node(list(argv), 0, self, top=True,
-                           dry=True, built=built)
-        built.reverse()
-        self.result, _ = self.app._run_node(list(argv), 0, self, top=True,
-                                            built=built)
+        # Larry's three passes (2026-09-07).  PARCEL+SCAN: _run_node walks
+        # the whole line, parceling each era onto its converters and
+        # checking structure--running NO user code--and lists the steps to
+        # execute.  A structural problem anywhere ends the parcel: it's
+        # NOTED, not raised yet.  Then the IMMEDIATE eras that scanned
+        # clean (the metadata precommand: -h/--version) execute--they
+        # outrank a problem later on the line.  Then the problem, if any,
+        # is raised; else EXECUTE the rest left to right, converting each
+        # step's records in token order as it runs (a later conversion
+        # error doesn't un-run an earlier command; [[streaming-dispatch]]).
+        steps = []
+        problem = None
+        try:
+            self.app._run_node(list(argv), 0, steps, top=True)
+        except AppealDataError as e:
+            problem = e
+        env = {}                            # class-as-app instance store
+        self.result = None
+        for step in steps:
+            if not step.immediate:
+                break
+            # (the only immediate era today is Appeal's metadata precommand,
+            # which exits or returns None--a halting immediate era arrives
+            # with the user-facing flag, Step 3)
+            self.result = step.execute(self, env)
+        if problem is not None:
+            raise problem
+        for step in steps:
+            if step.immediate:
+                continue                    # already ran
+            self.result = step.execute(self, env)
+            if _halts(self.result):
+                break
         return self.result
 
     def __repr__(self):
@@ -1112,11 +1207,10 @@ class Appeal:
         # racing first-parses each build and one install wins -- the rest
         # harmlessly discard.  The dict caches are eager-{} so there's no
         # None-then-{} check-and-set to race.
-        self._parse = None        # scalar: the single-command parse fn
-        self._set_entries = {}    # nested set dicts, built per parent node
         self._plans = {}          # {id(node): Plan}, filled per word
-        self._parses = {}         # {id(node): parse fn}, ditto
         self._global_plan = None  # scalar
+        self._era_plans = None    # the head eras' plans, built once (the
+                                  # compiled class lives on each plan)
 
     def _invalidate(self):
         # registration under a node changes every ancestor's
@@ -1125,11 +1219,9 @@ class Appeal:
         # the tree nothing staling
         node = self
         while node is not None:
-            node._parse = None
-            node._set_entries = {}
             node._plans = {}
-            node._parses = {}
             node._global_plan = None
+            node._era_plans = None
             node = node.parent
 
     # ------------------------------------------------------------
@@ -2141,6 +2233,17 @@ class Appeal:
             plan = self._plans.setdefault(id(node), plan)
         return plan
 
+    def _default_plan(self):
+        "This set's default command's Plan, cached with the node's plans."
+        plan = self._plans.get('default')
+        if plan is None:
+            owner = self._method_owner.get(id(self._default))
+            if owner is None:                   # a self-method no class
+                _refuse_orphan_method(self._default)   # claimed: refuse
+            plan = self._build(self._default, method_of=owner)
+            plan = self._plans.setdefault('default', plan)
+        return plan
+
     def plan_for(self, word):
         "The named command's Plan, built at first request."
         self._finalize()
@@ -2157,18 +2260,18 @@ class Appeal:
         main(), instead of lurking until someone invokes that command.  Runs
         once per root.
         """
-        from .backend import build_converters
+        from .backend import converter_for
         root = self.root
         if root._compiled_all:
             return
         root._compiled_all = True
         root._finalize()
         for plan in root.global_plans():                # the head eras
-            build_converters([plan])
+            converter_for(plan)
         def visit(node):
             for word, child in list(node._children.items()):
                 if child._command_callable() is not None:
-                    build_converters([node._plan_for_node(child, word)])
+                    converter_for(node._plan_for_node(child, word))
                 visit(child)
         visit(root)
 
@@ -2323,6 +2426,8 @@ class Appeal:
         era (Larry, 2026-09-03)--see _merge_era_options.
         """
         self._finalize()
+        if self._era_plans is not None:
+            return self._era_plans
         plans = []
         if self.parent is None:
             pre = self._precommand_plan()
@@ -2333,7 +2438,8 @@ class Appeal:
             if owner is None:                       # a self-method no class
                 _refuse_orphan_method(era)          # claimed: refuse by name
             plans.append(self._build(era, method_of=owner))
-        return _merge_era_options(plans)
+        self._era_plans = _merge_era_options(plans)
+        return self._era_plans
 
     def _ordered_precommands(self):
         """
@@ -2386,30 +2492,21 @@ class Appeal:
         processor(args)
         return processor
 
-    def _run_node(self, argv, pos, holder, top, env=None,
-                  dry=False, built=None, inherited=None):
-        "Dispatch one set node's eras + command words; recurse for subcommands."
-        if env is None:
-            env = {}                                # class-as-app instance store
+    def _run_node(self, argv, pos, steps, top, inherited=False):
+        """
+        Parcel and scan one set node's eras + command words, appending
+        the steps to execute; recurse for subcommands.  Runs no user
+        code: converters are instantiated (Appeal's classes) and tokens
+        are parceled onto them as records.  Returns (dispatched, pos):
+        whether a command word of THIS node was parceled, and where the
+        node's tokens end.  A structural error raises (the caller notes
+        it: pass 2 raises it after the immediate eras run).
+        """
         self._finalize()
         table = self._table()
         era_plans = self.global_plans()             # carries the global as a head era
-        # laziness is per command (build_converters compiles independently): the
-        # head eras always run, so build them now; each command word builds ITS
-        # OWN converter only when dispatched -- a broken sibling costs nothing
-        # until it's used.  The dry pass builds; the live pass pops what the dry
-        # pass built (same converters, same order).
-        if dry:
-            era_classes = build_converters(era_plans) if era_plans else {}
-            precommands = [era_classes[_converter_key(p)] for p in era_plans]
-            built.extend(precommands)
-        else:
-            precommands = [built.pop() for _ in era_plans]
+        precommands = [converter_for(p) for p in era_plans]
 
-        # a parent's own body already produced a result; if this node runs
-        # nothing (the line stopped at the parent), keep it -- result is "the
-        # last command that ran" (Larry, 2026-08-24), not None.
-        result = inherited
         if precommands:
           try:
             # ONE MERGED ERA (Larry, 2026-09-03): every precommand's options
@@ -2418,73 +2515,45 @@ class Appeal:
             # string (string ownership settled at build by _merge_era_options).
             # Recognition merges; INVOCATION stays front-to-back in
             # registration order, each converter fed the values the shared
-            # parse bound to it.  Positional appetite fills left-to-right
-            # across the seams--the ordinary law, applied to one long era.
+            # parse bound to it.
             convs = [cls() for cls in precommands]
-            proc = backend.Engine(argv[pos:], convs[0], table, dry=dry)
+            proc = backend.Engine(argv[pos:], convs[0], table)
             for conv in convs:
                 proc.enter(conv)
+            era_steps = []
+            for cls, era_plan, conv in zip(precommands, era_plans, convs):
+                bound = self._precommand_config.get(id(era_plan.callable))
+                era_steps.append(_Step(
+                    'era', self, cls, conv, proc, plan=era_plan, config=bound,
+                    immediate=getattr(era_plan.callable, 'precommand', False)))
             try:
                 proc._loop()
             except UsageError:
-                # a sibling precommand's structural shortfall (a bare app's
-                # required operands, say) must not outrank -h/--version:
-                # options are recognized anywhere, so a requested help is
-                # already bound--let the metadata precommand exit first,
-                # then let the error stand
-                if dry:
-                    for era_plan, conv in zip(era_plans, convs):
-                        if getattr(era_plan.callable, 'precommand', False):
-                            conv()
+                # INTERIM (retired by the era flags, Step 3): a sibling
+                # precommand's structural shortfall (a bare app's required
+                # operands, say) must not outrank -h/--version: options are
+                # recognized anywhere, so a requested help is already bound--
+                # let the metadata precommand run first, then the error stands
+                for step in era_steps:
+                    if step.immediate:
+                        step.execute(None, {})
                 raise
             pos += proc.consumed                    # the whole era's tokens
-            if dry:
-                # pre-scan: structural only, no instances, no halt -- except
-                # Appeal's own metadata precommand (-h/--help/--version),
-                # whose body sys.exit()s the help/version page and outranks
-                # validation; it must fire here, before the command portion is
-                # parsed, or `foo -h badcmd` would error instead of helping.
-                # (No-op unless requested; its grammar is all str-level, so
-                # the dry pass's raw values convert correctly at invoke.)
-                for era_plan, conv in zip(era_plans, convs):
-                    bound = self._precommand_config.get(id(era_plan.callable))
-                    if bound:
-                        # config KEY vetting is structural -- fire its
-                        # refusals in the pre-scan (the value merge is live)
-                        _config_vet(era_plan, frozenset(table), bound[0],
-                                    self.plan_for, bound[1])
-                    if getattr(era_plan.callable, 'precommand', False):
-                        conv()
-            else:
-                for cls, era_plan, conv in zip(precommands, era_plans, convs):
-                    if cls.binds is not None:       # a method/BIC precommand:
-                        conv.bound = env.get(cls.binds)  # self is its class's
-                                                         # instance, built by an
-                                                         # earlier invocation
-                    bound = self._precommand_config.get(id(era_plan.callable))
-                    if bound:
-                        # a BOUND config mapping: argv parsed already; merge
-                        # config for options argv didn't set, THEN invoke
-                        # (argv wins, whole)
-                        _config_apply(conv, table, era_plan, bound[0],
-                                      self.plan_for, bound[1])
-                    result = conv()
-                    if cls.constructs is not None:  # a global class-as-app: its
-                        env[cls.constructs] = result   # methods bind to this
-                    holder.instances.append(        # eras log (None,
-                        (None, result               #  instance-or-None)
-                         if cls.constructs is not None else None))
-                    if _halts(result):              # pos already advanced, so a
-                        return result, pos          # nonzero-int return doesn't
-                                                    # leave era tokens behind
+            for step in era_steps:
+                if step.config:
+                    # config KEY vetting is structural -- fire its refusals
+                    # in the scan (the value merge is at execute)
+                    _config_vet(step.plan, frozenset(table), step.config[0],
+                                self.plan_for, step.config[1])
+            steps.extend(era_steps)
           except AppealDataError as e:
             # an era-level error (a bad program-wide option, a config value)
-            # gets the program usage line (decision B, 2026-09-06).  An era
-            # error is born in the engine, before any deeper attachment site
-            # can run, so nobody has spoken yet
-            assert e.usage is None
-            e.usage = _line_trailer(self.stylesheet,
-                                    self._program_usage_markup())
+            # gets the program usage line unless a deeper site already spoke
+            # (decision B, 2026-09-06)--a precommand BODY raising with usage
+            # attached (help's unknown topic) is that deeper site
+            if e.usage is None:
+                e.usage = _line_trailer(self.stylesheet,
+                                        self._program_usage_markup())
             raise
 
         dispatched = False              # did a command word of THIS node run?
@@ -2498,7 +2567,7 @@ class Appeal:
                 if alt != word and alt in table:
                     word = alt
                 elif not top:
-                    return result, pos          # pop back: a parent may own it
+                    return dispatched, pos      # pop back: a parent may own it
                 else:
                     err = _unexpected(word, table)
                     # a leading dash-token is an unknown OPTION (program usage
@@ -2510,44 +2579,21 @@ class Appeal:
                                  else _overview_trailer(self))
                     raise err
             c = table[word]
-            if dry:
-                owner = self._method_owner.get(id(c))
-                if owner is None:                   # a self-method with no class
-                    _refuse_orphan_method(c)        # that claimed it: refuse by name
-                plan = self._build(c, method_of=owner)  # method_of -> binds
-                cls = build_converters([plan])[_converter_key(plan)]  # this cmd
-                built.append(cls)
-            else:
-                cls = built.pop()                   # the dry pass built this
+            # the node's cached plan (the compiled class lives on it)
+            cls = converter_for(self._plan_for_node(self._children[word], word))
             pos += 1
             conv = cls()
-            if cls.binds is not None and not dry:   # a method command: self is the
-                conv.bound = env.get(cls.binds)     # instance a parent constructed
-            proc = backend.Engine(argv[pos:], conv, table, dry=dry)
+            proc = backend.Engine(argv[pos:], conv, table)
+            step = _Step('command', self, cls, conv, proc, word=word,
+                         callable=c)
             try:
-                result = proc.run()
+                proc.parse()
             except AppealDataError as e:
-                # any error while filling THIS command: attach its usage line,
-                # prefixed like --help's page (deepest-command-wins: an inner
-                # subcommand already set it).  Derived here, on the error path
-                # only--never on the hot/dry path (it would perturb the
-                # first-parse lock race).
-                if e.usage is None:
-                    markup = self.plan_for(word).usage(
-                        f'{self._prog()} {word}')
-                    e.usage = _line_trailer(self.stylesheet, markup)
+                step.attach_usage(e)
                 raise
             dispatched = True
-            if dry:                                 # pre-scan: no instances, no
-                pos += proc.consumed                # halt, but keep recursing
-            else:
-                if cls.constructs is not None:      # a class command: stash instance
-                    env[cls.constructs] = result
-                instance = result if _is_class_command(c) else None
-                holder.instances.append((holder._command_for(word), instance))
-                pos += proc.consumed                # advance BEFORE halting so a
-                if _halts(result):                  # nonzero-int return doesn't
-                    return result, pos              # strand its own tokens
+            pos += proc.consumed
+            steps.append(step)
 
             # recurse into the command's subcommand node: it may dispatch a
             # subcommand OR (the line stops at the parent) run that node's
@@ -2557,15 +2603,14 @@ class Appeal:
             child = self._children.get(word)
             if child is not None and (child._has_commands
                                       or child._default is not None):
-                result, pos = child._run_node(argv, pos, holder, top=False,
-                                              env=env, dry=dry, built=built,
-                                              inherited=result)
+                _, pos = child._run_node(argv, pos, steps, top=False,
+                                         inherited=True)
             if not self._node_repeat and pos < len(argv):
                 # this set doesn't cycle: pop the leftover word up to an
                 # ancestor whose set does (the parent's loop re-dispatches it);
                 # at the top with nothing to claim it, it's unexpected
                 if not top:
-                    return result, pos
+                    return dispatched, pos
                 tok = argv[pos]
                 pool = proc.handlers if tok.startswith('-') else table
                 err = _unexpected(tok, pool)
@@ -2582,27 +2627,15 @@ class Appeal:
             # ruled 2026-07-09).  A global command runs as a head era regardless
             # -- it processes pre-command options; it doesn't answer a bare line.
             if self._default is not None:
-                if dry:
-                    owner = self._method_owner.get(id(self._default))
-                    if owner is None:               # a self-method no class
-                        _refuse_orphan_method(self._default)   # claimed: refuse
-                    d_plan = self._build(self._default, method_of=owner)
-                    dcls = build_converters([d_plan])[_converter_key(d_plan)]
-                    built.append(dcls)
-                else:
-                    dcls = built.pop()
+                dcls = converter_for(self._default_plan())
                 dconv = dcls()
-                if dcls.binds is not None and not dry:
-                    dconv.bound = env.get(dcls.binds)
-                dproc = backend.Engine(argv[pos:], dconv, table, dry=dry)
-                result = dproc.run()
-                if not dry:
-                    holder.instances.append((None, None))
+                dproc = backend.Engine(argv[pos:], dconv, table)
+                dproc.parse()
                 pos += dproc.consumed
-            elif top and self._has_commands and not dry:
-                self.help()                         # the set listing, to stdout
-                result = 1
-        return result, pos
+                steps.append(_Step('default', self, dcls, dconv, dproc))
+            elif top and self._has_commands:
+                steps.append(_Step('listing', self, None, None, None))
+        return dispatched, pos
 
     def main(self, args=None):
         """
@@ -2828,7 +2861,7 @@ class Appeal:
 # public API); the dispatch methods reach it as backend.Engine.
 from . import backend
 from .backend import (
-    execute, build_converters, _converter_key,
+    execute, build_converters, converter_for, _converter_key,
     _halts, _unexpected, Converter,
     )
 

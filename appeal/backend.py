@@ -246,6 +246,127 @@ def _availability_message(owner):
     return f"expected {ops}" if ops else "expected an argument"
 
 
+class _Raw:
+    """
+    A leaf operand or oparg as the scanner found it: the text and its
+    converter.  Conversion happens at EXECUTE time, in token order (the
+    engine's `pending` list)--the scan runs no user code.
+    """
+    __slots__ = ('converter', 'text', 'name', 'value', 'done')
+    def __init__(self, converter, text, name):
+        self.converter = converter
+        self.text = text
+        self.name = name
+        self.done = False
+    def resolve(self):
+        if not self.done:
+            self.value = convert(self.converter, self.text, self.name)
+            self.done = True
+
+
+class _Nullary:
+    "A zero-argument converter as a flag (--north): CALLED at execute time."
+    __slots__ = ('constructor', 'value', 'done')
+    def __init__(self, constructor):
+        self.constructor = constructor
+        self.done = False
+    def resolve(self):
+        if not self.done:
+            self.value = self.constructor()
+            self.done = True
+
+
+class _Multi:
+    "A (constructor, *leaves) option value, built at execute time."
+    __slots__ = ('constructor', 'leaves', 'name', 'value', 'done')
+    def __init__(self, constructor, leaves, name):
+        self.constructor = constructor
+        self.leaves = leaves                    # _Raw records, already pending
+        self.name = name
+        self.done = False
+    def resolve(self):
+        if self.done:
+            return
+        for leaf in self.leaves:
+            leaf.resolve()
+        args = [leaf.value for leaf in self.leaves]
+        if self.constructor is tuple:
+            self.value = tuple(args)
+        else:
+            try:                                # the converter body's own
+                self.value = self.constructor(*args)   # ValueError/TypeError
+            except (ValueError, TypeError) as e:       # is a polite usage error
+                name = getattr(self.constructor, '__name__', 'converter')
+                raise UsageError(f"not a valid {name}: {str(e) or name}") from None
+        self.done = True
+
+
+class _Fold:
+    """
+    A fold option's value-in-waiting (counter/accumulator/mapping): the
+    MultiOption is CONSTRUCTED at execute time, at its first occurrence,
+    and fed one occurrence at a time in token order.  Rendered like any
+    deferred value: calling it renders the MultiOption.
+    """
+    __slots__ = ('factory', 'default', 'name', 'instance', 'occurrences')
+    def __init__(self, factory, default, name):
+        self.factory = factory
+        self.default = default
+        self.name = name
+        self.instance = None
+        self.occurrences = []
+    def __call__(self):
+        for occurrence in self.occurrences:     # idempotent: a partial
+            occurrence.resolve()                # resolve finishes here
+        return self.instance()
+
+
+class _FoldOccurrence:
+    "One occurrence of a fold option: its opargs, applied at execute time."
+    __slots__ = ('fold', 'opargs', 'done')
+    def __init__(self, fold, opargs):
+        self.fold = fold
+        self.opargs = opargs                    # _Raw records, already pending
+        self.done = False
+        fold.occurrences.append(self)
+    def resolve(self):
+        if self.done:
+            return
+        fold = self.fold
+        if fold.instance is None:
+            fold.instance = fold.factory()      # user code: execute time only
+            fold.instance.init(fold.default)
+        for r in self.opargs:
+            r.resolve()
+        try:
+            fold.instance.option(*[r.value for r in self.opargs])
+        except (ValueError, TypeError) as e:    # wrap the option body's error
+            raise UsageError(f"{fold.name}: {e}")
+        self.done = True
+
+
+def finish(v):
+    """
+    A parsed value, made final: records convert (or are already
+    converted), folds render their MultiOption, child converters call
+    their callable.  Leaves and flags pass through.
+    """
+    if isinstance(v, (_Raw, _Nullary, _Multi)):
+        v.resolve()
+        return v.value
+    if isinstance(v, _Fold):
+        return v()
+    if isinstance(v, Converter):
+        # a group's constructor body raising ValueError/TypeError is a
+        # POLITE usage error ('not a valid spot'); anything else passes
+        try:
+            return v()
+        except (ValueError, TypeError) as e:
+            name = getattr(type(v).converter, '__name__', 'converter')
+            raise UsageError(f"not a valid {name}: {e or name}") from None
+    return v
+
+
 class LiveBinding:
     "Invoke -> set the flag; `--flag=false` gives an explicit boolean."
     __slots__ = ('instance', 'name', 'present')
@@ -296,24 +417,16 @@ class ValueBinding:
             if value is not None:                       # (--north): presence IS
                 raise UsageError(                       # the value; '=' is refused
                     f"option {name!r} doesn't take a value")
-            return constructor()
+            return processor._record(_Nullary(constructor))
         texts = [value] if value is not None else []    # =value/attached is first
         while len(texts) < len(leaves):
             if processor.peek() is None:
                 raise UsageError(
                     f"option {name!r} requires {len(leaves)} values")
             texts.append(processor.advance())           # raw grab
-        args = [processor._cv(leaf, text, self.name)
-                for leaf, text in zip(leaves, texts)]
-        if processor.dry:                           # structural pre-scan: opargs
-            return None                             # counted, converter deferred
-        if constructor is tuple:
-            return tuple(args)
-        try:                                        # the converter body's own
-            return constructor(*args)               # ValueError/TypeError is a
-        except (ValueError, TypeError) as e:        # polite usage error
-            name = getattr(constructor, '__name__', 'converter')
-            raise UsageError(f"not a valid {name}: {str(e) or name}") from None
+        leaves = [processor._cv(leaf, text, self.name)
+                  for leaf, text in zip(leaves, texts)]
+        return processor._record(_Multi(constructor, leaves, self.name))
 
 
 def _fold_shape(rule):
@@ -344,12 +457,10 @@ class MultiBinding:
             _fold_shape(rule)
     def invoke(self, processor, value=None, spelling=None):
         name = spelling or self.name
-        instance = self.owner.kwargs.get(self.name)     # MultiOptions live in
-        if instance is None:                            # kwargs now, rendered
-            instance = self.factory()                   # like any deferred value
-            if not processor.dry:                       # init is user code
-                instance.init(self.default)
-            self.owner.kwargs[self.name] = instance
+        fold = self.owner.kwargs.get(self.name)         # the fold lives in
+        if fold is None:                                # kwargs, rendered like
+            fold = _Fold(self.factory, self.default, self.name)   # any value
+            self.owner.kwargs[self.name] = fold
         opargs = []
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)
@@ -371,12 +482,7 @@ class MultiBinding:
                     break                               # optional tail: stop
                 opargs.append(processor._cv(converter, processor.advance(),
                                             self.name))
-        if processor.dry:                       # opargs counted; folding deferred
-            return
-        try:
-            instance.option(*opargs)
-        except (ValueError, TypeError) as e:    # wrap the option body's error
-            raise UsageError(f"{self.name}: {e}")
+        processor._record(_FoldOccurrence(fold, opargs))
 
 
 class GroupBinding:
@@ -475,12 +581,10 @@ class ConjureFoldBinding:
             obj = self.converter_cls()
             obj._summoned = True
             processor.conjured[self.slot] = obj
-        instance = obj.kwargs.get(self.name)            # the MultiOption lives
-        if instance is None:                            # in the group's kwargs
-            instance = self.factory()
-            if not processor.dry:                       # init is user code
-                instance.init(self.default)
-            obj.kwargs[self.name] = instance
+        fold = obj.kwargs.get(self.name)                # the fold lives in
+        if fold is None:                                # the group's kwargs
+            fold = _Fold(self.factory, self.default, self.name)
+            obj.kwargs[self.name] = fold
         name = spelling or self.name
         opargs = []
         if value is not None:                           # =value / attached
@@ -500,12 +604,7 @@ class ConjureFoldBinding:
                     break
                 opargs.append(processor._cv(converter, processor.advance(),
                                             self.name))
-        if processor.dry:                       # opargs counted; folding deferred
-            return
-        try:
-            instance.option(*opargs)
-        except (ValueError, TypeError) as e:
-            raise UsageError(f"{self.name}: {e}")
+        processor._record(_FoldOccurrence(fold, opargs))
 
 
 class ConjureChainBinding:
@@ -541,12 +640,10 @@ class ConjureChainBinding:
         name = spelling or self.name
         if self.factory is not None:                    # a fold option
             factory, converters, minimum, default = _fold_shape(self.rule)
-            instance = parent.kwargs.get(self.name)
-            if instance is None:
-                instance = factory()
-                if not processor.dry:
-                    instance.init(default)
-                parent.kwargs[self.name] = instance
+            fold = parent.kwargs.get(self.name)
+            if fold is None:
+                fold = _Fold(factory, default, self.name)
+                parent.kwargs[self.name] = fold
             opargs = []
             if value is not None:
                 opargs = [processor._cv(converters[0], value, self.name)]
@@ -560,11 +657,7 @@ class ConjureChainBinding:
                         break
                     opargs.append(processor._cv(conv, processor.advance(),
                                                 self.name))
-            if not processor.dry:
-                try:
-                    instance.option(*opargs)
-                except (ValueError, TypeError) as e:
-                    raise UsageError(f"{self.name}: {e}")
+            processor._record(_FoldOccurrence(fold, opargs))
         elif self.converter is not None:                # a value option
             if value is None:
                 if processor.peek() is None:
@@ -663,26 +756,10 @@ class Converter:
         return RepeatInstruction(items)
 
     def __call__(self):
-        "Render (phase 2): finalize every deferred value, then call the callable."
-        def render(v):
-            # the deferred values are zero-arg callables: a child Converter (a
-            # group) or a MultiOption (a fold, living in kwargs); leaves were
-            # converted eagerly and are already final.  A group's constructor
-            # body raising ValueError/TypeError is a POLITE usage error ('not a
-            # valid spot'); anything else passes through.
-            if isinstance(v, Converter):
-                try:
-                    return v()
-                except (ValueError, TypeError) as e:
-                    name = getattr(type(v).converter, '__name__', 'converter')
-                    raise UsageError(
-                        f"not a valid {name}: {e or name}") from None
-            if isinstance(v, Option):
-                return v()
-            return v
+        "Render (execute): finish every deferred value, then call the callable."
         for name in list(self.kwargs):
-            self.kwargs[name] = render(self.kwargs[name])
-        args = [render(a) for a in self.args]
+            self.kwargs[name] = finish(self.kwargs[name])
+        args = [finish(a) for a in self.args]
         conv = type(self).converter
         if type(self)._iterable:            # tuple[...]/list[...]: build from the iterable
             return conv(args)
@@ -704,7 +781,17 @@ class Converter:
 
 
 class Engine:
-    def __init__(self, argv, root, commands=(), dry=False):
+    """
+    One era's scanner and executor.  parse() parcels the era's tokens
+    onto its converters--structural errors (counts, unknown options, a
+    starved oparg) raise here, and NO user code runs: every leaf is a
+    _Raw record, every fold an occurrence list, every nullary a deferred
+    call.  execute() then converts the records in token order and calls
+    the root.  (Larry's three passes, 2026-09-07: parcel, scan, execute
+    --the first two fused per era, since a structural error ends the
+    parcel either way.)
+    """
+    def __init__(self, argv, root, commands=()):
         self.argv = list(argv)
         self.pos = 0
         self.end = len(self.argv)       # exclusive: trailing pockets shrink it
@@ -717,17 +804,20 @@ class Engine:
                                         # in `consumed` since they never hit pos
         self.root = root
         self.commands = commands        # command words: the saturation boundary
-        self.dry = dry                  # the whole-line STRUCTURAL pre-scan:
-                                        # parcel + validate arity, running NO
-                                        # converter/fold/callable (so a bad value
-                                        # or a converter side effect is deferred
-                                        # to the live pass).  Structural errors
-                                        # -- counts, unknown options, an option
-                                        # missing its oparg -- still raise here.
+        self.pending = []               # the records to resolve, in token order
+
+    def _record(self, record):
+        self.pending.append(record)
+        return record
 
     def _cv(self, converter, text, name):
-        "convert(), or a raw passthrough during the dry structural pre-scan."
-        return text if self.dry else convert(converter, text, name)
+        "A leaf's record: converted at execute time, in token order."
+        return self._record(_Raw(converter, text, name))
+
+    def resolve(self):
+        "Convert every record, in token order (a bad value raises here)."
+        for record in self.pending:
+            record.resolve()
 
     def prepend(self, items):
         "Push work onto the FRONT, preserving order (a la rextend)."
@@ -889,11 +979,14 @@ class Engine:
         " untouched tail past `end`, and the trailing operands it lifted out."
         return self.pos + (len(self.argv) - self.end) + self.reserved
 
-    def run(self):
+    def parse(self):
+        "Parcel the era's tokens onto the root (structural errors raise)."
         self.enter(self.root)
         self._loop()
-        if self.dry:                    # structural pre-scan: no render, no call
-            return None
+
+    def execute(self):
+        "Convert in token order, then call the root."
+        self.resolve()
         return self.root()
 
     def _loop(self):
@@ -1134,13 +1227,13 @@ def execute(commands, argv, *, precommands=(), repeat=False):
     window), and yields at the next command word or an option it doesn't own.
     commands maps command-word -> Converter class.
     """
-    result = None
+    # pass 1+2: parcel and scan the whole line (structural errors raise)
+    steps = []
     pos = 0
     for era_cls in precommands:                 # the head eras, in order
         processor = Engine(argv[pos:], era_cls(), commands)
-        result = processor.run()
-        if _halts(result):
-            return result
+        processor.parse()
+        steps.append(processor)
         pos += processor.consumed
     if not precommands and not argv:
         raise UsageError("no command given")
@@ -1151,17 +1244,19 @@ def execute(commands, argv, *, precommands=(), repeat=False):
             raise _unexpected(word, commands)
         pos += 1
         processor = Engine(argv[pos:], converter_cls(), commands)
-        result = processor.run()
+        processor.parse()
         pos += processor.consumed
-        # validate leftover BEFORE the early-exit contract: a command that
-        # returns a truthy int (an exit code -- or just an int result, like a
-        # verbosity level) must not mask an unclaimed trailing token.
         if not repeat and pos < len(argv):
             # a leftover option suggests from this command's options; a leftover
             # word from the command table
             tok = argv[pos]
             pool = processor.handlers if tok.startswith('-') else commands
             raise _unexpected(tok, pool)
+        steps.append(processor)
+    # pass 3: execute left to right; a truthy int result halts the rest
+    result = None
+    for processor in steps:
+        result = processor.execute()
         if _halts(result):
             return result
     return result
@@ -1259,6 +1354,18 @@ def build_converters(plans):
 def build_converter(plan):
     "The single command's live Converter subclass (convenience over build_converters)."
     return build_converters([plan])[_converter_key(plan)]
+
+
+def converter_for(plan):
+    """
+    The plan's compiled Converter subclass, built ONCE: a pure function
+    of the plan (the backend reads nothing else), so it lives on the
+    plan and is rebuilt only when the plan is (any decoration change
+    invalidates the plan).  Ruled 2026-09-07 (Astra R10).
+    """
+    if plan.compiled is None:
+        plan.compiled = build_converter(plan)
+    return plan.compiled
 
 
 def _build_class(plan, classes):

@@ -469,7 +469,7 @@ class Plan:
                  'certain', 'var_keyword', 'constructs', 'binds',
                  'tree_trailing', 'scoped_keys', 'auto_help',
                  'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0',
-                 'bound_inner', 'decoration')
+                 'bound_inner', 'decoration', 'compiled')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
@@ -536,6 +536,7 @@ class Plan:
         self.maximum = maximum
         self.valid_counts = valid_counts
         self.unbounded_from = None
+        self.compiled = None    # the backend's class, built once (converter_for)
 
     def __repr__(self):
         return (f'<Plan {self.name} slots={len(self.slots)} '

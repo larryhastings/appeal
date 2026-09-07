@@ -3634,21 +3634,14 @@ def test_read_mapping_facade():
     assert app.read_mapping(f, {'x': '5'}) == 5
     assert app.read_iterable(f, [['5']]) == [5]
 
-def test_prescan_dry_live_agree():
-    # HARDENING the two-pass engine (2026-08-23): the whole-line
-    # STRUCTURAL pre-scan (dry) and the live pass must traverse the
-    # command line identically -- that's what makes the shared
-    # `built` converter FIFO sound.  With INFALLIBLE converters (str),
-    # any failure is STRUCTURAL, so the dry pass must catch it all.
-    # Two oracle-free properties, one with real teeth:
-    #   (A) dry accepts <=> live accepts, same UsageError when both reject,
-    #       and live never CRASHES (a FIFO divergence pops the wrong
-    #       converter -> IndexError/AttributeError).
-    #   (B) TEETH: every command returns its OWN name and the app carries a
-    #       GLOBAL (so >=2 converters sit in the FIFO in order).  A dispatch
-    #       of `[--g?, cmdK, ...]` that ACCEPTS must return 'cmdK' -- pop the
-    #       wrong converter and the wrong body runs, so the name is wrong.
-    # (Mutation-checked: dropping `built.reverse()` fails (B).)
+def test_fuzz_dispatch_runs_the_right_command():
+    # Born as the dry/live-agreement fuzz for the two-pass engine
+    # (2026-08-23); the engine parses ONCE now (2026-09-07), so the
+    # agreement half is retired and the TEETH remain: every command
+    # returns its OWN name and the app carries a GLOBAL, so a dispatch
+    # of `[--g?, cmdK, ...]` that ACCEPTS must return 'cmdK'--run the
+    # wrong converter and the name is wrong.  And a random line never
+    # CRASHES: it's accepted, or refused with a UsageError.
     # See [[eager-parse-then-convert]], [[streaming-dispatch]].
     import contextlib, io, random
     import appeal as _ap
@@ -3698,11 +3691,6 @@ def test_prescan_dry_live_agree():
             app.command(nm)(make_command(ns, nm))
         return app, names
 
-    def dry_alone(app, argv):
-        app._finalize()
-        app._run_node(list(argv), 0, _ap.Processor(app), top=True,
-                      dry=True, built=[])
-
     def outcome(fn):
         "Run fn, returning ('ok', result) / ('usage', msg); crashes propagate."
         sink = io.StringIO()
@@ -3732,18 +3720,10 @@ def test_prescan_dry_live_agree():
                         for _ in range(rng.randrange(0, 7))]
 
             try:
-                dry_kind = outcome(lambda: dry_alone(app, argv))[0]
-            except Exception as e:
-                assert False, f'DRY crashed: {type(e).__name__}: {e}\nargv={argv!r}'
-            try:
                 live_kind, live_val = outcome(lambda: app.process(list(argv)).result)
             except Exception as e:
-                assert False, (f'LIVE crashed (dry/live divergence?): '
-                               f'{type(e).__name__}: {e}\nargv={argv!r}')
-
-            assert dry_kind == live_kind, (
-                f'dry/live DISAGREE:\nargv={argv!r}\n'
-                f'dry={dry_kind} live={live_kind} ({live_val!r})')
+                assert False, (f'CRASHED: {type(e).__name__}: {e}\n'
+                               f'argv={argv!r}')
             if live_kind == 'ok':
                 accepts += 1
                 if teeth_word is not None:

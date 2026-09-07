@@ -2526,6 +2526,114 @@ def test_astra_r01_backend_reads_only_the_plan():
         assert _probe(total).process(['--total', '5']).result == 5
 
 
+def test_astra_r03_no_user_code_before_the_line_scans():
+    # R03 (ruled 2026-09-07, absolute): the parcel/scan runs NO user
+    # code.  A nullary converter ran twice on a valid line (scan and
+    # execute) and once on a REJECTED one; an Option subclass's __init__
+    # ran during the scan.  Now: once, at execute; never on a bad line.
+    events = []
+    def north():
+        events.append('north')
+        return 'north'
+    def command(*, direction: north = None):
+        return direction
+    assert _probe(command).process(['--direction']).result == 'north'
+    assert events == ['north']
+    events.clear()
+    try:
+        _probe(command).process(['--direction', '--unknown'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError:
+        pass
+    assert events == []
+    class Bump(appeal.Option):
+        def __init__(self):
+            events.append('construct')
+        def init(self, default):
+            pass
+        def option(self):
+            pass
+        def __call__(self):
+            return None
+    def bumped(*, bump: Bump = None):
+        return bump
+    try:
+        _probe(bumped).process(['--bump', '--unknown'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError:
+        pass
+    assert events == []
+
+
+def test_astra_r10_compile_once():
+    # R10 (ruled 2026-09-07): the compiled class is a pure function of
+    # the plan, built ONCE and cached on it--three process() calls used
+    # to compile two, three, four times cumulatively, and a module-level
+    # cache keyed by each throwaway class retained them all
+    from unittest.mock import patch
+    from appeal import backend
+    app = Appeal(name='probe', default_mappings=None)
+    @app.command()
+    def go(value):
+        return value
+    with patch.object(backend, '_build_class', wraps=backend._build_class) as build:
+        app.process(['go', 'first'])
+        after_first = build.call_count
+        app.process(['go', 'second'])
+        assert build.call_count == after_first
+    assert not hasattr(backend, '_capacity_cache')   # the retainer is gone
+
+
+def test_parse_once_edges():
+    # the parse-once engine's corners (2026-09-07)
+    # -h with a bad topic: help's own 'unknown command' (it carries the
+    # overview page) wins over the line's other problems--the deeper
+    # site spoke, both at parse (a malformed head era) and at execute
+    app = Appeal(name='foo', version='1.0')
+    @app.global_command()
+    def main(src, dst):
+        return (src, dst)
+    @app.command()
+    def commit(msg):
+        return msg
+    for argv in (['-h', 'nope'],            # head era malformed (src, dst)
+                 ['commit', 'x', '-h', 'nope']):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                app.main(argv)
+                assert False, 'main() exits'
+            except SystemExit as e:
+                assert e.code == 2, e.code
+        text = out.getvalue() + err.getvalue()
+        assert "unknown command 'nope'" in text, (argv, text)
+        assert 'missing argument' not in text, (argv, text)
+    # a set's DEFAULT command answers a bare line; its plan is cached
+    # across runs (the compiled class lives on it)
+    app2 = Appeal(name='dflt')
+    @app2.command()
+    def other():
+        return 'other'
+    @app2.default_command()
+    def dflt():
+        return 'default'
+    assert app2.process([]).result == 'default'
+    assert app2.process([]).result == 'default'       # the cached plan
+    # config replay: a group value with the WRONG number of items is a
+    # structural refusal--config provenance, before any conversion
+    def pair(x: int, y: int):
+        return (x, y)
+    app3 = Appeal(name='cfg', default_mappings=None)
+    @app3.precommand(config={'where': [1]})
+    def top(*, where: pair = None):
+        return where
+    try:
+        app3.process([])
+        assert False, 'expected AppealDataError'
+    except appeal.AppealDataError as e:
+        assert str(e) == "config: option '--where' requires 2 values", e
+
+
 def test_no_debris_ships():
     # flit builds the sdist from git's tracked-file list minus
     # pyproject's [tool.flit.sdist] excludes--so the published package
@@ -4369,7 +4477,7 @@ def test_init_config_layering_edges():
         app2.process(['go', 't']).result
         assert False
     except DataErr as e:
-        assert str(e) == 'config: must be non-negative'
+        assert str(e) == 'config: not a valid grp2: must be non-negative'
 
 
 def test_help_collapses_blank_line_runs():
