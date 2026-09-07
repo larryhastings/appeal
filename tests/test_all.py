@@ -7,10 +7,11 @@
 # import each suite and call its run_tests(run), aggregating in ONE
 # process--so `coverage run tests/test_all.py` measures the whole
 # thing at once.  (Appeal, unlike big, has no chicken-and-egg with its
-# own test harness, so it just uses big.test.preload.)
+# own test harness, so it just uses big.builtin.load.)
 
 from big import test
-test.preload('appeal')
+from big.builtin import load
+load('appeal')
 
 import sys
 

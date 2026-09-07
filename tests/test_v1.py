@@ -74,11 +74,12 @@ import unittest
 
 
 from big import test
+from big.builtin import load
 import os.path
 
-# big >= 0.15: preload() returns the imported module; the repo root is
+# big >= 0.15: load() returns the imported module; the repo root is
 # its package parent
-appeal_dir = os.path.dirname(os.path.dirname(test.preload('appeal').__file__))
+appeal_dir = os.path.dirname(os.path.dirname(load('appeal').__file__))
 
 import appeal
 
@@ -90,7 +91,7 @@ if not getattr(appeal, '__version__', '').startswith('0.'):
     print("test_v1.py is the v1 corpus; this tree is v2. See tests/test_all.py.")
     sys.exit(0)
 
-# big.test (imported above, for preload) adds bare-assert
+# big.test (imported above, for load) adds bare-assert
 # introspection and a runner that returns control to us instead of
 # exiting.  (Appeal already depends on big; this is big.test's
 # first customer after big itself.)

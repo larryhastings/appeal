@@ -23,11 +23,12 @@ import sys
 import unittest
 
 from big import test
+from big.builtin import load
 
 import os.path
-# big >= 0.15: preload() returns the imported module; the repo root is
+# big >= 0.15: load() returns the imported module; the repo root is
 # its package parent
-repo_dir = os.path.dirname(os.path.dirname(test.preload('appeal').__file__))
+repo_dir = os.path.dirname(os.path.dirname(load('appeal').__file__))
 sys.path.insert(0, repo_dir + '/tests')
 
 # NOTHING is marked "expected to fail" (Larry's rule, 2026-08-24): either a
