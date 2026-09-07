@@ -2779,12 +2779,13 @@ class Appeal:
             except AppealDataError as e:
                 print(f"{sheet.render(style('error', 'error:'))} {e}")
                 # the dispatch boundary attaches a trailer to every
-                # escaping data error (restored 2026-09-06), so this
-                # is the str|None contract check, belt-and-braces
-                if e.usage:                         # pragma: no branch
-                    text = e.usage(_sys.stdout)     # the REPL prints to stdout
-                    if text:
-                        print(text)
+                # escaping data error (restored 2026-09-06); a falsy
+                # one here is an off-contract usage= from user code,
+                # and that crashes loudly rather than being absorbed
+                assert e.usage is not None
+                text = e.usage(_sys.stdout)         # the REPL prints to stdout
+                if text:
+                    print(text)
             except AppealConfigurationError as e:
                 print(f"{sheet.render(style('error', 'configuration error:'))} {e}")
             except AppealError as e:
