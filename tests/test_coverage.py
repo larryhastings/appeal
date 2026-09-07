@@ -1976,6 +1976,32 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_every_theme_renders_a_link():
+    # big >= 0.15 hands a Markdown link's URL to the sheet as a second
+    # field ('URL', 'T', ...); every theme's link entry must accept
+    # it (the five colored themes' overrides once didn't--a docstring
+    # with a hyperlink crashed under any colored theme, and nothing
+    # rendered one through them)
+    from appeal.presentation import (
+        plain_theme, uncolored_theme, appeal_theme, light_warm_theme,
+        dark_warm_theme, light_cool_theme, dark_cool_theme,
+        markdown_defaults, transforms, _StyleSheet)
+    from big.stylesheet import ansi_truecolor_palette
+    from big.markdown import (parse, style_document,
+                              split_styles_document, layout_document)
+    from appeal.presentation import render_baked_help
+    doc = layout_document(split_styles_document(style_document(
+        parse('See [the docs](https://example.com/docs) for more.'))))
+    for theme in (plain_theme, uncolored_theme, appeal_theme,
+                  light_warm_theme, dark_warm_theme, light_cool_theme,
+                  dark_cool_theme):
+        sheet = (markdown_defaults | transforms | ansi_truecolor_palette
+                 | _StyleSheet(theme))
+        text = render_baked_help((('markdown', doc),), margin=60,
+                                 stylesheet=sheet)
+        assert 'the docs' in text, text
+
+
 def test_plain_and_uncolored_are_one_structure():
     # plain and uncolored are ONE theme--the structural base--over two
     # palettes (Larry's ruling, 2026-09-07).  The heading's line art

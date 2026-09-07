@@ -443,7 +443,7 @@ uncolored_theme = {
     # inline structure
     'code':       ('T', 'T'),               # themes color this
     'codeblock':  ('T', '⦃code⦙T⦄'),        # inherits code
-    'link':       ('T', '⦃underline⦙T⦄'),
+    'link':       ('URL', 'T', '⦃underline⦙T⦄'),   # URL is luggage (big >= 0.15)
     'marker':     ('T', 'T'),
     'blockquote': ('T', 'T'),
     'term':       ('T', '⦃bold⦙T⦄'),        # deflist terms
@@ -497,7 +497,7 @@ appeal_theme = _theme(
     error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
     code      = ('T', '⦃green⦙T⦄'),          # ruled: code is green
     marker    = ('T', '⦃dark_purple⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃blue⦙T⦄⦄'),
+    link      = ('URL', 'T', '⦃underline⦙⦃blue⦙T⦄⦄'),      # URL: luggage
     heading_color = ('T', '⦃cyan⦙T⦄'),
 )
 
@@ -510,7 +510,7 @@ light_warm_theme = _theme(
     error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
     code      = ('T', '⦃dark_amber⦙T⦄'),
     marker    = ('T', '⦃dark_yellow⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),
+    link      = ('URL', 'T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),      # URL: luggage
     heading_color = ('T', '⦃dark_red⦙T⦄'),
 )
 
@@ -523,7 +523,7 @@ dark_warm_theme = _theme(
     error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
     code      = ('T', '⦃light_amber⦙T⦄'),
     marker    = ('T', '⦃light_yellow⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),
+    link      = ('URL', 'T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),      # URL: luggage
     heading_color = ('T', '⦃light_red⦙T⦄'),
 )
 
@@ -536,7 +536,7 @@ light_cool_theme = _theme(
     error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),     # errors stay red, even here
     code      = ('T', '⦃dark_green⦙T⦄'),
     marker    = ('T', '⦃dark_cyan⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),
+    link      = ('URL', 'T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),      # URL: luggage
     heading_color = ('T', '⦃dark_blue⦙T⦄'),
 )
 
@@ -549,7 +549,7 @@ dark_cool_theme = _theme(
     error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
     code      = ('T', '⦃light_green⦙T⦄'),
     marker    = ('T', '⦃light_cyan⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),
+    link      = ('URL', 'T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),      # URL: luggage
     heading_color = ('T', '⦃light_blue⦙T⦄'),
 )
 
