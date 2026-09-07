@@ -8,8 +8,13 @@
 # through them (parcel + convert + dispatch).  The front end
 # (appeal/frontend.py) produces the Plan.
 
-from _collections import deque       # what collections itself imports; the
-                                     # package costs the fast path 1.6ms
+# what collections itself does: the C deque straight from _collections
+# (the collections package costs the fast path 1.6ms); an implementation
+# without _collections gets the package's, as the stdlib does
+try:
+    from _collections import deque
+except ImportError:      # pragma: no cover -- not CPython
+    from collections import deque
 from . import (AppealConfigurationError, ConfigurationError,
                DataError, UsageError, did_you_mean)
 from .converters import convert, Option, MultiOption
