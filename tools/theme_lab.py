@@ -222,29 +222,17 @@ PAIRINGS = {
 
 
 ##
-## the sample page, two honest halves--ONE technology.  Both
-## halves are "baked pieces", the same things Appeal bakes into
-## a compiled script, and both finish through Appeal's REAL
-## finisher, render_baked_help (wrap at the margin, fuse spans,
-## paint with the sheet).  They differ only in provenance:
-##
-## SAMPLE_MARKDOWN is baked by big's real ingestion (parse ->
-## style -> layout), like a docstring--edit the Markdown freely.
-##
-## ROLE_PIECES simulates the OUTPUT of Appeal's flense (the
-## usage lines, the Arguments/Options/Commands tables, the error
-## line).  The real pipeline emits these role spans now; the lab
-## keeps a hand-baked copy so one page showcases EVERY role and
-## stays freely editable.  (Role markup can never ride a
-## docstring anyway: the pipeline ESCAPES delimiters found in
-## source text, correctly.)
-## The vocabulary is the layout grammar the flense will speak:
-## role-styled words, ('indent', first, rest), and the
-## definition-list markers--so the tables go through the real
-## compact layout, not hand-spaced columns.
+## the sample: a REAL Appeal program.  The swatches below are the
+## genuine article--the demo app's actual help pages and an actual
+## error, rendered by Appeal's live pipeline--so any change to
+## Appeal's rendering shows up here the moment it lands, and the
+## lab can never drift.  The docstrings are the showcase: edit
+## them freely to exercise more Markdown.
 ##
 
-SAMPLE_MARKDOWN = """\
+WIDTH = 72
+
+DEMO_DOC = """\
 Start the server, and serve until interrupted.
 
 Longer prose with **bold**, *italic*, and `inline_code()`,
@@ -306,75 +294,72 @@ share it and the monster falls back man-style:
 : You have been warned.
 """
 
-def _mark(role, text):
-    "Per-word role spans; join_styles refuses them back together."
-    return tuple(f'⦃{role}⦙{word}⦄' for word in text.split())
+
+def build_demo(stylesheet, errors):
+    """
+    The demo program.  Its overview page carries DEMO_DOC (the
+    Markdown zoo) plus the set usage line and the Commands table;
+    `help serve` shows a command page (usage with options and
+    operands, the Arguments/Options tables); a bad option shows
+    the error line and its usage trailer.
+    """
+    import appeal
+    app = appeal.Appeal(name='serve', version='1.0', margin=WIDTH,
+                        stylesheet=stylesheet, errors=errors)
+
+    def top(*, verbose=False):
+        pass
+    top.__doc__ = DEMO_DOC
+    app.global_command()(top)
+
+    @app.command()
+    def serve(host='0.0.0.0', *, port: int = 8080, quiet=False):
+        """
+        Start the server.
+
+        ## Arguments
+
+        host
+        : The interface to bind.
+
+        ## Options
+
+        port
+        : The TCP port to bind.  Defaults to 8080, or the value
+          of the `SERVE_PORT` environment variable if set.
+
+        quiet
+        : Hush.
+        """
+
+    @app.command()
+    def stop():
+        "Stop the server."
+
+    return app
 
 
-ROLE_PIECES = (
-    # the flense's line between the doc and the machine-made
-    # sections--also proves the renderer's `line` injection.
-    ('markdown', ('⦃heading_color⦙⦃line⦄⦄',)),
-    # the usage line: each bracket group is ONE word, so wrapping
-    # never splits a unit (usage_units' rule).
-    ('markdown', (
-        ('indent', 'usage: ', '       '),
-        '⦃program⦙serve⦄',
-        '[⦃option⦙-v⦄|⦃option⦙--verbose⦄]',
-        '[⦃option⦙-p⦄|⦃option⦙--port⦄ ⦃oparg⦙<PORT>⦄]',
-        '⦃argument⦙<HOST>⦄',
-    )),
-    # the SET flavor's usage line: the <COMMAND> placeholder keeps
-    # the argument DECORATION (a hole to fill) but wears the command
-    # ROLE, cross-referencing the listing's words below (ruled
-    # 2026-09-07)
-    ('markdown', (
-        ('indent', 'usage: ', '       '),
-        '⦃program⦙serve⦄',
-        '⦃command⦙<COMMAND>⦄',
-    )),
-    ('markdown', _mark('summary',
-        'Start the server, and serve until interrupted.')),
-    ('markdown', (
-        '⦃heading2⦙Arguments⦄', '\n\n',
-        ('def start',),
-        ('term', '⦃argument⦙<HOST>⦄'),
-        'The', 'interface', 'to', 'bind.',
-        ('def end',),
-    )),
-    ('markdown', (
-        '⦃heading2⦙Options⦄', '\n\n',
-        ('def start',),
-        ('term', '⦃option⦙-v⦄|⦃option⦙--verbose⦄'),
-        'Narrate', 'the', 'process.',
-        ('term', '⦃option⦙-p⦄|⦃option⦙--port⦄', '⦃oparg⦙<PORT>⦄'),
-        'The', 'TCP', 'port.',
-        ('def end',),
-    )),
-    ('markdown', (
-        '⦃heading2⦙Commands⦄', '\n\n',
-        ('def start',),
-        ('term', '⦃command⦙serve⦄'),
-        'Start', 'the', 'server.',
-        ('term', '⦃command⦙stop⦄'),
-        'Stop', 'the', 'server.',
-        ('def end',),
-    )),
-    ('markdown', ('⦃error⦙error:⦄', 'unknown', 'command', "'zerve'")),
-)
-
-WIDTH = 72
+def render_sample(sheet):
+    "The demo app's real output, styled by `sheet`, as one string."
+    import contextlib
+    import io
+    buf = io.StringIO()
+    app = build_demo(sheet, buf)
+    with contextlib.redirect_stdout(buf):
+        app.process(['help'])
+        print()
+        app.process(['help', 'serve'])
+        print()
+        try:
+            app.main(['--zerve'])
+        except SystemExit:
+            pass
+    return buf.getvalue()
 
 
 def main(argv):
-    from big.markdown import (layout_document, parse,
-                              split_styles_document, style_document)
+    from big.markdown import markdown_defaults
     from big.stylesheet import transforms
-    from appeal.presentation import render_baked_help
-
-    document = split_styles_document(style_document(
-        parse(SAMPLE_MARKDOWN)))
-    pieces = (('markdown', layout_document(document)),) + ROLE_PIECES
 
     picks = argv or list(PAIRINGS)
     for name in picks:
@@ -385,8 +370,6 @@ def main(argv):
         # the composition, per the 2026-08-06 rulings:
         # markdown_defaults beneath (safety net), the transforms
         # (upper etc), the palette, then the theme outermost.
-        # `line` is the renderer's business: render_baked_help
-        # injects it at the real margin (ruled 2026-08-08).
         sheet = (markdown_defaults | transforms
                  | palette | StyleSheet(theme_dict))
         bar = '=' * 62
@@ -394,8 +377,7 @@ def main(argv):
         print(f'==  {name}_theme  (over {_palette_name(palette)})')
         print(bar)
         print()
-        print(render_baked_help(pieces, margin=WIDTH,
-                                stylesheet=sheet))
+        print(render_sample(sheet))
 
 
 def _palette_name(palette):
