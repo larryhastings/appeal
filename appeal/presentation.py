@@ -1124,14 +1124,18 @@ def merge_docs(plan, command_names=None):
         # name flowing through.
         namespace = {}
         for o in p.options:
+            # several rules may share one NAME (@app.option's each-call-
+            # is-its-own-rule: go2's --north/--south both map direction);
+            # the namespace entry is first-wins, but every rule gets its
+            # own listing row--usage advertises them all, so must Options
+            rowkey = id(o)
             if o.name not in namespace:
-                rowkey = id(o)
                 namespace[o.name] = ('option',
                                      _option_display(o, plan.decoration),
                                      rowkey)
-                option_rows.append((rowkey,
-                                    _option_display(o, plan.decoration),
-                                    anchors))
+            option_rows.append((rowkey,
+                                _option_display(o, plan.decoration),
+                                anchors))
             if o.child is not None:
                 for name, value in option_subtree(o.child, 1).items():
                     namespace.setdefault(name, value)
@@ -1255,8 +1259,8 @@ def merge_docs(plan, command_names=None):
                 display += f' (after {before}, before {after})'
             elif before:
                 display += f' (after {before})'
-            elif after:
-                display += f' (before {after})'
+            else:               # the != (None, None) guard: one anchor
+                display += f' (before {after})'     # exists, and it's after
         rows.append((rowkey, display))
 
     return {

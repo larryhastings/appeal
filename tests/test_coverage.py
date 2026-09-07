@@ -1917,6 +1917,54 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_definition_no_space_after_colon():
+    # branch audit: ':definition' with no space after the colon is
+    # legal--the space is cosmetic, stripped when present
+    from appeal.presentation import _parse_definition_list
+    got = _parse_definition_list(['term', ':definition text'], 'here')
+    assert got == [('term', 'definition text')], got
+
+
+def test_schema_more_shapes():
+    # branch audit, two undescribed shapes.  describe_set without a
+    # global plan (an Appeal app always synthesizes one, but the
+    # function is callable without): no 'global' entry
+    app = Appeal(name='cc')
+    @app.command()
+    def pick(*choices: appeal.validate('a', 'b')):
+        return choices
+    from appeal.schema import describe_set
+    entry = describe_set({'pick': app.plan_for('pick')}, None, 'cc')
+    assert 'commands' in entry and 'global' not in entry
+    # ...and a *args operand through a recipe converter (validate:
+    # a terminal whose name is no JSON type): an array, untyped items
+    js = app.schema('mcp', '2024-11-05')
+    assert js['pick']['properties']['choices'] == {'type': 'array'}
+
+
+def test_multi_declaration_options_all_listed():
+    # branch audit turned bug: several @app.option rules may share one
+    # NAME (each call is its own rule--go2's --north/--south both map
+    # `direction`); usage advertised them all but the Options section
+    # listed only the first.  Every rule gets its own row.
+    app = Appeal(name='md')
+    def north():
+        return 'north'
+    def south():
+        return 'south'
+    def go2(*, direction='none'):
+        return direction
+    app.option('direction', '--north', annotation=north)(go2)
+    app.option('direction', '--south', annotation=south)(go2)
+    app.command()(go2)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.process(['help', 'go2'])
+    text = out.getvalue()
+    assert '--north' in text.partition('Options')[2]
+    assert '--south' in text.partition('Options')[2]
+
+
 def test_converter_type_overrides():
     # branch audit: validate(..., type=) and validate_range(..., type=)
     # are the documented explicit-type overrides, and nothing ever
