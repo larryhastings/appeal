@@ -5010,3 +5010,57 @@ def run_tests(run=None):
 if __name__ == '__main__':
     run_tests()
     test.finish()
+
+
+def test_astra_r07_documentation_has_occurrence_identity():
+    # R07: a row's identity is the OCCURRENCE, not the parameter
+    # name--two sibling converters each documenting their own x
+    # keep their own text (the second used to overwrite the first),
+    # and one converter used twice (the frontend shares its plan)
+    # documents both uses
+    from appeal.presentation import merge_docs
+    def left(x, y):
+        "Left.\n\n# Arguments\nx\n: LEFT X\n"
+        return x, y
+    def right(x, y):
+        "Right.\n\n# Arguments\nx\n: RIGHT X\n"
+        return x, y
+    def command(a: left, b: right):
+        return a, b
+    rows = merge_docs(build_plan(command))['arguments']
+    assert [lines for display, lines in rows] == \
+        [['LEFT X'], [], ['RIGHT X'], []]
+    def twice(a: left, b: left):
+        return a, b
+    rows = merge_docs(build_plan(twice))['arguments']
+    assert [lines for display, lines in rows] == \
+        [['LEFT X'], [], ['LEFT X'], []]
+    # the refusal of an ambiguous bare name names the candidates
+    def both(a: left, b: right):
+        "Both.\n\n# Arguments\nx\n: Whose?\n"
+        return a, b
+    try:
+        merge_docs(build_plan(both))
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert "'left' and 'right' each have one" in str(e), e
+
+
+def test_astra_r12_bad_tool_name_keeps_serving():
+    # R12: a malformed params.name (not a string) is a -32602 reply,
+    # not a crash that ends the session
+    import contextlib, io, json
+    from unittest.mock import patch
+    from appeal.mcp import run_mcp
+    requests = [
+        {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+         'params': {'name': []}},
+        {'jsonrpc': '2.0', 'id': 2, 'method': 'ping'},
+    ]
+    incoming = io.StringIO(''.join(json.dumps(r) + '\n' for r in requests))
+    out = io.StringIO()
+    with patch.object(sys, 'stdin', incoming), contextlib.redirect_stdout(out):
+        run_mcp({}, 'probe')
+    replies = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert [r['id'] for r in replies] == [1, 2], replies
+    assert replies[0]['error']['code'] == -32602, replies

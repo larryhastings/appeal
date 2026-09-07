@@ -1080,9 +1080,13 @@ def merge_docs(plan, command_names=None):
             break
         return (before, after)
 
-    namespaces = {}    # id(plan) -> its own subtree namespace
+    # Row identity is the OCCURRENCE (Astra R07): the path of slot/option
+    # ids from the root down.  A plan is shared by every use of its
+    # callable (frontend memoizes), so a node id alone can't tell two
+    # visible uses of the same converter apart; a path can.
+    namespaces = {}    # path -> that occurrence's subtree namespace
 
-    def option_subtree(child, depth):
+    def option_subtree(child, depth, path):
         # An option's converter subtree: its inner options become
         # rows indented beneath the declaring option's row (full
         # depth), and its operands are named--so the converter may
@@ -1095,59 +1099,66 @@ def merge_docs(plan, command_names=None):
         # into the declaring plan's namespace.
         ns = {}
         for inner in child.options:
-            rowkey = id(inner)
+            rowkey = path + (id(inner),)
             display = _option_display(inner, plan.decoration)
-            ns.setdefault(inner.name, ('option', display, rowkey))
+            ns.setdefault(inner.name, ('option', display, rowkey, child.name))
             option_rows.append(
                 (rowkey, '  ' * depth + display, (None, None)))
             if inner.child is not None:
-                for name, value in option_subtree(inner.child,
-                                                  depth + 1).items():
+                for name, value in option_subtree(inner.child, depth + 1,
+                                                  rowkey).items():
                     ns.setdefault(name, value)
         for s in child.slots:
             # an operand of the option: shown inline in the option
             # display, so no row--but named, so the converter may
             # document it (with nowhere to show, the text is
             # dropped) rather than erroring
-            ns.setdefault(s.name, ('argument', s.usage_name, id(s)))
+            here = path + (id(s),)
+            ns.setdefault(s.name, ('argument', s.usage_name, here, child.name))
             if not isinstance(s.child, Terminal):
-                for name, value in option_subtree(s.child, depth).items():
+                for name, value in option_subtree(s.child, depth,
+                                                  here).items():
                     ns.setdefault(name, value)
-        namespaces.setdefault(id(child), ns)
+        assert path not in namespaces
+        namespaces[path] = ns
         return ns
 
-    def walk(p, override=None, anchors=(None, None)):
+    def walk(p, override=None, anchors=(None, None), path=()):
         # returns the subtree namespace for p: name -> (kind,
-        # display, rowkey).  override, when set, is the
-        # transparency rule in flight: (rowkey, display) for the
-        # subtree's sole terminal--the outer annotated parameter's
-        # name flowing through.
+        # display, rowkey, owner) where owner is the declaring
+        # plan's name (an 'ambiguous' entry carries the owners'
+        # names instead, for the refusal).  override, when set,
+        # is the transparency rule in flight: (rowkey, display) for
+        # the subtree's sole terminal--the outer annotated
+        # parameter's name flowing through.
         namespace = {}
         for o in p.options:
             # several rules may share one NAME (@app.option's each-call-
             # is-its-own-rule: go2's --north/--south both map direction);
             # the namespace entry is first-wins, but every rule gets its
             # own listing row--usage advertises them all, so must Options
-            rowkey = id(o)
+            rowkey = path + (id(o),)
             if o.name not in namespace:
                 namespace[o.name] = ('option',
                                      _option_display(o, plan.decoration),
-                                     rowkey)
+                                     rowkey, p.name)
             option_rows.append((rowkey,
                                 _option_display(o, plan.decoration),
                                 anchors))
             if o.child is not None:
-                for name, value in option_subtree(o.child, 1).items():
+                for name, value in option_subtree(o.child, 1, rowkey).items():
                     namespace.setdefault(name, value)
         for index, s in enumerate(p.slots):
+            here = path + (id(s),)
             if isinstance(s.child, Terminal):
                 if override is not None:
                     # override display is already final (formatted or
                     # literal, decided where it was captured)
                     rowkey, display = override
                 else:
-                    rowkey, display = s.name, arg_name(s)
-                namespace.setdefault(s.name, ('argument', display, rowkey))
+                    rowkey, display = here, arg_name(s)
+                namespace.setdefault(s.name, ('argument', display, rowkey,
+                                              p.name))
                 argument_rows.append((rowkey, display))
             else:
                 inner = s.child.sole_terminal_slot()
@@ -1163,46 +1174,50 @@ def merge_docs(plan, command_names=None):
                                                        plan.decoration))
                                if inner.usage_name != inner.name
                                else arg_name(s))
-                    child_override = (s.name, display)
+                    child_override = (here, display)
                 child_namespace = walk(s.child, child_override or override,
-                                       flanks(p, index))
+                                       flanks(p, index), here)
                 for name, value in child_namespace.items():
                     if (name in namespace
                             and namespace[name][0] == 'ambiguous'):
+                        namespace[name][3].append(value[3])
                         continue
                     if (name in namespace
                             and namespace[name][2] != value[2]
                             and namespace[name][0] == value[0]):
                         # the same name from two sibling subtrees:
                         # documenting it HERE can't pick one
-                        namespace[name] = ('ambiguous', value[1], None)
+                        namespace[name] = ('ambiguous', value[1], None,
+                                           [namespace[name][3], value[3]])
                         continue
                     namespace.setdefault(name, value)
                 if child_override is not None:
                     namespace.setdefault(
-                        s.name, ('argument', child_override[1], s.name))
+                        s.name, ('argument', child_override[1], here, p.name))
                 else:
-                    namespace.setdefault(s.name, ('internal', s.usage_name, s.name))
-        namespaces.setdefault(id(p), namespace)
+                    namespace.setdefault(
+                        s.name, ('internal', s.usage_name, here, p.name))
+        assert path not in namespaces
+        namespaces[path] = namespace
         return namespace
 
-    def apply(p, namespace=None):
+    def apply(p, path=()):
         # deepest first: children's entries land, then ours
         # overwrite (nearest enclosing scope wins).  Each scope's
         # entries resolve against ITS OWN subtree namespace--a
         # converter documents its own window even when the name is
         # ambiguous a level up.
-        namespace = namespaces[id(p)]
+        namespace = namespaces[path]
         # children (positional converters AND option converters)
         # land their docstrings first, deepest scope first; this
         # plan's own docstring then overwrites, so the nearest
         # enclosing scope wins on a name clash
         for s in p.slots:
             if not isinstance(s.child, Terminal):
-                apply(s.child)
+                apply(s.child, path + (id(s),))
         for o in p.options:
             if o.child is not None:
-                apply(o.child)
+                apply(o.child, path + (id(o),))
         where = getattr(p.callable, '__name__', repr(p.callable))
         parsed = parse_docstring(_inspect.getdoc(p.callable), where)
         for kind, heading in (('arguments', 'Arguments:'),
@@ -1216,10 +1231,12 @@ def merge_docs(plan, command_names=None):
                         f"converters")
                 found = entry[0]
                 if found == 'ambiguous':
+                    owners = [repr(owner) for owner in entry[3]]
+                    candidates = ', '.join(owners[:-1]) + ' and ' + owners[-1]
                     raise AppealConfigurationError(
                         f"{where}: {name!r} is ambiguous in {where!r}--"
-                        f"two of its converters' windows have one; "
-                        f"document it in the converter's docstring")
+                        f"{candidates} each have one; document it in "
+                        f"the converter's docstring")
                 if found == 'internal':
                     raise AppealConfigurationError(
                         f"{where}: {name!r} is not one of the visible "

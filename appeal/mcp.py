@@ -94,11 +94,11 @@ def run_mcp(tools, name, version='0'):
                 reply(id, error={'code': -32602,
                                  'message': 'params must be an object'})
                 continue
-            tool = tools.get(params.get('name'))
+            name = params.get('name')
+            tool = tools.get(name) if isinstance(name, str) else None
             if tool is None:
                 reply(id, error={'code': -32602,
-                                 'message': f"unknown tool "
-                                            f"{params.get('name')!r}"})
+                                 'message': f"unknown tool {name!r}"})
                 continue
             arguments = params.get('arguments') or {}
             if not isinstance(arguments, dict):
