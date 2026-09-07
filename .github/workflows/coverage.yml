@@ -21,13 +21,13 @@ jobs:
         pip install .
     - name: Run coverage without optional dependencies
       run: |
-        coverage run --parallel-mode tests/test_all.py
+        coverage run --branch --parallel-mode tests/test_all.py
     - name: Install optional dependencies
       run: |
         python -m pip install . '.[test]'
     - name: Run coverage with optional dependencies
       run: |
-        coverage run --parallel-mode tests/test_all.py
+        coverage run --branch --parallel-mode tests/test_all.py
     - name: Produce coverage reports
       run: |
         coverage combine
@@ -38,8 +38,10 @@ jobs:
     - name: Upload htmlcov
       uses: actions/upload-artifact@v4
       with:
-        name: big_htmlcov
+        name: appeal_htmlcov
         path: htmlcov/
-    - name: Fail if not 68% coverage
+    # the line in the sand: today's true branch-mode score, so we can't
+    # backslide.  Raise to 100 when the 36-partial-branch audit lands.
+    - name: Fail if branch coverage regresses below 99%
       run: |
-        coverage report -i --fail-under=68
+        coverage report -i --fail-under=99
