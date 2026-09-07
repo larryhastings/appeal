@@ -249,7 +249,8 @@ def test_repl_in_process():
 
     # the Processor's repr is for debugging, not the REPL's output
     # (the Sol review's original symptom)
-    p = app.process(['add', '1', '1'])
+    with contextlib.redirect_stdout(io.StringIO()):
+        p = app.process(['add', '1', '1'])
     assert repr(p).startswith('<Processor result=')
     assert '<Processor' not in out
 
@@ -2185,7 +2186,8 @@ def test_trailer_contract_and_repl_data_errors():
     def go():
         raise appeal.AppealDataError('dry error', usage=lambda file: None)
     try:
-        app.main(['go'])
+        with contextlib.redirect_stderr(io.StringIO()):
+            app.main(['go'])
         assert False, 'main() must exit'
     except SystemExit as e:
         assert e.code == 2
@@ -3459,7 +3461,8 @@ def test_section_template_more_fails():
     corpus = {'summary': ['Sum.'], 'documentation': ['Prose.'],
               'arguments': [('a', ['doc a'], 0)],
               'options': [('-x', [], 0)], 'commands': []}
-    page = render_help_page('t [-x] a', corpus, template)
+    page = render_help_page('t [-x] a', corpus, template,
+                            stylesheet=False)
     assert page.index('Opts:') < page.index('Sum.') < \
         page.index('Args:'), page
     assert 'Cmds:' not in page

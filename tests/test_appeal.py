@@ -1087,8 +1087,9 @@ def test_default_mappings_design():
                           default_mappings=None)
     @app3.command()
     def go3(): return 0
-    assert main(app3, ['--version'])[0] == 2
-    assert main(app3, ['version'])[0] == 2
+    with contextlib.redirect_stderr(io.StringIO()):     # the diagnostics
+        assert main(app3, ['--version'])[0] == 2
+        assert main(app3, ['version'])[0] == 2
     assert 'version' not in app3.commands
     assert 'version' not in app3.complete([], '')
 
@@ -1551,7 +1552,7 @@ def test_wrapped_heading_fuses():
               'arguments': [], 'options': [], 'commands': []}
     pieces = help_page_pieces('x', corpus, default_template,
                               suppress=('usage',))
-    page = render_baked_help(pieces, margin=70)
+    page = render_baked_help(pieces, margin=70, stylesheet=False)
     assert page == (
         '======================================================='
         '===============\n'
@@ -1574,7 +1575,7 @@ def test_heading_with_inline_formatting():
               'arguments': [], 'options': [], 'commands': []}
     pieces = help_page_pieces('x', corpus, default_template,
                               suppress=('usage',))
-    page = render_baked_help(pieces, margin=40)
+    page = render_baked_help(pieces, margin=40, stylesheet=False)
     assert page == ('========================\n'
                     'Heading with code inside\n'
                     '========================\n'), repr(page)
@@ -2490,7 +2491,9 @@ def test_greedy_global_star_args():
         tags.append(seen)
     def go(target):
         return ('go', target)
-    got = run_both_set([go], g, ['a', 'b', 'go', 'x'])   # *seen eats it all
+    import contextlib, io
+    with contextlib.redirect_stdout(io.StringIO()):     # the bare listing
+        got = run_both_set([go], g, ['a', 'b', 'go', 'x'])   # *seen eats it all
     assert got != ('ok', ('go', 'x')), got               # go never dispatches
 
 def test_greedy_global_converter_group():
@@ -3817,7 +3820,6 @@ def test_differential_fuzz_v1_greedy():
             print('  (baseline unavailable: git archive of tag 0.6.4 '
                   'failed; differential NOT exercised)')
             return
-        print('  (differential against the 0.6.4 tag: exercised)')
         driver = os.path.join(d, 'driver.py')
         with open(driver, 'wt', encoding='utf-8') as f:
             f.write(
@@ -3951,7 +3953,6 @@ def test_differential_fuzz_converter_group_conversion_and_arity():
             print('  (baseline unavailable: git archive of tag 0.6.4 '
                   'failed; differential NOT exercised)')
             return
-        print('  (differential against the 0.6.4 tag: exercised)')
         driver = os.path.join(d, 'driver.py')
         with open(driver, 'wt', encoding='utf-8') as f:
             f.write(
@@ -4030,7 +4031,6 @@ def test_differential_fuzz_converter_group_conversion_and_arity():
                 unapproved.append(('1.0-narrower', src, argv, payload, ours))
         if deferred:
             continue
-    print(f'  0.6.4<->1.0 census: {dict(census)}')
     assert compared >= 40, compared
     assert not unapproved, (
         f'{len(unapproved)} UNAPPROVED 0.6.4<->1.0 divergence(s) -- a behavior '
@@ -7655,7 +7655,8 @@ def test_colorized_help_paints_after_layout():
              | StyleSheet(appeal_theme))
     plan = build_plan(draw)
     corpus = merge_docs(plan)
-    plain = render_help_page(plan.usage(), corpus, default_template)
+    plain = render_help_page(plan.usage(), corpus, default_template,
+                             stylesheet=False)
     painted = render_help_page(plan.usage(), corpus, default_template,
                                stylesheet=sheet)
     assert painted != plain
@@ -7925,7 +7926,8 @@ def _run_doc_example(source, where, namespace=None):
     if namespace is None:
         namespace = {}
     try:
-        exec(compile(source, where, 'exec'), namespace)
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(source, where, 'exec'), namespace)
     except Exception as e:
         raise AssertionError(
             f'{where} failed to run: {e}\n{source}') from e
