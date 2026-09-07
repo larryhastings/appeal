@@ -108,6 +108,18 @@ def _slot_schema(slot, docs):
     return entry
 
 
+def _operand_counts(plan):
+    """
+    The exact valid counts.  An unbounded plan lists the valid
+    counts below 'unbounded_from', from which every count is valid.
+    """
+    counts = {'minimum': plan.minimum, 'maximum': plan.maximum,
+              'valid': sorted(plan.valid_counts)}
+    if plan.unbounded_from is not None:
+        counts['unbounded_from'] = plan.unbounded_from
+    return counts
+
+
 def _plan_schema(plan):
     from big.stylesheet import strip_styles
     summary, docs = _docs_for(plan)
@@ -119,12 +131,7 @@ def _plan_schema(plan):
         'usage': strip_styles(plan.usage()),
         'operands': [_slot_schema(s, docs) for s in plan.slots],
         'options': [_option_schema(o, docs) for o in plan.options],
-        'operand_counts': {
-            'minimum': plan.minimum,
-            'maximum': plan.maximum,
-            'valid': (sorted(plan.valid_counts)
-                      if plan.valid_counts is not None else None),
-        },
+        'operand_counts': _operand_counts(plan),
     }
     return entry
 

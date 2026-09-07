@@ -160,35 +160,17 @@ def _group_capacity(converter_cls):
     return n
 
 
-def _valid_counts(converter_cls):
+def _count_list(counts, unbounded_from=None):
     """
-    The set of valid TOTAL operand counts for a group option's converter --
-    v1's "judge the count after grabbing".  A required leaf adds exactly 1; an
-    optional leaf adds 0 or 1; a required group adds its own valid counts; an
-    optional group adds those or 0.  grp2(a, i: inner=(p, q)) -> {1, 3}.
+    Render valid counts as '1 or 3' / '1, 2, or 4'; an unbounded
+    plan's as '2 or more' / '0, or 2 or more' (Larry's wording).
     """
-    coll = _Collector()
-    converter_cls().register(coll)
-    counts = {0}
-    for item in coll.items:
-        if not isinstance(item, ArgumentInstruction):
-            continue
-        if isinstance(item.converter, type) and issubclass(item.converter,
-                                                            Converter):
-            sub = _valid_counts(item.converter)
-            if not item.required:
-                sub = sub | {0}
-        elif item.required:
-            sub = {1}
-        else:
-            sub = {0, 1}
-        counts = {c + s for c in counts for s in sub}
-    return counts
-
-
-def _count_list(counts):
-    "Render valid counts as '1 or 3' / '1, 2, or 4'."
     nums = sorted(counts)
+    if unbounded_from is not None:
+        tail = f"{unbounded_from} or more"
+        if not nums:
+            return tail
+        return ', '.join(map(str, nums)) + f", or {tail}"
     if len(nums) == 1:
         return str(nums[0])
     if len(nums) == 2:
@@ -1118,9 +1100,10 @@ class Engine:
                     if arg.required:
                         # a required oparg starved mid-group: the grabbed count
                         # isn't a valid one -- name the option and its counts
+                        root = arg.owner._optarg_root.plan
                         raise UsageError(
                             f"option {arg.owner._opt_display} takes "
-                            f"{_count_list(_valid_counts(arg.owner._optarg_root))}")
+                            f"{_count_list(root.valid_counts, root.unbounded_from)}")
                     self.queue.popleft()
                     arg.owner.args.append(
                         _positional_default(arg.owner, arg.name))
@@ -1519,6 +1502,7 @@ def _build_class(plan, classes):
            '__module__': __name__}
     if children:                                # else the base no-op suffices
         dct['_fixup_children'] = classmethod(fixup_children)
+    dct['plan'] = plan          # the class knows its plan: counts, shape
     return type(f'Converter_{plan.name}', (Converter,), dct)
 
 

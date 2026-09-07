@@ -135,7 +135,9 @@ def test_plan_star_args():
     plan = build_plan(cp)
     assert plan.minimum == 1          # dst
     assert plan.maximum is None
-    assert plan.valid_counts is None
+    # unbounded: nothing valid below 1 (dst is pocketed), everything
+    # from 1 up (src absorbs the rest)
+    assert plan.valid_counts == set() and plan.unbounded_from == 1
     # src is now an absorbing GROUP (the _sources converter, whose own
     # slot repeats); dst is the reserved trailing operand
     assert plan.slots[0].child.slots[0].repeat
@@ -4138,8 +4140,11 @@ def test_fuzz_parity():
 
     def gen_argv(plan):
         "A random command line for the plan: operands + options."
-        if plan.valid_counts is None:
-            count = plan.minimum + rng.randint(0, 4)
+        if plan.unbounded_from is not None:
+            # a valid count below the threshold, or anything above it
+            counts = sorted(plan.valid_counts) + [
+                plan.unbounded_from + k for k in range(5)]
+            count = rng.choice(counts)
         else:
             counts = sorted(plan.valid_counts)
             count = rng.choice(counts)
@@ -4235,7 +4240,8 @@ def test_converter_restrictions_named():
     from appeal.frontend import Terminal
     assert not isinstance(named['a'].child, Terminal)
     assert named['a'].child.maximum is None
-    assert plan.valid_counts is None and plan.minimum == 2
+    assert plan.minimum == 2
+    assert plan.valid_counts == set() and plan.unbounded_from == 2
     # and v1's "can never be satisfied" shape is now the
     # only-possible reading (the completable-distribution superset)
     got = run_both(cmd, ['x', 'y', 'z'])

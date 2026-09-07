@@ -445,11 +445,17 @@ class Plan:
     options       OptionRules, in declaration order
     minimum,      operand-count arity, folded over the slots
     maximum       (maximum is None for unbounded)
-    valid_counts  the set of acceptable operand counts, or None
-                  when unbounded (then: count >= minimum)
+    valid_counts  the EXACT set of operand counts the fill rule
+                  accepts (simulated, so it can't disagree with the
+                  engine).  Unbounded plans (a *args somewhere) list
+                  the valid counts BELOW unbounded_from; from there
+                  up, every count is valid.
+    unbounded_from
+                  that threshold, or None for a bounded plan
     """
     __slots__ = ('callable', 'name', 'slots', 'options',
-                 'minimum', 'maximum', 'valid_counts', 'windowed', 'gated',
+                 'minimum', 'maximum', 'valid_counts', 'unbounded_from',
+                 'windowed', 'gated',
                  'certain', 'var_keyword', 'constructs', 'binds',
                  'tree_trailing', 'scoped_keys', 'auto_help',
                  'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0',
@@ -519,6 +525,7 @@ class Plan:
         self.minimum = minimum
         self.maximum = maximum
         self.valid_counts = valid_counts
+        self.unbounded_from = None
 
     def __repr__(self):
         return (f'<Plan {self.name} slots={len(self.slots)} '
@@ -627,17 +634,6 @@ class Plan:
         else:
             head = style('program', escape_styles(self.name))
         return f'{head} {body_text(self)}'.rstrip()
-
-    @property
-    def body_minimum(self):
-        "Arity in distribution space: the subtree's trailing excluded."
-        return self.minimum - self.tree_trailing
-
-    @property
-    def body_valid_counts(self):
-        if self.valid_counts is None:
-            return None
-        return {c - self.tree_trailing for c in self.valid_counts}
 
     def sole_terminal_slot(self):
         """
@@ -2065,72 +2061,100 @@ def _finalize_options(plan, default_options=default_options,
         plan.sibling_keys = frozenset(sibling_keys)
 
 
+def _greedy_body(plan, remaining):
+    """
+    The engine's fill rule, on counts: how many of `remaining`
+    operands this plan's body (its non-trailing slots) consumes,
+    or None if some slot starves.  Slots fill strictly left to
+    right, each taking while operands remain; a group is entered
+    whenever operands remain, and takes what ITS slots take.
+    Trailing operands aren't in play here: the whole tree's are
+    pocketed from the end of the stream before any body fills.
+    """
+    used = 0
+    for slot in plan.slots:
+        if slot.trailing:
+            continue
+        if slot.repeat:
+            used += remaining
+            remaining = 0
+        elif isinstance(slot.child, Terminal):
+            if remaining:
+                used += 1
+                remaining -= 1
+            elif slot.required:
+                return None
+        elif remaining or slot.required:
+            took = _greedy_body(slot.child, remaining)
+            if took is None:
+                return None
+            used += took
+            remaining -= took
+    return used
+
+
+def _absorbs(plan):
+    "Does this plan's body consume unboundedly (a *args somewhere)?"
+    return any(s.repeat or (not s.trailing
+                            and not isinstance(s.child, Terminal)
+                            and _absorbs(s.child))
+               for s in plan.slots)
+
+
+def _saturation(plan):
+    """
+    For an absorbing plan: the body count at which every slot
+    before the absorber has taken its maximum, so everything from
+    there up is valid (the absorber takes the rest).
+    """
+    # (no trailing check: a trailing slot always FOLLOWS the absorber,
+    # and the walk returns there)
+    total = 0
+    for slot in plan.slots:
+        if slot.repeat:
+            return total
+        if isinstance(slot.child, Terminal):
+            total += 1
+        elif _absorbs(slot.child):
+            return total + _saturation(slot.child)
+        else:
+            total += slot.child.maximum
+    assert False, 'an absorbing plan has an absorber'    # pragma: no cover
+
+
 def _analyze(plan):
     """
-    The plan's operand-count footprint: minimum, maximum, and
-    valid_counts (trailing operands shift everything by their count).
-
-    valid_counts is the fold of every slot's possible counts--the
-    up-front arity gate, and the set the wrong-count message phrases
-    as English.  It is a SUPERSET of what the greedy left-to-right
-    fill accepts (f(a='A', p: pair='P') folds to {0, 1, 2, 3}, but
-    two operands fill a and starve pair): the fill rule is the
-    engine's, and it never skips a slot--see the grammar's
-    distribution rule.  (The retired completable-distribution
-    automaton kept per-slot tables here; ruled away 2026-08-20.)
+    The plan's operand-count footprint--minimum, maximum,
+    valid_counts, unbounded_from--by SIMULATING the fill rule on
+    counts, so the set can't disagree with the engine (the retired
+    completable-distribution fold was a superset: it called two
+    operands valid for f(a='A', p: pair='P'), which fill a and
+    starve pair; ruled exact 2026-09-07).  Trailing operands are
+    pocketed from the end of the stream first, shifting everything
+    by the tree's trailing count.
     """
-    non_trailing = [s for s in plan.slots if not s.trailing]
-    n_trailing = sum(1 for s in plan.slots if s.trailing)
-    plan.tree_trailing = n_trailing + sum(
-        s.child.tree_trailing for s in non_trailing
-        if not isinstance(s.child, Terminal))
+    plan.tree_trailing = sum(
+        1 if s.trailing else
+        (s.child.tree_trailing if not isinstance(s.child, Terminal) else 0)
+        for s in plan.slots)
+    trailing = plan.tree_trailing
 
-    # each slot's possible operand counts, or None for one that
-    # absorbs unboundedly (a repeat slot, or a converter with *args)
-    slot_counts = []
-    for slot in non_trailing:
-        if slot.repeat:
-            slot_counts.append(None)
-        elif isinstance(slot.child, Terminal):
-            slot_counts.append((1,) if slot.required else (1, 0))
-        elif slot.child.valid_counts is None:
-            slot_counts.append(None)
-        else:
-            # body space: a child subtree's trailing arguments come
-            # from the end of the whole command's stream, not from
-            # this window
-            child_counts = set(slot.child.body_valid_counts)
-            if not slot.required:
-                child_counts.add(0)
-            slot_counts.append(tuple(sorted(child_counts, reverse=True)))
+    def valid(n):
+        return _greedy_body(plan, n) == n
 
-    # the fold, right to left: (counts completable by the slots from
-    # here on, or None for unbounded; their minimum)
-    counts, minimum = frozenset({0}), 0
-    for slot, own in zip(reversed(non_trailing), reversed(slot_counts)):
-        if slot.repeat:
-            counts = None
-        elif own is None:
-            # absorbing: unbounded above its child's minimum (0 if
-            # the slot is skippable)
-            counts = None
-            minimum += 0 if not slot.required else slot.child.body_minimum
-        elif counts is None:
-            minimum += min(own)
-        else:
-            counts = frozenset(c + x for c in own for x in counts)
-            minimum += min(own)
-
-    # the stream footprint: body plus every trailing argument in
-    # the subtree (they all come from the end of the stream)
-    plan.minimum = minimum + plan.tree_trailing
-    if counts is None:
+    if _absorbs(plan):
+        threshold = _saturation(plan)
+        counts = {n + trailing for n in range(threshold) if valid(n)}
+        plan.unbounded_from = threshold + trailing
         plan.maximum = None
-        plan.valid_counts = None
+        plan.minimum = min(counts) if counts else plan.unbounded_from
     else:
-        shifted = {c + plan.tree_trailing for c in counts}
-        plan.maximum = max(shifted)
-        plan.valid_counts = shifted
+        ceiling = _greedy_body(plan, 10 ** 9)       # every slot saturated
+        counts = {n + trailing for n in range(ceiling + 1) if valid(n)}
+        plan.unbounded_from = None
+        plan.maximum = max(counts)
+        plan.minimum = min(counts)
+    plan.valid_counts = counts
     _check_option_reachability(plan)
 
 

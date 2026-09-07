@@ -850,14 +850,73 @@ def test_schema_leaf_fallbacks():
     assert set(spots['items']['properties']) == {'x', 'y'}
 
 
-def test_plan_body_valid_counts_none():
-    # an unbounded plan has no count set: the body property answers
-    # None right along with valid_counts
+def test_plan_unbounded_counts():
+    # an unbounded plan: the valid counts BELOW unbounded_from, and
+    # everything from there up.  A bare *args takes anything at all
     def infinite(*args):
         return args
     plan = build_plan(infinite)
-    assert plan.valid_counts is None
-    assert plan.body_valid_counts is None
+    assert plan.valid_counts == set() and plan.unbounded_from == 0
+    assert plan.minimum == 0 and plan.maximum is None
+
+
+def test_valid_counts_are_exact():
+    # valid_counts is SIMULATED from the fill rule, so it can't be a
+    # superset of what the engine accepts (Larry's ruling, 2026-09-07:
+    # a count shown to the user must be true).  The retired fold
+    # called two operands valid for ambig--they fill a and starve pair.
+    def pair(x, y):
+        return (x, y)
+    def triple(x, y, z):
+        return (x, y, z)
+    def ambig(a='A', p: pair='P'):
+        return (a, p)
+    def two_groups(g1: pair=None, g2: triple=None):
+        return (g1, g2)
+    def before_absorb(p: pair=None, *rest):
+        return (p, rest)
+    assert build_plan(ambig).valid_counts == {0, 1, 3}
+    assert build_plan(two_groups).valid_counts == {0, 2, 5}
+    # unbounded with a hole: one operand starves the pair even though
+    # *rest could have taken it (the group is entered while operands
+    # remain--no skipping)
+    plan = build_plan(before_absorb)
+    assert plan.valid_counts == {0} and plan.unbounded_from == 2
+    # ...and the user sees the exact set, in Larry's wording
+    from appeal.backend import _count_list
+    assert _count_list(plan.valid_counts, plan.unbounded_from) == \
+        '0, or 2 or more'
+    assert _count_list(set(), 1) == '1 or more'
+    app = Appeal(name='ex')
+    @app.command()
+    def cmd(*, g: ambig = None):
+        return g
+    try:
+        app.process(['cmd', '-g', '1', '2'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert str(e) == 'option -g takes 0, 1, or 3', e
+    # the schema carries the threshold for an unbounded plan
+    app2 = Appeal(name='sc')
+    @app2.command()
+    def take(p: pair=None, *rest):
+        return (p, rest)
+    counts = app2.schema('appeal', '1.0')['commands']['take']['operand_counts']
+    assert counts == {'minimum': 0, 'maximum': None, 'valid': [0],
+                      'unbounded_from': 2}, counts
+    # a trailing operand behind an absorbing group that opens with an
+    # optional pair: the pocketed dst shifts everything by one, and
+    # the pair's hole survives the shift
+    def absorb(*words):
+        return words
+    def opt_then_abs(p: pair=None, *rest):
+        return (p, rest)
+    def t(g: opt_then_abs, dst):
+        return (g, dst)
+    plan = build_plan(t)
+    assert plan.slots[1].trailing
+    assert plan.valid_counts == {1} and plan.unbounded_from == 3, \
+        (plan.valid_counts, plan.unbounded_from)
 
 
 def test_completion_repeat_group_carries_completions():
