@@ -17,13 +17,13 @@ page's structure belongs to Appeal's template, not to how you
 happened to arrange your docstring.
 
 **Your docstring is Markdown.**  The first paragraph is the
-summary.  Everything after it is the documentation.  And a
-heading named `Options`, `Arguments`, or `Commands`--ANY heading,
-`# Options` or `###### OPTIONS` or setext `Options` over
-`-------`, any level, any case--opens a special section, which
-must contain exactly one **definition list**: the term is a
-parameter name (or command word), bare and unformatted; the
-details after the `:` are Markdown.
+summary.  Everything after it is the documentation.  And a line
+that is exactly `# Arguments`, `# Options`, or `# Commands`--one
+octothorpe, one space, that capitalization, at the left margin,
+not inside a code fence--opens a special section, which must
+contain exactly one **definition list**: the term is a parameter
+name (or command word), bare and unformatted; the details after
+the `:` are Markdown.
 
     import appeal
 
@@ -83,9 +83,15 @@ The rules, all of them:
   of any kind** (or the end), and must contain ONLY its
   definition list--trailing prose there is an error; put it
   before the section, or under its own heading.
+* Only that exact spelling opens a section.  `## Options`,
+  `# options`, `OPTIONS` underlined with dashes, an indented
+  `# Options`, or a `# Options` inside a code fence is ordinary
+  prose: Appeal leaves it in the documentation and says nothing.
 * Your OTHER headings are yours: anything not named
   Options/Arguments/Commands stays in the documentation and
   renders as part of it.
+* The details may nest a definition list of their own: indent it
+  to the details' column (the column after `: `), colon and all.
 * Entries are validated against your program's grammar, at build
   time, loudly: naming something that isn't a parameter is an
   error; documenting an option under `Arguments` (or vice versa)

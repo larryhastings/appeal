@@ -1777,36 +1777,36 @@ various output formats.  This means Appeal imposes a small
 amount of structure onto your docstrings.  It's gentle, and
 highly human-readable--you're gonna like it, honest!
 
-A docstring for an Appeal command function should be in this shape:
+A docstring for an Appeal command function is Markdown, in
+this shape:
 ```
 Summary line.
 
-Full description of the documentation.  Multiple lines
+Full description of the command.  Multiple lines
 and paragraphs are all fine.
 
 This is a second paragraph.
 
-Arguments:
-    parametername1: Description of what this argument does.
+# Arguments
+parametername1
+: Description of what this argument does.
 
-    parametername2: Documentation for the second argument.
+parametername2
+: Documentation for the second argument.
 
-Options:
-
-    keywordargument_a: Description of the option(s) that feed this
-      parameter.
-
-Text at the left column goes back into the "full documentation"
-section.
+# Options
+keywordargument_a
+: Description of the option(s) that feed this
+  parameter.
 ```
 
 First, Appeal outdents the entire docstring by its leftmost
 nonwhite column.  I talk about the "left column" below; this
 is the relative leftmost column, column 1 after outdenting.
 
-The "summary line" is the first line of the docstring.  It should
-be a standalone line (or paragraph) that explains what the
-command does.  It ends at the first empty line.  You should
+The "summary line" is the first paragraph of the docstring.  It
+should be a standalone line (or paragraph) that explains what
+the command does.  It ends at the first empty line.  You should
 keep these short; it should just be a summary, not full
 documentation.
 
@@ -1815,18 +1815,23 @@ It should be written as it should be presented to the user;
 it should talk about options by name (`--version`), not
 about keyword-only parameters (`version`).
 
-`Arguments:` and `Options:` are special markers parsed by
-Appeal.  They need to be at the left column, and they need
-that exact spelling, with the leading capital letter and the
-trailing colon without whitespace.  These start the "arguments"
-and "options" sections.
+`# Arguments`, `# Options`, and `# Commands` are special
+markers parsed by Appeal.  They need that exact spelling: one
+octothorpe, one space, the leading capital letter, at the left
+column, and not inside a code fence.  Any other spelling
+(`## Options`, `# options`, `Options` underlined with dashes)
+is ordinary prose; Appeal leaves it in your documentation and
+says nothing.  These start the "arguments", "options", and
+"commands" sections; a section runs to the next heading (of
+any kind) or the end of the docstring.
 
-The format of these sections is simple.  Every line must be
-indented, and every entry starts with the name of a parameter,
-followed by a colon, followed by the documentation for that
-parameter.  The documentation can cross multiple lines, but
-subsequent lines should be indented further.  A line at
-the left column ends the section.
+The format of these sections is a Markdown definition list.
+Every entry starts with the name of a parameter on a line by
+itself, at the left column, followed by a line starting with
+a colon and a space, followed by the documentation for that
+parameter.  The documentation can cross multiple lines and
+paragraphs; indent the subsequent lines to the column after
+the `: `.  A section must contain only its definition list.
 
 It's worth repeating, and pointing out: you define the
 documentation by specifying the *parameter name*, not
@@ -1847,12 +1852,16 @@ def serve(host, port: int = 8080, *, verbose=False):
     Longer prose about serving, wrapped and formatted
     for you.
 
-    Arguments:
-      host: The host to serve on.
-      port: The port.  Defaults to 8080.
+    # Arguments
+    host
+    : The host to serve on.
 
-    Options:
-      verbose: Print more output.
+    port
+    : The port.  Defaults to 8080.
+
+    # Options
+    verbose
+    : Print more output.
     """
     print('serving', host, port, verbose)
 
@@ -1863,18 +1872,22 @@ If you write this to `serve.py` and ask for help on the
 serve command, you are rewarded with:
 ```
 % python3 serve.py help serve
-Serves the thing.
+usage: serve serve [-v|--verbose] <HOST> [<PORT>]
 
-usage: serve [-v|--verbose] host [port]
+Serves the thing.
 
 Longer prose about serving, wrapped and formatted for you.
 
-Arguments:
-    host  The host to serve on.
-    port  The port.  Defaults to 8080.
+Arguments
+---------
 
-Options:
-    -v|--verbose  Print more output.
+<HOST>  The host to serve on.
+<PORT>  The port.  Defaults to 8080.
+
+Options
+-------
+
+-v|--verbose  Print more output.
 ```
 
 Already this is pretty good.  You specify the parameter name,
@@ -1889,17 +1902,16 @@ automatically pull in the documentation for *its* arguments
 and options--and all of its children, too.  You document
 the arguments and options once, in the command function or
 converter where it's defined, and everyone who uses it gets
-the documentation for free.
-
- document a converter's parameters once, in
-the converter's own docstring, and every command that uses the
-converter inherits that documentation--with the command able
-to override any entry it wants (nearest scope wins).  Your
-`Logging` mixin documents itself once, everywhere.
+the documentation for free.  Document a converter's
+parameters once, in the converter's own docstring, and every
+command that uses the converter inherits that documentation--
+with the command able to override any entry it wants (nearest
+scope wins).  Your `Logging` mixin documents itself once,
+everywhere.
 
 Entries are validated against your program's actual grammar at
 build time, loudly: document a parameter that doesn't exist,
-or file an option under `Arguments:`, and Appeal names your
+or file an option under `# Arguments`, and Appeal names your
 mistake instead of quietly shipping wrong help.
 
 You can reshape the page (the templates live in a plain dict,

@@ -1344,10 +1344,12 @@ def test_help_knobs():
 
 def test_markdown_scanner():
     # The Markdown pivot's hand-written textual scanner (Larry's
-    # spec, 2026-08-05): summary paragraph, body, and the
-    # Options/Arguments/Commands sections by ANY heading kind
-    # (ATX or setext), any level, case-insensitive; each section
-    # must be exactly one definition list; terms unformatted.
+    # spec, 2026-08-05; tightened 2026-09-07): summary paragraph,
+    # body, and the Options/Arguments/Commands sections opened by
+    # EXACTLY '# Options' etc.--one octothorpe, one space, this
+    # case, at the margin, outside a fence; any other spelling is
+    # prose.  Each section must be exactly one definition list;
+    # terms unformatted.
     from appeal.presentation import scan_docstring
     r = scan_docstring(
         "Update the item.\n"
@@ -1363,8 +1365,7 @@ def test_markdown_scanner():
         "color\n"
         ": Hue.\n"
         "\n"
-        "Arguments\n"
-        "---------\n"
+        "# Arguments\n"
         "name\n"
         ": The item.\n"
         "\n"
@@ -1380,11 +1381,30 @@ def test_markdown_scanner():
         ('color', 'Hue.')]
     assert r['arguments'] == [('name', 'The item.')]
     assert r['commands'] is None
-    # any level, any kind, any case
-    r = scan_docstring("Sum.\n\n###### OPTIONS\nv\n: Doc.\n")
-    assert r['options'] == [('v', 'Doc.')]
-    r = scan_docstring("Sum.\n\nCommands\n========\ngo\n: Runs.\n")
-    assert r['commands'] == [('go', 'Runs.')]
+    # any other spelling is prose, ignored: other levels, other
+    # cases, setext, indented, or inside a code fence (Astra R08)
+    for prose in ("###### OPTIONS\nv\n: Doc.\n",
+                  "## Options\nv\n: Doc.\n",
+                  "# options\nv\n: Doc.\n",
+                  " # Options\nv\n: Doc.\n",
+                  "Commands\n========\ngo\n: Runs.\n",
+                  "```python\n# Options\nprint('hi')\n```\n",
+                  "~~~\n# Commands\n~~~\n"):
+        r = scan_docstring("Sum.\n\n" + prose)
+        assert r['options'] is None and r['commands'] is None, prose
+        assert prose.split('\n')[1] in r['body'], (prose, r['body'])
+    # a fence inside a section's details doesn't end the section,
+    # and a heading inside the fence is code
+    r = scan_docstring("Sum.\n\n# Options\nv\n: Doc.\n\n"
+                       "  ```\n  # Notes\n  ```\n\nw\n: Two.\n")
+    assert r['options'] == [('v', 'Doc.\n\n```\n# Notes\n```'),
+                            ('w', 'Two.')], r['options']
+    # a nested definition inside a definition keeps its colon: the
+    # content column is big's, so an indented ':' is a continuation
+    r = scan_docstring("Sum.\n\n# Arguments\nx\n: Description.\n\n"
+                       "  term\n  : Nested definition.\n")
+    assert r['arguments'] == \
+        [('x', 'Description.\n\nterm\n: Nested definition.')], r
     # refusals name the offender
     from appeal import AppealConfigurationError
     for bad, fragment in (
@@ -1645,12 +1665,11 @@ def test_template_dresses_the_page():
         """
         Summary here.
 
-        ###### OPTIONS
+        # Options
         loud
         : Speak up.
 
-        Arguments
-        =========
+        # Arguments
         thing
         : The thing.
         """
@@ -1662,7 +1681,7 @@ def test_template_dresses_the_page():
             pass
     text = out.getvalue()
     # the input decoration is gone; the template's dress renders
-    assert '######' not in text and '=====' not in text, text
+    assert '# Options' not in text and '# Arguments' not in text, text
     assert 'Options\n-------' in text, text
     assert 'Arguments\n---------' in text, text
     # the TEMPLATE's order wins: arguments before options
@@ -4367,7 +4386,7 @@ def test_scoped_help_presentation():
     def mg(a, b: child = None, c: child = None, *, gronk=''):
         return (a, b, c)
     corpus = merge_docs(build_plan(mg))
-    options = {strip_styles(d): v for d, v in corpus['options']}
+    options = {strip_styles(d): v for d, v, _ in corpus['options']}
     assert '-g|--gronk <GRONK>' in options            # unqualified
     assert '-f|--flag (after <A>, before <C>)' in options
     assert '-f|--flag (after <B>)' in options
@@ -4394,7 +4413,7 @@ def test_scoped_help_presentation():
         return (first, second)
     corpus = merge_docs(build_plan(dish))
     rows = corpus['options']
-    texts = [lines for display, lines in rows]
+    texts = [lines for display, lines, depth in rows]
     assert ['The sweet one.'] in texts and ['The savory one.'] in texts
 
     # documenting the shared name at the COMMAND is ambiguous:
@@ -4422,10 +4441,11 @@ def test_scoped_help_presentation():
     def draw(shape, *, stroke: fancy = None):
         return (shape, stroke)
     corpus = merge_docs(build_plan(draw))
-    displays = [strip_styles(display) for display, lines in corpus['options']]
-    assert '-s|--stroke [-d|--dotted] [width]' in displays[0] or True
-    indented = [d for d in displays if d.startswith('  ')]
-    assert any('-d|--dotted' in d for d in indented), displays
+    rows = [(strip_styles(display), depth)
+            for display, lines, depth in corpus['options']]
+    assert rows[0][0].startswith('-s|--stroke') and rows[0][1] == 0, rows
+    # the sub-option nests one level beneath its declaring option
+    assert any('-d|--dotted' in d and depth == 1 for d, depth in rows), rows
 
 
 def test_config_layering():
@@ -5151,13 +5171,13 @@ def test_usage_formatter_knobs():
             Serves the thing with a summary long enough that a
             narrow margin will have to re-wrap it across lines.
 
-            ## Arguments
+            # Arguments
 
             host
             : The host to serve on, described at length so
               wrapping becomes visible in a narrow margin.
 
-            ## Options
+            # Options
 
             verbose
             : Print more output.
@@ -7292,8 +7312,7 @@ def test_parse_docstring():
     doc = (
         "Sum.\n"
         "\n"
-        "Arguments\n"
-        "---------\n"
+        "# Arguments\n"
         "x\n"
         ": the thing.\n"
         "  More about x.\n"
@@ -7320,9 +7339,11 @@ def test_parse_docstring():
         c = parse_docstring(empty, "f")
         assert c['summary'] == [] and c['documentation'] == []
 
-    # any heading kind, any level, any case
-    c = parse_docstring("Sum.\n\n###### COMMANDS\nserve\n: Serves.", "f")
+    # exactly '# Commands' opens the section; other spellings are prose
+    c = parse_docstring("Sum.\n\n# Commands\nserve\n: Serves.", "f")
     assert c['commands'] == {'serve': ['Serves.']}
+    c = parse_docstring("Sum.\n\n###### COMMANDS\nserve\n: Serves.", "f")
+    assert c['commands'] == {} and '###### COMMANDS' in c['documentation']
     # 'Subcommands' is not on the menu (the Markdown spec names
     # exactly three sections); it stays a body heading
     c = parse_docstring("Sum.\n\n# Subcommands\nserve\n: Serves.", "f")
@@ -7346,8 +7367,8 @@ def test_parse_docstring_errors():
             return
         assert False, f'expected AppealConfigurationError for {doc!r}'
 
-    # one section per kind, whatever the spelling
-    refuses("# Options\na\n: b\n\nOPTIONS\n-------\nc\n: d", "two")
+    # one section per kind
+    refuses("# Options\na\n: b\n\n# Options\nc\n: d", "two")
     # a special section must contain only a definition list
     refuses("# Options\njust some prose", "definition")
     # a term must be unformatted
@@ -7404,13 +7425,13 @@ def test_merge_docs():
     assert c['documentation'] == []
     # rows in plan order; entries merge up; nearest wins ('i');
     # undocumented surfaces get empty rows ('s')
-    assert [(strip_styles(d), v) for d, v in c['arguments']] == [
+    assert [(strip_styles(d), v) for d, v, _ in c['arguments']] == [
         ('<A>', ['The first thing.']),
         ('<I>', ['Overridden, how many knocks.']),
         ('<F>', ['The float part.']),
         ('<S>', []),
     ]
-    assert [(strip_styles(d), v) for d, v in c['options']] == \
+    assert [(strip_styles(d), v) for d, v, _ in c['options']] == \
         [('-v|--verbose', ['Print more output.'])]
     assert c['commands'] == []
 
@@ -7425,7 +7446,7 @@ def test_merge_docs():
         : a trailing operand.
         """
     c = merge_docs(build_plan(trailing_ok))
-    assert [(strip_styles(d), v) for d, v in c['arguments']] == \
+    assert [(strip_styles(d), v) for d, v, _ in c['arguments']] == \
         [('<A>', []), ('<REQUIRED_KW>', ['a trailing operand.'])]
 
     # commands merge only when the plan dispatches
@@ -7438,7 +7459,8 @@ def test_merge_docs():
         : Serves the thing.
         """
     c = merge_docs(build_plan(dispatcher), command_names=('serve', 'help'))
-    assert c['commands'] == [('serve', ['Serves the thing.']), ('help', [])]
+    assert c['commands'] == [('serve', ['Serves the thing.'], 0),
+                             ('help', [], 0)]
 
 
 def test_merge_docs_errors():
@@ -7775,7 +7797,7 @@ def test_single_terminal_transparency():
     # the row wears the outer name; the outer entry documents it,
     # winning (nearest) over flavor's own 'name:' entry
     assert ('<TASTE>', ['which flavor to serve.']) in \
-        [(strip_styles(d), v) for d, v in corpus['arguments']]
+        [(strip_styles(d), v) for d, v, _ in corpus['arguments']]
 
     # the converter's own docstring keeps working in its own
     # vocabulary: without an outer override, 'name:' documents
@@ -7784,7 +7806,7 @@ def test_single_terminal_transparency():
         "Serves."
     corpus = merge_docs(build_plan(scoop2))
     assert ('<TASTE>', ["the flavor, in flavor's own vocabulary."]) in \
-        [(strip_styles(d), v) for d, v in corpus['arguments']]
+        [(strip_styles(d), v) for d, v, _ in corpus['arguments']]
 
     # an explicit rename on the inner parameter wins the display
     # (recorded in a registry, never on the converter)

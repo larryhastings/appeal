@@ -3458,8 +3458,8 @@ def test_section_template_more_fails():
                 '{summary}\n\n{doc}\n\nArgs:\n  {arguments}\n\n'
                 'Cmds:\n  {commands}')
     corpus = {'summary': ['Sum.'], 'documentation': ['Prose.'],
-              'arguments': [('a', ['doc a'])],
-              'options': [('-x', [])], 'commands': []}
+              'arguments': [('a', ['doc a'], 0)],
+              'options': [('-x', [], 0)], 'commands': []}
     page = render_help_page('t [-x] a', corpus, template)
     assert page.index('Opts:') < page.index('Sum.') < \
         page.index('Args:'), page
@@ -4883,7 +4883,7 @@ def test_presentation_fiddly_reachable():
         return (width, dotted)
     def draw(a: fancy = None, mid: int = 0, b: fancy = None):
         return (a, mid, b)
-    quals = [strip_styles(d) for d, _ in merge_docs(build_plan(draw))['options']]
+    quals = [strip_styles(d) for d, _, _ in merge_docs(build_plan(draw))['options']]
     assert any('(before <MID>)' in q for q in quals), quals
     assert any('(after <MID>)' in q for q in quals), quals
     # a nested group inside an option: option_subtree recurses into the
@@ -4973,8 +4973,8 @@ def test_docstring_section_refusals():
     import appeal
     from appeal.presentation import parse_docstring
     for doc, needle in [
-        ("S.\n\n## Arguments\n   stray indented line\n", "stray indented"),
-        ("S.\n\n## Arguments\n", "empty"),
+        ("S.\n\n# Arguments\n   stray indented line\n", "stray indented"),
+        ("S.\n\n# Arguments\n", "empty"),
     ]:
         try:
             parse_docstring(doc, 'x')
@@ -5028,12 +5028,12 @@ def test_astra_r07_documentation_has_occurrence_identity():
     def command(a: left, b: right):
         return a, b
     rows = merge_docs(build_plan(command))['arguments']
-    assert [lines for display, lines in rows] == \
+    assert [lines for display, lines, depth in rows] == \
         [['LEFT X'], [], ['RIGHT X'], []]
     def twice(a: left, b: left):
         return a, b
     rows = merge_docs(build_plan(twice))['arguments']
-    assert [lines for display, lines in rows] == \
+    assert [lines for display, lines, depth in rows] == \
         [['LEFT X'], [], ['LEFT X'], []]
     # the refusal of an ambiguous bare name names the candidates
     def both(a: left, b: right):
@@ -5064,3 +5064,63 @@ def test_astra_r12_bad_tool_name_keeps_serving():
     replies = [json.loads(line) for line in out.getvalue().splitlines()]
     assert [r['id'] for r in replies] == [1, 2], replies
     assert replies[0]['error']['code'] == -32602, replies
+
+
+def test_astra_r08_tables_are_nodes_and_the_scanner_knows_code():
+    # R08: generated tables are built as big DefinitionList nodes,
+    # so a definition list the TEMPLATE adds no longer steals a
+    # row's term (the old Markdown round trip matched terms by
+    # traversal order and ran out); the docstring scanner knows
+    # code fences and big's definition content column; the
+    # CommonMark transforms leave code alone
+    import contextlib, io
+    from appeal.presentation import (default_template, scan_docstring,
+                                     to_commonmark, merge_docs)
+    app = Appeal(name='probe')
+    @app.precommand()
+    def command(x):
+        return x
+    app.templates = default_template.replace(
+        '## Arguments\n', '## Arguments\n\nlegend\n: A legend.\n\n')
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.help()
+    assert 'legend' in out.getvalue() and '<X>' in out.getvalue(), \
+        out.getvalue()
+    # two sub-options nest under their declaring option, in one list
+    def fancy(width: float = 1.0, *, dotted=False, dashed=False):
+        "Fancy.\n\n# Options\ndotted\n: Dots.\n\ndashed\n: Dashes.\n"
+        return (width, dotted, dashed)
+    def draw(shape, *, stroke: fancy = None):
+        return (shape, stroke)
+    app2 = Appeal(name='probe')
+    app2.precommand()(draw)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app2.help()
+    text = out.getvalue()
+    assert text.index('--dotted') < text.index('--dashed'), text
+    rows = merge_docs(build_plan(draw))['options']
+    assert [depth for display, lines, depth in rows] == [0, 1, 1], rows
+    # a fenced '# Options' is code, not a section
+    scanned = scan_docstring(
+        'Summary.\n\n```python\n# Options\nprint("hello")\n```')
+    assert scanned['options'] is None and '# Options' in scanned['body']
+    # a nested definition keeps its colon
+    scanned = scan_docstring('Summary.\n\n# Arguments\nx\n: Description.\n\n'
+                             '  term\n  : Nested definition.\n')
+    assert 'term\n: Nested definition.' in scanned['arguments'][0][1]
+    # a section ends at the next heading, setext included
+    scanned = scan_docstring('Summary.\n\n# Options\nv\n: Doc.\n\n'
+                             'Notes\n-----\nProse.\n')
+    assert scanned['options'] == [('v', 'Doc.')]
+    assert 'Notes' in scanned['body'] and 'Prose.' in scanned['body']
+    # a wide gap after the ':' is big's indented code
+    scanned = scan_docstring('Summary.\n\n# Options\nv\n:      code\n')
+    assert scanned['options'] == [('v', '     code')], scanned['options']
+    # inline code and fenced code pass through the transforms verbatim
+    assert to_commonmark('Use `~~literal~~`.') == 'Use `~~literal~~`.'
+    doc = 'Gone ~~here~~.\n\n```\n~~kept~~\nterm\n: not a list\n```\n'
+    assert to_commonmark(doc) == \
+        'Gone here.\n\n```\n~~kept~~\nterm\n: not a list\n```\n', \
+        to_commonmark(doc)

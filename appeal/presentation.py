@@ -14,8 +14,21 @@ from . import ConfigurationError
 
 SPECIAL_SECTIONS = ('options', 'arguments', 'commands')
 
+# the special section openers, LITERALLY (Larry's ruling, 2026-09-07):
+# one octothorpe, one space, this case, at the left margin, outside
+# any fence.  Anything else--'## Options', 'OPTIONS' underlined, an
+# indented '# Options'--is prose, and stays in the documentation.
+_SPECIAL_HEADINGS = {'# Options': 'options',
+                     '# Arguments': 'arguments',
+                     '# Commands': 'commands'}
 _ATX_RE = re.compile(r'^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$')
 _SETEXT_RE = re.compile(r'^ {0,3}(=+|-+)\s*$')
+# a code fence: three or more backticks or tildes, indented at most
+# three; closed by the same character, at least as many
+_FENCE_RE = re.compile(r'^ {0,3}(`{3,}|~{3,})')
+# a definition marker: ':' indented at most three (big's rule), then
+# the gap that sets the content column
+_DEFMARK_RE = re.compile(r'^( {0,3}):( *)(.*)$')
 # characters that read as Markdown formatting in a term.  '_' is
 # deliberately absent: parameter names carry underscores, and
 # mid-word underscores aren't emphasis anyway.
@@ -40,18 +53,36 @@ def _heading_at(lines, i):
     return None
 
 
-def _continues(line):
-    "A definition continuation line: indented, not a new ':'."
-    return line[:1].isspace() and not line.lstrip().startswith(':')
+def _fence_step(line, fence):
+    """
+    Track code fences line by line: returns the fence state after
+    `line`--(char, length) inside a fence, None outside--given the
+    state before it.
+    """
+    m = _FENCE_RE.match(line)
+    if fence is None:
+        return (m.group(1)[0], len(m.group(1))) if m else None
+    if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
+        return None
+    return fence
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip(' '))
 
 
 def _parse_definition_list(lines, where):
     """
     Parse section content that must be exactly one definition
     list: term lines at the margin, `: ` definitions beneath,
-    indented continuations, blank-line paragraph breaks inside a
-    definition.  Returns [(term, definition_markdown), ...];
-    anything that isn't a definition list refuses by name.
+    continuations indented to the definition's content column,
+    blank-line paragraph breaks inside a definition.  The content
+    column is big's (the parser that renders the details): the
+    ':' plus its gap sets it, and every line indented at least
+    that far belongs to the definition--including a NESTED
+    'term / : definition' pair, colon and all.  Returns
+    [(term, definition_markdown), ...]; anything that isn't a
+    definition list refuses by name.
     """
     def refuse(what):
         raise ConfigurationError(f"docstring section {where}: {what}")
@@ -63,7 +94,7 @@ def _parse_definition_list(lines, where):
             i += 1
             continue
         line = lines[i]
-        if line.lstrip().startswith(':'):
+        if _DEFMARK_RE.match(line):
             refuse(f"definition with no term: {line.strip()!r}")
         if line[:1].isspace():
             refuse(f"stray indented text {line.strip()!r} (the section "
@@ -77,14 +108,17 @@ def _parse_definition_list(lines, where):
         j = i
         while j < n and not lines[j].strip():
             j += 1
-        if j >= n or not lines[j].lstrip().startswith(':'):
+        if j >= n or not _DEFMARK_RE.match(lines[j]):
             refuse(f"term {term!r} has no ': definition'")
         i = j
         parts = []
-        while i < n and lines[i].lstrip().startswith(':'):
-            first = lines[i].lstrip()[1:]
-            if first[:1] == ' ':
-                first = first[1:]
+        while i < n and _DEFMARK_RE.match(lines[i]):
+            m = _DEFMARK_RE.match(lines[i])
+            margin, gap, first = m.groups()
+            if len(gap) > 4:                # big: a wide gap is one
+                first = gap[1:] + first     # space plus indented text
+                gap = ' '
+            column = len(margin) + 1 + len(gap)
             block = [first]
             i += 1
             cont = []
@@ -94,12 +128,12 @@ def _parse_definition_list(lines, where):
                     j = i
                     while j < n and not lines[j].strip():
                         j += 1
-                    if j < n and _continues(lines[j]):
+                    if j < n and _indent(lines[j]) >= column:
                         cont.append('')
                         i = j
                         continue
                     break
-                if _continues(s):
+                if _indent(s) >= column:
                     cont.append(s)
                     i += 1
                     continue
@@ -126,34 +160,40 @@ def scan_docstring(text, where=None):
       options, arguments, commands
                  [(term, definition_markdown), ...] or None when
                  the section wasn't written
-    ANY heading whose text is Options/Arguments/Commands
-    (case-insensitive), of ANY kind and level, opens the special
-    section; it runs to the next heading of any kind or EOF.
+    EXACTLY the line '# Options' / '# Arguments' / '# Commands'
+    (one octothorpe, one space, this case, at the left margin,
+    outside any code fence) opens the special section; it runs
+    to the next heading of any kind (outside a fence) or EOF.
+    Any other spelling is prose: ignored, kept in the body.
     `where` names the docstring's owner in error messages.
     """
     prefix = f"{where}: docstring " if where else "docstring "
     lines = (text or '').split('\n')
     sections = {name: None for name in SPECIAL_SECTIONS}
     body_lines = []
+    fence = None
     i, n = 0, len(lines)
     while i < n:
-        h = _heading_at(lines, i)
-        if h is not None:
-            name = h[0].lower()
-            if name in SPECIAL_SECTIONS:
-                if sections[name] is not None:
-                    raise ConfigurationError(
-                        f"{prefix}has two {h[0]!r} sections")
-                i += h[2]
-                content = []
-                while i < n and _heading_at(lines, i) is None:
-                    content.append(lines[i])
-                    i += 1
-                sections[name] = _parse_definition_list(
-                    content, (f"{where}: {h[0]}" if where
-                              else h[0]) + ':')
-                continue
-        body_lines.append(lines[i])
+        line = lines[i]
+        name = (_SPECIAL_HEADINGS.get(line.rstrip())
+                if fence is None else None)
+        if name is not None:
+            if sections[name] is not None:
+                raise ConfigurationError(
+                    f"{prefix}has two {line.rstrip()!r} sections")
+            i += 1
+            content = []
+            while i < n and (fence is not None
+                             or _heading_at(lines, i) is None):
+                fence = _fence_step(lines[i], fence)
+                content.append(lines[i])
+                i += 1
+            sections[name] = _parse_definition_list(
+                content, (f"{where}: {line.rstrip()}" if where
+                          else line.rstrip()) + ':')
+            continue
+        fence = _fence_step(line, fence)
+        body_lines.append(line)
         i += 1
 
     body = '\n'.join(body_lines).strip('\n')
@@ -181,16 +221,35 @@ _STRIKETHROUGH_RE = re.compile(r'~~(?=\S)(.+?)(?<=\S)~~', re.DOTALL)
 _ALERT_RE = re.compile(
     r'^(\s*> )\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$',
     re.MULTILINE)
+# code, which the textual transforms must leave alone: a fenced
+# block (opened and closed by the same fence), or a code span (a
+# backtick run closed by a run of the same length)
+_CODE_RE = re.compile(
+    r'(?:^ {0,3}(`{3,}|~{3,}).*?^ {0,3}\1[ \t]*$)'
+    r'|(?:(`+)(?!`).+?(?<!`)\2(?!`))',
+    re.MULTILINE | re.DOTALL)
+
+
+def _outside_code(text, transform):
+    "transform(text) applied to the stretches that aren't code."
+    out = []
+    pos = 0
+    for m in _CODE_RE.finditer(text):
+        out.append(transform(text[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(transform(text[pos:]))
+    return ''.join(out)
 
 
 def _strip_strikethrough(text):
-    return _STRIKETHROUGH_RE.sub(r'\1', text)
+    return _outside_code(text, lambda t: _STRIKETHROUGH_RE.sub(r'\1', t))
 
 
 def _alerts_to_commonmark(text):
     def label(m):
         return f"{m.group(1)}**{m.group(2).title()}:**"
-    return _ALERT_RE.sub(label, text)
+    return _outside_code(text, lambda t: _ALERT_RE.sub(label, t))
 
 
 def _transform_definition_lists(text, render_block):
@@ -202,10 +261,12 @@ def _transform_definition_lists(text, render_block):
     """
     lines = text.split('\n')
     out = []
+    fence = None
     i, n = 0, len(lines)
     while i < n:
         line = lines[i]
-        starts = (line.strip() and not line[:1].isspace()
+        fence = _fence_step(line, fence)
+        starts = (fence is None and line.strip() and not line[:1].isspace()
                   and not line.lstrip().startswith(':'))
         if starts:
             j = i + 1
@@ -748,63 +809,45 @@ def parse_help_template(template):
     return sections
 
 
-def rows_markdown(rows, role=None):
+def rows_document(rows, header, role=None):
     """
-    Corpus rows [(display, doc-lines), ...] as one Markdown
-    definition list, definition order preserved (ruled
-    2026-08-05).  An undocumented row is a term with an empty
-    definition (': ' with nothing after it--bare ':' wouldn't
-    parse as a definition list).  Entry lines are already
-    Markdown; continuation lines re-indent under the ':'.
-
-    A nested option's row (its display carries two leading
-    spaces per depth level, from the merge) becomes a NESTED
-    definition list inside its parent's details (ruled
-    2026-08-06)--the rendered table indents sub-options beneath
-    the option that declares them.
-
-    Argument/option displays arrive pre-built as role spans.
-    `role` (e.g. 'command') dresses rows whose display is plain
-    text instead--the command listing's words wear 'command'.
+    A table section as a big document: the template's header
+    (Markdown) followed by the corpus rows as a DefinitionList,
+    built as NODES (Astra R08: no Markdown round trip, no
+    re-deriving the hierarchy from indentation).  Each row's
+    display--a role-tagged span--is the entry's term, carried as
+    StyledText so big styles it verbatim; its doc lines are
+    Markdown, parsed into the definition's blocks.  A nested row
+    (depth > 0) becomes a definition list inside its parent's
+    definition, so sub-options indent beneath the option that
+    declares them (ruled 2026-08-06).  `role` (e.g. 'command')
+    dresses rows whose display is plain text--the command
+    listing's words wear 'command'.
     """
-    if role is not None:
-        rows = [(style(role, escape_styles(display)), lines)
-                for display, lines in rows]
-    # display is a role-tagged span; the markdown SOURCE term is its
-    # plain text (strip_styles), and the span itself is collected, in
-    # document order, to be injected as a StyledText term post-parse.
-    def entry_block(display, lines, children):
-        body = [l for l in lines] or ['']
-        first = f": {body[0]}" if body[0] else ": "
-        rest = [("  " + l) if l.strip() else '' for l in body[1:]]
-        block = [strip_styles(display), first] + rest
-        terms = [display]
-        for child in children:
-            block.append('')
-            sub_block, sub_terms = entry_block(*child)
-            block.extend(("  " + l) if l.strip() else '' for l in sub_block)
-            terms.extend(sub_terms)
-        return block, terms
-
-    # rebuild the tree the merge flattened: depth = the display's
-    # leading two-space pairs (on the plain text)
-    roots = []
-    stack = []                  # (depth, entry) path to the tip
-    for display, lines in rows:
-        plain = strip_styles(display)
-        stripped_plain = plain.lstrip(' ')
-        depth = (len(plain) - len(stripped_plain)) // 2
-        entry = (display.lstrip(' '), lines, [])
+    from big.markdown import (parse, DefinitionList, DefinitionEntry,
+                              Term, Definition, StyledText)
+    document = parse(header)
+    entries = []
+    stack = []                  # (depth, Definition) path to the tip
+    for display, lines, depth in rows:
+        if role is not None:
+            display = style(role, escape_styles(display))
+        text = '\n'.join(lines)
+        blocks = parse(text).blocks if text.strip() else []
+        definition = Definition(blocks)
+        entry = DefinitionEntry(Term([StyledText(display)]), [definition])
         while stack and stack[-1][0] >= depth:
             stack.pop()
-        (stack[-1][1][2] if stack else roots).append(entry)
-        stack.append((depth, entry))
-    blocks, terms = [], []
-    for e in roots:
-        b, t = entry_block(*e)
-        blocks.append('\n'.join(b))
-        terms.extend(t)
-    return '\n\n'.join(blocks), terms
+        if stack:
+            parent = stack[-1][1].blocks
+            if not parent or not isinstance(parent[-1], DefinitionList):
+                parent.append(DefinitionList([]))
+            parent[-1].entries.append(entry)
+        else:
+            entries.append(entry)
+        stack.append((depth, definition))
+    document.blocks.append(DefinitionList(entries))
+    return document
 
 
 def render_help_page(usage, corpus, templates, margin=79,
@@ -815,10 +858,10 @@ def render_help_page(usage, corpus, templates, margin=79,
     dresses its headings (Markdown, '## Options' by default);
     the corpus fills the slots--summary and doc are Markdown
     prose, the three tables become definition lists whose terms
-    are the resolved displays, rows synthesized in definition
-    order.  The assembled document renders through big's
-    pipeline in one pass.  usage is not Markdown: rendered and
-    wrapped separately, at whole units, painted when themed.
+    are the resolved displays, built as nodes in definition
+    order.  Everything renders through big's pipeline.  usage is
+    not Markdown: rendered and wrapped separately, at whole
+    units, painted when themed.
     Empty sections are suppressed, header and all; suppress
     names slots to omit entirely (help()'s usage=/summary=/doc=
     knobs).
@@ -836,36 +879,13 @@ def role_layout(layout):
     """
     Dress the summary section: every word wears the 'summary' role
     (join_styles fuses them back at render).  Table terms are dressed
-    at bake time now (built structurally, injected as StyledText),
-    and doc prose flushes section-less, so only the summary reaches
-    here.  Purely additive: a plain sheet strips the spans, so
+    at bake time (built structurally, as StyledText terms), and doc
+    prose flushes section-less, so only the summary reaches here.  Purely additive: a plain sheet strips the spans, so
     unthemed output is unchanged.
     """
     return tuple(style('summary', item)
                  if isinstance(item, str) and item.strip() else item
                  for item in layout)
-
-
-def _inject_styled_terms(document, terms):
-    """
-    Replace each definition-list term in `document` (in document
-    order) with its pre-built role span, delivered as a big
-    StyledText node so style_document carries it verbatim (no
-    escaping, no re-derivation).  `terms` is the ordered list
-    rows_markdown collected.
-    """
-    from big.markdown import StyledText, DefinitionList
-    it = iter(terms)
-
-    def walk(blocks):
-        for b in blocks:
-            if isinstance(b, DefinitionList):
-                for entry in b.entries:
-                    entry.term.children = [StyledText(next(it))]
-                    for d in entry.definitions:
-                        walk(d.blocks)
-
-    walk(document.blocks)
 
 
 def help_page_pieces(usage, corpus, templates, suppress=()):
@@ -884,21 +904,18 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
     pieces = []
     md = []            # pending markdown, flushed per role change
 
-    def flush(section=None, terms=None):
+    def bake(document, section=None):
+        layout = layout_document(
+            split_styles_document(style_document(document)))
+        if section == 'summary':
+            layout = role_layout(layout)
+        pieces.append(('markdown', layout))
+
+    def flush(section=None):
         text = ''.join(md)
         md.clear()
         if text.strip():
-            document = parse(text)
-            if terms:
-                # a table section: its def-list terms are pre-built
-                # role spans, injected as StyledText so big's layout
-                # carries them verbatim (no post-layout reparse)
-                _inject_styled_terms(document, terms)
-            layout = layout_document(
-                split_styles_document(style_document(document)))
-            if section == 'summary':
-                layout = role_layout(layout)
-            pieces.append(('markdown', layout))
+            bake(parse(text), section)
 
     for name, header, indent in parse_help_template(templates):
         if name in suppress:
@@ -909,24 +926,24 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
             prefix = header[nl + 1:] if nl >= 0 else header
             pieces.append(('usage', prefix, usage))
             continue
-        terms = None
-        if name == 'summary':
-            content = '\n'.join(corpus['summary'])
-        elif name == 'doc':
-            content = '\n'.join(corpus['documentation'])
-        else:
-            content, terms = rows_markdown(
-                corpus[name], 'command' if name == 'commands' else None)
-        if not content.strip():
-            continue
-        if name == 'doc':
+        if name in ('summary', 'doc'):
+            content = '\n'.join(corpus[name if name == 'summary'
+                                        else 'documentation'])
+            if not content.strip():
+                continue
+            if name == 'doc':
+                md.append(header + content)
+                continue
+            flush()
             md.append(header + content)
+            flush(name)
             continue
-        # a roled section bakes alone, so its terms line up with its
-        # own def-list
+        if not corpus[name]:
+            continue
+        # a table section is built as nodes, on its own
         flush()
-        md.append(header + content)
-        flush(name, terms)
+        bake(rows_document(corpus[name], header,
+                           'command' if name == 'commands' else None))
     flush()
     return tuple(pieces)
 
@@ -1043,10 +1060,15 @@ def merge_docs(plan, command_names=None):
 
         summary        the command's own summary, as lines
         documentation  the command's own prose blob, as lines
-        arguments      [(display, lines), ...] in plan order
-        options        [(display, lines), ...] in plan order
-        commands       [(word, lines), ...] if command_names,
+        arguments      [(display, lines, depth), ...] in plan order
+        options        [(display, lines, depth), ...] in plan order
+        commands       [(word, lines, depth), ...] if command_names,
                        else []
+
+    A row's display is a role-tagged span; its lines are Markdown;
+    depth nests it beneath the previous shallower row (a converter's
+    options under the option that declares it--arguments and
+    commands are depth 0).
 
     Every visible surface gets a row; undocumented rows carry
     empty lines.  command_names, if given, is an iterable of the
@@ -1056,9 +1078,11 @@ def merge_docs(plan, command_names=None):
     # namespaces (name -> ('argument'|'option'|'internal', display)),
     # deepest first so shallower scopes override.
     argument_rows = []     # (rowkey, display) in plan order
-    option_rows = []       # (rowkey, display, site) in plan order:
-                           # site is (flanking-argument anchors,
-                           # depth) for qualifiers and indentation
+    option_rows = []       # (rowkey, display, anchors, depth) in
+                           # plan order: the flanking-argument
+                           # anchors qualify a duplicated display;
+                           # depth nests a converter's options
+                           # beneath the option that declares it
     docs = {}              # rowkey -> lines, post-merge
     command_names = tuple(command_names) if command_names else ()
     def arg_name(s):
@@ -1102,8 +1126,7 @@ def merge_docs(plan, command_names=None):
             rowkey = path + (id(inner),)
             display = _option_display(inner, plan.decoration)
             ns.setdefault(inner.name, ('option', display, rowkey, child.name))
-            option_rows.append(
-                (rowkey, '  ' * depth + display, (None, None)))
+            option_rows.append((rowkey, display, (None, None), depth))
             if inner.child is not None:
                 for name, value in option_subtree(inner.child, depth + 1,
                                                   rowkey).items():
@@ -1144,7 +1167,7 @@ def merge_docs(plan, command_names=None):
                                      rowkey, p.name)
             option_rows.append((rowkey,
                                 _option_display(o, plan.decoration),
-                                anchors))
+                                anchors, 0))
             if o.child is not None:
                 for name, value in option_subtree(o.child, 1, rowkey).items():
                     namespace.setdefault(name, value)
@@ -1265,11 +1288,11 @@ def merge_docs(plan, command_names=None):
     # position qualifiers, only where a display is duplicated:
     # the flanking arguments' names say which window each row is
     seen = {}
-    for rowkey, display, anchors in option_rows:
+    for rowkey, display, anchors, depth in option_rows:
         key = strip_styles(display).strip()
         seen[key] = seen.get(key, 0) + 1
     rows = []
-    for rowkey, display, anchors in option_rows:
+    for rowkey, display, anchors, depth in option_rows:
         if seen[strip_styles(display).strip()] > 1 and anchors != (None, None):
             before, after = anchors
             if before and after:
@@ -1278,17 +1301,17 @@ def merge_docs(plan, command_names=None):
                 display += f' (after {before})'
             else:               # the != (None, None) guard: one anchor
                 display += f' (before {after})'     # exists, and it's after
-        rows.append((rowkey, display))
+        rows.append((rowkey, display, depth))
 
     return {
         'summary': parsed['summary'],
         'documentation': parsed['documentation'],
         'presentation': parsed.get('presentation'),
-        'arguments': [(display, docs.get(name, []))
+        'arguments': [(display, docs.get(name, []), 0)
                       for name, display in argument_rows],
-        'options': [(display, docs.get(name, []))
-                    for name, display in rows],
-        'commands': [(word, docs.get(word, []))
+        'options': [(display, docs.get(name, []), depth)
+                    for name, display, depth in rows],
+        'commands': [(word, docs.get(word, []), 0)
                      for word in command_names],
     }
 
@@ -1318,14 +1341,14 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True):
                   'documentation': parsed['documentation'],
                   'presentation': parsed.get('presentation'),
                   'arguments': [], 'options': [],
-                  'commands': [(w, parsed['commands'].get(w, []))
+                  'commands': [(w, parsed['commands'].get(w, []), 0)
                                for w in words]}
     elif global_plan is not None:
         corpus = merge_docs(global_plan, command_names=words)
     else:
         corpus = {'summary': [], 'documentation': [],
                   'arguments': [], 'options': [],
-                  'commands': [(word, []) for word in words]}
+                  'commands': [(word, [], 0) for word in words]}
     if listing:
         # the LISTING never shows the global command's own
         # arguments/options tables (v1's shape; the single
@@ -1335,8 +1358,8 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True):
         corpus['options'] = []
     fallback = dict(entries)
     corpus['commands'] = [
-        (word, lines or ([fallback[word]] if fallback.get(word) else []))
-        for word, lines in corpus['commands']]
+        (word, lines or ([fallback[word]] if fallback.get(word) else []), 0)
+        for word, lines, depth in corpus['commands']]
     return corpus
 
 
@@ -1407,7 +1430,7 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
         if not pairs:
             return
         line(f'.SH {section}')
-        for display, lines in pairs:
+        for display, lines, depth in pairs:
             line('.TP')
             line(f'.B {opt(display)}')
             if lines:
@@ -1431,7 +1454,7 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
     rows('OPTIONS', corpus['options'])
     if command_pages:
         line('.SH COMMANDS')
-        for word, lines in corpus['commands']:
+        for word, lines, depth in corpus['commands']:
             line('.TP')
             line(f'.B {esc(word)}')
             if lines:
@@ -1448,7 +1471,7 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
                     continue
                 line('.PP')
                 line(f'.B {label}')
-                for display, lines in pairs:
+                for display, lines, depth in pairs:
                     line('.TP')
                     line(f'.B {opt(display)}')
                     if lines:
