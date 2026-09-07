@@ -438,7 +438,7 @@ uncolored_theme = {
     'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
                        '⦃heading_color⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
     'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
-    'heading5':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
+    'heading5':   ('T', '⦃heading_color⦙T⦄'),
     'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
     # inline structure
     'code':       ('T', 'T'),               # themes color this

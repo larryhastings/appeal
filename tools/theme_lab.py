@@ -62,8 +62,9 @@ appeal_markdown_defaults = {
     # heading_color--ONE slot, so a theme recolors all six with
     # one entry.  h1 is bold ALL-CAPS between lines of =, h2
     # bold over a line of - (the =/- rows come from big's
-    # layout; the style paints them), h3 bold, h4-5 italic, h6
-    # color only.
+    # layout; the style paints them), h3 bold, h4 italic, h5
+    # color only, h6 color lowercased (ruled 2026-09-07: h5
+    # dropped italic--it rendered identically to h4).
     'heading_color': ('T', 'T'),
     # STRUCTURE IN THE SHEET, live (ruled 2026-08-08; big's
     # layout hard-codes nothing now).  h1 sits between full
@@ -83,7 +84,7 @@ appeal_markdown_defaults = {
     'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
                        '⦃heading_color⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
     'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
-    'heading5':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
+    'heading5':   ('T', '⦃heading_color⦙T⦄'),
     'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
     # inline structure
     'code':       ('T', 'T'),               # themes color this
@@ -281,10 +282,10 @@ share it and the monster falls back man-style:
 `-v`|`--verbose`
 : Narrate the process.
 
-`--config` *FILE*
-: Read configuration from *FILE*.
+`--config` *<FILE>*
+: Read configuration from *<FILE>*.
 
-`-p`|`--port` *PORT*
+`-p`|`--port` *<PORT>*
 : The TCP port to bind.  Defaults to 8080, or the value of
   the `SERVE_PORT` environment variable if set.
 
