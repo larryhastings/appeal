@@ -1107,13 +1107,15 @@ def _child_for(parameter, memo, stack):
     if annotation is inspect.Parameter.empty:
         default = parameter.default
         if default is not inspect.Parameter.empty:
-            if (isinstance(default, list) and default
+            if (isinstance(default, (list, tuple)) and default
                     and all(type(e) in _default_type_converters
                             for e in default)):
-                # a list default infers a group from its element
-                # types: b=[0, 0.0] takes an int and a float and
-                # produces a list (v1's corpus)
-                return _elements_plan(list, [type(e) for e in default],
+                # a list or tuple default infers a group from its
+                # element types: b=[0, 0.0] takes an int and a float
+                # and produces that sequence type (v1's corpus; the
+                # tuple half restored 2026-09-07, review item I2)
+                return _elements_plan(type(default),
+                                      [type(e) for e in default],
                                       parameter.name)
             t = type(default)
             if t in _default_type_converters or t is bool:
@@ -1121,7 +1123,16 @@ def _child_for(parameter, memo, stack):
                 # command line the runtime parses true/false/yes/no
                 # strictly, never truthiness
                 return Terminal(t)
-        return Terminal(str)
+            if default is not None and not isinstance(
+                    default, (list, tuple, dict, set, frozenset, bytes)):
+                # v1: a custom-class default infers ITS TYPE as the
+                # converter, recursing exactly like an annotation--
+                # build(target=Path('out')) reads the operand through
+                # Path (restored 2026-09-07, review item I1; the
+                # option side always kept this rule)
+                annotation = t
+        if annotation is inspect.Parameter.empty:
+            return Terminal(str)
     annotation = dereference_annotated(annotation)
     _refuse_bare_factory(annotation, f"parameter {parameter.name!r}")
     if (hasattr(annotation, 'recipe')

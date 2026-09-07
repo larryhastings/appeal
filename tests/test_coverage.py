@@ -1917,6 +1917,42 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_defaults_inference_class_and_tuple():
+    # v1's defaults inference, restored (review items I1/I2, ruled
+    # 2026-09-07): an unannotated positional infers its converter
+    # from the DEFAULT VALUE's type.  The scalar half never left;
+    # these are the two that did.
+    import pathlib
+    app = Appeal(name='i1')
+    @app.command()
+    def build(target=pathlib.Path('out')):
+        return target
+    # I1: a custom-class default--the operand converts through the
+    # class, so the function sees ONE type either way
+    assert app.process(['build']).result == pathlib.Path('out')
+    assert app.process(['build', 'src/x']).result == pathlib.Path('src/x')
+    # I2: a tuple default--its length is the arity, its element
+    # types the converters, and the result is a tuple
+    app2 = Appeal(name='i2')
+    @app2.command()
+    def crop(box=(0, 2.5)):
+        return box
+    assert app2.process(['crop']).result == (0, 2.5)
+    assert app2.process(['crop', '3', '4']).result == (3, 4.0)
+    # a class whose constructor can't take one string fails politely,
+    # at conversion, naming the parameter
+    import datetime
+    app3 = Appeal(name='fg')
+    @app3.command()
+    def when(at=datetime.datetime(2026, 1, 1)):
+        return at
+    try:
+        app3.process(['when', '2026-09-07'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert "invalid value for 'at'" in str(e), e
+
+
 def test_dispatch_more_shapes():
     # branch audit: __init__'s one-way ifs, each pinned behaviorally.
     # -V and --version both already belong to the program's own
