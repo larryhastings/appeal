@@ -1917,6 +1917,75 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_group_option_required_nested_counts():
+    # branch audit: a group option whose converter nests a REQUIRED
+    # group--the nested counts add without the optional {0}:
+    # outer(a, i:inner(p,q)) -> exactly 3
+    app = Appeal(name='vc')
+    def inner(p, q):
+        return (p, q)
+    def outer(a, i: inner):
+        return (a, i)
+    @app.command()
+    def cmd(*, g: outer = None):
+        return g
+    assert app.process(['cmd', '-g', '1', '2', '3']).result == ('1', ('2', '3'))
+    try:
+        app.process(['cmd', '-g', '1', '2'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert 'takes 3' in str(e), e
+
+
+def test_chain_options_deep_shapes():
+    # branch audit: options on a NESTED positional-slot group (the
+    # conjure chain), through the real two-pass dispatch
+    def enfant(*, count: appeal.counter() = 0, flag: int = 0):
+        return (count, flag)
+    def parent(et: enfant = None):
+        return et
+    app = Appeal(name='cf')
+    @app.command()
+    def grandparent(p: parent = None):
+        return p
+    # a chain FOLD invoked twice: the second occurrence reuses the
+    # instance; the dry pass builds it too, deferring init/option
+    assert app.process(['grandparent', '--count', '--count']).result == (2, 0)
+    # a chain VALUE option with its value attached
+    assert app.process(['grandparent', '--flag=5']).result == (0, 5)
+    # a chain-summoned MIDDLE level starving on its required operand:
+    # it has no kwargs (the typed option lives on the deepest level),
+    # so the availability message is the generic form
+    def parent2(need, et: enfant = None):
+        return (need, et)
+    app2 = Appeal(name='sv')
+    @app2.command()
+    def grandparent2(p: parent2 = None):
+        return p
+    try:
+        app2.process(['grandparent2', '--flag', '5'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert 'expected <NEED>' in str(e), e
+    # a nested option that takes SEVERAL opargs isn't conjurable--the
+    # chain pre-registration skips it, so it can't summon its group
+    def pt(x: int, y: int):
+        return (x, y)
+    def enfant2(*, spot: pt = None):
+        return spot
+    def parent3(need, et: enfant2 = None):
+        return (need, et)
+    app3 = Appeal(name='mv')
+    @app3.command()
+    def grandparent3(p: parent3 = None):
+        return p
+    try:
+        app3.process(['grandparent3', '--spot', '1', '2'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert "unknown option '--spot'" in str(e), e
+
+
 def test_definition_no_space_after_colon():
     # branch audit: ':definition' with no space after the colon is
     # legal--the space is cosmetic, stripped when present

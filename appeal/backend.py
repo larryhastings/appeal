@@ -280,12 +280,15 @@ def _availability_message(owner):
     from the starved converter itself -- it knows its own options and operands.
     """
     options, operands = _own_shape(type(owner))
-    spoken = None                                   # the option string the user
-    for name in owner.kwargs:                       # actually typed (set a kwarg)
-        strings = options.get(name)
-        if strings:
-            spoken = next((s for s in strings if s.startswith('--')), strings[0])
-            break
+    # the summon IS an option invoke, and every conjure binding writes
+    # its own option's kwarg on the spot--so when kwargs is non-empty,
+    # its first key is the option the user actually typed.  (A chain-
+    # summoned middle level has no kwargs at all: generic message.)
+    spoken = None
+    for name in owner.kwargs:
+        strings = options[name]
+        spoken = next((s for s in strings if s.startswith('--')), strings[0])
+        break
     ops = _operand_list(operands)
     if spoken:
         return f"{spoken} only becomes available if you specify {ops}"
