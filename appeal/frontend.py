@@ -699,7 +699,11 @@ def command_set_usage(prog, global_plan, decoration=None):
         rest = global_plan.usage().partition(' ')[2]
         if rest:
             parts.append(rest)
-    parts.append(style('argument',
+    # the placeholder keeps the argument DECORATION (<COMMAND>: a hole
+    # to fill) but wears the command ROLE--the words that can fill it
+    # are printed in that same style in the listing below, so the
+    # paint cross-references them (Larry's ruling, 2026-09-07)
+    parts.append(style('command',
                        decorate_argument('command', decoration)))
     return ' '.join(parts)
 

@@ -1917,6 +1917,16 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_command_placeholder_wears_command_role():
+    # the set usage line's <COMMAND> placeholder keeps the argument
+    # DECORATION (a hole to fill) but wears the command ROLE, cross-
+    # referencing the listing's words below (Larry's ruling,
+    # 2026-09-07)
+    from appeal.frontend import command_set_usage
+    markup = command_set_usage('vcs', None)
+    assert '⦃command⦙<COMMAND>⦄' in markup, markup
+
+
 def test_defaults_inference_class_and_tuple():
     # v1's defaults inference, restored (review items I1/I2, ruled
     # 2026-09-07): an unannotated positional infers its converter
