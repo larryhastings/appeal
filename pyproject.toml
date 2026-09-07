@@ -61,7 +61,6 @@ exclude = [
     "appeal_competitive_analysis.md",
     "survey.md",
     "README.draft.md",                  # the future README, not yet the README
-    "sample/",                          # stale: demonstrates removed codegen
     "tools/",                           # development apparatus
     "resources/",                       # repo/site assets (logo images)
 ]
