@@ -40,7 +40,31 @@ Source = "https://github.com/larryhastings/appeal/"
 
 [project.optional-dependencies]
 # the name CI installs: pip install '.[test]'
-test = ['perky', 'tomli']
+test = ['perky', 'tomli', 'flit_core']
+
+[tool.flit.sdist]
+# flit builds the sdist from git's tracked-file list, so the published
+# package would carry the whole repository unless told otherwise.  What
+# ships: the appeal package, the tests, the user docs (README plus the
+# appeal.*.md manuals), LICENSE, and this file.  What doesn't: review
+# transcripts, design history, and development apparatus.
+# tests/test_coverage.py::test_no_debris_ships holds the same line: a
+# new tracked file must be classified there or excluded here.
+exclude = [
+    "appeal.opus.4.6.review.txt",       # review transcripts
+    "appeal.opus.4.8.review.txt",
+    "appeal.fable.5.review.notes.md",
+    "appeal.sol.review.md",
+    "appeal.1.0.break.audit.md",
+    "appeal.proposal.md",               # design history
+    "appeal.streaming.md",
+    "appeal_competitive_analysis.md",
+    "survey.md",
+    "README.draft.md",                  # the future README, not yet the README
+    "sample/",                          # stale: demonstrates removed codegen
+    "tools/",                           # development apparatus
+    "resources/",                       # repo/site assets (logo images)
+]
 
 [tool.coverage.run]
 source = ["appeal"]

@@ -1917,6 +1917,66 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_no_debris_ships():
+    # flit builds the sdist from git's tracked-file list minus
+    # pyproject's [tool.flit.sdist] excludes--so the published package
+    # is "everything tracked, unless somebody said otherwise", and a
+    # stray tracked file ships silently (Sol #11: debugging scripts and
+    # review transcripts in the sdist).  Hold the line from both ends:
+    # every tracked file must be classified--shipped (this test's
+    # allowlist) or excluded (pyproject)--and the wheel must contain
+    # nothing but the package.
+    import subprocess
+    appeal_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        proc = subprocess.run(['git', 'ls-files'], cwd=appeal_dir,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL,
+                              universal_newlines=True)
+    except OSError:                     # no git on this machine
+        proc = None
+    if proc is None or proc.returncode != 0:
+        print('test_no_debris_ships: sdist half not run (not a git checkout)')
+        tracked = []
+    else:
+        tracked = proc.stdout.split()
+    shipped_dirs = ('appeal/', 'tests/', '.github/')
+    shipped_files = {
+        '.gitignore', 'LICENSE', 'README.md', 'pyproject.toml',
+        'appeal.completion.md', 'appeal.documentation.md',
+        'appeal.grammar.md', 'appeal.tour.md',
+    }
+    with open(os.path.join(appeal_dir, 'pyproject.toml')) as f:
+        pyproject = f.read()
+    for path in tracked:
+        if path.startswith(shipped_dirs) or path in shipped_files:
+            continue
+        top = path.partition('/')[0]
+        assert f'"{path}"' in pyproject or f'"{top}/"' in pyproject, (
+            f'{path!r} is tracked but unclassified: either it ships '
+            f'(add it to this test) or it does not (exclude it in '
+            f'[tool.flit.sdist])')
+
+    try:
+        from flit_core.wheel import make_wheel_in
+    except ImportError:
+        # 3.6: modern flit_core doesn't reach back that far
+        print('test_no_debris_ships: wheel half not run (no flit_core)')
+        return
+    import pathlib
+    import tempfile
+    import zipfile
+    with tempfile.TemporaryDirectory() as td:
+        info = make_wheel_in(pathlib.Path(appeal_dir) / 'pyproject.toml',
+                             pathlib.Path(td))
+        with zipfile.ZipFile(info.file) as z:
+            names = z.namelist()
+    for name in names:
+        # the package, and the wheel's own appeal-<version>.dist-info/
+        assert name.startswith(('appeal/', 'appeal-')), (
+            f'{name!r} is in the wheel but not part of the package')
+
+
 def test_completion_bad_candidates_and_fish():
     from appeal import completion_reentry
     def color(hue):
