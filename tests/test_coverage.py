@@ -1008,7 +1008,7 @@ def test_config_inject_shapes():
     assert drive({'corner': [7, 8]})[3] == (7, 8)
     assert drive({'corner': 9})[3] == (9, 0)
     for config, complaint in (({'tags': 5}, 'sequence'),
-                              ({'spot': 5}, '2 values'),
+                              ({'spot': 5}, 'sequence of 2'),
                               ({'corner': {'w': 1, 'zz': 2}}, 'zz')):
         try:
             drive(config)
@@ -2631,7 +2631,7 @@ def test_parse_once_edges():
         app3.process([])
         assert False, 'expected AppealDataError'
     except appeal.AppealDataError as e:
-        assert str(e) == "config: option '--where' requires 2 values", e
+        assert str(e) == "config: expected a sequence of 2 (at where)", e
 
 
 def test_era_flags():
@@ -2877,6 +2877,92 @@ def test_astra_r09_conjured_options_are_ordinary_options():
     app = _probe(counted)
     assert app.process(['-v', '-v']).result == 2
     assert app.process(['-vv']).result == 2
+
+
+def test_astra_r02_config_reaches_its_owner():
+    # R02: config replayed as synthetic argv lost values.  An option on
+    # a POSITIONAL converter vetted fine but never arrived (the replay
+    # merged only root kwargs); a by-name group mapping couldn't skip an
+    # earlier optional operand (the serializer stopped at the first
+    # missing slot).  Values are now read by name and assigned to their
+    # owners.
+    def logging(*, level='warn'):
+        return level
+    app = Appeal(name='probe', default_mappings=None)
+    @app.precommand(config={'level': 'info'})
+    def command(log: logging = None):
+        return log
+    assert app.process([]).result == 'info'
+    assert app.process(['--level', 'debug']).result == 'debug'   # argv wins
+    def group(first='A', second='B', *, flag=False):
+        return first, second, flag
+    app2 = Appeal(name='probe', default_mappings=None)
+    @app2.precommand(config={'group': {'second': 'CONFIGURED'}})
+    def command2(*, group: group = None):
+        return group
+    assert app2.process([]).result == ('A', 'CONFIGURED', False)
+    # an argv-built nested instance takes the config value too (argv
+    # wins for the options it set)
+    def logging3(*, level='warn', color=False):
+        return (level, color)
+    app3 = Appeal(name='probe', default_mappings=None)
+    @app3.precommand(config={'level': 'info', 'color': True})
+    def command3(log: logging3 = None):
+        return log
+    assert app3.process(['--level', 'debug']).result == ('debug', True)
+    # a false flag is ABSENT (documented): the default stays
+    app4 = Appeal(name='probe', default_mappings=None)
+    @app4.precommand(config={'color': False, 'level': 'x'})
+    def command4(log: logging3 = None):
+        return log
+    assert app4.process([]).result == ('x', False)
+    # an inner option of a group OPTION: built from the mapping when
+    # argv didn't name the group, assigned to the argv-built instance
+    # when it did
+    app6 = Appeal(name='probe', default_mappings=None)
+    @app6.precommand(config={'flag': True})
+    def command6(*, group: group = None):
+        return group
+    assert app6.process([]).result == ('A', 'B', True)
+    assert app6.process(['--group', 'X']).result == ('X', 'B', True)
+    # the owner is found past a leaf slot and past another group slot
+    def other(*, verbose=False):
+        return verbose
+    def stamp():
+        return 'stamped'
+    app7 = Appeal(name='probe', default_mappings=None)
+    @app7.precommand(config={'level': 'info', 'mark': True})
+    def command7(count: int = 0, o: other = None, log: logging = None,
+                 *, mark: stamp = None):
+        return (count, o, log, mark)
+    assert app7.process([]).result == (0, None, 'info', 'stamped')
+    assert app7.process(['3']).result == (3, None, 'info', 'stamped')
+    # a false nullary is absent, like a false flag
+    app7b = Appeal(name='probe', default_mappings=None)
+    @app7b.precommand(config={'mark': False})
+    def command7b(*, mark: stamp = None):
+        return mark
+    assert app7b.process([]).result is None
+    # two levels down, both unbuilt: the mapping nests to the owner
+    def outer(*, inner: logging = None):
+        return inner
+    app8 = Appeal(name='probe', default_mappings=None)
+    @app8.precommand(config={'level': 'info'})
+    def command8(*, a: other = None, o: outer = None):
+        return o
+    assert app8.process([]).result == 'info'
+    # an owner behind a *args slot can't be addressed by a mapping
+    def each(x, *, tag=''):
+        return (x, tag)
+    app5 = Appeal(name='probe', default_mappings=None)
+    @app5.precommand(config={'tag': 'T'})
+    def command5(*items: each):
+        return items
+    try:
+        app5.process([])
+        assert False, 'expected AppealConfigurationError'
+    except appeal.AppealConfigurationError as e:
+        assert 'behind a *args' in str(e), e
 
 
 def test_no_debris_ships():
@@ -4723,7 +4809,7 @@ def test_init_config_layering_edges():
         app2.process(['go', 't']).result
         assert False
     except DataErr as e:
-        assert str(e) == 'config: not a valid grp2: must be non-negative'
+        assert str(e) == 'config: must be non-negative'
 
 
 def test_help_collapses_blank_line_runs():

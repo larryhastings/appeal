@@ -29,7 +29,7 @@ __version__ = '1.0'
 # here; rendering, building, and completion stay lazy.
 # ============================================================
 
-import collections
+import collections.abc
 import operator
 import sys
 
@@ -590,25 +590,35 @@ def _config_vet(plan, table_words, config, command_plan_for,
             if not isinstance(s.child, Terminal):
                 gather(s.child)
     gather(plan)
+    def scoped_in(rule, value):
+        "the key--or a nested key of a group's mapping--that is scoped"
+        if rule.name in scoped or rule.key in plan.scoped_keys:
+            return rule.name
+        if rule.kind == 'group' and isinstance(value, collections.abc.Mapping):
+            inner = {o.name: o for o in rule.child.options}
+            for k, v in value.items():
+                if k in inner:
+                    hit = scoped_in(inner[k], v)
+                    if hit:
+                        return hit
+        return None
     vetted = {}
     for key, value in config.items():
-        if key in scoped or (key in options
-                             and options[key].key in plan.scoped_keys):
+        rule = options.get(key)
+        hit = rule and scoped_in(rule, value)
+        if hit:
             if not strict:
                 continue
             # refused BY DESIGN (ruled 2026-07-09): position is
             # the essence of a scoped option, and a mapping has no
-            # position--the two transports don't compose.  (The
-            # relax-later shape, should a real need appear, is
-            # nested addressing through the window's parameter:
-            # {'b': {'flavor': ...}}.)
+            # position--the two transports don't compose.  A scoped
+            # option INSIDE a group's mapping refuses the same way.
             raise AppealConfigurationError(
-                f"config: {key!r} names a scoped option (several "
+                f"config: {hit!r} names a scoped option (several "
                 f"windows declare it, and position decides which--"
                 f"a mapping has no position).  Set it on the "
                 f"command line, or give the uses distinct "
                 f"parameter names (@app.option)")
-        rule = options.get(key)
         if rule is not None:
             vetted[key] = rule
             continue
@@ -646,121 +656,115 @@ def _config_vet(plan, table_words, config, command_plan_for,
 
 def _config_apply(conv, table, plan, config, plan_for, strict=True):
     """
-    Layer a precommand era's BOUND config mapping onto its already-parsed
-    converter (the one engine): defaults < config < argv, atomic per option.
-    Keys are vetted strictly (reuse _config_vet).  Each vetted option argv did
-    NOT set is replayed as the synthetic command-line tokens it would have
-    produced, run through a fresh converter of the same class and merged in --
-    so config rides the ordinary conversion pipeline.  Conversion failures
-    carry 'config:' provenance (an option argv already gave wins whole).
+    Layer a precommand era's BOUND config mapping onto its parsed
+    converter: defaults < config < argv, atomic per option.  Keys are
+    vetted strictly (_config_vet).  Each vetted option argv did NOT set
+    is read the way a mapping is read--load's by-name reader, the same
+    converters--and ASSIGNED TO ITS OWNER: the era's converter for its
+    own options; the argv-built nested instance for a nested converter's
+    option; else that nested converter is built from the mapping, with
+    defaults for the rest.  Nothing is re-serialized as a command line
+    (Astra R02: that replay lost values--an option living on a positional
+    converter, a by-name group mapping that skipped an optional operand).
+    A false flag is ABSENT (the documented policy); conversion failures
+    carry 'config:' provenance and name the key.
     """
-    from .load import _read_bool
+    from .frontend import all_options
+    from .load import _option_value, _read_group, _read_bool
     vetted = _config_vet(plan, frozenset(table), config, plan_for, strict)
-    given = set(conv.kwargs)            # options (folds included) all live here now
-    usage = None            # the era hook attaches the trailer (the program
-                            # usage line--config errors are era errors)
-
-    def tokens_for(rule, value, provenance):
-        kind = rule.kind
-        spelling = rule.key                     # the long option string
-        if kind in ('flag', 'nullary'):
-            try:
-                wanted = _read_bool(value, f'config: {provenance}')
-            except AppealError as e:            # config is end-user input
-                raise AppealDataError(str(e), usage) from None
-            return [spelling] if wanted else []
-        if kind == 'group':
-            if not isinstance(value, dict):
-                seq = value if isinstance(value, (list, tuple)) else (value,)
-                return [spelling] + [str(v) for v in seq]
-            slot_names = {s.name for s in rule.child.slots}
-            option_rules = {o.name: o for o in rule.child.options}
-            extra = set(value) - slot_names - set(option_rules)
-            if extra:
-                raise AppealDataError(
-                    f"config: {provenance!r}: unknown group argument(s) "
-                    f"{sorted(extra)}", usage)
-            toks = [spelling]
-            for s in rule.child.slots:          # child operands, by name, in order
-                if s.name not in value:
-                    break
-                toks.append(str(value[s.name]))
-            for oname, orule in option_rules.items():   # child options, recursively
-                if oname not in value:
-                    continue
-                if orule.key in plan.scoped_keys:
-                    # a scoped option's essence is position; a mapping has none
-                    # (same ruling as a scoped top-level key, _config_vet)
-                    raise AppealConfigurationError(
-                        f"config: {provenance!r}.{oname!r} names a scoped "
-                        f"option (several windows declare it, and position "
-                        f"decides which); set it on the command line")
-                toks += tokens_for(orule, value[oname], f'{provenance}.{oname}')
-            return toks
-        if kind == 'fold':
-            if getattr(rule.converters[0], 'mapping', False):
-                if not isinstance(value, dict):
-                    raise AppealDataError(
-                        f"config: {provenance!r} collects KEY=VALUE pairs; "
-                        f"give it a mapping", usage)
-                toks = []
-                for k, v in value.items():
-                    toks += [spelling, f'{k}={v}']
-                return toks
-            if not isinstance(value, (list, tuple)):
-                raise AppealDataError(
-                    f"config: {provenance!r} repeats; give it a sequence", usage)
-            toks = []
-            for v in value:                     # one occurrence per element; a
-                if isinstance(v, (list, tuple)): # sequence element is a multi-arg
-                    toks.append(spelling)        # occurrence (--adds 2 3)
-                    toks += [str(x) for x in v]
-                else:
-                    toks += [spelling, str(v)]
-            return toks
-        # value: one occurrence, single- or multi-oparg
-        if len(rule.converters) > 1:
-            if not isinstance(value, (list, tuple)):
-                raise AppealDataError(
-                    f"config: {provenance!r} takes {len(rule.converters) - 1} "
-                    f"values; give it a sequence", usage)
-            return [spelling] + [str(v) for v in value]
-        return [spelling, str(value)]
-
-    synth = []
+    owners = {id(rule): owner for owner, rule in all_options(plan)}
     for name, rule in vetted.items():
-        if name in given:                       # argv wins, whole
+        raw = config[name]
+        try:
+            if rule.kind == 'flag':
+                if not _read_bool(raw, name):
+                    continue                    # false: absent, default stays
+                value = rule.present
+            elif rule.kind == 'nullary':
+                if not _read_bool(raw, name):
+                    continue
+                value = rule.converters[0]()
+            else:
+                value = _option_value(rule, raw, name, strict)
+            _config_assign(conv, plan, owners[id(rule)], name, raw, value,
+                           strict, _read_group)
+        except (AppealDataError, ValueError, TypeError) as e:
+            # the reader names the innermost parameter it blamed
+            param = e.param if isinstance(e, AppealDataError) else None
+            raise AppealDataError(f"config: {e}",
+                                  param=param or name) from None
+
+
+def _config_assign(conv, plan, owner_plan, name, raw, value, strict,
+                   read_group):
+    """
+    Put a config value on its owner, argv winning per option.  The owner
+    is reached by the plan path from the era's converter: through
+    argv-built nested instances where they exist, else by BUILDING the
+    nested converter from a by-name mapping of the config value (its
+    other parameters default).
+    """
+    holder = conv
+    path = _owner_path(plan, owner_plan)
+    for k, step in enumerate(path):
+        node = step[1]
+        if step[0] == 'option':
+            instance = holder.kwargs.get(node.name)
+            slot_key = node.name
+        else:
+            index = step[2]
+            if index is None:
+                raise AppealConfigurationError(
+                    f"config: {name!r} lives on a converter behind a *args "
+                    f"slot; a mapping can't say which window")
+            instance = holder.args[index]
+            slot_key = index
+        if isinstance(instance, Converter):
+            holder = instance                   # argv built it: descend
             continue
-        synth += tokens_for(rule, config[name], name)
-    if not synth:
+        # argv didn't build this level: build the rest from config, by
+        # name, defaults for everything else
+        mapping = {name: raw}
+        for later in reversed(path[k + 1:]):
+            mapping = {later[1].name: mapping}
+        built = read_group(node.child, mapping, node.name, strict)
+        if step[0] == 'option':
+            holder.kwargs[slot_key] = built
+        else:
+            holder.args[slot_key] = built
         return
-    cfg_conv = type(conv)()
-    proc = backend.Engine(synth, cfg_conv, table)
-    try:
-        proc.parse()
-    except UsageError as e:
-        # config supplies only options (vetted); its synth carries no operands,
-        # so once the option tokens are consumed cfg_conv's required POSITIONALS
-        # report "missing argument" -- expected and irrelevant.  Any OTHER error
-        # is structural -> config: provenance.
-        if not str(e).startswith('missing argument'):
-            raise AppealDataError(f"config: {e}", getattr(e, 'usage', None),
-                                  param=getattr(e, 'param', None)) from None
-    try:
-        # finish the config VALUES here (not at conv()) so a conversion failure
-        # carries 'config:' provenance; then merge the finished values in
-        proc.resolve()
-        for k in list(cfg_conv.kwargs):
-            cfg_conv.kwargs[k] = backend.finish(cfg_conv.kwargs[k])
-    except (UsageError, ValueError, TypeError) as e:
-        # provenance: it came from config.  A group value builds LATE here, so
-        # its converter's own ValueError/TypeError (a helper saying "bad value")
-        # surfaces raw -- catch it too, exactly as the command-line render does,
-        # so config reads politely instead of tracing back.
-        raise AppealDataError(f"config: {e}", getattr(e, 'usage', None),
-                              param=getattr(e, 'param', None)) from None
-    for k, v in cfg_conv.kwargs.items():
-        conv.kwargs.setdefault(k, v)
+    if name not in holder.kwargs:               # argv wins, whole
+        holder.kwargs[name] = value
+
+
+def _owner_path(plan, target):
+    """
+    The steps from `plan` down to the plan `target`: ('slot', slot,
+    index-in-args) through positional groups (index None for a *args
+    window and everything after it), ('option', rule) through group
+    options.  [] when
+    target is plan; None when unreachable.
+    """
+    from .frontend import Terminal
+    if plan is target:
+        return []
+    index = 0
+    for slot in plan.slots:
+        if slot.repeat or index is None:
+            here = None                     # a *args window, or after one
+        else:
+            here = index
+            index += 1
+        if not isinstance(slot.child, Terminal):
+            rest = _owner_path(slot.child, target)
+            if rest is not None:
+                return [('slot', slot, here)] + rest
+    for option in plan.options:
+        if option.kind == 'group':
+            rest = _owner_path(option.child, target)
+            if rest is not None:
+                return [('option', option)] + rest
+    return None
 
 
 def _is_class_command(obj):

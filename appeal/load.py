@@ -34,8 +34,12 @@ _FALSY = frozenset(('false', 'no', 'off', '0'))
 
 
 def _fail(message, path):
+    # the error carries the innermost parameter's name as its param
+    # (structural provenance: the config layer names the key it
+    # blames from this, never from the message text)
     where = f" (at {path})" if path else ""
-    raise AppealDataError(f"{message}{where}")
+    param = path.rpartition('.')[2] if path else None
+    raise AppealDataError(f"{message}{where}", param=param)
 
 
 def _sub(path, name):
@@ -137,6 +141,10 @@ def _option_value(o, value, path, strict):
         if arity == 0:
             return ()
         if arity == 1:
+            # an occurrence is a sequence of its arguments; for one
+            # argument the bare value is accepted too
+            if _is_sequence(occurrence) and len(occurrence) == 1:
+                occurrence = occurrence[0]
             return (_convert(element_converters[0], occurrence, where),)
         if not _is_sequence(occurrence) or len(occurrence) != arity:
             _fail(f"expected a sequence of {arity}", where)
@@ -176,7 +184,7 @@ def _vet_keys(plan, mapping, path):
     claimed = _subtree_names(plan)
     for key in mapping:
         if key not in claimed:
-            _fail(f"unrecognized key {key!r}", path or 'the mapping')
+            _fail(f"unrecognized key {key!r}", path)
 
 
 def _read_group(plan, mapping, path, strict, boundary=True):
@@ -213,7 +221,7 @@ def _read_group_args(plan, mapping, path, strict):
             if slot.name in mapping:
                 value = _convert(child.converter, mapping[slot.name], here)
             elif slot.required:
-                _fail(f"required key {slot.name!r} is missing", path or 'the mapping')
+                _fail(f"required key {slot.name!r} is missing", path)
             else:
                 value = slot.default
             if slot.trailing:
@@ -283,7 +291,7 @@ def _read_sequence(plan, items, path, strict, call=True):
             args.append(slot.default)
             continue
         if i >= len(body):
-            _fail(f"ran out of values ({slot.name!r} is next)", path or 'the sequence')
+            _fail(f"ran out of values ({slot.name!r} is next)", path)
         value = body[i]
         i += 1
         if isinstance(child, Terminal):
@@ -292,7 +300,7 @@ def _read_sequence(plan, items, path, strict, call=True):
             args.append(_read_child(child, value, here, strict))
 
     if i < len(body):
-        _fail(f"{len(body) - i} leftover value(s)", path or 'the sequence')
+        _fail(f"{len(body) - i} leftover value(s)", path)
 
     kwargs = {}
     for slot, value in zip(trailing, reserved):
