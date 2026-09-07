@@ -4,10 +4,10 @@
 ## theme_lab.py -- Appeal's theme drafting bench.
 ##
 ## Renders one sample help page under every proposed theme, so
-## you can look at them in your actual terminal and hack the
-## colors.  EVERYTHING IS MEANT TO BE EDITED: the themes are
-## plain dict literals right below, the sample page is one
-## marked-up string, and rerunning the script shows your edits.
+## you can look at them in your actual terminal.  The themes are
+## THE REAL ONES, imported from appeal/presentation.py--edit them
+## there and rerun; the demo program's docstrings (below) are the
+## showcase, also freely editable.
 ## Glyphs (the bullet, quote bars, heading rules, alert emoji)
 ## are zero-arg spans--⦃bullet⦄, ⦃note_emoji⦄--resolved by the
 ## stylesheet, so a theme can re-glyph as well as recolor
@@ -53,160 +53,19 @@ from big.stylesheet import (
 
 
 ##
-## appeal_markdown_defaults: Appeal's opinions about the Markdown
-## concepts and the role defaults--ATTRIBUTES ONLY, no color.
-## Every theme starts from a copy of this and adds color.
-## (uncolored_theme IS this dict, verbatim.)
+## the themes are APPEAL'S--the signed-off dicts shipping in
+## appeal/presentation.py (ruled 2026-09-07: no lab copies, no
+## drift).  To tweak a theme, edit it THERE and rerun the lab.
 ##
 
-appeal_markdown_defaults = {
-    # headings (Larry's design, 2026-08-06): every level wears
-    # heading_color--ONE slot, so a theme recolors all six with
-    # one entry.  h1 is bold ALL-CAPS between lines of =, h2
-    # bold over a line of - (the =/- rows come from big's
-    # layout; the style paints them), h3 bold, h4 italic, h5
-    # color only, h6 color lowercased (ruled 2026-09-07: h5
-    # dropped italic--it rendered identically to h4).
-    'heading_color': ('T', 'T'),
-    # STRUCTURE IN THE SHEET, live (ruled 2026-08-08; big's
-    # layout hard-codes nothing now).  h1 sits between full
-    # rules, h2 over one--⦃fill⦙pattern⦙model⦄ sizes the rule to
-    # the stripped heading, ⦃clip⦙⦃line⦄⦙...⦄ bounds it at the
-    # margin (`line` is renderer-injected: '-' to the margin).
-    # Delete a rule line, lose the rule; give heading4 one, it
-    # rules.  The transforms on call: fill clip center strip
-    # lstrip rstrip upper lower title.
-    'heading1':   ('T',
-        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄\n'
-        '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
-        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄'),
-    'heading2':   ('T',
-        '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
-        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄'),
-    'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
-                       '⦃heading_color⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
-    'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
-    'heading5':   ('T', '⦃heading_color⦙T⦄'),
-    'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
-    # inline structure
-    'code':       ('T', 'T'),               # themes color this
-    'codeblock':  ('T', '⦃code⦙T⦄'),        # inherits code
-    'link':       ('T', '⦃underline⦙T⦄'),
-    'marker':     ('T', 'T'),
-    'blockquote': ('T', 'T'),
-    'rule':       ('T', 'T'),
-    'term':       ('T', '⦃bold⦙T⦄'),        # user deflists in prose
-    # GitHub alerts: big's colors, kept
-    'note':              ('T', '⦃blue⦙T⦄'),
-    'heading_note':      ('T', '⦃bold⦙⦃blue⦙T⦄⦄'),
-    'tip':               ('T', '⦃green⦙T⦄'),
-    'heading_tip':       ('T', '⦃bold⦙⦃green⦙T⦄⦄'),
-    'important':         ('T', '⦃purple⦙T⦄'),
-    'heading_important': ('T', '⦃bold⦙⦃purple⦙T⦄⦄'),
-    'warning':           ('T', '⦃dark_yellow⦙T⦄'),
-    'heading_warning':   ('T', '⦃bold⦙⦃dark_yellow⦙T⦄⦄'),
-    'caution':           ('T', '⦃red⦙T⦄'),
-    'heading_caution':   ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
-    # the roles, attribute-only defaults
-    'program':    ('T', '⦃bold⦙T⦄'),
-    'command':    ('T', '⦃bold⦙T⦄'),
-    'option':     ('T', '⦃bold⦙T⦄'),
-    'argument':   ('T', 'T'),
-    'oparg':      ('T', '⦃argument⦙T⦄'),    # ruled: defaults to argument
-    'summary':    ('T', '⦃bold⦙T⦄'),
-    'error':      ('T', '⦃bold⦙T⦄'),
-}
-
-
-def theme(**overrides):
-    "A theme: appeal_markdown_defaults plus your colors."
-    t = dict(appeal_markdown_defaults)
-    t.update(overrides)
-    return t
-
-
-##
-## the seven themes.  Edit freely--this is the whole point.
-##
-
-# plain and uncolored are ONE structure over two palettes: the theme
-# emits the document (heading rules are TEXT), and the palette decides
-# what renders--uncolored_palette expresses bold/italic/underline but
-# no colors, plain_palette expresses nothing.
-plain_theme = dict(appeal_markdown_defaults)
-
-# uncolored: attributes, no color--the defaults, verbatim.
-uncolored_theme = dict(appeal_markdown_defaults)
-
-# appeal_theme: Larry's, designed against the ANSI 16 (terminal
-# light/dark modes remap those for legibility, so this looks
-# right on both).  THIS IS A STRAWMAN--hack away.
-appeal_theme = theme(
-    command   = ('T', '⦃bold⦙⦃cyan⦙T⦄⦄'),
-    option    = ('T', '⦃cyan⦙T⦄'),
-    argument  = ('T', '⦃italic⦙T⦄'),
-    summary   = ('T', '⦃bold⦙T⦄'),
-    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
-    code      = ('T', '⦃green⦙T⦄'),          # ruled: code is green
-    marker    = ('T', '⦃dark_purple⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃blue⦙T⦄⦄'),
-    heading_color = ('T', '⦃cyan⦙T⦄'),
-)
-
-# the four corners: warm = red/orange/yellow, cool =
-# blue/green/cyan, purple in both.  light_* themes use dark_
-# colors (dark ink on a light page); dark_* themes use light_.
-# One deliberate deviation: code is AMBER in the warm corners
-# (green read as a wrong note there; ruled 2026-09-07--the
-# monochrome-phosphor colors were amber, green, and bluish
-# white, and amber is the warm one).
-
-light_warm_theme = theme(
-    command   = ('T', '⦃bold⦙⦃dark_orange⦙T⦄⦄'),
-    option    = ('T', '⦃dark_red⦙T⦄'),
-    argument  = ('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄'),
-    summary   = ('T', '⦃bold⦙⦃dark_red⦙T⦄⦄'),
-    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
-    code      = ('T', '⦃dark_amber⦙T⦄'),
-    marker    = ('T', '⦃dark_yellow⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),
-    heading_color = ('T', '⦃dark_red⦙T⦄'),
-)
-
-dark_warm_theme = theme(
-    command   = ('T', '⦃bold⦙⦃light_orange⦙T⦄⦄'),
-    option    = ('T', '⦃light_red⦙T⦄'),
-    argument  = ('T', '⦃italic⦙⦃light_gray⦙T⦄⦄'),
-    summary   = ('T', '⦃bold⦙⦃light_orange⦙T⦄⦄'),
-    error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
-    code      = ('T', '⦃light_amber⦙T⦄'),
-    marker    = ('T', '⦃light_yellow⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),
-    heading_color = ('T', '⦃light_red⦙T⦄'),
-)
-
-light_cool_theme = theme(
-    command   = ('T', '⦃bold⦙⦃dark_cyan⦙T⦄⦄'),
-    option    = ('T', '⦃dark_blue⦙T⦄'),
-    argument  = ('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄'),
-    summary   = ('T', '⦃bold⦙⦃dark_blue⦙T⦄⦄'),
-    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),     # errors stay red, even here
-    code      = ('T', '⦃dark_green⦙T⦄'),
-    marker    = ('T', '⦃dark_cyan⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),
-    heading_color = ('T', '⦃dark_blue⦙T⦄'),
-)
-
-dark_cool_theme = theme(
-    command   = ('T', '⦃bold⦙⦃light_cyan⦙T⦄⦄'),
-    option    = ('T', '⦃light_blue⦙T⦄'),
-    argument  = ('T', '⦃italic⦙⦃light_gray⦙T⦄⦄'),
-    summary   = ('T', '⦃bold⦙⦃light_cyan⦙T⦄⦄'),
-    error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
-    code      = ('T', '⦃light_green⦙T⦄'),
-    marker    = ('T', '⦃light_cyan⦙T⦄'),
-    link      = ('T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),
-    heading_color = ('T', '⦃light_blue⦙T⦄'),
+from appeal.presentation import (
+    appeal_theme,
+    dark_cool_theme,
+    dark_warm_theme,
+    light_cool_theme,
+    light_warm_theme,
+    plain_theme,
+    uncolored_theme,
 )
 
 
