@@ -636,6 +636,24 @@ one function with `@app.global_command()` and don't add
 any command functions.  Now that function owns the whole
 command-line.
 
+`@app.global_command()` is the friendly name for
+`@app.precommand()`, and you can register several: each
+runs before the commands, in registration order.  Their
+options are all recognized together at the head of the
+line, so `foo -q --version` works whichever precommand
+maps which option.  Three keywords shape that head, and
+Appeal's own `-h`/`--help`/`--version` handling is just a
+precommand that uses all three: `boundary=True` ends the
+precommand's era (the next precommand starts a new one);
+`bleed=True` keeps the era's options recognized one era
+further along the line; `immediate=True` runs the era as
+soon as it scans clean, before anything later on the line
+is judged--which is why `foo -h` prints help even when the
+program's required arguments are missing.  Only the leading
+eras may be immediate.  Commands can bleed too:
+`@app.command(bleed=True)` keeps that command's options
+recognized through the next command on the line.
+
 On the flip side of this coin, Appeal also supports
 *subcommands:* your command can *itself* be followed by
 another command, `git remote add`-style.  To add a
@@ -2493,9 +2511,10 @@ things POSIX allows, and allows some things POSIX disallows.
   stop recognizing strings starting with dashes as options,
   specify `--` (two dashes with nothing else).  All subsequent
   strings on the command-line will be used as arguments, even
-  if they start with a `-`.  (The effect is local to the parse
-  in progress--in a cycling program, the next command's parse
-  starts fresh.)
+  if they start with a `-`--for the rest of the line, every
+  command included; command words still dispatch.  (The rule
+  docopt uses; argparse and click forget the `--` at each
+  subcommand, git and clap stop recognizing subcommands too.)
 * A lone `-` is always an operand, never an option--it reaches
   your converter verbatim.  `appeal.file()` gives it the classic
   stdin/stdout meaning; without it, the string `'-'` is yours.

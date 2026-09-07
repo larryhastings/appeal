@@ -2634,6 +2634,193 @@ def test_parse_once_edges():
         assert str(e) == "config: option '--where' requires 2 values", e
 
 
+def test_era_flags():
+    # Larry's era model (2026-09-07): precommand(boundary=, bleed=,
+    # immediate=); Appeal's metadata precommand declares all three
+    import contextlib
+    # bleed: the metadata era's -h/--version reach the user precommand
+    # era ('foo -q --version'), and stop there--never the first command
+    app = Appeal(name='b', version='2.0')
+    @app.precommand()
+    def quiet(*, quiet=False):
+        return quiet
+    @app.command()
+    def status(*, verbose=False):
+        return verbose
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app.main(['-q', '--version'])
+            assert False, 'main() exits'
+        except SystemExit as e:
+            assert e.code == 0
+    assert out.getvalue().strip() == '2.0'
+    try:
+        app.process(['status', '--version'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert "unknown option '--version'" in str(e), e
+    # a user precommand that bleeds: its option is recognized in the
+    # FIRST command's era, bound to the precommand; the command's own
+    # options win a collision; a second command doesn't get it
+    seen = []
+    app2 = Appeal(name='bl', default_mappings=None, repeat=True)
+    @app2.precommand(bleed=True)
+    def logging(*, verbose=False, level=1):
+        seen.append(('logging', verbose, level))
+    @app2.command()
+    def one(*, level=9):
+        seen.append(('one', level))
+    @app2.command()
+    def two():
+        seen.append(('two',))
+    app2.process(['one', '--verbose', '--level', '3', 'two'])
+    assert seen == [('logging', True, 1), ('one', 3), ('two',)], seen
+    seen.clear()
+    try:
+        app2.process(['one', 'two', '--verbose'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert "unknown option '--verbose'" in str(e), e
+    # command(bleed=True): its options relay one command further--
+    # through a command with no options-and-arguments era of its own
+    seen.clear()
+    app3 = Appeal(name='cb', default_mappings=None, repeat=True)
+    @app3.command(bleed=True)
+    def first(*, tag=''):
+        seen.append(('first', tag))
+    @app3.command(bleed=True)
+    def relay():                        # nothing of its own: relays
+        seen.append(('relay',))
+    @app3.command()
+    def last(*, other=False):
+        seen.append(('last', other))
+    @app3.command()
+    def stop():
+        seen.append(('stop',))
+    app3.process(['first', 'relay', 'last', '--tag', 'T', '--other'])
+    assert seen == [('first', 'T'), ('relay',), ('last', True)], seen
+    seen.clear()
+    try:                                # last doesn't bleed: stop can't see it
+        app3.process(['first', 'last', 'stop', '--tag', 'x'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert "unknown option '--tag'" in str(e), e
+    # immediate: a user immediate era executes before the rest of the
+    # line is judged, and its nonzero result halts the run
+    app4 = Appeal(name='im', default_mappings=None)
+    @app4.precommand(boundary=True, immediate=True)
+    def early(*, bail=False):
+        seen.append(('early', bail))
+        return 3 if bail else None
+    @app4.command()
+    def work():
+        seen.append(('work',))
+    seen.clear()
+    assert app4.process(['--bail', 'nonsense']).result == 3
+    assert seen == [('early', True)]
+    seen.clear()
+    app4.process(['work'])
+    assert seen == [('early', False), ('work',)]
+    # the immediate eras must LEAD the line, and an era must agree
+    app5 = Appeal(name='order', default_mappings=None)
+    @app5.precommand(boundary=True)
+    def waits(*, w=False):
+        pass
+    @app5.precommand(boundary=True, immediate=True)
+    def late(*, l=False):
+        pass
+    @app5.command()
+    def go():
+        pass
+    try:
+        app5.process(['go'])
+        assert False, 'expected AppealConfigurationError'
+    except appeal.AppealConfigurationError as e:
+        assert 'must lead the line' in str(e), e
+    app6 = Appeal(name='mixed', default_mappings=None)
+    @app6.precommand(immediate=True)
+    def yes(*, y=False):
+        pass
+    @app6.precommand()
+    def no(*, n=False):
+        pass
+    @app6.command()
+    def go6():
+        pass
+    try:
+        app6.process(['go6'])
+        assert False, 'expected AppealConfigurationError'
+    except appeal.AppealConfigurationError as e:
+        assert 'disagree on immediate=' in str(e), e
+    # two waiting (non-immediate) eras in a row are fine: only an
+    # immediate one after a waiting one is refused
+    app8 = Appeal(name='waits', default_mappings=None)
+    @app8.precommand(boundary=True)
+    def w1(*, a=False):
+        seen.append(('w1', a))
+    @app8.precommand(boundary=True)
+    def w2(*, b=False):
+        seen.append(('w2', b))
+    @app8.command()
+    def go8():
+        seen.append(('go8',))
+    seen.clear()
+    app8.process(['-a', '-b', 'go8'])
+    assert seen == [('w1', True), ('w2', True), ('go8',)], seen
+    # subcommand(bleed=True) on a nested path registers the flag too
+    app7 = Appeal(name='sub', default_mappings=None)
+    @app7.command()
+    def db():
+        pass
+    @app7.subcommand('db', bleed=True)
+    def migrate(*, dry=False):
+        return dry
+    assert app7.plan_for('migrate').bleed
+    node = app7.command('db', bleed=True)  # the name path stamps the node
+    assert node._node_bleed
+
+
+def test_double_dash_is_line_wide():
+    # ruled 2026-09-07 (docopt-style): after `--` no token on the line
+    # is an option, in this era or any later one--but command words
+    # still dispatch
+    def pair(x, y):
+        return (x, y)
+    app = Appeal(name='dd', default_mappings=None)
+    @app.command()
+    def commit(msg, *, amend=False):
+        return (msg, amend)
+    @app.command()
+    def show(p: pair):
+        return p
+    # `--` before the command word: it dispatches; its later options die
+    assert app.process(['--', 'commit', '-m']).result == ('-m', False)
+    try:
+        app.process(['--', 'commit', '-m', '--amend'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert "unknown command '--amend'" in str(e), e
+    # `--` protects operands reaching a NESTED converter (R06)
+    assert app.process(['show', '--', '-a', 'b']).result == ('-a', 'b')
+    assert app.process(['--', 'show', '-a', 'b']).result == ('-a', 'b')
+
+
+def test_astra_r04_precommand_operands_in_registration_order():
+    # R04: two precommands with operands got them REVERSED (each entry
+    # laid its work at the front); now registration order
+    app = Appeal(name='probe', default_mappings=None)
+    events = []
+    @app.precommand()
+    def first(x):
+        events.append(('first', x))
+    @app.precommand()
+    def second(y):
+        events.append(('second', y))
+    app.process(['A', 'B'])
+    assert events == [('first', 'A'), ('second', 'B')], events
+
+
 def test_no_debris_ships():
     # flit builds the sdist from git's tracked-file list minus
     # pyproject's [tool.flit.sdist] excludes--so the published package

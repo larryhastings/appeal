@@ -791,20 +791,31 @@ class Engine:
     --the first two fused per era, since a structural error ends the
     parcel either way.)
     """
-    def __init__(self, argv, root, commands=()):
+    def __init__(self, argv, root, commands=(), dashdash=False):
         self.argv = list(argv)
         self.pos = 0
         self.end = len(self.argv)       # exclusive: trailing pockets shrink it
         self.queue = collections.deque()
         self.handlers = {}
         self.conjured = {}
-        self.force_positional = False
+        self.force_positional = dashdash    # `--` is LINE-WIDE (ruled
+                                        # 2026-09-07): once seen, no later
+                                        # token on the line is an option
         self.reserved = 0               # trailing operands lifted out of the
                                         # stream (option-aware pocket); counted
                                         # in `consumed` since they never hit pos
         self.root = root
         self.commands = commands        # command words: the saturation boundary
         self.pending = []               # the records to resolve, in token order
+
+    def seed(self, bled):
+        """
+        Options BLED from the previous era: still recognized here, still
+        bound to their own era's converter.  This era's own options win a
+        collision (registered first; a bled string only fills a gap).
+        """
+        for string, binding in bled.items():
+            self.handlers.setdefault(string, binding)
 
     def _record(self, record):
         self.pending.append(record)
@@ -1012,13 +1023,8 @@ class Engine:
 
             tok = self.peek()
             if tok == '--' and not self.force_positional:
-                if not self.queue:
-                    # saturated: a `--` is only meaningful to a consumer with
-                    # operands left to force positional.  An options-only era
-                    # (a help/version precommand) must leave it for the command
-                    # that follows, or the `--` is lost and its operands parse
-                    # as options (test_double_dash_state_never_leaks).
-                    return
+                # line-wide: from here on nothing is an option, in this era
+                # or any later one (the dispatcher carries the state along)
                 self.advance(); self.force_positional = True; continue
 
             if (tok is not None and not self.force_positional
@@ -1148,7 +1154,9 @@ class Engine:
             return
         # a converter slot: a conjured instance, or a fresh one from an operand
         obj = self.conjured.pop(arg.slot, None)
-        if obj is not None and (tok is None or self._is_option(tok)):
+        # (the loop invokes options before any fill sees them, so tok here
+        # is an operand or None--after `--` a dash token is an operand too)
+        if obj is not None and tok is None:
             # an option summoned a group but no operand arrived to start a fresh
             # element.  queue[0] is THIS Argument; a *args window has the Repeat
             # behind it.
@@ -1164,16 +1172,14 @@ class Engine:
             # no instance to bind to: the summoned shell falls through and becomes
             # the element.  If it needs operands and none arrive, its own fill
             # reports it (invoke-always; no conjurable flag).
-        if obj is None and (tok is None or self._is_option(tok)):
-            if tok is None and arg.required:
+        if obj is None and tok is None:
+            if arg.required:
                 obj = arg.converter()                # invoke-always (ruled): a
                                                      # required slot builds its
                                                      # shell; a starved required
                                                      # operand surfaces in its fill
             else:
                 self.queue.popleft()                 # nothing to build here
-                if arg.required:
-                    raise UsageError(f"missing argument {arg.name!r}")
                 if self.queue and isinstance(self.queue[0], RepeatInstruction):
                     self.queue.popleft()             # end the *args -- no phantom
                 else:                                # element; a plain optional
@@ -1200,15 +1206,16 @@ def _halts(result):
     return isinstance(result, int) and not isinstance(result, bool) and result
 
 
-def _unexpected(token, candidates=()):
+def _unexpected(token, candidates=(), dashdash=False):
     """
     Diagnose a token nobody claimed.  Commands never start with a dash, so a
     leading-dash leftover is a mistyped option (--verison), not a mystery
     command -- a friendlier, truthful error than "unknown command".
     `candidates` is the pool to suggest from: option strings for a dash token
-    (long ones only), command words otherwise.
+    (long ones only), command words otherwise.  After `--` (dashdash) nothing
+    is an option, so a dash token is an unknown command like any other.
     """
-    if token.startswith('-') and token not in ('-', '--'):
+    if not dashdash and token.startswith('-') and token not in ('-', '--'):
         longs = [c for c in candidates if c.startswith('--')]
         return UsageError(
             f"unknown option {token!r}{did_you_mean(token, longs)}")

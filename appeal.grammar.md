@@ -452,20 +452,25 @@ methods by attribute (`MyApp.fgrep`) and constructs at dispatch.
 
 ## Two stages, and cycling (July 2026 rulings)
 
-**Parse before execute** (the Appeal rule): the whole command line
-scans first--token structure, option legality and opargs, argument
-counts, the gate rule, window binding--with **zero user code**; a
-structurally malformed line does no work at all.  Then commands
-execute left to right, each built bottom-up (its converters--user
-code--run at the command's own position, so a later command's
-converter may depend on an earlier command's effects).  A
-*conversion* failure is therefore stage 2: commands to its left
-have already run, like `make` stopping mid-build.  A nonzero int
+**Three passes** (Larry's rule, 2026-09-07).  *Parcel:* the whole
+command line is matched up first--each token to the option, oparg,
+argument or command word it is--with **zero user code**: leaves are
+recorded as text with their converters, folds as occurrences,
+zero-argument converters as deferred calls.  A dead end (a word where
+a command should be but isn't one, an option nobody owns) ends the
+parcel: it's noted, not raised yet.  *Scan:* the eras marked
+`immediate` (Appeal's own `-h`/`--help`/`--version` precommand) that
+parceled cleanly execute now--they outrank whatever is wrong later on
+the line--then the noted problem is raised.  *Execute:* commands run
+left to right, each converting its records in token order and then
+calling its callable (user code runs at the command's own position,
+so a later command's converter may depend on an earlier command's
+effects).  A *conversion* failure is therefore pass 3: commands to its
+left have already run, like `make` stopping mid-build.  A nonzero int
 return halts dispatch and becomes the result (v1's early-exit
-contract, now uniform across every command on the line).
+contract, uniform across every command on the line).
 `app.process(args)` parses and runs, returning the `Processor` for
-that run; a whole-line structural pre-scan validates the command set
-before any command runs (there is no separate public parse-only call).  The Processor's `instances` list
+that run (there is no separate public parse-only call).  The Processor's `instances` list
 is the execution log, one `(command, instance)` pair per command
 run, in order (the global command logs `(None, ...)`; instances
 arrive with class-based commands).
@@ -561,22 +566,68 @@ flat spelling reads the current level and is for shallow configs.
 
 ## Precommands
 
-`@app.precommand()` is repeatable: each registration is another head
-era, invoked front-to-back (registration order; `index=` places one
-explicitly) before any command.  Their options all PARSE as one
-merged region at the head of the line (ruled 2026-09-03), so
-`foo -q --version` works no matter which precommand maps which
-string, in either spelling order.  One region means one owner per
-string: two precommands that WROTE the same option name (a long from
-a parameter, or an explicit @app.option claim) are a build error
-naming both; an auto-proposed short letter simply yields to the
-first claimant--the same first-declared-wins rule the letters follow
-inside one plan.  Invocation is unchanged: each precommand receives
-the values the shared parse bound to it, positional appetite fills
-left-to-right across the seams, and a halting return (help/version)
-still stops the line.  Precommand options do NOT survive into the
-command portion: the merged region ends at the first command word
-(matching argparse, click, and git itself--probed 2026-09-03).
+`@app.precommand()` is repeatable: each registration is another
+precommand, invoked front-to-back (registration order; `index=`
+places one explicitly) before any command.  By default they all parse
+as ONE era at the head of the line: every precommand's options are
+recognized together, so `foo -q --version` works no matter which
+precommand maps which string, in either spelling order.  One era
+means one owner per string: two precommands that WROTE the same
+option name (a long from a parameter, or an explicit @app.option
+claim) are a build error naming both; an auto-proposed short letter
+simply yields to the first claimant--the same first-declared-wins
+rule the letters follow inside one plan.  Each precommand receives
+the values the shared parse bound to it; operands fill in
+registration order.
+
+**The era flags** (Larry's design, 2026-09-07), keywords of
+`@app.precommand()`:
+
+* `boundary=True`: this precommand **ends its era**; the next
+  precommand starts a new one.  A boundary begins a new era even
+  when no later precommand registers in it--that empty era is where
+  a bleed lands and stops.
+* `bleed=True`: the era's options **stay mapped into the next era**,
+  still bound to their own precommand.  They're thrown away at the
+  end of THAT era unless it bleeds too--one hop per flag.  A later
+  era's own option wins a collision with a bled one.
+* `immediate=True`: the era **executes during the scan**, as soon as
+  it parcels clean--before anything later on the line is judged.
+  Only the leading eras may be immediate (an immediate era after a
+  waiting one is a build error), and every precommand sharing an era
+  must agree.  A nonzero int from an immediate era halts the line.
+
+Appeal's own metadata precommand (`-h`/`--help`/`--version`) declares
+all three: it is the first era alone, its options reach the user
+precommand era (`foo -q --version`) and no further, and it runs
+first--so `foo -h` prints help even when the program's required
+operands are missing, and `foo --version garbage` prints the
+version.  Nothing is special-cased: those are the flags, and a user
+precommand may claim them (`--dump-config`, say).
+
+**Command eras.**  Each command word is an era of its own (one
+required argument, the word; no options), followed by the command's
+options-arguments-opargs era when it takes anything.  A command era
+relays bled options into its own o-a-o era; a command that takes
+nothing stops the bleed.  `@app.command(bleed=True)` (and
+`subcommand(..., bleed=True)`) keeps the command's options mapped
+one command further: on the o-a-o era when there is one, else on the
+command era itself, so the relay continues through it.
+
+**Scanning an era**, token by token (the rule, in Larry's words): if
+an oparg is owed--optional opargs included--the token is it,
+unconditionally (`foo -h --version` asks for help on `--version`).
+`--` is remembered and discarded, and it is **line-wide**: no later
+token on the line is an option, in this era or any other, though
+command words still dispatch (docopt's rule; argparse and click scope
+it per level, git and clap kill later commands too--ruled
+2026-09-07).  Otherwise a dash token is an option: unknown, with
+nothing owed, it **ends the era** and is retried in the next; unknown
+with an argument still owed, it's an error; a short cluster mixing
+known and unknown letters is an error; known, it's consumed.  Any
+other token is an argument: it fills the next slot--optional slots
+are owed too, so an era ends only at saturation--or, saturated, ends
+the era and is retried.
 
 ## Config layering
 
