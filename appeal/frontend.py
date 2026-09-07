@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # appeal/frontend.py
-# Part of Appeal v2.
+# Part of Appeal 1.0.
 #
 # The front end: a callable's signature -> the Plan (the grammar IR).
 # Featherweight signature reading, the Plan tree, and build_plan's

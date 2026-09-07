@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # appeal/mcp.py
-# Part of Appeal v2.
+# Part of Appeal 1.0.
 # Copyright 2021-2026 by Larry Hastings
 #
 # The MCP server: JSON-RPC 2.0 over stdio, newline-delimited--the

@@ -770,14 +770,6 @@ def test_read_sequence_shapes():
         assert "'Z'" in str(e), e
 
 
-def test_help_dedent_blank_lines():
-    # _dedent_lines wears kid gloves: blank lines don't count
-    # toward the margin (the docstring parser never sends any,
-    # but the helper honors them)
-    from appeal.presentation import _dedent_lines
-    assert _dedent_lines(['  a', '', '    b']) == ['a', '', '  b']
-
-
 def test_help_ambiguous_three_ways():
     # the same parameter name documented differently in THREE
     # sibling grammars: once ambiguous, later conflicts stand down
@@ -1985,8 +1977,8 @@ def test_every_theme_renders_a_link():
     from appeal.presentation import (
         plain_theme, uncolored_theme, appeal_theme, light_warm_theme,
         dark_warm_theme, light_cool_theme, dark_cool_theme,
-        markdown_defaults, transforms, _StyleSheet)
-    from big.stylesheet import ansi_truecolor_palette
+        markdown_defaults, transforms)
+    from big.stylesheet import ansi_truecolor_palette, StyleSheet
     from big.markdown import (parse, style_document,
                               split_styles_document, layout_document)
     from appeal.presentation import render_baked_help
@@ -1996,10 +1988,17 @@ def test_every_theme_renders_a_link():
                   light_warm_theme, dark_warm_theme, light_cool_theme,
                   dark_cool_theme):
         sheet = (markdown_defaults | transforms | ansi_truecolor_palette
-                 | _StyleSheet(theme))
+                 | StyleSheet(theme))
         text = render_baked_help((('markdown', doc),), margin=60,
                                  stylesheet=sheet)
         assert 'the docs' in text, text
+    # the URL rides along as luggage, so a sheet MAY show it
+    sheet = (markdown_defaults | transforms | ansi_truecolor_palette
+             | StyleSheet(plain_theme)
+             | StyleSheet({'link': ('URL', 'T', 'T <URL>')}))
+    text = render_baked_help((('markdown', doc),), margin=60,
+                             stylesheet=sheet)
+    assert 'the docs <https://example.com/docs>' in text, text
 
 
 def test_plain_and_uncolored_are_one_structure():
@@ -2009,13 +2008,13 @@ def test_plain_and_uncolored_are_one_structure():
     # what else renders: uncolored expresses bold/italic/underline
     # (no colors), plain expresses nothing at all.
     from appeal.presentation import (plain_theme, uncolored_theme,
-                                     render_baked_help, _StyleSheet,
+                                     render_baked_help,
                                      markdown_defaults, transforms)
-    from big.stylesheet import plain_palette, uncolored_palette
+    from big.stylesheet import plain_palette, uncolored_palette, StyleSheet
     pieces = (('markdown', ('⦃heading2⦙Options⦄',)),)
     def render(theme, palette):
         sheet = (markdown_defaults | transforms | palette
-                 | _StyleSheet(theme))
+                 | StyleSheet(theme))
         return render_baked_help(pieces, margin=40, stylesheet=sheet)
     plain = render(plain_theme, plain_palette)
     assert plain == 'Options\n-------\n', repr(plain)
@@ -4843,9 +4842,6 @@ def test_help_collapses_blank_line_runs():
 def test_presentation_fiddly_reachable():
     import appeal, io, contextlib
     from big.stylesheet import strip_styles
-    # _dedent_lines: a line already at the margin -> nothing to strip
-    from appeal.presentation import _dedent_lines
-    assert _dedent_lines(['a', '  b']) == ['a', '  b']
     # a bare multi-command line prints the terse command listing
     app = appeal.Appeal('pile')
     @app.command()
@@ -4899,7 +4895,9 @@ def test_presentation_fiddly_reachable():
     o2 = io.StringIO()
     with contextlib.redirect_stdout(o2):
         app2.help('cmd')
-    assert 'opt' in strip_styles(o2.getvalue()) or True
+    text = strip_styles(o2.getvalue())
+    assert '-o|--opt' in text and '-f|--flag' in text, text
+    assert text.index('-o|--opt') < text.index('-f|--flag'), text
 
 
 def test_internal_helpers_direct():

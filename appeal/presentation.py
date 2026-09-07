@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # appeal/presentation.py
-# Part of Appeal v2.
+# Part of Appeal 1.0.
 #
 # All human-facing output: markdown scanning/transform of docstrings,
 # help-page assembly, usage + error rendering, themes and stylesheets.
@@ -429,14 +429,6 @@ _re = re
 style_delimiters = '⦃⦙⦄'
 
 
-def _StyleSheet(*args, **kwargs):
-    return StyleSheet(*args, **kwargs)
-
-
-def _style_span(*args, **kwargs):
-    return style(*args, **kwargs)
-
-
 _decoration_sheets = {}
 
 def decorate_argument(name, entry=None):
@@ -633,7 +625,7 @@ def resolve_stylesheet(spec, file=None):
                    if (spec is None) and can_colorize(file=file)
                    else plain_stylesheet)
         return (markdown_defaults | transforms | palette
-                | _StyleSheet(appeal_theme))
+                | StyleSheet(appeal_theme))
     return spec
 
 
@@ -742,7 +734,7 @@ def render_baked_help(pieces, margin=79, file=None,
     # DECORATED into literal text (host -> <HOST>) by the time they
     # get here, so their width measures correctly too.  The bare
     # ⦃line⦄ word is the one role only the renderer sizes.
-    line_span = _style_span('line')
+    line_span = style('line')
     line_glyph = sheet.render(line_span)
     measure = lambda w: strip_styles(
         glyphs(w).replace(line_span, line_glyph))
@@ -963,30 +955,6 @@ from . import AppealConfigurationError
 ## entries are slurped out, the remaining prose coalesces into one
 ## blob, and the templates own the output's structure entirely.
 ##
-
-# the first line of an entry: 'name:' or 'name: text'
-_ENTRY_START_RE = _re.compile(r'^([A-Za-z_][A-Za-z0-9_]*):(?:\s+(\S.*))?$')
-
-
-def _dedent_lines(lines):
-    """
-    Strips the common leading whitespace from lines, preserving
-    their relative indentation (kid gloves: an indented code line
-    stays indented relative to its siblings).  Ignores blank lines
-    when measuring--though the parser never sends any; a blank
-    line ends a section.
-    """
-    margin = None
-    for line in lines:
-        if not line.strip():
-            continue
-        indent = len(line) - len(line.lstrip())
-        if (margin is None) or (indent < margin):
-            margin = indent
-    if not margin:
-        return list(lines)
-    return [line[margin:] if line.strip() else line for line in lines]
-
 
 def parse_docstring(doc, where):
     """

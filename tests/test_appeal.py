@@ -6,12 +6,12 @@
 #
 # Three layers of protection:
 #   * the plan/build layer, tested directly;
-#   * PARITY: every (signature, argv) case runs through both the
-#     rung-1 interpreter and the rung-3 generated parser, and they must
-#     agree--same result or same UsageError message;
-#   * the NORTH STAR: standalone scripts are generated, written to
-#     disk, and executed in a subprocess with no access to appeal,
-#     appeal2, or big--and they must work.
+#   * the engine: every (signature, argv) case runs through the one
+#     interpreter (run_both and friends--named from the retired
+#     two-rung parity days) and must produce the expected result or
+#     UsageError message;
+#   * history: two differential tests run generated programs through
+#     the 0.6.4 tag (git archive) and compare.
 
 from big import test
 from big.builtin import load
@@ -23,8 +23,9 @@ import os.path
 import subprocess
 import sys
 
-# load returns the module; the repo root (for the git-archive
-# differential tests below) is the parent of the package directory
+# load returns the module; the repo root (for the differential tests
+# below, which git-archive the 0.6.4 tag) is the parent of the package
+# directory
 repo_dir = os.path.dirname(os.path.dirname(load('appeal').__file__))
 
 if sys.version_info < (3, 7):
@@ -2297,7 +2298,7 @@ def test_plan_configuration_errors():
 
 
 # ---------------------------------------------------------------------
-# PARITY: rung 1 (interpreter) vs rung 3 (generated), forever
+# the engine harness (run_both: named from the retired two-rung parity days)
 
 GENERIC_SPELLINGS = sys.version_info >= (3, 9)
 NOT_RUN_ON_OLD = []
@@ -3809,12 +3810,14 @@ def test_differential_fuzz_v1_greedy():
         v1dir = os.path.join(d, 'v1')
         os.makedirs(v1dir)
         r = subprocess.run(
-            f'git -C {repo_dir} archive master appeal | '
+            f'git -C {repo_dir} archive 0.6.4 appeal | '
             f'tar -x -C {v1dir}',
             shell=True, capture_output=True, text=True)
         if r.returncode != 0:
-            print('  (git archive failed; differential skipped)')
+            print('  (baseline unavailable: git archive of tag 0.6.4 '
+                  'failed; differential NOT exercised)')
             return
+        print('  (differential against the 0.6.4 tag: exercised)')
         driver = os.path.join(d, 'driver.py')
         with open(driver, 'wt', encoding='utf-8') as f:
             f.write(
@@ -3942,11 +3945,13 @@ def test_differential_fuzz_converter_group_conversion_and_arity():
     with tempfile.TemporaryDirectory() as d:
         v1dir = os.path.join(d, 'v1'); os.makedirs(v1dir)
         r = subprocess.run(
-            f'git -C {repo_dir} archive master appeal | tar -x -C {v1dir}',
+            f'git -C {repo_dir} archive 0.6.4 appeal | tar -x -C {v1dir}',
             shell=True, capture_output=True, text=True)
         if r.returncode != 0:
-            print('  (git archive failed; differential skipped)')
+            print('  (baseline unavailable: git archive of tag 0.6.4 '
+                  'failed; differential NOT exercised)')
             return
+        print('  (differential against the 0.6.4 tag: exercised)')
         driver = os.path.join(d, 'driver.py')
         with open(driver, 'wt', encoding='utf-8') as f:
             f.write(

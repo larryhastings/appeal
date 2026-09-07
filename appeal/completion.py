@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 #
-# appeal/complete.py
-# Part of Appeal v2.
+# appeal/completion.py
+# Part of Appeal 1.0.
 # Copyright 2021-2026 by Larry Hastings
 #
-# The build-time half of shell completion: turning a plan into the
-# tables the engine answers from.  The engine itself--and the
-# reentry protocol--live in appeal/__init__.py.
+# Shell completion: the shell scripts, the completion tables built from
+# a plan, the completer that answers a reentry (_APPEAL_COMPLETE), and
+# the reentry protocol.  Lazy--imported only when completion is asked for.
+#
+# What completion supports: it classifies tokens with the engine's own
+# rules (is_option_token, parse_short_options--one scanner, shared) and
+# walks the words before the cursor tolerantly through the tables,
+# offering option strings and command words.  It never runs a
+# converter, so it can't offer values a converter would compute; for an
+# operand it stands down and the shell's file completion takes over.
 
 import os
 import sys

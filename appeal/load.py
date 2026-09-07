@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
-# appeal/read.py
-# Part of Appeal v2.
+# appeal/load.py
+# Part of Appeal 1.0.
 # Copyright 2021-2026 by Larry Hastings
 #
 # read_mapping and read_iterable: the third and fourth consumers of

@@ -261,13 +261,6 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
     return 0
 
 
-# the compiled Appeal's default for a policy argument: "use the library
-# default".  The facade can't reproduce that default without importing full
-# appeal, so for the sentinel it falls back to the fingerprint the emitter
-# baked (the compile-time policy's).  An explicit value is fingerprinted live.
-_CONFIG_DEFAULT = object()
-
-
 import os
 import sys
 
@@ -1089,8 +1082,8 @@ class Appeal:
         # command word, linked by .parent.  A node's _impl is its
         # command function--for a node with children, that
         # function is the global command of its own little set.
-        # The flat structures the compiler consumes (_commands,
-        # _subs, ...) are read-only views derived from this tree.
+        # The flat views (_commands, _subs, ...) are read-only,
+        # derived from this tree.
         self.parent = parent
         self._children = {}       # command word -> child Appeal
         self._impl = None         # this node's command function
@@ -1503,8 +1496,7 @@ class Appeal:
                 yield word, node
                 yield from node._iter_set_nodes()
 
-    # -- the flat views the compiler consumes: read-only,
-    # -- derived from the tree
+    # -- the flat views: read-only, derived from the tree
 
     @property
     def _has_commands(self):

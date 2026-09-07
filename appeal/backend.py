@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # appeal/backend.py
-# Part of Appeal v2.
+# Part of Appeal 1.0.
 #
 # The back end: consumes the Plan.  build_converters turns Plans into the
 # live Converter subclasses; the Engine runs a command line
@@ -611,7 +611,7 @@ class Converter:
     a PreOption (conjuring builds the object but defers its work).
     """
     trailing = 0                        # count of this converter's own
-                                        # trailing operands (emitter sets it)
+                                        # trailing operands (build sets it)
     _iterable = False                   # tuple[...]/list[...] group: build from
                                         # the args iterable, don't splat them
     converter = None                    # the user's callable, wired by
@@ -701,7 +701,7 @@ class Converter:
             # nested CLASS command also has binds (it's a subcommand) but must
             # construct plainly -- it doesn't take the outer instance as self.
             # (A BoundInnerClass, which DOES construct through the outer, is a
-            # known-unported edge -- build hands the compiler a _Probe-bound
+            # known-unported edge -- build hands the engine a _Probe-bound
             # grammar, not the real descriptor.)
             return conv(self.bound, *args, **self.kwargs)
         return conv(*args, **self.kwargs)

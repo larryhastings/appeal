@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # appeal/schema.py
-# Part of Appeal v2.
+# Part of Appeal 1.0.
 # Copyright 2021-2026 by Larry Hastings
 #
 # Generic schema generation: the plan tree described as plain data

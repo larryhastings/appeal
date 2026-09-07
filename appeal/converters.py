@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # appeal/converters.py
-# Part of Appeal v2.
+# Part of Appeal 1.0.
 #
 # The converter vocabulary: the Option protocol, convert(), and the
 # built-in converter factories (split, validate, validate_range, counter,

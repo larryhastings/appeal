@@ -111,17 +111,10 @@ with minimal effort.
 Appeal 1.0 is a major rewrite.  It keeps Appeal 0.6's semantics and
 APIs--it runs all the old tests--but adds a bounty of new marquee powers:
 
-* **Standalone scripts.**  Appeal can *compile* your command-line
-  parser, producing a *standalone Python script*.  The resulting
-  script has no dependencies beyond Python itself--it doesn't even
-  need Appeal installed!  The emitted script is also *fast*--a
-  standalone Appeal parser takes single-digit *microseconds* to run.
-  Not *mille-*, *micro-*.
 * **Composable documentation**, rendered through templates
   you can reshape, and a color theme you can restyle.
 * **Tab completion** for bash, zsh, and fish, answered by the
-  same grammar that parses your command line--and it works in
-  the standalone scripts too.
+  same grammar that parses your command line.
 * **A class as your whole program**: `__init__` handles the
   global options, decorated methods are the commands.  The
   old "preparers" are gone, it *just works.*
@@ -1752,7 +1745,7 @@ And because the class-as-app is just commands all the way down,
 everything else in this document composes with it: cycling
 (`Appeal(repeat=True)` lets one line call several methods on
 the *same* instance), config layering (the config dict feeds
-`__init__`--see below), standalone emission, the REPL, MCP.
+`__init__`--see below), the REPL, MCP.
 
 (Appeal 0.6 handled methods with "preparer" objects--
 `app.app_class()`, `app.command_method()`, and friends.  The
@@ -1950,9 +1943,7 @@ zero-effort spelling:
 
 `app.completion(shell)` returns the same shell-function text
 for `'bash'`, `'zsh'`, or `'fish'`, if you'd rather install it
-properly.  And standalone scripts (next section) ship with
-completion baked in--the emitted script answers its own
-completion requests with no appeal installed.
+properly.
 
 The full walkthrough lives in
 [appeal.completion.md](appeal.completion.md).
@@ -2166,9 +2157,10 @@ A few things to know:
   startup**--`app.mcp(config=...)` feeds `__init__` under the
   config-layering rules--and every method tool dispatches
   bound to that one instance, so state persists across calls.
-* And of course, there's a standalone version:
-  `app.standalone_mcp()` emits the whole MCP server as one
-  dependency-free script, per the north star.
+* Stdout is the protocol stream while serving, and Appeal has
+  no opinion about what your commands print: a command that
+  prints to stdout corrupts the stream, so return the text (it
+  becomes the tool result) or print to stderr.
 
 The machine-readable twin of `--help` is also available
 directly: `app.schema('appeal', '1.0')` describes your whole
@@ -2193,7 +2185,8 @@ Appeal's exceptions form a tiny, principled hierarchy:
   for the command that failed.
 * `AppealConfigurationError` -- *you* (the program author)
   used Appeal incorrectly: an unbuildable signature, colliding
-  option strings, an unemittable standalone.  Raised at build
+  option strings, a docstring naming a parameter that doesn't
+  exist.  Raised at build
   time wherever possible, so structure bugs fail before any
   user input arrives.
 
@@ -2226,9 +2219,7 @@ that name is kept as an alias).  And it has one job of its own:
 raise it *from your command* for a runtime failure that should
 end the program politely--`raise AppealError("couldn't reach
 the server")` prints `error: couldn't reach the server` and
-exits 1, no usage (the command line was fine).  It works from a
-standalone script too, even though your module and the script
-each hold their own copy of the class.
+exits 1, no usage (the command line was fine).
 
 (The short spellings `UsageError`, `DataError`, and
 `ConfigurationError` are importable aliases, and both
@@ -2268,8 +2259,7 @@ Creates a new Appeal instance.
 * `margin` (default 79) caps the help page's wrap width; at
   render time the page uses the terminal's width or this cap,
   whichever is narrower (pipes and redirects get the cap, so
-  captured output is stable).  Baked into standalone scripts,
-  where the *script's* terminal decides.
+  captured output is stable).
 * `indent` (default 4) sets the left indent of the help tables.
   It works by re-indenting the section templates, which own
   layout--overwrite `app.templates` to go further.
@@ -2281,7 +2271,7 @@ Creates a new Appeal instance.
   every operand in angle brackets (`--number <number>`),
   `'{name.upper()}'` shouts them (`--number NUMBER`).  An
   explicit `@app.parameter(usage=...)` rename is literal and
-  overrides the format outright.  Baked into standalone scripts.
+  overrides the format outright.
 * `default_options` is the policy that turns an automatically-
   mapped keyword-only parameter into option strings: a callable
   `(name, annotation, default)` returning a list of option
@@ -2289,9 +2279,8 @@ Creates a new Appeal instance.
   (Appeal claims the long outright and the short if its letter is
   free); `default_long_option` drops the short (the "no auto
   shorts" policy), `default_short_option` drops the long, or pass
-  your own.  It runs at build time; only its output--the
-  strings--rides into a standalone script, never the callable
-  itself.  All three ship on the `appeal` namespace.
+  your own.  It runs at build time.  All three ship on the
+  `appeal` namespace.
 * `help` (default `True`) is Appeal's automatic help.  `True`
   gives every command `-h`/`--help` and, for a program with
   commands, a `help` command.  `help=False` suppresses all of
@@ -2303,8 +2292,7 @@ Help is on by default: every command answers `-h`/`--help`, and a
 program with commands gets a `help` command, unless you define
 your own or pass `help=False`.  Version works the same way, when
 you supply one: `Appeal(version='1.2.3')` gives you `--version`
-and a `version` command for free, and both are baked into
-standalone scripts.
+and a `version` command for free.
 
 `Appeal.command(name=None, *, repeat=False)`
 
@@ -2561,10 +2549,9 @@ things POSIX allows, and allows some things POSIX disallows.
 ## What Changed From Appeal 0.6
 
 Appeal 1.0 is a ground-up rewrite: the 0.6
-bytecode interpreter is gone, replaced by a compiler that
-analyzes your functions once and generates a specialized
-parser (the same generated code serves in-process and
-standalone).  Appeal 0.6's test corpus runs against 1.0
+bytecode interpreter is gone, replaced by a front end that
+analyzes your functions once into a plan and an engine that
+parses from the plan.  Appeal 0.6's test corpus runs against 1.0
 as a permanent regression suite.  The *deliberate* semantic
 changes, all of them:
 
@@ -2625,8 +2612,8 @@ class-as-app, config layering, `name=`, `list[T]`/`dict[K, V]`/
 `tuple[...]` spellings, the REPL, MCP servers, `app.schema()`'s
 two formats--
 and speed: cold start (build plus first parse) is roughly 10x
-faster than 0.6, warm parses roughly 700x, and a
-standalone script pays about 2.6ms of total startup where a
+faster than 0.6, warm parses roughly 700x, and `import appeal`
+plus a parse costs a few milliseconds of startup where a
 0.6 program paid about 70ms.
 
 
