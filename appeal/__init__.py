@@ -424,9 +424,10 @@ class _LazyInspect:
 _inspect = _LazyInspect()
 
 # featherweight stand-ins for the fast path: signature (microsecond) and
-# a bound-method check by shape (a bound method has __self__; `types`
-# would cost the fast path an import), so registration + dispatch never
-# trip the lazy real-inspect proxy.  getdoc etc. stay on _inspect (help).
+# MethodType minted from a bound method (`types` would cost the fast path
+# an import), so registration + dispatch never trip the lazy real-inspect
+# proxy.  getdoc etc. stay on _inspect (help).
+_MethodType = type((lambda self: None).__get__(object()))
 
 
 def _stamp_decoration(plan, entry):
@@ -1863,7 +1864,8 @@ class Appeal:
         if annotation is None:
             annotation = empty
         def decorator(callable):
-            if (isinstance(getattr(callable, '__self__', None), Appeal)
+            if (isinstance(callable, _MethodType)
+                    and isinstance(callable.__self__, Appeal)
                     and callable.__func__
                         is type(callable.__self__).help_and_version_precommand):
                 # the bound precommand: Python mints a fresh bound
@@ -1877,7 +1879,8 @@ class Appeal:
                     tuple(options)
                 callable.__self__.root._invalidate()
                 return callable
-            if isinstance(getattr(callable, '__self__', None), Appeal):
+            if (isinstance(callable, _MethodType)
+                    and isinstance(callable.__self__, Appeal)):
                 # a bound app method registered as a command
                 # (help's knobs, ruled 2026-08-05): bound methods
                 # mint a fresh object per attribute access, but
