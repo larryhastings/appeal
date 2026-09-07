@@ -10,7 +10,7 @@
 
 import os
 import sys
-from .backend import parse_short_options
+from .backend import parse_short_options, is_option_token
 from .frontend import all_options, help_option_strings
 from . import AppealConfigurationError, UsageError
 from .frontend import Terminal
@@ -237,16 +237,18 @@ def _completion_scan(options, words, maximum=None, boundary=None,
             remaining -= 1
             pending = (key, nargs, remaining) if remaining else None
             continue
-        if force_positional or not word.startswith('-') or word == '-':
+        if word == '--' and not force_positional:
+            force_positional = True             # line-wide, like the parse
+            continue
+        if force_positional or not is_option_token(word, (flag, oparg, opargs)):
+            # the scanner's own rule: a lone '-', and a negative number
+            # that isn't a short bundle, are operands (Astra R11)
             if maximum is not None and operands >= maximum:
                 return used, operands, pending, force_positional, index
             if (minimum is not None and boundary
                     and operands >= minimum and word in boundary):
                 return used, operands, pending, force_positional, index
             operands += 1
-            continue
-        if word == '--':
-            force_positional = True
             continue
         if word.startswith('--'):
             name = word.partition('=')[0]

@@ -2821,6 +2821,38 @@ def test_astra_r04_precommand_operands_in_registration_order():
     assert events == [('first', 'A'), ('second', 'B')], events
 
 
+def test_astra_r05_reservation_reads_short_bundles():
+    # R05: the trailing-operand reservation classified `-vo out` as a
+    # flag bundle occupying one token, so `out` was reserved as the
+    # destination and stolen from -o.  It carves bundles with the
+    # parser's own parse_short_options now.
+    def sources(*src):
+        return src
+    def cp(src: sources, dest, *, verbose=False, output=''):
+        return src, dest, verbose, output
+    app = _probe(cp)
+    expected = (('src',), 'dest', True, 'out')
+    assert app.process(['src', 'dest', '-v', '-o', 'out']).result == expected
+    assert app.process(['src', 'dest', '-vo', 'out']).result == expected
+    assert app.process(['src', 'dest', '-voout']).result == expected
+
+
+def test_astra_r11_completion_shares_the_option_rule():
+    # R11: completion decided "is this an option?" on its own (any dash
+    # token), so `-1` was an unknown short option and the operand
+    # position never advanced, while the parser read it as a negative
+    # number.  One rule now: is_option_token.
+    def color(value):
+        return value
+    color.completions = lambda prefix: ('red', 'blue')
+    def command(number: int, hue: color):
+        return number, hue
+    app = _probe(command)
+    assert app.process(['-1', 'red']).result == (-1, 'red')
+    assert app.complete(['1'], '') == ['blue', 'red']
+    assert app.complete(['-1'], '') == ['blue', 'red']
+
+
 def test_no_debris_ships():
     # flit builds the sdist from git's tracked-file list minus
     # pyproject's [tool.flit.sdist] excludes--so the published package

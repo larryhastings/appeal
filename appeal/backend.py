@@ -156,6 +156,29 @@ def _takes_many(binding):
     return False
 
 
+def is_option_token(tok, classifiers):
+    """
+    The scanner's one rule for a dash token: is it an option?  A lone
+    '-' and '--' aren't.  A dash+digit token is ambiguous--short options
+    (-243 == -2 -4 -3) or a negative number (Larry's heuristic,
+    2026-08-24): if it carves fully as a short-option bundle against
+    `classifiers` it's options; else if it's a valid float it's an
+    operand; else it's an option (so the real parse raises the honest
+    "unknown option").  Shared by the engine and completion, so they
+    can't disagree (Astra R11).
+    """
+    if not tok.startswith('-') or tok in ('-', '--'):
+        return False
+    if not tok.startswith('--') and tok[1].isdigit():
+        try:
+            for _ in parse_short_options(tok, classifiers):
+                pass
+            return True
+        except UsageError:
+            return not _is_float(tok)
+    return True
+
+
 def _is_float(text):
     "Does text parse as a Python float? (the negative-number heuristic's test.)"
     try:
@@ -860,28 +883,7 @@ class Engine:
         tok = self.argv[self.pos]; self.pos += 1; return tok
 
     def _is_option(self, tok):
-        if not tok.startswith('-') or tok in ('-', '--'):
-            return False
-        if not tok.startswith('--') and tok[1].isdigit():
-            # a dash+digit token is ambiguous: it could be short options
-            # (-243 == -2 -4 -3) or a negative number (Larry's heuristic,
-            # 2026-08-24).  (1) if it fully parses as a short-option bundle,
-            # it's options; (2) else if it's a valid float, it's an operand;
-            # (3) else it's an option, so _invoke_option raises the real
-            # "unknown option" error.
-            if self._parses_as_shorts(tok):
-                return True
-            return not _is_float(tok)
-        return True
-
-    def _parses_as_shorts(self, tok):
-        "Would tok fully parse as a short-option bundle?  Structural, no side effects."
-        try:
-            for _ in parse_short_options(tok, self._short_classifiers()):
-                pass
-            return True
-        except UsageError:
-            return False
+        return is_option_token(tok, self._short_classifiers())
 
     def _short_classifiers(self):
         """
@@ -927,9 +929,11 @@ class Engine:
         """
         How many argv tokens the option at index i occupies (itself plus its
         space-separated opargs), or None when it's an option we don't own (a
-        boundary).  Used only by the trailing-reservation scan to tell operands
-        apart from option machinery, so an attached/bundled approximation is
-        fine -- the live loop still does the real parse.
+        boundary).  The trailing-reservation scan uses it to tell operands
+        apart from option machinery, so it must read a token EXACTLY as the
+        parse will: a short bundle is carved by parse_short_options, and only
+        its LAST option can take the following words (Astra R05: `-vo out`
+        once read as a flag bundle, and `out` got reserved as the destination).
         """
         tok = self.argv[i]
         if tok.startswith('--'):
@@ -940,12 +944,14 @@ class Engine:
             if eq:
                 return 1                # --opt=value: no following opargs
             return 1 + self._span_arity(binding)
-        binding = self.handlers.get('-' + tok[1])
-        if binding is None:
-            return None
-        arity = self._span_arity(binding)
-        if arity == 0 or len(tok) > 2:
-            return 1                    # a flag bundle (-vd) or attached (-j5)
+        try:
+            carved = list(parse_short_options(tok, self._short_classifiers()))
+        except UsageError:
+            return None                 # a letter we don't own: our boundary
+        option, arg = carved[-1]        # only the last option can take words
+        arity = self._span_arity(self.handlers['-' + option])
+        if arity == 0 or arg is not None:
+            return 1                    # a flag bundle, or the value attached
         return 1 + arity
 
     def enter(self, converter):
