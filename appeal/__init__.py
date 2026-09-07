@@ -2833,12 +2833,12 @@ from .backend import (
     )
 
 
-if _sys.version_info < (3, 7):      # pragma: no cover--coverage runs on
+# these lines run ONLY on Python 3.6, where coverage never runs; the
+# real-3.6 test runs exercise them (hence the pragma on the if below)
+if _sys.version_info < (3, 7):      # pragma: no cover
     # module-level __getattr__ (PEP 562) is 3.7+; on 3.6 it's never called,
     # so `from appeal import build_plan` (and the other lazy re-exports) would
     # fail.  Bind them eagerly here instead--at the cost of importing their
     # modules now, which on this legacy interpreter is a fair trade.
-    # (The pragma: these lines run ONLY on 3.6, and coverage runs on modern
-    # Python; the 3.6 test runs exercise them for real.)
     for _name in _LAZY_REEXPORTS:
         globals()[_name] = __getattr__(_name)
