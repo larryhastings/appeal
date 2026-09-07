@@ -5639,10 +5639,13 @@ def test_documentation_man():
     # (an extra assertion, not a skipped test)
     groff = _shutil.which('groff')
     if groff:
-        r = sub_run([groff, '-man', '-Tutf8'],
+        # -P-cbu: grotty in plain-text mode, no bold/underline, so the
+        # words come out bare whether this groff would otherwise emit
+        # SGR escapes or backspace overstrikes (S\bSY\bY...)
+        r = sub_run([groff, '-man', '-Tutf8', '-P-cbu'],
                            input=text, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
-        assert 'SYNOPSIS' in r.stdout
+        assert 'SYNOPSIS' in r.stdout, r.stdout
 
 
 def test_appeal_error_umbrella():
