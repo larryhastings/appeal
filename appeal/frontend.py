@@ -163,6 +163,16 @@ def signature(callable):
     # a level's own explicit __signature__ (checked above) wins.
     wrapped = getattr(callable, '__wrapped__', None)
     if wrapped is not None:
+        if hasattr(callable, '__self__') and hasattr(callable, '__func__'):
+            # a BOUND method whose function is a wrapper: the bound
+            # object proxies __wrapped__ to the bare function, which
+            # still carries self.  Read the function's public signature
+            # and drop self--the binding is the method's, not the
+            # wrapper's (Astra R01)
+            sig = signature(callable.__func__)
+            params = dict(sig.parameters)
+            del params[next(iter(params))]      # self: a bound method has one
+            return Signature(params)
         return signature(wrapped)
 
     try:

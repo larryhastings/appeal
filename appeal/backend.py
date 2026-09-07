@@ -12,17 +12,7 @@ import collections
 from . import (AppealConfigurationError, ConfigurationError,
                DataError, UsageError, did_you_mean)
 from .converters import convert, Option, MultiOption
-from .frontend import Terminal, NO_DEFAULT, dereference_annotated
-
-
-def _params_host(obj):
-    "Where a callable keeps its parameters: itself, or __init__."
-    if hasattr(obj, '__code__'):
-        return obj
-    init = getattr(obj, '__init__', None)
-    if init is not None and hasattr(init, '__code__'):
-        return init
-    return None
+from .frontend import Terminal, NO_DEFAULT
 
 
 class ArgumentInstruction:
@@ -31,14 +21,19 @@ class ArgumentInstruction:
     trailing Argument (keyword-only-no-default parameter) instead draws
     from its owner's end-pocket and is delivered as a keyword argument.
     """
-    __slots__ = ('owner', 'name', 'converter', 'required', 'slot', 'trailing')
-    def __init__(self, owner, name, converter, *, required, trailing=False):
+    __slots__ = ('owner', 'name', 'converter', 'required', 'slot', 'trailing',
+                 'default')
+    def __init__(self, owner, name, converter, *, required, trailing=False,
+                 default=None):
         self.owner = owner
         self.name = name
         self.converter = converter
         self.required = required
         self.slot = name
         self.trailing = trailing
+        self.default = default          # the plan's default, for a skipped
+                                        # optional slot (the backend reads only
+                                        # the plan--never the callable)
 
 
 class OptionInstruction:
@@ -51,20 +46,22 @@ class OptionInstruction:
     option (`--units F`: raw-grab one oparg, convert).  One binding is shared
     across the strings (so -v and --verbose feed the same MultiOption).
     """
-    __slots__ = ('owner', 'name', 'converter', 'strings')
-    def __init__(self, owner, name, converter, strings):
+    __slots__ = ('owner', 'name', 'converter', 'strings', 'rule')
+    def __init__(self, owner, name, converter, strings, rule):
         self.owner = owner
         self.name = name
         self.converter = converter
         self.strings = strings
+        self.rule = rule                # the plan's OptionRule: default,
+                                        # presence value, fold shape
     def register(self, processor, overwrite=True):
         conv = self.converter
         if conv is bool:
-            binding = LiveBinding(self.owner, self.name)
+            binding = LiveBinding(self.owner, self.name, self.rule.present)
         elif isinstance(conv, type) and issubclass(conv, Converter):
             binding = GroupBinding(self.owner, self.name, conv, self.strings)
         elif isinstance(conv, type) and issubclass(conv, MultiOption):
-            binding = MultiBinding(self.owner, self.name, conv)
+            binding = MultiBinding(self.owner, self.name, self.rule)
         else:
             binding = ValueBinding(self.owner, self.name, conv)
         for string in self.strings:
@@ -75,14 +72,15 @@ class OptionInstruction:
 class PreOptionInstruction:
     "Registers a conjure: fire before the converter exists to summon one."
     __slots__ = ('owner', 'string', 'name', 'slot', 'converter_cls',
-                 'converter', 'factory', 'chain')
-    def __init__(self, owner, string, name, slot, converter_cls,
+                 'converter', 'factory', 'chain', 'rule')
+    def __init__(self, owner, string, name, slot, converter_cls, rule,
                  converter=None, factory=None, chain=None):
         self.owner = owner
         self.string = string
         self.name = name
         self.slot = slot
         self.converter_cls = converter_cls
+        self.rule = rule                    # the child plan's OptionRule
         self.converter = converter          # set -> a value option (forward
                                             # oparg); None -> a flag (conjure)
         self.factory = factory              # set -> a fold option (counter/
@@ -96,16 +94,16 @@ class PreOptionInstruction:
             return                          # first-wins (announce-first)
         if self.chain is not None:
             processor.handlers[self.string] = ConjureChainBinding(
-                self.chain, self.name, self.converter, self.factory)
+                self.chain, self.name, self.rule, self.converter, self.factory)
         elif self.factory is not None:
             processor.handlers[self.string] = ConjureFoldBinding(
-                self.name, self.slot, self.converter_cls, self.factory)
+                self.name, self.slot, self.converter_cls, self.rule)
         elif self.converter is not None:
             processor.handlers[self.string] = ConjureValueBinding(
                 self.name, self.slot, self.converter_cls, self.converter)
         else:
             processor.handlers[self.string] = ConjureBinding(
-                self.name, self.slot, self.converter_cls)
+                self.name, self.slot, self.converter_cls, self.rule.present)
 
 
 class RepeatInstruction:
@@ -115,49 +113,20 @@ class RepeatInstruction:
         self.items = items
 
 
-class _Collector:
-    "A stand-in processor that just records a converter's laid instructions."
-    __slots__ = ('items',)
-    def __init__(self):
-        self.items = []
-    def prepend(self, items):
-        self.items.extend(items)
-
-
 def _own_shape(converter_cls):
     """
-    A converter's own options and required leaf operands, read by dry-running
-    its register (the SAME instructions the parser runs -- no plan needed).
+    A converter's own options and required leaf operands, off its plan.
     Returns (name -> option strings, [required operand name, ...]).
     """
-    coll = _Collector()
-    converter_cls().register(coll)
-    options = {}
-    operands = []
-    for item in coll.items:
-        if isinstance(item, RepeatInstruction):     # a *args template: its lone
-            continue                                # element isn't THIS converter
-        if isinstance(item, OptionInstruction):
-            options[item.name] = list(item.strings)
-        elif isinstance(item, PreOptionInstruction):
-            options.setdefault(item.name, []).append(item.string)
-        elif isinstance(item, ArgumentInstruction) and item.required:
-            operands.append(item.name)
+    plan = converter_cls.plan
+    options = {o.name: list(o.strings) for o in plan.options}
+    operands = [s.name for s in plan.slots if s.required and not s.repeat]
     return options, operands
 
 
-_capacity_cache = {}
-
-
-def _group_capacity(converter_cls):
-    "How many operands a group option's converter takes (dry-run its register)."
-    n = _capacity_cache.get(converter_cls)
-    if n is None:
-        coll = _Collector()
-        converter_cls().register(coll)
-        n = sum(1 for it in coll.items if isinstance(it, ArgumentInstruction))
-        _capacity_cache[converter_cls] = n
-    return n
+def _capacity(converter_cls):
+    "How many operands a group option's converter takes: its plan's slots."
+    return sum(1 for s in converter_cls.plan.slots if not s.repeat)
 
 
 def _count_list(counts, unbounded_from=None):
@@ -181,7 +150,7 @@ def _count_list(counts, unbounded_from=None):
 def _takes_many(binding):
     "Does this option take more than one oparg (so it can't be attached)?"
     if isinstance(binding, GroupBinding):
-        return _group_capacity(binding.converter_cls) > 1
+        return _capacity(binding.converter_cls) > 1
     if isinstance(binding, ValueBinding) and isinstance(binding.converter, tuple):
         return len(binding.converter) - 1 > 1       # (constructor, *leaves)
     return False
@@ -277,42 +246,16 @@ def _availability_message(owner):
     return f"expected {ops}" if ops else "expected an argument"
 
 
-def _presence(instance, name):
-    "A flag's presence value: `not default`, read live off the callable."
-    host = _params_host(type(instance).converter)   # a class: its __init__
-    default = (getattr(host, '__kwdefaults__', None) or {}).get(name, False)
-    return not default
-
-
-def _default(instance, name):
-    "The parameter's default, read live off the callable (for init)."
-    host = _params_host(type(instance).converter)
-    return (getattr(host, '__kwdefaults__', None) or {}).get(name)
-
-
-def _positional_default(instance, name):
-    """
-    A positional parameter's default, read live off the callable.  A skipped
-    optional positional slot appends this so later slots (e.g. a conjured group)
-    stay positionally aligned -- "signature default fills the tail" is false once
-    conjuring can fill a slot to the right of a skipped one.
-    """
-    host = _params_host(type(instance).converter)
-    code = host.__code__
-    names = code.co_varnames[:code.co_argcount]
-    defaults = host.__defaults__ or ()
-    return defaults[names.index(name) - (code.co_argcount - len(defaults))]
-
-
 class LiveBinding:
     "Invoke -> set the flag; `--flag=false` gives an explicit boolean."
-    __slots__ = ('instance', 'name')
-    def __init__(self, instance, name):
+    __slots__ = ('instance', 'name', 'present')
+    def __init__(self, instance, name, present):
         self.instance = instance
         self.name = name
+        self.present = present          # the plan's presence value (not default)
     def invoke(self, processor, value=None, spelling=None):
         if value is None:
-            self.instance.kwargs[self.name] = _presence(self.instance, self.name)
+            self.instance.kwargs[self.name] = self.present
             return
         if value not in ('true', 'false'):          # ruled: only these two
             raise UsageError(
@@ -373,43 +316,16 @@ class ValueBinding:
             raise UsageError(f"not a valid {name}: {str(e) or name}") from None
 
 
-_oparg_converters_cache = {}
-
-
-def _annotations_of(host):
+def _fold_shape(rule):
     """
-    __annotations__, refusing strings.  The backend reads annotations
-    directly off functions for speed; a string where an object belongs
-    (PEP 563's future import, or hand-stringizing) is refused exactly
-    as the signature reader refuses it (ruled 2026-09-03).
+    A fold option's shape, off its OptionRule: (the MultiOption class,
+    its per-occurrence oparg converters, how many are required, the
+    parameter's default).  converters is (cls, *leaves) on the rule.
     """
-    annotations = getattr(host, '__annotations__', {}) or {}
-    if any(type(v) is str for v in annotations.values()):
-        # the frontend refuses stringized annotations on every callable
-        # it wires, so this twin never fires--belt and braces, kept so
-        # the ruling holds even if a backend-first path ever appears
-        raise NotImplementedError(   # pragma: no cover
-            "Appeal doesn't support stringized annotations")
-    return annotations
-
-
-def _oparg_converters(factory):
-    """
-    A MultiOption's per-occurrence oparg converters, from its option()
-    parameters -- read off __code__/__annotations__ (no `inspect`, which
-    costs ~7ms to import) and cached ONCE per type, not every parse.
-    """
-    cached = _oparg_converters_cache.get(factory)
-    if cached is None:
-        option = factory.option
-        code = option.__code__
-        names = code.co_varnames[1:code.co_argcount]    # skip self
-        annotations = _annotations_of(option)
-        converters = tuple(annotations.get(name, str) for name in names)
-        minimum = len(names) - len(option.__defaults__ or ())   # optional tail
-        cached = (converters, minimum)
-        _oparg_converters_cache[factory] = cached
-    return cached
+    leaves = rule.converters[1:]
+    minimum = (rule.fold_minimum if rule.fold_minimum is not None
+               else len(leaves))
+    return rule.converters[0], leaves, minimum, rule.default
 
 
 class MultiBinding:
@@ -419,19 +335,20 @@ class MultiBinding:
     option leaves the parameter's default untouched), init()'d with that
     default, and fed once per occurrence.  render() happens at finalize.
     """
-    __slots__ = ('owner', 'name', 'factory', 'converters', 'minimum')
-    def __init__(self, owner, name, factory):
+    __slots__ = ('owner', 'name', 'factory', 'converters', 'minimum',
+                 'default')
+    def __init__(self, owner, name, rule):
         self.owner = owner
         self.name = name
-        self.factory = factory
-        self.converters, self.minimum = _oparg_converters(factory)
+        self.factory, self.converters, self.minimum, self.default = \
+            _fold_shape(rule)
     def invoke(self, processor, value=None, spelling=None):
         name = spelling or self.name
         instance = self.owner.kwargs.get(self.name)     # MultiOptions live in
         if instance is None:                            # kwargs now, rendered
             instance = self.factory()                   # like any deferred value
             if not processor.dry:                       # init is user code
-                instance.init(_default(self.owner, self.name))
+                instance.init(self.default)
             self.owner.kwargs[self.name] = instance
         opargs = []
         if value is not None:                           # =value / attached
@@ -491,18 +408,19 @@ class GroupBinding:
 
 class ConjureBinding:
     "Invoke -> conjure a fresh converter on its defaults, stashed by slot."
-    __slots__ = ('name', 'slot', 'converter_cls')
-    def __init__(self, name, slot, converter_cls):
+    __slots__ = ('name', 'slot', 'converter_cls', 'present')
+    def __init__(self, name, slot, converter_cls, present):
         self.name = name
         self.slot = slot
         self.converter_cls = converter_cls
+        self.present = present
     def invoke(self, processor, value=None, spelling=None):
         obj = processor.conjured.get(self.slot)
         if obj is None:
             obj = self.converter_cls()
             obj._summoned = True
             processor.conjured[self.slot] = obj
-        obj.kwargs[self.name] = (_presence(obj, self.name) if value is None
+        obj.kwargs[self.name] = (self.present if value is None
                                  else value == 'true')
 
 
@@ -544,13 +462,13 @@ class ConjureFoldBinding:
     construction like any MultiOption kwarg.
     """
     __slots__ = ('name', 'slot', 'converter_cls', 'factory',
-                 'converters', 'minimum')
-    def __init__(self, name, slot, converter_cls, factory):
+                 'converters', 'minimum', 'default')
+    def __init__(self, name, slot, converter_cls, rule):
         self.name = name
         self.slot = slot
         self.converter_cls = converter_cls
-        self.factory = factory
-        self.converters, self.minimum = _oparg_converters(factory)
+        self.factory, self.converters, self.minimum, self.default = \
+            _fold_shape(rule)
     def invoke(self, processor, value=None, spelling=None):
         obj = processor.conjured.get(self.slot)
         if obj is None:
@@ -561,7 +479,7 @@ class ConjureFoldBinding:
         if instance is None:                            # in the group's kwargs
             instance = self.factory()
             if not processor.dry:                       # init is user code
-                instance.init(_default(obj, self.name))
+                instance.init(self.default)
             obj.kwargs[self.name] = instance
         name = spelling or self.name
         opargs = []
@@ -600,10 +518,11 @@ class ConjureChainBinding:
     the top slot's Argument picks it up); deeper ones live in their parent's
     kwargs.
     """
-    __slots__ = ('chain', 'name', 'converter', 'factory')
-    def __init__(self, chain, name, converter=None, factory=None):
+    __slots__ = ('chain', 'name', 'rule', 'converter', 'factory')
+    def __init__(self, chain, name, rule, converter=None, factory=None):
         self.chain = chain                  # [(slot_name, converter_cls), ...]
         self.name = name
+        self.rule = rule                    # the deep group's OptionRule
         self.converter = converter
         self.factory = factory
     def invoke(self, processor, value=None, spelling=None):
@@ -621,13 +540,13 @@ class ConjureChainBinding:
             parent = obj
         name = spelling or self.name
         if self.factory is not None:                    # a fold option
+            factory, converters, minimum, default = _fold_shape(self.rule)
             instance = parent.kwargs.get(self.name)
             if instance is None:
-                instance = self.factory()
+                instance = factory()
                 if not processor.dry:
-                    instance.init(_default(parent, self.name))
+                    instance.init(default)
                 parent.kwargs[self.name] = instance
-            converters, minimum = _oparg_converters(self.factory)
             opargs = []
             if value is not None:
                 opargs = [processor._cv(converters[0], value, self.name)]
@@ -656,8 +575,7 @@ class ConjureChainBinding:
                 self.converter, value, self.name)
         else:                                           # a flag
             parent.kwargs[self.name] = (
-                _presence(parent, self.name) if value is None
-                else value == 'true')
+                self.rule.present if value is None else value == 'true')
 
 
 class Converter:
@@ -731,15 +649,16 @@ class Converter:
     # work-item factories -- owner is self, bound implicitly.  A group
     # operand/option passes its child Converter subclass as its converter;
     # a leaf passes a plain callable.
-    def Argument(self, name, converter, *, required, trailing=False):
+    def Argument(self, name, converter, *, required, trailing=False,
+                 default=None):
         return ArgumentInstruction(self, name, converter, required=required,
-                        trailing=trailing)
-    def Option(self, name, converter, *strings):
-        return OptionInstruction(self, name, converter, strings)
-    def PreOption(self, string, name, slot, converter_cls, converter=None,
-                  factory=None, chain=None):
+                                   trailing=trailing, default=default)
+    def Option(self, name, converter, rule, *strings):
+        return OptionInstruction(self, name, converter, strings, rule)
+    def PreOption(self, string, name, slot, converter_cls, rule,
+                  converter=None, factory=None, chain=None):
         return PreOptionInstruction(self, string, name, slot, converter_cls,
-                                    converter, factory, chain)
+                                    rule, converter, factory, chain)
     def Repeat(self, items):
         return RepeatInstruction(items)
 
@@ -897,7 +816,7 @@ class Engine:
         if isinstance(binding, MultiBinding):
             return len(binding.converters)
         if isinstance(binding, GroupBinding):
-            return _group_capacity(binding.converter_cls)
+            return _capacity(binding.converter_cls)
         if isinstance(binding, ValueBinding) and isinstance(binding.converter,
                                                             tuple):
             return len(binding.converter) - 1
@@ -1068,7 +987,7 @@ class Engine:
             # params are options -- the Logging/five_a mixin) is nullary: it
             # conjures + enters, then the bundle continues (-me == -m then -e,
             # -e now registered by entering the group)
-            return _group_capacity(binding.converter_cls) == 0
+            return _capacity(binding.converter_cls) == 0
         return False
 
     def _fill_argument(self, arg):
@@ -1106,7 +1025,7 @@ class Engine:
                             f"{_count_list(root.valid_counts, root.unbounded_from)}")
                     self.queue.popleft()
                     arg.owner.args.append(
-                        _positional_default(arg.owner, arg.name))
+                        arg.default)
                     return
                 self.advance()
                 self.queue.popleft()
@@ -1128,7 +1047,7 @@ class Engine:
                     self.queue.popleft()             # end a *args of leaves -- no
                 else:                                # phantom element; a plain
                     arg.owner.args.append(           # optional keeps its position
-                        _positional_default(arg.owner, arg.name))
+                        arg.default)
                 return
             self.advance()
             arg.owner.args.append(self._cv(arg.converter, tok, arg.name))
@@ -1166,7 +1085,7 @@ class Engine:
                     self.queue.popleft()             # end the *args -- no phantom
                 else:                                # element; a plain optional
                     arg.owner.args.append(           # group keeps its position
-                        _positional_default(arg.owner, arg.name))
+                        arg.default)
                 return
         if obj is None:
             obj = arg.converter()
@@ -1308,16 +1227,12 @@ def _child_converters(plan):
     and group options), as callable -> a representative parameter name.  Feeds
     fixup_converters: one wire-up per child, its callable read off `annotations`.
     """
-    annotations = _annotations_of(_params_host(plan.callable))
     children = {}
     for slot in plan.slots:
         if not isinstance(slot.child, Terminal):
             children.setdefault(_converter_key(slot.child), slot.name)
     for option in plan.options:
-        # fixup wires a child off annotations[name]; a decoration-supplied group
-        # option (e.g. the help precommand's -h/--help) isn't a signature
-        # parameter, so it can't be wired that way -- skip it here.
-        if option.kind == 'group' and option.name in annotations:
+        if option.kind == 'group':
             children.setdefault(_converter_key(option.child), option.name)
     return children
 
@@ -1367,7 +1282,7 @@ def _build_class(plan, classes):
             # grabs zero opargs and returns constructor().  (In-memory only: the
             # live converter needs no source spelling.)
             kind, extra = 'multi', (o.converters[0],)
-        option_specs.append((o.name, kind, extra, o.strings))
+        option_specs.append((o.name, kind, extra, o.strings, o))
 
     # spellings the enclosing command owns: a sub-converter option with the
     # same spelling is SHADOWED -- the command's own option is used, and it
@@ -1376,30 +1291,22 @@ def _build_class(plan, classes):
     own_strings = {s for o in plan.options for s in o.strings}
 
     def register(self, processor):
-        # a tuple[...]/list[...] group's converter is the builtin tuple/list,
-        # which has no __annotations__ (and no options to look up anyway)
-        annotations = _annotations_of(type(self).converter)
         items = []
-        for name, kind, extra, strings in option_specs:
+        for name, kind, extra, strings, rule in option_specs:
             if kind == 'flag':
                 conv = bool
             elif kind == 'group':
                 conv = classes[extra]                   # the child Converter class
-            elif kind == 'multi':
-                conv = extra                            # (constructor, *leaves)
-            elif kind == 'fold':
-                conv = extra                            # the MultiOption (build's rewrite)
-            else:                                       # value(single)
-                conv = dereference_annotated(annotations.get(name, extra))
-            items.append(self.Option(name, conv, *strings))
+            else:                                       # value / multi / fold:
+                conv = extra                            # the plan's converter(s)
+            items.append(self.Option(name, conv, rule, *strings))
         boundary = len(items)   # a conjurable slot's PreOption inserts here:
                                 # after the last required-or-group slot (so it
                                 # leaps over optional leaves to reach its slot)
         for slot in plan.slots:
             req = slot.default is NO_DEFAULT        # intrinsic, not promoted
             if isinstance(slot.child, Terminal):
-                conv = dereference_annotated(
-                    annotations.get(slot.name, slot.child.converter))
+                conv = slot.child.converter             # the plan's, resolved
                 if slot.repeat:                         # *args of a leaf
                     items.append(self.Repeat([
                         self.Argument(slot.name, conv, required=False)]))
@@ -1407,7 +1314,8 @@ def _build_class(plan, classes):
                     continue
                 items.append(self.Argument(slot.name, conv,
                                            required=req,
-                                           trailing=slot.trailing))
+                                           trailing=slot.trailing,
+                                           default=slot.default))
                 if req:
                     boundary = len(items)
                 continue
@@ -1420,7 +1328,7 @@ def _build_class(plan, classes):
                         if s in own_strings:    # shadowed: the command owns it
                             continue
                         preopts.append(
-                            self.PreOption(s, o.name, slot.name, childcls))
+                            self.PreOption(s, o.name, slot.name, childcls, o))
                 elif o.kind == 'value' and len(o.converters) == 1:
                     # a single-oparg VALUE option that conjures its group: the
                     # "mix-in" pattern (--log-level debug on a converter that
@@ -1431,7 +1339,7 @@ def _build_class(plan, classes):
                         if s in own_strings:
                             continue
                         preopts.append(self.PreOption(
-                            s, o.name, slot.name, childcls, o.converters[0]))
+                            s, o.name, slot.name, childcls, o, o.converters[0]))
                 elif o.kind == 'fold':
                     # a FOLD option on the group (counter/accumulator/mapping,
                     # e.g. -v on a Logging mixin): conjure the group and fold the
@@ -1441,7 +1349,7 @@ def _build_class(plan, classes):
                         if s in own_strings:
                             continue
                         preopts.append(self.PreOption(
-                            s, o.name, slot.name, childcls,
+                            s, o.name, slot.name, childcls, o,
                             factory=o.converters[0]))
             if slot.repeat:                             # windowed *args
                 items.append(self.Repeat(
@@ -1464,20 +1372,22 @@ def _build_class(plan, classes):
                                 continue
                             if o.kind == 'flag':
                                 preopts.append(self.PreOption(
-                                    s, o.name, sub.name, subcls, chain=subchain))
+                                    s, o.name, sub.name, subcls, o,
+                                    chain=subchain))
                             elif o.kind == 'value' and len(o.converters) == 1:
                                 preopts.append(self.PreOption(
-                                    s, o.name, sub.name, subcls,
+                                    s, o.name, sub.name, subcls, o,
                                     converter=o.converters[0], chain=subchain))
                             elif o.kind == 'fold':
                                 preopts.append(self.PreOption(
-                                    s, o.name, sub.name, subcls,
+                                    s, o.name, sub.name, subcls, o,
                                     factory=o.converters[0], chain=subchain))
                     _nest(sub.child, subchain)
             _nest(slot.child, [(slot.name, childcls)])
             for k, pre in enumerate(preopts):           # leap over optionals
                 items.insert(boundary + k, pre)
-            items.append(self.Argument(slot.name, childcls, required=req))
+            items.append(self.Argument(slot.name, childcls, required=req,
+                                       default=slot.default))
             boundary = len(items)
 
         processor.prepend(items)

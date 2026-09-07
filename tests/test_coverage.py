@@ -2458,6 +2458,74 @@ def test_read_fold_mapping_occurrence_lenient():
         assert 'zzz' in str(e)
 
 
+# ---------------------------------------------------------------------
+# the Astra review's reproductions, enrolled as each fix lands
+# (appeal_review_reproductions.astra.py, 2026-09-07)
+
+def _probe(function):
+    "The review's harness: one precommand, no default mappings."
+    app = Appeal(name='probe', default_mappings=None)
+    app.precommand()(function)
+    return app
+
+
+def test_astra_r01_backend_reads_only_the_plan():
+    # R01 (ruled 2026-09-07: the backend reads ONLY the plan): the
+    # frontend's resolution--decorator overrides, wrapper unwrapping,
+    # Annotated--used to be overruled by the backend re-reading
+    # __annotations__/__defaults__/__kwdefaults__ off the raw callable
+    import functools
+    # an @app.option annotation override survives the build
+    app = Appeal(name='probe', default_mappings=None)
+    @app.precommand()
+    @app.option('value', '--value', annotation=int)
+    def command(*, value: str = ''):
+        return value
+    result = app.process(['--value', '5']).result
+    assert type(result) is int and result == 5
+    # a functools.wraps wrapper: the wrapped function's defaults, both
+    # positional (once a crash: tuple.index on the wrapper's code) and
+    # the flag's presence value (once inverted: True delivered as True)
+    def original(value='DEFAULT'):
+        return value
+    @functools.wraps(original)
+    def wrapper(*args, **kwargs):
+        return original(*args, **kwargs)
+    assert _probe(wrapper).process([]).result == 'DEFAULT'
+    def original2(*, enabled=True):
+        return enabled
+    @functools.wraps(original2)
+    def wrapper2(*args, **kwargs):
+        return original2(*args, **kwargs)
+    assert _probe(wrapper2).process(['--enabled']).result is False
+    # a decorated BOUND method keeps its binding: the bound object
+    # proxies __wrapped__ to the bare function, which carries self
+    def decorated(function):
+        @functools.wraps(function)
+        def wrapper(*args, **kwargs):
+            return function(*args, **kwargs)
+        return wrapper
+    class Owner:
+        @decorated
+        def method(self, value: int):
+            return value
+    assert _probe(Owner().method).process(['5']).result == 5
+    # an Option's option() parameter annotated Annotated[str, int]
+    # converts with the LAST metadata (Appeal's rule), not the outer str
+    if sys.version_info >= (3, 9):
+        from typing import Annotated
+        class Sum(appeal.Option):
+            def init(self, default):
+                self.value = 0
+            def option(self, value: Annotated[str, int]):
+                self.value += value
+            def __call__(self):
+                return self.value
+        def total(*, total: Sum = None):
+            return total
+        assert _probe(total).process(['--total', '5']).result == 5
+
+
 def test_no_debris_ships():
     # flit builds the sdist from git's tracked-file list minus
     # pyproject's [tool.flit.sdist] excludes--so the published package
