@@ -29,8 +29,6 @@ __version__ = '1.0'
 # here; rendering, building, and completion stay lazy.
 # ============================================================
 
-import collections.abc
-import operator
 import sys
 
 # Appeal REQUIRES big (ruled 2026-08-06) for its help/usage rendering.
@@ -425,10 +423,10 @@ class _LazyInspect:
 
 _inspect = _LazyInspect()
 
-# featherweight stand-ins for the fast path: signature (microsecond)
-# and MethodType (types is always already loaded), so registration + dispatch
-# never trip the lazy real-inspect proxy.  getdoc etc. stay on _inspect (help).
-from types import MethodType as _MethodType
+# featherweight stand-ins for the fast path: signature (microsecond) and
+# a bound-method check by shape (a bound method has __self__; `types`
+# would cost the fast path an import), so registration + dispatch never
+# trip the lazy real-inspect proxy.  getdoc etc. stay on _inspect (help).
 
 
 def _stamp_decoration(plan, entry):
@@ -583,11 +581,12 @@ def _config_vet(plan, table_words, config, command_plan_for,
             if not isinstance(s.child, Terminal):
                 gather(s.child)
     gather(plan)
+    from collections.abc import Mapping
     def scoped_in(rule, value):
         "the key--or a nested key of a group's mapping--that is scoped"
         if rule.name in scoped or rule.key in plan.scoped_keys:
             return rule.name
-        if rule.kind == 'group' and isinstance(value, collections.abc.Mapping):
+        if rule.kind == 'group' and isinstance(value, Mapping):
             inner = {o.name: o for o in rule.child.options}
             for k, v in value.items():
                 if k in inner:
@@ -1864,8 +1863,7 @@ class Appeal:
         if annotation is None:
             annotation = empty
         def decorator(callable):
-            if (isinstance(callable, _MethodType)
-                    and isinstance(callable.__self__, Appeal)
+            if (isinstance(getattr(callable, '__self__', None), Appeal)
                     and callable.__func__
                         is type(callable.__self__).help_and_version_precommand):
                 # the bound precommand: Python mints a fresh bound
@@ -1879,8 +1877,7 @@ class Appeal:
                     tuple(options)
                 callable.__self__.root._invalidate()
                 return callable
-            if (isinstance(callable, _MethodType)
-                    and isinstance(callable.__self__, Appeal)):
+            if isinstance(getattr(callable, '__self__', None), Appeal):
                 # a bound app method registered as a command
                 # (help's knobs, ruled 2026-08-05): bound methods
                 # mint a fresh object per attribute access, but

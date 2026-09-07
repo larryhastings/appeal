@@ -251,7 +251,12 @@ def signature(callable):
 # the signature/Parameter slice this module reads, exposed as `inspect`
 # so the analysis below reads naturally.
 import sys as _sys
-import types as _types
+
+# the builtin union spelling (X | None), feature-detected: 3.10+ has it
+try:
+    _UnionType = type(int | str)
+except TypeError:      # pragma: no cover -- 3.6..3.9 only; the 3.6 test
+    _UnionType = None  # runs exercise it, where coverage doesn't gate
 inspect = _sys.modules[__name__]
 
 def _oparg_names(o):
@@ -745,8 +750,7 @@ def dereference_annotated(annotation):
     # Only the BUILTIN spelling; typing.Optional/typing.Union stay
     # unsupported, per the house typing stance.  A union of two real
     # types is refused by name: which converter would it be?
-    union = getattr(_types, 'UnionType', None)
-    if union is not None and isinstance(annotation, union):
+    if _UnionType is not None and isinstance(annotation, _UnionType):
         arms = [a for a in annotation.__args__ if a is not type(None)]
         if len(arms) != 1:
             from . import AppealConfigurationError

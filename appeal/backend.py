@@ -8,7 +8,8 @@
 # through them (parcel + convert + dispatch).  The front end
 # (appeal/frontend.py) produces the Plan.
 
-import collections
+from _collections import deque       # what collections itself imports; the
+                                     # package costs the fast path 1.6ms
 from . import (AppealConfigurationError, ConfigurationError,
                DataError, UsageError, did_you_mean)
 from .converters import convert, Option, MultiOption
@@ -722,7 +723,7 @@ class Engine:
         self.argv = list(argv)
         self.pos = 0
         self.end = len(self.argv)       # exclusive: trailing pockets shrink it
-        self.queue = collections.deque()
+        self.queue = deque()
         self.handlers = {}
         self.conjured = {}
         self.force_positional = dashdash    # `--` is LINE-WIDE (ruled
