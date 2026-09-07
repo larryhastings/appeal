@@ -2478,13 +2478,13 @@ class Appeal:
                         return result, pos          # nonzero-int return doesn't
                                                     # leave era tokens behind
           except AppealDataError as e:
-            # an era-level error (a bad program-wide option, a config value):
-            # attach the program usage line unless a deeper site already spoke
-            # (decision B, 2026-09-06).  No deeper site precedes an ERA error
-            # today--the guard keeps decision B's shape, belt-and-braces
-            if e.usage is None:     # pragma: no branch
-                e.usage = _line_trailer(self.stylesheet,
-                                        self._program_usage_markup())
+            # an era-level error (a bad program-wide option, a config value)
+            # gets the program usage line (decision B, 2026-09-06).  An era
+            # error is born in the engine, before any deeper attachment site
+            # can run, so nobody has spoken yet
+            assert e.usage is None
+            e.usage = _line_trailer(self.stylesheet,
+                                    self._program_usage_markup())
             raise
 
         dispatched = False              # did a command word of THIS node run?
