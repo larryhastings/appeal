@@ -2853,6 +2853,32 @@ def test_astra_r11_completion_shares_the_option_rule():
     assert app.complete(['-1'], '') == ['blue', 'red']
 
 
+def test_astra_r09_conjured_options_are_ordinary_options():
+    # R09: the conjured-option bindings reimplemented the live ones with
+    # different rules--`--flag=nonsense` before a group was entered was
+    # accepted (stored False); `-vv` on a conjured counter was refused
+    # ("-v takes no value") because the lexer didn't know the conjured
+    # fold was nullary.  Now an owner is resolved (live, conjured, or a
+    # chain) and the option is the ordinary binding of its kind.
+    def mix(x='', *, flag=False):
+        return x, flag
+    def command(m: mix = None):
+        return m
+    try:
+        _probe(command).process(['--flag=nonsense'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert "expected 'true' or 'false'" in str(e), e
+    assert _probe(command).process(['--flag=true']).result == ('', True)
+    def mixin(*, verbose: appeal.counter() = 0):
+        return verbose
+    def counted(m: mixin = None):
+        return m
+    app = _probe(counted)
+    assert app.process(['-v', '-v']).result == 2
+    assert app.process(['-vv']).result == 2
+
+
 def test_no_debris_ships():
     # flit builds the sdist from git's tracked-file list minus
     # pyproject's [tool.flit.sdist] excludes--so the published package
@@ -4184,7 +4210,8 @@ def test_backend_more_errors():
         return x
     assert both2(cpr, ['--pr', 'A']) == ('ok', 'x')
     # a fold buried in a NESTED positional chain: too few values, and the
-    # optional-tail break, both through ConjureChainBinding
+    # optional-tail break--the ordinary MultiBinding, owner conjured
+    # through the chain (one implementation, one message: Astra R09)
     def enfant(*, pt: accumulator[int, int] = []):
         return pt
     def parent(e: enfant = None):
@@ -4192,7 +4219,7 @@ def test_backend_more_errors():
     def gp(p: parent = None, y='y'):
         return (p, y)
     assert both2(gp, ['--pt', '1']) == \
-        ('usage', "option '--pt' requires a value")
+        ('usage', "option '--pt' requires 2 values")
     def enfant2(*, pr: Pair = []):
         return pr
     def parent2(e: enfant2 = None):

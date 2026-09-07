@@ -56,14 +56,15 @@ class OptionInstruction:
                                         # presence value, fold shape
     def register(self, processor, overwrite=True):
         conv = self.converter
+        owner = _Owner(self.owner)
         if conv is bool:
-            binding = LiveBinding(self.owner, self.name, self.rule.present)
+            binding = LiveBinding(owner, self.name, self.rule.present)
         elif isinstance(conv, type) and issubclass(conv, Converter):
             binding = GroupBinding(self.owner, self.name, conv, self.strings)
         elif isinstance(conv, type) and issubclass(conv, MultiOption):
-            binding = MultiBinding(self.owner, self.name, self.rule)
+            binding = MultiBinding(owner, self.name, self.rule)
         else:
-            binding = ValueBinding(self.owner, self.name, conv)
+            binding = ValueBinding(owner, self.name, conv)
         for string in self.strings:
             if overwrite or string not in processor.handlers:
                 processor.handlers[string] = binding
@@ -92,18 +93,19 @@ class PreOptionInstruction:
     def register(self, processor, overwrite=True):
         if not overwrite and self.string in processor.handlers:
             return                          # first-wins (announce-first)
+        # the owner is conjured (a chain of them for a nested group); the
+        # option itself is the ORDINARY binding of its kind (Astra R09)
         if self.chain is not None:
-            processor.handlers[self.string] = ConjureChainBinding(
-                self.chain, self.name, self.rule, self.converter, self.factory)
-        elif self.factory is not None:
-            processor.handlers[self.string] = ConjureFoldBinding(
-                self.name, self.slot, self.converter_cls, self.rule)
-        elif self.converter is not None:
-            processor.handlers[self.string] = ConjureValueBinding(
-                self.name, self.slot, self.converter_cls, self.converter)
+            target = _Chain(self.chain)
         else:
-            processor.handlers[self.string] = ConjureBinding(
-                self.name, self.slot, self.converter_cls, self.rule.present)
+            target = _Conjure(self.slot, self.converter_cls)
+        if self.factory is not None:
+            binding = MultiBinding(target, self.name, self.rule)
+        elif self.converter is not None:
+            binding = ValueBinding(target, self.name, self.converter)
+        else:
+            binding = LiveBinding(target, self.name, self.rule.present)
+        processor.handlers[self.string] = binding
 
 
 class RepeatInstruction:
@@ -390,50 +392,111 @@ def finish(v):
     return v
 
 
-class LiveBinding:
-    "Invoke -> set the flag; `--flag=false` gives an explicit boolean."
-    __slots__ = ('instance', 'name', 'present')
-    def __init__(self, instance, name, present):
+class _Owner:
+    "An option's owner: a converter instance that already exists."
+    __slots__ = ('instance',)
+    def __init__(self, instance):
         self.instance = instance
+    def resolve(self, processor):
+        return self.instance
+
+
+class _Conjure:
+    """
+    An option's owner, conjured on demand: the converter for `slot`,
+    built on its defaults the first time one of its options is named
+    (before any operand starts it) and stashed by slot so the slot's
+    Argument picks it up.  Marked _summoned: if it then starves for
+    operands, the option wasn't available yet.
+    """
+    __slots__ = ('slot', 'converter_cls')
+    def __init__(self, slot, converter_cls):
+        self.slot = slot
+        self.converter_cls = converter_cls
+    def resolve(self, processor):
+        obj = processor.conjured.get(self.slot)
+        if obj is None:
+            obj = self.converter_cls()
+            obj._summoned = True
+            processor.conjured[self.slot] = obj
+        return obj
+
+
+class _Chain:
+    """
+    An option's owner on a NESTED positional-slot group (grandparent
+    -> parent -> enfant_terrible.flag): conjure/get every level from
+    the top, each stashed by its slot so each level's Argument picks
+    its instance up during normal filling; the deepest is the owner.
+    """
+    __slots__ = ('chain',)
+    def __init__(self, chain):
+        self.chain = chain                  # [(slot_name, converter_cls), ...]
+    def resolve(self, processor):
+        owner = None
+        for slot_name, cls in self.chain:
+            obj = processor.conjured.get(slot_name)
+            if obj is None:
+                obj = cls()
+                obj._summoned = True
+                processor.conjured[slot_name] = obj
+            owner = obj
+        return owner
+
+
+class LiveBinding:
+    """
+    A flag: invoke -> set the plan's presence value on the owner;
+    `--flag=true`/`false` sets that literal boolean, anything else
+    is refused.  ONE implementation whoever the owner is--a live
+    instance, or one conjured by naming the option (Astra R09: the
+    conjured path once stored `value == 'true'` unchecked).
+    """
+    __slots__ = ('target', 'name', 'present')
+    def __init__(self, target, name, present):
+        self.target = target
         self.name = name
         self.present = present          # the plan's presence value (not default)
     def invoke(self, processor, value=None, spelling=None):
+        owner = self.target.resolve(processor)
         if value is None:
-            self.instance.kwargs[self.name] = self.present
+            owner.kwargs[self.name] = self.present
             return
         if value not in ('true', 'false'):          # ruled: only these two
             raise UsageError(
                 f"option {(spelling or self.name)!r} expected 'true' or 'false'")
-        self.instance.kwargs[self.name] = (value == 'true')
+        owner.kwargs[self.name] = (value == 'true')
 
 
 class ValueBinding:
     """
     Invoke -> one leaf oparg (`--units F`), or a multi-oparg option whose
     converter is a `(constructor, leaf1, leaf2, ...)` tuple (`--where X Y`,
-    `--coord 3 4`): raw-grab one oparg per leaf, convert each, then build the
-    value -- `tuple(args)` for a tuple option, else `constructor(*args)`.
+    `--coord 3 4`): raw-grab one oparg per leaf, record each, and build the
+    value at execute -- `tuple(args)` for a tuple option, else
+    `constructor(*args)`.  A bare `(constructor,)` is a nullary converter:
+    presence CALLS it, at execute.
     """
-    __slots__ = ('instance', 'name', 'converter')
-    def __init__(self, instance, name, converter):
-        self.instance = instance
+    __slots__ = ('target', 'name', 'converter')
+    def __init__(self, target, name, converter):
+        self.target = target
         self.name = name
         self.converter = converter
     def invoke(self, processor, value=None, spelling=None):
+        owner = self.target.resolve(processor)
         conv = self.converter
         name = spelling or self.name
         if isinstance(conv, tuple):
-            self.instance.kwargs[self.name] = self._multi(processor, conv, value,
-                                                          name)
+            owner.kwargs[self.name] = self._multi(processor, conv, value, name)
             return
         if value is None:
             if processor.peek() is None:
                 raise UsageError(f"option {name!r} requires a value")
             value = processor.advance()                 # raw: no option check
-        # value options convert eagerly, per occurrence: a repeated option
+        # value options convert per occurrence: a repeated option
         # validates EVERY value (ruled 2026-08-16, "not called validate for
-        # nothing"), last wins.  (Positional leaves defer; options don't.)
-        self.instance.kwargs[self.name] = processor._cv(conv, value, self.name)
+        # nothing"), last wins.
+        owner.kwargs[self.name] = processor._cv(conv, value, self.name)
     def _multi(self, processor, conv, value, name):
         constructor, leaves = conv[0], conv[1:]
         if not leaves:                                  # a nullary converter
@@ -466,24 +529,24 @@ def _fold_shape(rule):
 
 class MultiBinding:
     """
-    Invoke -> feed a persistent MultiOption (counter/accumulator/mapping).
-    The instance is created lazily on first occurrence (so an unused
-    option leaves the parameter's default untouched), init()'d with that
-    default, and fed once per occurrence.  render() happens at finalize.
+    Invoke -> feed a persistent fold (counter/accumulator/mapping): a
+    _Fold holder in the owner's kwargs, one occurrence record per
+    invocation; the MultiOption is constructed and fed at execute.
     """
-    __slots__ = ('owner', 'name', 'factory', 'converters', 'minimum',
+    __slots__ = ('target', 'name', 'factory', 'converters', 'minimum',
                  'default')
-    def __init__(self, owner, name, rule):
-        self.owner = owner
+    def __init__(self, target, name, rule):
+        self.target = target
         self.name = name
         self.factory, self.converters, self.minimum, self.default = \
             _fold_shape(rule)
     def invoke(self, processor, value=None, spelling=None):
+        owner = self.target.resolve(processor)
         name = spelling or self.name
-        fold = self.owner.kwargs.get(self.name)         # the fold lives in
+        fold = owner.kwargs.get(self.name)              # the fold lives in
         if fold is None:                                # kwargs, rendered like
             fold = _Fold(self.factory, self.default, self.name)   # any value
-            self.owner.kwargs[self.name] = fold
+            owner.kwargs[self.name] = fold
         opargs = []
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)
@@ -533,165 +596,6 @@ class GroupBinding:
             self.strings[0] if self.strings else self.name)       # to a short form
         self.owner.kwargs[self.name] = instance
         processor.enter(instance)                   # register its options
-
-
-class ConjureBinding:
-    "Invoke -> conjure a fresh converter on its defaults, stashed by slot."
-    __slots__ = ('name', 'slot', 'converter_cls', 'present')
-    def __init__(self, name, slot, converter_cls, present):
-        self.name = name
-        self.slot = slot
-        self.converter_cls = converter_cls
-        self.present = present
-    def invoke(self, processor, value=None, spelling=None):
-        obj = processor.conjured.get(self.slot)
-        if obj is None:
-            obj = self.converter_cls()
-            obj._summoned = True
-            processor.conjured[self.slot] = obj
-        obj.kwargs[self.name] = (self.present if value is None
-                                 else value == 'true')
-
-
-class ConjureValueBinding:
-    """
-    A windowed *args group's VALUE option (`--label up`) at a window boundary:
-    grab one oparg, convert it, and set it on a conjured FORWARD instance that
-    the next operand's Argument will pick up.  The mid-instance ValueBinding
-    (registered when a window is entered) is overwritten by this at the
-    boundary, exactly as a flag's ConjureBinding overwrites its LiveBinding.
-    """
-    __slots__ = ('name', 'slot', 'converter_cls', 'converter')
-    def __init__(self, name, slot, converter_cls, converter):
-        self.name = name
-        self.slot = slot
-        self.converter_cls = converter_cls
-        self.converter = converter
-    def invoke(self, processor, value=None, spelling=None):
-        obj = processor.conjured.get(self.slot)
-        if obj is None:
-            obj = self.converter_cls()
-            obj._summoned = True
-            processor.conjured[self.slot] = obj
-        if value is None:
-            if processor.peek() is None:
-                raise UsageError(
-                    f"option {(spelling or self.name)!r} requires a value")
-            value = processor.advance()             # raw: no option check
-        obj.kwargs[self.name] = processor._cv(self.converter, value, self.name)
-
-
-class ConjureFoldBinding:
-    """
-    A converter group's FOLD option (counter/accumulator/mapping on a mixin,
-    e.g. -v on a Logging group): conjure the group if needed, then fold this
-    occurrence into a MultiOption living in the conjured group's kwargs --
-    MultiBinding's logic aimed at a conjured forward instance (as
-    ConjureValueBinding is ValueBinding aimed there).  Rendered at group
-    construction like any MultiOption kwarg.
-    """
-    __slots__ = ('name', 'slot', 'converter_cls', 'factory',
-                 'converters', 'minimum', 'default')
-    def __init__(self, name, slot, converter_cls, rule):
-        self.name = name
-        self.slot = slot
-        self.converter_cls = converter_cls
-        self.factory, self.converters, self.minimum, self.default = \
-            _fold_shape(rule)
-    def invoke(self, processor, value=None, spelling=None):
-        obj = processor.conjured.get(self.slot)
-        if obj is None:
-            obj = self.converter_cls()
-            obj._summoned = True
-            processor.conjured[self.slot] = obj
-        fold = obj.kwargs.get(self.name)                # the fold lives in
-        if fold is None:                                # the group's kwargs
-            fold = _Fold(self.factory, self.default, self.name)
-            obj.kwargs[self.name] = fold
-        name = spelling or self.name
-        opargs = []
-        if value is not None:                           # =value / attached
-            if not self.converters:
-                raise UsageError(
-                    f"option {name!r} doesn't take a value")
-            opargs = [processor._cv(self.converters[0], value, self.name)]
-        else:
-            for k, converter in enumerate(self.converters):
-                tok = processor.peek()
-                if tok is None or tok == '--':
-                    if k < self.minimum:
-                        need = self.minimum
-                        raise UsageError(
-                            f"option {name!r} requires "
-                            f"{'a value' if need == 1 else f'{need} values'}")
-                    break
-                opargs.append(processor._cv(converter, processor.advance(),
-                                            self.name))
-        processor._record(_FoldOccurrence(fold, opargs))
-
-
-class ConjureChainBinding:
-    """
-    An option on a NESTED positional-slot group (grandparent -> parent ->
-    enfant_terrible.flag): build the chain from the top, conjuring/getting each
-    instance and linking parent.kwargs[slot] = child (the nested params are
-    positional-OR-keyword, so keyword linkage renders correctly), then set the
-    option on the deepest.  The top instance stashes in processor.conjured (so
-    the top slot's Argument picks it up); deeper ones live in their parent's
-    kwargs.
-    """
-    __slots__ = ('chain', 'name', 'rule', 'converter', 'factory')
-    def __init__(self, chain, name, rule, converter=None, factory=None):
-        self.chain = chain                  # [(slot_name, converter_cls), ...]
-        self.name = name
-        self.rule = rule                    # the deep group's OptionRule
-        self.converter = converter
-        self.factory = factory
-    def invoke(self, processor, value=None, spelling=None):
-        # stash every level in processor.conjured by its slot, so each level's
-        # slot pops its instance during normal filling (as the single-level
-        # conjure does) -- the engine enters each conjured group and fills its
-        # sub-slots from the stash.
-        parent = None
-        for slot_name, cls in self.chain:
-            obj = processor.conjured.get(slot_name)
-            if obj is None:
-                obj = cls()
-                obj._summoned = True
-                processor.conjured[slot_name] = obj
-            parent = obj
-        name = spelling or self.name
-        if self.factory is not None:                    # a fold option
-            factory, converters, minimum, default = _fold_shape(self.rule)
-            fold = parent.kwargs.get(self.name)
-            if fold is None:
-                fold = _Fold(factory, default, self.name)
-                parent.kwargs[self.name] = fold
-            opargs = []
-            if value is not None:
-                opargs = [processor._cv(converters[0], value, self.name)]
-            else:
-                for k, conv in enumerate(converters):
-                    tok = processor.peek()
-                    if tok is None or tok == '--':
-                        if k < minimum:
-                            raise UsageError(
-                                f"option {name!r} requires a value")
-                        break
-                    opargs.append(processor._cv(conv, processor.advance(),
-                                                self.name))
-            processor._record(_FoldOccurrence(fold, opargs))
-        elif self.converter is not None:                # a value option
-            if value is None:
-                if processor.peek() is None:
-                    raise UsageError(
-                        f"option {name!r} requires a value")
-                value = processor.advance()
-            parent.kwargs[self.name] = processor._cv(
-                self.converter, value, self.name)
-        else:                                           # a flag
-            parent.kwargs[self.name] = (
-                self.rule.present if value is None else value == 'true')
 
 
 class Converter:
@@ -914,7 +818,7 @@ class Engine:
     def _span_arity(self, binding):
         "How many space-separated opargs an option consumes (for the pocket scan)."
         assert binding is not None      # both callers null-check first
-        if isinstance(binding, (LiveBinding, ConjureBinding)):
+        if isinstance(binding, LiveBinding):
             return 0
         if isinstance(binding, MultiBinding):
             return len(binding.converters)
@@ -923,7 +827,7 @@ class Engine:
         if isinstance(binding, ValueBinding) and isinstance(binding.converter,
                                                             tuple):
             return len(binding.converter) - 1
-        return 1                        # ValueBinding leaf / ConjureValueBinding
+        return 1                        # a ValueBinding leaf
 
     def _option_span(self, i):
         """
@@ -1083,7 +987,7 @@ class Engine:
     @staticmethod
     def _nullary(binding):
         "Does this option take no oparg (so it can bundle: -vd)?"
-        if isinstance(binding, (LiveBinding, ConjureBinding)):
+        if isinstance(binding, LiveBinding):
             return True
         if isinstance(binding, MultiBinding):
             return not binding.converters
