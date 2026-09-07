@@ -156,8 +156,10 @@ appeal_theme = theme(
 # the four corners: warm = red/orange/yellow, cool =
 # blue/green/cyan, purple in both.  light_* themes use dark_
 # colors (dark ink on a light page); dark_* themes use light_.
-# NOTE one deliberate deviation: code is ORANGE in the warm
-# corners (green read as a wrong note there)--Larry to confirm.
+# One deliberate deviation: code is AMBER in the warm corners
+# (green read as a wrong note there; ruled 2026-09-07--the
+# monochrome-phosphor colors were amber, green, and bluish
+# white, and amber is the warm one).
 
 light_warm_theme = theme(
     command   = ('T', '⦃bold⦙⦃dark_orange⦙T⦄⦄'),
@@ -165,7 +167,7 @@ light_warm_theme = theme(
     argument  = ('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄'),
     summary   = ('T', '⦃bold⦙⦃dark_red⦙T⦄⦄'),
     error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
-    code      = ('T', '⦃dark_orange⦙T⦄'),
+    code      = ('T', '⦃dark_amber⦙T⦄'),
     marker    = ('T', '⦃dark_yellow⦙T⦄'),
     link      = ('T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),
     heading_color = ('T', '⦃dark_red⦙T⦄'),
@@ -177,7 +179,7 @@ dark_warm_theme = theme(
     argument  = ('T', '⦃italic⦙⦃light_gray⦙T⦄⦄'),
     summary   = ('T', '⦃bold⦙⦃light_orange⦙T⦄⦄'),
     error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
-    code      = ('T', '⦃light_orange⦙T⦄'),
+    code      = ('T', '⦃light_amber⦙T⦄'),
     marker    = ('T', '⦃light_yellow⦙T⦄'),
     link      = ('T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),
     heading_color = ('T', '⦃light_red⦙T⦄'),
