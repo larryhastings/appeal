@@ -233,9 +233,10 @@ Appeal also gave you help for free. Run `python3 script.py help hello` (or
 usage: hello name
 ```
 
-**The return value is your exit code.** Return `None` or `0` for success;
-return a nonzero integer for failure. (A function that just falls off the
-end returns `None`, i.e. success.)
+**Return an int and it's your exit code**--zero success, nonzero failure,
+C-style. Return anything else (or nothing) and that's success, exit 0.
+Bools aren't ints here: `return True` means "it worked", so it succeeds.
+To fail with a message, raise `appeal.CommandError(message, exit_code)`.
 
 **And bad input never reaches your function.** Miss an argument, pass an
 unknown option, hand `--count` something that isn't an integer--Appeal

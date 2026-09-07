@@ -1894,6 +1894,29 @@ def test_parse_short_options_directly():
     assert next(carver) == ('e', None)
 
 
+def test_main_exit_status_rule():
+    # the boundary reads a result the way backend._halts does: an exit
+    # status is an int that isn't a bool.  `return True` means "it
+    # worked"--it mustn't exit 1 just because True == 1.  any non-int
+    # value, or no return at all, is success.
+    def status_of(value):
+        app = Appeal(name='status')
+        @app.command()
+        def go():
+            return value
+        try:
+            app.main(['go'])
+            assert False, 'main() must exit'
+        except SystemExit as e:
+            return e.code
+    assert status_of(None) == 0
+    assert status_of(0) == 0
+    assert status_of(3) == 3
+    assert status_of(True) == 0
+    assert status_of(False) == 0
+    assert status_of('hello') == 0
+
+
 def test_completion_bad_candidates_and_fish():
     from appeal import completion_reentry
     def color(hue):

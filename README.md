@@ -338,12 +338,24 @@ and you'd be rewarded with:
 
     Hello, world!
 
-The return value from your command function is the return
-code for your program.  If you return `None` or `0`, that's
-considered success; returning a non-zero integer indicates
-failure.  (And if your function exits without a return
-statement, Python behaves as if your function ended with
-`return None`.)
+The return value from your command function sets the exit
+status for your program, by one rule: return an int and
+that's your exit status, C-style--zero is success, nonzero
+is failure.  Any other return value--or none at all--is
+success, exit status 0.  A bool is not an int here, even
+though Python pretends otherwise: `return True` means "it
+worked", and it would be perverse for that to exit 1 just
+because `True == 1`.  So `True`, `False`, strings, lists,
+your own objects--all success.  To fail with a message,
+raise `appeal.CommandError(message, exit_code)` instead.
+
+(The int rule is for `@app.command()` functions, whose job
+is doing things, not computing values.  If you're also
+publishing your interface as an automation API and some
+function's *answer* is an int--a count of rows, say--keep
+that function separate and give Appeal a thin wrapper that
+prints it: the API returns the value, the command reports
+it.)
 
 And if the user gets the command-line wrong--a missing
 argument, an unknown option--Appeal prints a polite error
@@ -2319,9 +2331,11 @@ usage='FILE')`.
 `Appeal.main(args=None)`
 
 Processes a command-line and calls your command functions.
-Catches data errors and prints them politely (to stdout, with
-usage); returns the exit status (also usable as
-`sys.exit(app.main())`).  `args` defaults to `sys.argv[1:]`.
+Catches data errors and prints them politely (to stderr,
+with usage), then *exits the process* with the exit status--
+a script's last line can be a bare `app.main()`.  `args`
+defaults to `sys.argv[1:]`.  Want the status returned
+instead of exiting?  That's `process()`.
 
 `Appeal.process(args=None)`
 
@@ -2547,8 +2561,10 @@ changes, all of them:
   (`AppealUsageError`, ...) are the real class names again,
   with the short spellings kept as aliases--and the hierarchy
   is new: `AppealDataError` is the base, `AppealUsageError`
-  the command-line subclass.  `AppealCommandError` is gone
-  (return an integer instead).
+  the command-line subclass.  `AppealCommandError` (alias
+  `CommandError`), which 0.6 documented but never caught, is
+  now actually wired: raise it from your command to fail
+  with a message and a chosen exit code.
 * **Preparers are gone.**  `app.app_class()`,
   `app.command_method()`, and `CommandMethodPreparer` are
   replaced by the class-as-app (`@app.global_command()` on a

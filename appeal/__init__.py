@@ -252,9 +252,11 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
     except AppealError as e:
         print(f"{error_prefix()} {e}", file=error_stream())
         return 1
-    if result is None:
-        return 0
-    if isinstance(result, int):
+    # the same reading as backend._halts: an exit status is an int that
+    # isn't a bool.  True/False are answers, not verdicts--a command
+    # returning True ("it worked") mustn't exit 1.  Any other value,
+    # or none at all, is success.
+    if isinstance(result, int) and not isinstance(result, bool):
         return result
     return 0
 
