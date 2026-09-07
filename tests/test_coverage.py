@@ -1917,6 +1917,68 @@ def test_main_exit_status_rule():
     assert status_of('hello') == 0
 
 
+def test_frontend_more_shapes():
+    # branch audit: five frontend one-way ifs
+    from appeal import build_plan
+    # sole_terminal_slot skips an all-options mixin (zero terminals)
+    # and keeps looking for the one terminal
+    def mixin(*, deep=False):
+        return deep
+    def f(m: mixin, x):
+        return (m, x)
+    sole = build_plan(f).sole_terminal_slot()
+    assert sole is not None and sole.name == 'x'
+    # the long-only policy simply declines a one-char name: no long
+    # form exists, and the policy mints no short
+    app = Appeal(name='lo', default_options=appeal.default_long_option)
+    @app.command()
+    def go(x, *, v=False, verbose=False):
+        return (x, v, verbose)
+    assert app.process(['go', 'z', '--verbose']).result == ('z', False, True)
+    try:
+        app.process(['go', 'z', '-v'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert 'unknown option' in str(e), e
+    # re-applying an IDENTICAL @app.option declaration is a no-op
+    # (REPLs and test harnesses re-decorate freely): one rule, so
+    # one listing row
+    app2 = Appeal(name='re')
+    def cmd(*, level: int = 0):
+        return level
+    app2.option('level', '--lvl')(cmd)
+    app2.option('level', '--lvl')(cmd)
+    app2.command()(cmd)
+    assert app2.process(['cmd', '--lvl', '3']).result == 3
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app2.process(['help', 'cmd'])
+    assert out.getvalue().partition('Options')[2].count('--lvl') == 1
+    # a DECORATED keyword-only parameter followed by another parameter
+    def cmd2(*, first: int = 0, second=False):
+        return (first, second)
+    app3 = Appeal(name='seq')
+    app3.option('first', '--one')(cmd2)
+    app3.command()(cmd2)
+    assert app3.process(['cmd2', '--one', '5', '--second']).result == (5, True)
+    # sibling-parents pairing: a group option carrying NONE of the
+    # sibling-shared strings stays out of the pairing
+    def g1(*, shared=False):
+        return ('g1', shared)
+    def g2(*, shared=False):
+        return ('g2', shared)
+    def g3(*, unique=False):
+        return ('g3', unique)
+    app4 = Appeal(name='sib')
+    @app4.command()
+    def trio(*, a: g1 = None, b: g2 = None, c: g3 = None):
+        return (a, b, c)
+    plan = app4.plan_for('trio')
+    assert [k for k, keys in plan.sibling_parents] == ['-a', '-b']
+    assert app4.process(['trio', '-a', '--shared']).result == \
+        (('g1', True), None, None)
+
+
 def test_group_option_required_nested_counts():
     # branch audit: a group option whose converter nests a REQUIRED
     # group--the nested counts add without the optional {0}:

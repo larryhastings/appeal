@@ -1751,12 +1751,12 @@ def _build(callable, name, memo, stack, top, skip_first=False,
                     default, metavar, stack))
             continue
 
-        if kind is inspect.Parameter.VAR_KEYWORD:
-            # legal: it exists to receive @app.option declarations
-            # for parameters not in the signature (v1, probed:
-            # absent ones simply aren't passed)
-            has_kwargs = parameter.name
-            continue
+        # every other parameter kind was consumed above, so this one IS
+        # the **kwargs--legal: it exists to receive @app.option
+        # declarations for parameters not in the signature (v1,
+        # probed: absent ones simply aren't passed)
+        assert kind is inspect.Parameter.VAR_KEYWORD
+        has_kwargs = parameter.name
 
     if overrides and has_kwargs:
         # @app.option declarations for parameters the signature
@@ -2169,12 +2169,13 @@ def _check_option_reachability(plan):
 
 
 def _shallow_slots(obj):
-    "copy.copy for a __slots__ object, without importing copy."
+    # copy.copy for a __slots__ object, without importing copy.  Both
+    # cloned classes (Plan, Argument) assign every slot in __init__,
+    # so each attribute is simply present--no hasattr guard.
     new = obj.__class__.__new__(obj.__class__)
     for klass in type(obj).__mro__:
         for name in getattr(klass, '__slots__', ()):
-            if hasattr(obj, name):
-                setattr(new, name, getattr(obj, name))
+            setattr(new, name, getattr(obj, name))
     return new
 
 
