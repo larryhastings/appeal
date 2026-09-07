@@ -8,13 +8,6 @@
 # through them (parcel + convert + dispatch).  The front end
 # (appeal/frontend.py) produces the Plan.
 
-# what collections itself does: the C deque straight from _collections
-# (the collections package costs the fast path 1.6ms); an implementation
-# without _collections gets the package's, as the stdlib does
-try:
-    from _collections import deque
-except ImportError:      # pragma: no cover -- not CPython
-    from collections import deque
 from . import (AppealConfigurationError, ConfigurationError,
                DataError, UsageError, did_you_mean)
 from .converters import convert, Option, MultiOption
@@ -728,7 +721,10 @@ class Engine:
         self.argv = list(argv)
         self.pos = 0
         self.end = len(self.argv)       # exclusive: trailing pockets shrink it
-        self.queue = deque()
+        self.stack = []                 # instructions, top at the END:
+                                        # push = extend(reversed(items)),
+                                        # pop = pop(); only the top (and
+                                        # the one beneath) is ever examined
         self.handlers = {}
         self.conjured = {}
         self.force_positional = dashdash    # `--` is LINE-WIDE (ruled
@@ -764,15 +760,15 @@ class Engine:
             record.resolve()
 
     def prepend(self, items):
-        "Push work onto the FRONT, preserving order (a la rextend)."
+        "Push work onto the top of the stack, in order (items[0] on top)."
         # flat recognition (Larry's v2 ruling): an option is recognized anywhere
         # on the line, even before its converter is entered.  Register a batch's
         # options into the handlers table eagerly, not only when they reach the
-        # queue front, so `--dashed dot 2.5` knows --dashed before `dot` fills.
+        # top of the stack, so `--dashed dot 2.5` knows --dashed before `dot` fills.
         # FIRST-wins here (overwrite=False): when sibling windows share an
         # option string, a LEADING occurrence (before any is built) binds to
         # the FIRST window -- announce-first, the interval model.  As the loop
-        # advances, each window's queued option re-registers (overwrite=True),
+        # advances, each window's pushed option re-registers (overwrite=True),
         # so mid/trailing occurrences track the current region.
         for item in items:
             if isinstance(item, (OptionInstruction, PreOptionInstruction)):
@@ -784,7 +780,7 @@ class Engine:
                     if isinstance(inner, (OptionInstruction,
                                           PreOptionInstruction)):
                         inner.register(self, overwrite=False)
-        self.queue.extendleft(reversed(items))
+        self.stack.extend(reversed(items))
 
     def peek(self):
         return self.argv[self.pos] if self.pos < self.end else None
@@ -919,12 +915,12 @@ class Engine:
     def _loop(self):
         while True:
             # advance past non-Argument items, registering their options
-            while self.queue and isinstance(self.queue[0], (OptionInstruction, PreOptionInstruction)):
-                self.queue.popleft().register(self)
+            while self.stack and isinstance(self.stack[-1], (OptionInstruction, PreOptionInstruction)):
+                self.stack.pop().register(self)
 
-            front = self.queue[0] if self.queue else None
+            front = self.stack[-1] if self.stack else None
             if isinstance(front, RepeatInstruction):
-                self.queue.popleft()
+                self.stack.pop()
                 self.prepend(front.items + [front])       # re-lay for one element
                 continue
 
@@ -945,7 +941,7 @@ class Engine:
 
             if (tok is not None and not self.force_positional
                     and self._is_option(tok)):
-                if not self.queue and not self._owns_option(tok):
+                if not self.stack and not self._owns_option(tok):
                     return          # saturated + an option we don't own: this
                                     # era/command's boundary is over -- yield it
                 self._invoke_option(); continue
@@ -1009,7 +1005,7 @@ class Engine:
         if arg.trailing:                            # a required trailing operand
             assert arg.required                     # trailing == keyword-only,
                                                     # no default == required
-            self.queue.popleft()                    # reserved off the end, keyword
+            self.stack.pop()                    # reserved off the end, keyword
             if not arg.owner.reserve:               # too few operands
                 raise UsageError(f"missing argument {arg.name!r}")
             raw = arg.owner.reserve.pop(0)
@@ -1027,7 +1023,7 @@ class Engine:
                 if arg.owner._attached is not None:
                     raw = arg.owner._attached
                     arg.owner._attached = None
-                    self.queue.popleft()
+                    self.stack.pop()
                     arg.owner.args.append(self._cv(arg.converter, raw, arg.name))
                     return
                 if tok is None or tok == '--':
@@ -1038,12 +1034,12 @@ class Engine:
                         raise UsageError(
                             f"option {arg.owner._opt_display} takes "
                             f"{_count_list(root.valid_counts, root.unbounded_from)}")
-                    self.queue.popleft()
+                    self.stack.pop()
                     arg.owner.args.append(
                         arg.default)
                     return
                 self.advance()
-                self.queue.popleft()
+                self.stack.pop()
                 arg.owner.args.append(self._cv(arg.converter, tok, arg.name))
                 return
             if tok is None or (not self.force_positional and self._is_option(tok)):
@@ -1057,16 +1053,16 @@ class Engine:
                             f"wrong number of arguments: "
                             f"{len(arg.owner.args)} left over")
                     raise UsageError(f"missing argument {arg.name!r}")
-                self.queue.popleft()
-                if self.queue and isinstance(self.queue[0], RepeatInstruction):
-                    self.queue.popleft()             # end a *args of leaves -- no
+                self.stack.pop()
+                if self.stack and isinstance(self.stack[-1], RepeatInstruction):
+                    self.stack.pop()             # end a *args of leaves -- no
                 else:                                # phantom element; a plain
                     arg.owner.args.append(           # optional keeps its position
                         arg.default)
                 return
             self.advance()
             arg.owner.args.append(self._cv(arg.converter, tok, arg.name))
-            self.queue.popleft()
+            self.stack.pop()
             return
         # a converter slot: a conjured instance, or a fresh one from an operand
         obj = self.conjured.pop(arg.slot, None)
@@ -1074,16 +1070,16 @@ class Engine:
         # is an operand or None--after `--` a dash token is an operand too)
         if obj is not None and tok is None:
             # an option summoned a group but no operand arrived to start a fresh
-            # element.  queue[0] is THIS Argument; a *args window has the Repeat
+            # element.  the top is THIS Argument; a *args window has the Repeat
             # behind it.
-            if len(self.queue) > 1 and isinstance(self.queue[1], RepeatInstruction):
+            if len(self.stack) > 1 and isinstance(self.stack[-2], RepeatInstruction):
                 # a *args window: an option past the last operand binds to the
                 # NEAREST built instance, not a new window (never-rejects rule).
                 for built in reversed(arg.owner.args):
                     if isinstance(built, arg.converter):
                         built.kwargs.update(obj.kwargs)
-                        self.queue.popleft()        # the Argument
-                        self.queue.popleft()        # the Repeat -- end the *args
+                        self.stack.pop()        # the Argument
+                        self.stack.pop()        # the Repeat -- end the *args
                         return
             # no instance to bind to: the summoned shell falls through and becomes
             # the element.  If it needs operands and none arrive, its own fill
@@ -1095,16 +1091,16 @@ class Engine:
                                                      # shell; a starved required
                                                      # operand surfaces in its fill
             else:
-                self.queue.popleft()                 # nothing to build here
-                if self.queue and isinstance(self.queue[0], RepeatInstruction):
-                    self.queue.popleft()             # end the *args -- no phantom
+                self.stack.pop()                 # nothing to build here
+                if self.stack and isinstance(self.stack[-1], RepeatInstruction):
+                    self.stack.pop()             # end the *args -- no phantom
                 else:                                # element; a plain optional
                     arg.owner.args.append(           # group keeps its position
                         arg.default)
                 return
         if obj is None:
             obj = arg.converter()
-        if len(self.queue) > 1 and isinstance(self.queue[1], RepeatInstruction):
+        if len(self.stack) > 1 and isinstance(self.stack[-2], RepeatInstruction):
             obj._window = True                      # a *args window element: a
                                                     # starved required operand of
                                                     # it is a leftover shortfall
@@ -1113,7 +1109,7 @@ class Engine:
             obj._optarg_root = arg.owner._optarg_root   # same greedy grab; a starve
             obj._opt_display = arg.owner._opt_display   # names the top option/counts
         arg.owner.args.append(obj)
-        self.queue.popleft()
+        self.stack.pop()
         self.enter(obj)                             # pocket + front-splice
 
 
