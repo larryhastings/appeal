@@ -29,10 +29,10 @@ import appeal
 def both(fn, argv, decorations=None):
     "One engine: build the Converter in memory and run it; errors as text."
     import appeal
-    from appeal.backend import build_converters, _converter_key
+    from appeal.backend import build_converters
     plan = build_plan(fn, decorations=decorations)
     word = plan.name.replace('_', '-')
-    cls = build_converters([plan])[_converter_key(plan)]
+    cls = build_converters([plan])[plan.key]
     try:
         return ('ok', appeal.execute({word: cls}, [word] + list(argv)))
     except AppealDataError as e:
@@ -406,7 +406,7 @@ def test_plan_reprs_and_walkers():
     assert 'Plan' in repr(plan)
     assert 'Slot' in repr(plan.slots[0])
     assert 'Terminal' in repr(plan.slots[0].child)
-    assert 'OptionRule' in repr(plan.options[0])
+    assert repr(plan.options[0]) == '<Flag -v/--verbose -> verbose>'
     # sole_terminal_slot: a two-terminal child has no sole slot
     assert plan.slots[1].child.sole_terminal_slot() is None
     # count_terminals recurses through nonterminals
@@ -4067,7 +4067,7 @@ def test_backend_nested_chain_value_option_needs_value():
     # no value after it, reports that it needs one (ConjureChainBinding's value
     # branch: the whole chain conjures, then the value is missing)
     import appeal
-    from appeal.backend import build_converters, _converter_key
+    from appeal.backend import build_converters
     from appeal import build_plan, execute
     def first_child(*, verbose=False):
         return verbose
@@ -4078,7 +4078,7 @@ def test_backend_nested_chain_value_option_needs_value():
     def grandparent(p: parent = None):
         return p
     cls = build_converters([build_plan(grandparent)])[
-        _converter_key(build_plan(grandparent))]
+        build_plan(grandparent).key]
     try:
         execute({'grandparent': cls}, ['grandparent', '--flag'])
         assert False, 'expected AppealDataError'
@@ -4088,12 +4088,12 @@ def test_backend_nested_chain_value_option_needs_value():
 
 def test_backend_availability_and_counts():
     import appeal
-    from appeal.backend import build_converters, _converter_key
+    from appeal.backend import build_converters
     from appeal import build_plan, execute
     def run(f, argv):
         plan = build_plan(f)
         word = plan.name.replace('_', '-')
-        cls = build_converters([plan])[_converter_key(plan)]
+        cls = build_converters([plan])[plan.key]
         try:
             return ('ok', execute({word: cls}, [word] + list(argv)))
         except appeal.AppealDataError as e:
@@ -4140,7 +4140,7 @@ def test_backend_availability_and_counts():
 
 
 def test_frontend_signature_resolution():
-    from appeal.frontend import signature, build_plan, subtree_option_keys
+    from appeal.frontend import signature, build_plan
     def fn(x):
         pass
     signature(fn)                              # a plain function
@@ -4158,7 +4158,7 @@ def test_frontend_signature_resolution():
     # subtree_option_keys: every option key in the tree
     def cmd(a, *, v=False):
         pass
-    assert '-v' in subtree_option_keys(build_plan(cmd))
+    assert '-v' in build_plan(cmd).subtree_option_keys()
 
 
 def test_frontend_parameter_dunders():
@@ -4175,7 +4175,7 @@ def test_frontend_parameter_dunders():
 
 def test_frontend_reachable_edges():
     import sys
-    from appeal.frontend import (_resolve, build_plan, _clone_tree, Plan,
+    from appeal.frontend import (_resolve, build_plan, Plan,
                                  dereference_annotated, _is_repeat_group)
     # _resolve: a __func__-bearing object with no proxied __code__ and no
     # __self__ (a classmethod object) -> (underlying func, skip-first)
@@ -4197,8 +4197,8 @@ def test_frontend_reachable_edges():
         return (a, b)
     top = build_plan(outer)
     assert top.sole_terminal_slot() is None
-    # _clone_tree recurses into nested-group (Plan) slot children
-    assert isinstance(_clone_tree(top), Plan)
+    # clone recurses into nested-group (Plan) slot children
+    assert isinstance(top.clone(), Plan)
     # dereference_annotated short-circuits when 'typing' isn't imported
     saved = sys.modules.pop('typing', None)
     try:
@@ -4257,12 +4257,12 @@ def test_frontend_reachable_edges_2():
 
 def test_backend_more_errors():
     import appeal
-    from appeal.backend import build_converter, build_converters, _converter_key
+    from appeal.backend import build_converter, build_converters
     from appeal import build_plan, execute
     def both2(fn, argv):
         plan = build_plan(fn)
         word = plan.name.replace('_', '-')
-        cls = build_converters([plan])[_converter_key(plan)]
+        cls = build_converters([plan])[plan.key]
         try:
             return ('ok', execute({word: cls}, [word] + list(argv)))
         except appeal.AppealDataError as e:
@@ -4382,11 +4382,11 @@ def test_trailing_reservation_scan_option_kinds():
     # through a converter-group trailing (the surviving spelling).
     import appeal
     from appeal import build_plan, execute
-    from appeal.backend import build_converters, _converter_key
+    from appeal.backend import build_converters
     def run(fn, argv):
         plan = build_plan(fn)
         word = plan.name.replace('_', '-')
-        cls = build_converters([plan])[_converter_key(plan)]
+        cls = build_converters([plan])[plan.key]
         try:
             return ('ok', execute({word: cls}, [word] + list(argv)))
         except appeal.AppealDataError as e:
@@ -4412,11 +4412,11 @@ def test_trailing_reservation_scan_option_kinds():
 
 def test_backend_execute_edges():
     import appeal
-    from appeal.backend import build_converters, _converter_key
+    from appeal.backend import build_converters
     def mk(fn):
         plan = build_plan(fn)
         return plan.name.replace('_', '-'), build_converters(
-            [plan])[_converter_key(plan)]
+            [plan])[plan.key]
     def setup(*, verbose=False): return ('setup', verbose)
     def halt(*, stop=False): return 3 if stop else None
     def go(x): return ('go', x)
@@ -4606,7 +4606,7 @@ def test_reachable_grind_completion_docs():
 
 def test_init_reachable_edges():
     import appeal, io, contextlib
-    from appeal.frontend import all_options, build_plan, Plan
+    from appeal.frontend import build_plan, Plan
     app = appeal.Appeal('p')
     @app.global_command()
     def g(x):
@@ -4615,7 +4615,7 @@ def test_init_reachable_edges():
     assert isinstance(app.plan, Plan)                 # root .plan -> global
     def cmd(a, *, v=False):
         pass
-    assert '-v' in [o.key for _, o in all_options(build_plan(cmd))]
+    assert '-v' in [o.key for _, o in build_plan(cmd).all_options()]
     # tier 1: doc= overrides the program prose in the listing
     a2 = appeal.Appeal('q', doc="Override.\n\nProse here.")
     @a2.command()

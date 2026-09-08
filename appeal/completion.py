@@ -18,7 +18,6 @@
 import os
 import sys
 from .backend import parse_short_options, is_option_token
-from .frontend import all_options, help_option_strings
 from . import AppealConfigurationError, UsageError
 from .frontend import Terminal
 
@@ -68,13 +67,6 @@ complete --command {prog} --no-files \\
 """
 
 
-def _option_value_converters(o):
-    "The converters for an option's operands, one per position."
-    if len(o.converters) > 1:
-        return tuple(o.converters[1:])
-    return tuple(o.converters)
-
-
 def completion_table(plan):
     """
     The completion table for one command (see
@@ -83,8 +75,8 @@ def completion_table(plan):
     """
     options = {}
     values = {}
-    for owner, o in all_options(plan):
-        entry = o.table_entry(windowed=getattr(owner, 'windowed', False))
+    for owner, o in plan.all_options():
+        entry = o.table_entry(windowed=owner.windowed)
         kind = entry[1]
         base = kind[2:] if kind[:2] in ('w:', 's:') else kind
         if base in ('flag', 'nullary'):
@@ -102,7 +94,7 @@ def completion_table(plan):
         for s in o.strings:
             options[s] = (o.key, nargs, repeatable)
         if nargs:
-            values[o.key] = _option_value_converters(o)
+            values[o.key] = o.operand_converters
 
     operands = []
     repeat = [None]
@@ -138,7 +130,7 @@ def completion_table(plan):
     walk(plan)
     return {
         'options': options,
-        'help': tuple(help_option_strings(plan)),
+        'help': tuple(plan.help_option_strings()),
         'values': values,
         'operands': tuple(operands),
         'repeat': repeat[0],

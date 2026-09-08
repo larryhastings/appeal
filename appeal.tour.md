@@ -97,30 +97,56 @@ pointing at the *same* `point` Plan.  (That sharing is why the
 documentation code identifies rows by their path from the root rather
 than by the Plan object; section 8.)
 
+**The varieties.**  `Plan` is a small hierarchy (your design,
+2026-09-08), each variety differing in how it's built and in one
+method, `__call__`, its calling convention:
+
+* `SignaturePlan`: read from a callable's signature; the ordinary case.
+* `ClassPlan`: a class as a command; calling it constructs the
+  instance, stashed under `constructs` for its methods to bind to.
+* `MethodPlan`: a method as a command; the call supplies the instance
+  stashed under `binds` as `self`.
+* `BoundInnerPlan`: big's BoundInnerClass; constructs through the
+  parent instance's attribute.
+* `WindowPlan`: a `*args` converter group; `windowed`, options bind by
+  window.
+* `IterablePlan` (`TuplePlan`, `ElementsPlan`): the operands become a
+  tuple or list; nothing is called.  Its `key` carries its element
+  shape, since every `tuple[...]` shares the callable `tuple`.
+
+`OptionRule` is one too: `Flag`, `Value`, `Fold` (and `FoldOnce`),
+`Nullary`, `GroupOption`, each answering what it consumes and what the
+backend binds its strings to.  Consumers ask the rule instead of
+branching on a kind string.
+
 **What the front end decides**, all of it in `frontend.py`:
 
 * `signature()` reads parameters off `__code__` and `__annotations__`
   directly, so the fast path never imports `inspect` (7 ms).
-* `_child_for` classifies each parameter: terminal or group, `*args`,
-  option kind.  Builtin generics are handled by feature detection
-  (`list[int]`, `X | None`); the `typing` module is not consulted.
-* `_finalize_options` assigns option strings: a parameter's long option
-  is its name with underscores turned to dashes, and a short option is
-  proposed from the first letter and claimed if free.  Within one
-  command every string has exactly one owner.  A string declared by two
-  *sibling* groups (`a: point, b: point` both have `--flag`) is
+* `Plan.child_for` classifies each parameter: terminal or group,
+  `*args`, option kind.  Builtin generics are handled by feature
+  detection (`list[int]`, `X | None`); the `typing` module is not
+  consulted.  `OptionRule.build` does the same for options.  A `Build`
+  object carries the context (the memo of plans built, the cycle
+  stack, the decorations) that every constructor needs.
+* `Plan.finalize_options` assigns option strings: a parameter's long
+  option is its name with underscores turned to dashes, and a short
+  option is proposed from the first letter and claimed if free.  Within
+  one command every string has exactly one owner.  A string declared by
+  two *sibling* groups (`a: point, b: point` both have `--flag`) is
   **scoped**: it's legal, and which window it binds to is decided by
   position on the line.
-* `_analyze` computes the operand-count footprint: `minimum`, `maximum`,
-  and `valid_counts`, the exact set of operand counts the fill rule
-  accepts.  It gets that set by *simulating* the Engine's fill rule on
-  counts (`_greedy_body`), so the number in an error message cannot
-  disagree with what the parser does.
-* `_promote_optionality`: an optional operand followed by a required
-  one can never actually be skipped, so it becomes required.  This is
-  the rule you named **fill left to right**: a slot fills whenever an
-  operand remains; an optional is skipped only to leave room for a
-  required operand after it, never to reach a *later* optional.
+* `Plan.analyze` computes the operand-count footprint: `minimum`,
+  `maximum`, and `valid_counts`, the exact set of operand counts the
+  fill rule accepts.  It gets that set by *simulating* the Engine's
+  fill rule on counts (`greedy_body`), so the number in an error
+  message cannot disagree with what the parser does.
+* `Plan.promote_optionality`: an optional operand followed by a
+  required one can never actually be skipped, so it becomes required.
+  This is the rule you named **fill left to right**: a slot fills
+  whenever an operand remains; an optional is skipped only to leave
+  room for a required operand after it, never to reach a *later*
+  optional.
 
 A Plan also carries the era flags (`share`, `immediate`; section 5)
 and, once the back end has built it, `compiled`: the
@@ -140,8 +166,9 @@ has:
   **instructions** into an Engine (next section).
 * `args` and `kwargs` on each instance: where parsed operands and
   options land.
-* `__call__`: finish every value in `args` and `kwargs`, then call the
-  user's callable with them.  This is the moment your function runs.
+* `__call__`: finish every value in `args` and `kwargs`, then hand them
+  to the plan, whose `__call__` is the variety's calling convention.
+  This is the moment your function runs.
 
 `_build_class` writes `register` from the Plan, in memory, once.  There
 is no generated source anymore; the class is built by ordinary Python
@@ -512,8 +539,8 @@ ran.
 ## 10: Where to look when…
 
 * **a signature reads wrong** (wrong kind, wrong strings, wrong arity):
-  `frontend._child_for`, `_build_option_rule`, `_finalize_options`,
-  `_analyze`.
+  `Plan.child_for`, `OptionRule.build`, `Plan.finalize_options`,
+  `Plan.analyze`; the plan varieties and `build_plan` in `frontend.py`.
 * **a line parses wrong**: `backend.Engine._loop`, `_fill_argument`,
   `_invoke_option`; the token rules in `is_option_token` and
   `parse_short_options`.

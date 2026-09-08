@@ -41,12 +41,11 @@ table rows are structural; the usage line still arrives as a span
 string, so the man page un-renders it.  The general thing: a plain
 (unstyled) rendering of usage that both troff and tests can use.
 
-**A4. A BoundInnerClass's attribute name is recovered from a qualname
-string.**  `Converter.__call__`: `type(self).constructs.rpartition('.')[2]`
-splits a dotted qualname to find the attribute to fetch off the parent
-instance.  The plan's `constructs` is a string key for the env dict,
-doing double duty as a name to parse.  The general thing: the plan
-carries the attribute name as its own field.
+**A4. (Reduced, 2026-09-08.)**  `BoundInnerPlan.attribute` is a field
+now, and the backend's `__call__` asks the plan.  The field is still
+derived from the qualname's last segment at build time, once; whether
+big's BoundInnerClass exposes the name any other way is for you to
+say.
 
 **A5. The execution log finds a subcommand's callable by name.**
 `Processor._command_for`: the log records `(command, instance)` pairs
@@ -129,6 +128,13 @@ single item on the list and the one I'd most want you to read
 
 
 ## D: Defensive lookups on our own objects
+
+*(2026-09-08: the plan-side ones went with the plan varieties--
+`windowed`, `explicit`, `repeat`, `maximum`, `options` are read
+directly now, and Terminal is never duck-typed as a Plan.  The
+completion and `__init__` entries below are also gone.  Left: the
+`__origin__`/`__args__`/`completions`/`factory` probes on user
+annotations, which are genuinely optional attributes.)*
 
 The no-defensive-programming rule is yours, and these violate it in a
 way that also hides a design smell: `Terminal` and `Plan` are both

@@ -22,7 +22,7 @@
 from collections.abc import Mapping, Sequence
 
 from .frontend import build_plan
-from .frontend import Terminal, NO_DEFAULT, Plan
+from .frontend import Terminal, NO_DEFAULT, Plan, Nullary, Value
 from . import (
     AppealConfigurationError, AppealDataError, is_option,
     )
@@ -103,13 +103,13 @@ def _read_child(child, value, path, strict):
 
 
 def _option_value(o, value, path, strict):
-    if o.kind == 'flag':
+    if o.is_flag:
         return _read_bool(value, path)
-    if o.kind == 'nullary':
+    if isinstance(o, Nullary):
         return o.converters[0]() if _read_bool(value, path) else o.default
-    if o.kind == 'group':
+    if o.child is not None:
         return _read_child(o.child, value, path, strict)
-    if o.kind == 'value':
+    if isinstance(o, Value):
         if len(o.converters) == 1:
             return _convert(o.converters[0], value, path)
         if not _is_sequence(value) or len(value) != len(o.converters) - 1:

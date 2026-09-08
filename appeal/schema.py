@@ -71,11 +71,10 @@ def _option_schema(o, docs):
         'mapping': bool(o.converters) and getattr(
             o.converters[0], 'mapping', False),
     }
-    if o.kind == 'group':
+    if o.child is not None:
         entry['group'] = _plan_schema(o.child)
-    elif o.kind not in ('flag', 'nullary'):
-        converters = o.converters[1:] if len(o.converters) > 1 else o.converters
-        entry['operands'] = [_converter_name(c) for c in converters]
+    elif o.consumes_operands:
+        entry['operands'] = [_converter_name(c) for c in o.operand_converters]
     entry['default'] = _default(o.default)
     if o.usage_name and o.usage_name != o.name:
         entry['usage'] = o.usage_name

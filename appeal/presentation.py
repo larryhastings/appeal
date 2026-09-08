@@ -944,7 +944,7 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
 import inspect as _inspect
 import re as _re
 
-from .frontend import Terminal, _oparg_names
+from .frontend import Terminal
 from . import AppealConfigurationError
 
 
@@ -1345,11 +1345,11 @@ def _option_display(o, decoration=None):
     has to re-derive it.
     """
     bits = ['|'.join(style('option', escape_styles(s)) for s in o.strings)]
-    if o.kind == 'group':
+    if o.child is not None:
         bits.append('...')                       # structural, stays bare
-    elif o.kind not in ('flag', 'nullary'):
+    elif o.consumes_operands:
         names = ([o.usage_name] if o.usage_name is not None
-                 else _oparg_names(o))
+                 else o.oparg_names())
         for name in names:
             bits.append(style('oparg', decorate_argument(name, decoration)))
     return ' '.join(bits)

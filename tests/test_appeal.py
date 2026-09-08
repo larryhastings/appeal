@@ -2329,10 +2329,10 @@ def run_both(command, argv, decorations=None):
     decorations: the app-side @option/@parameter registry.
     """
     import appeal
-    from appeal.backend import build_converters, _converter_key
+    from appeal.backend import build_converters
     plan = build_plan(command, decorations=decorations)
     word = plan.name.replace('_', '-')
-    cls = build_converters([plan])[_converter_key(plan)]
+    cls = build_converters([plan])[plan.key]
     try:
         return ('ok', appeal.execute({word: cls}, [word] + list(argv)))
     except UsageError as e:
@@ -3341,8 +3341,7 @@ def test_help_disabled():
         assert '--help' in str(e), e
     # and the option truly isn't in the plan
     plan = app.plan
-    from appeal.frontend import help_option_strings
-    assert help_option_strings(plan) == ()
+    assert plan.help_option_strings() == ()
     # help=True (default) still answers --help
     app2 = Appeal(name='solo2')
     @app2.global_command()
@@ -4050,7 +4049,6 @@ def test_fuzz_parity():
     # Deterministic seed: a failure here reproduces exactly.
     import random
     rng = random.Random(20260703)
-    from appeal.frontend import all_options
 
     LEAVES = ['str', 'int', 'float']
 
@@ -4159,7 +4157,7 @@ def test_fuzz_parity():
                 count = rng.choice([max(0, min(counts) - 1), max(counts) + 1,
                                     count + 1])
         argv = [str(rng.randint(0, 99)) for _ in range(count)]
-        for owner, option in all_options(plan):
+        for owner, option in plan.all_options():
             if rng.random() > 0.40:
                 continue
             # repetition has semantics now (last-wins; repeatable

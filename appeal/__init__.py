@@ -449,7 +449,7 @@ def _stamp_decoration(plan, entry):
         if not isinstance(s.child, Terminal):
             _stamp_decoration(s.child, entry)
     for o in plan.options:
-        if o.kind == 'group':
+        if o.child is not None:
             _stamp_decoration(o.child, entry)
 
 
@@ -467,19 +467,17 @@ def _merge_era_options(plans):
     ones simply go without--the same rule the letters already follow
     inside one plan.
     """
-    from .frontend import all_options
     written = {}                        # string the user wrote -> plan
     autos = []                          # (plan, option, short), era order
     for plan in plans:
         seen = set()
-        for owner, option in all_options(plan):
+        for owner, option in plan.all_options():
             if id(option) in seen:
                 # a shared rule revisited (all_options dedupes plans,
                 # but belt and braces--the frontend twin's rule)
                 continue   # pragma: no cover
             seen.add(id(option))
-            auto = () if getattr(option, 'explicit', False) else \
-                   getattr(option, 'auto_shorts', ())
+            auto = () if option.explicit else option.auto_shorts
             for s in tuple(option.strings):
                 if s in auto:
                     autos.append((plan, option, s))
@@ -539,11 +537,10 @@ def _config_vet(plan, table_words, config, command_plan_for,
     instead SKIPS every key that can't layer: take what's mine,
     ignore the rest.
     """
-    from .frontend import all_options
     from .frontend import Terminal
     options = {}
     scoped = set()
-    for owner, o in all_options(plan):
+    for owner, o in plan.all_options():
         if o.name in options and options[o.name] is not o:
             scoped.add(o.name)
         options.setdefault(o.name, o)
@@ -559,7 +556,7 @@ def _config_vet(plan, table_words, config, command_plan_for,
         "the key--or a nested key of a group's mapping--that is scoped"
         if rule.name in scoped or rule.key in plan.scoped_keys:
             return rule.name
-        if rule.kind == 'group' and isinstance(value, Mapping):
+        if rule.child is not None and isinstance(value, Mapping):
             inner = {o.name: o for o in rule.child.options}
             for k, v in value.items():
                 if k in inner:
@@ -609,7 +606,7 @@ def _config_vet(plan, table_words, config, command_plan_for,
                     f"of {word!r}; config supplies only "
                     f"global-command options")
             if any(o.name == key
-                   for owner, o in all_options(p)):
+                   for owner, o in p.all_options()):
                 raise AppealDataError(
                     f"config: {key!r} is an option of {word!r}; "
                     f"config supplies only global-command "
@@ -634,18 +631,18 @@ def _config_apply(conv, table, plan, config, plan_for, strict=True):
     A false flag is ABSENT (the documented policy); conversion failures
     carry 'config:' provenance and name the key.
     """
-    from .frontend import all_options
+    from .frontend import Nullary
     from .load import _option_value, _read_group, _read_bool
     vetted = _config_vet(plan, frozenset(table), config, plan_for, strict)
-    owners = {id(rule): owner for owner, rule in all_options(plan)}
+    owners = {id(rule): owner for owner, rule in plan.all_options()}
     for name, rule in vetted.items():
         raw = config[name]
         try:
-            if rule.kind == 'flag':
+            if rule.is_flag:
                 if not _read_bool(raw, name):
                     continue                    # false: absent, default stays
                 value = rule.present
-            elif rule.kind == 'nullary':
+            elif isinstance(rule, Nullary):
                 if not _read_bool(raw, name):
                     continue
                 value = rule.converters[0]()
@@ -725,7 +722,7 @@ def _owner_path(plan, target):
             if rest is not None:
                 return [('slot', slot, here)] + rest
     for option in plan.options:
-        if option.kind == 'group':
+        if option.child is not None:
             rest = _owner_path(option.child, target)
             if rest is not None:
                 return [('option', option)] + rest
@@ -832,8 +829,9 @@ class _Step:
             node.help()                         # the set listing, to stdout
             return 1
         cls, conv = self.cls, self.conv
-        if cls.binds is not None:               # a method/BIC command: self is
-            conv.bound = env.get(cls.binds)     # its class's instance, built by
+        plan = cls.plan
+        if plan.binds is not None:              # a method/BIC command: self is
+            conv.bound = env.get(plan.binds)    # its class's instance, built by
                                                 # an earlier step
         if self.kind == 'era':
             try:
@@ -849,11 +847,11 @@ class _Step:
                     e.usage = _line_trailer(node.stylesheet,
                                             node._program_usage_markup())
                 raise
-            if cls.constructs is not None:      # a global class-as-app: its
-                env[cls.constructs] = result    # methods bind to this
+            if plan.constructs is not None:     # a global class-as-app: its
+                env[plan.constructs] = result   # methods bind to this
             holder.instances.append(            # eras log (None,
                 (None, result                   #  instance-or-None)
-                 if cls.constructs is not None else None))
+                 if plan.constructs is not None else None))
             return result
         if self.kind == 'default':
             # a set's default command answers a BARE line: no operands
@@ -870,8 +868,8 @@ class _Step:
         except AppealDataError as e:
             self.attach_usage(e)
             raise
-        if cls.constructs is not None:          # a class command: stash instance
-            env[cls.constructs] = result
+        if plan.constructs is not None:         # a class command: stash instance
+            env[plan.constructs] = result
         instance = result if _is_class_command(self.callable) else None
         holder.instances.append((holder._command_for(self.word), instance))
         return result
@@ -1382,14 +1380,13 @@ class Appeal:
         like .plan and .plans.
         """
         import types as _types
-        from .frontend import all_options
         table = {}
         plan = None
         if self._impl is not None:
             plan = (self.global_plan if self.parent is None
                     else self._plan())
         if plan is not None:
-            for owner, o in all_options(plan):
+            for owner, o in plan.all_options():
                 for s in o.strings:
                     table.setdefault(s, o)
         for param, strings in self.root._precommand_options.items():
@@ -2497,10 +2494,9 @@ class Appeal:
         option went too far: "after 'db', but before any subcommand"
         (Larry, 2026-09-08).  Built on demand--only an error asks.
         """
-        from .frontend import all_options
         places = {}                     # string -> {where: True}, in order
         def claim(plan, where):
-            for owner, o in all_options(plan):
+            for owner, o in plan.all_options():
                 for s in o.strings:
                     places.setdefault(s, {})[where] = True
         for plan in self.global_plans():
@@ -2793,9 +2789,8 @@ class Appeal:
             root = self.root
             if self.parent is None or not root._help_enabled:
                 return None
-            from .frontend import all_options
             own = root._plan_for_node(self, self.name)
-            claimed = {s for owner, o in all_options(own) for s in o.strings}
+            claimed = {s for owner, o in own.all_options() for s in o.strings}
             policy = self._command_mappings
             strings = policy(self, claimed) if policy is not None else []
             if not strings:
@@ -3259,7 +3254,7 @@ class Appeal:
 # public API); the dispatch methods reach it as backend.Engine.
 from . import backend
 from .backend import (
-    execute, build_converters, converter_for, _converter_key,
+    execute, build_converters, converter_for,
     _halts, _unexpected, Converter,
     )
 

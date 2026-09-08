@@ -616,16 +616,8 @@ class Converter:
     """
     trailing = 0                        # count of this converter's own
                                         # trailing operands (build sets it)
-    _iterable = False                   # tuple[...]/list[...] group: build from
-                                        # the args iterable, don't splat them
     converter = None                    # the user's callable, wired by
                                         # fixup_converters at @command time
-    binds = None                        # a method command: the env key of the
-                                        # instance to pass as self (class-as-app)
-    constructs = None                   # a class command: the env key to stash
-                                        # the instance it builds under
-    _bound_inner = False                # a BoundInnerClass: construct THROUGH
-                                        # the bound parent instance, not plainly
     _window = False                     # set on an instance built as one element
                                         # of a *args window; a starved required
                                         # operand of a window is "left over", not
@@ -687,28 +679,16 @@ class Converter:
         return RepeatInstruction(items)
 
     def __call__(self):
-        "Render (execute): finish every deferred value, then call the callable."
+        """
+        Render (execute): finish every deferred value, then invoke the
+        callable--the plan's calling convention (a method takes its
+        instance, an iterable group builds its container, a bound inner
+        class constructs through its parent).
+        """
         for name in list(self.kwargs):
             self.kwargs[name] = finish(self.kwargs[name])
         args = [finish(a) for a in self.args]
-        conv = type(self).converter
-        if type(self)._iterable:            # tuple[...]/list[...]: build from the iterable
-            return conv(args)
-        if type(self)._bound_inner:
-            # a BoundInnerClass: the compiled converter is bound to a throwaway
-            # probe (build only needed its grammar).  Construct through the REAL
-            # parent instance's attribute, which re-binds the descriptor.
-            inner = type(self).constructs.rpartition('.')[2]
-            return getattr(self.bound, inner)(*args, **self.kwargs)
-        if type(self).binds is not None and type(self).constructs is None:
-            # a method command: self is the instance a parent constructed.  A
-            # nested CLASS command also has binds (it's a subcommand) but must
-            # construct plainly -- it doesn't take the outer instance as self.
-            # (A BoundInnerClass, which DOES construct through the outer, is a
-            # known-unported edge -- build hands the engine a _Probe-bound
-            # grammar, not the real descriptor.)
-            return conv(self.bound, *args, **self.kwargs)
-        return conv(*args, **self.kwargs)
+        return type(self).plan(args, self.kwargs, self.bound)
 
 
 class Engine:
@@ -1222,28 +1202,6 @@ def execute(commands, argv, *, precommands=(), repeat=False):
 _BUILTIN_CONVERTERS = (str, bool, int, float, complex)
 
 
-def _converter_key(plan):
-    """
-    A converter's identity for deduplication.  Normally the callable (one class
-    per callable, per Larry's rule).  But a builtin iterable-constructor group --
-    tuple[int, str] -- has callable `tuple` for EVERY parameterization, so those
-    collide onto one class unless keyed by their element shape too.  Without this,
-    tuple[int, str] and tuple[str, int] would share a class and mis-convert.
-    """
-    if plan.callable in (tuple, list):
-        return (plan.callable, _group_shape(plan))
-    return plan.callable
-
-
-def _group_shape(plan):
-    "A hashable signature of a builtin group's element slots (converter + shape)."
-    return tuple(
-        ((slot.child.converter if isinstance(slot.child, Terminal)
-          else _converter_key(slot.child)),
-         slot.required, slot.repeat, slot.trailing)
-        for slot in plan.slots)
-
-
 def _converters(plans):
     """
     The distinct converters reachable from the command Plans, as an ordered
@@ -1254,14 +1212,14 @@ def _converters(plans):
     found = {}
 
     def visit(plan):
-        key = _converter_key(plan)
+        key = plan.key
         if key in found:
             return
         for slot in plan.slots:                 # its own converters first
             if not isinstance(slot.child, Terminal):
                 visit(slot.child)
         for option in plan.options:
-            if option.kind == 'group':
+            if option.child is not None:
                 visit(option.child)
         found[key] = plan
     for plan in plans:
@@ -1278,10 +1236,10 @@ def _child_converters(plan):
     children = {}
     for slot in plan.slots:
         if not isinstance(slot.child, Terminal):
-            children.setdefault(_converter_key(slot.child), slot.name)
+            children.setdefault(slot.child.key, slot.name)
     for option in plan.options:
-        if option.kind == 'group':
-            children.setdefault(_converter_key(option.child), option.name)
+        if option.child is not None:
+            children.setdefault(option.child.key, option.name)
     return children
 
 
@@ -1300,13 +1258,13 @@ def build_converters(plans):
     for key, plan in converters.items():
         classes[key] = _build_class(plan, classes)
     for plan in plans:                          # wire each command's reachable tree
-        classes[_converter_key(plan)].fixup_converters(plan.callable)
+        classes[plan.key].fixup_converters(plan.callable)
     return classes
 
 
 def build_converter(plan):
     "The single command's live Converter subclass (convenience over build_converters)."
-    return build_converters([plan])[_converter_key(plan)]
+    return build_converters([plan])[plan.key]
 
 
 def converter_for(plan):
@@ -1323,26 +1281,15 @@ def converter_for(plan):
 
 def _build_class(plan, classes):
     "One Converter subclass; group refs and fixup resolve through `classes`."
-    option_specs = []
-    for o in plan.options:
-        if o.kind == 'flag':
-            kind, extra = 'flag', None
-        elif o.kind == 'value' and len(o.converters) == 1:
-            kind, extra = 'value', o.converters[0]
-        elif o.kind == 'value':                 # multi-oparg: (constructor, *leaves)
-            kind, extra = 'multi', o.converters
-        elif o.kind in ('fold', 'fold1'):       # counter/accumulator/mapping
-            kind, extra = 'fold', o.converters[0]
-        elif o.kind == 'group':                 # sibling converter-group option
-            kind, extra = 'group', _converter_key(o.child)
-        else:
-            assert o.kind == 'nullary'          # a zero-arg converter as a flag:
-            # presence CALLS it (--north -> north()).  Spelled as a value option
-            # with a (constructor,) tuple and no leaves -- ValueBinding._multi
-            # grabs zero opargs and returns constructor().  (In-memory only: the
-            # live converter needs no source spelling.)
-            kind, extra = 'multi', (o.converters[0],)
-        option_specs.append((o.name, kind, extra, o.strings, o))
+    # what each option's strings bind to: the rule says (its
+    # engine_converter), except a GroupOption, which binds to its
+    # child's Converter class--resolved through `classes`
+    option_specs = [
+        (o.name,
+         classes[o.child.key] if o.child is not None
+         else o.engine_converter,
+         o.strings, o)
+        for o in plan.options]
 
     # spellings the enclosing command owns: a sub-converter option with the
     # same spelling is SHADOWED -- the command's own option is used, and it
@@ -1352,13 +1299,7 @@ def _build_class(plan, classes):
 
     def register(self, processor):
         items = []
-        for name, kind, extra, strings, rule in option_specs:
-            if kind == 'flag':
-                conv = bool
-            elif kind == 'group':
-                conv = classes[extra]                   # the child Converter class
-            else:                                       # value / multi / fold:
-                conv = extra                            # the plan's converter(s)
+        for name, conv, strings, rule in option_specs:
             items.append(self.Option(name, conv, rule, *strings))
         boundary = len(items)   # a conjurable slot's PreOption inserts here:
                                 # after the last required-or-group slot (so it
@@ -1380,37 +1321,17 @@ def _build_class(plan, classes):
                     boundary = len(items)
                 continue
             # a converter group -- reference the child class
-            childcls = classes[_converter_key(slot.child)]
+            childcls = classes[slot.child.key]
             preopts = []
-            for o in slot.child.options:        # flat recognition
-                if o.kind == 'flag':
-                    for s in o.strings:
-                        if s in own_strings:    # shadowed: the command owns it
-                            continue
-                        preopts.append(
-                            self.PreOption(s, o.name, slot.name, childcls, o))
-                elif o.kind == 'value' and len(o.converters) == 1:
-                    # a single-oparg VALUE option that conjures its group: the
-                    # "mix-in" pattern (--log-level debug on a converter that
-                    # consumes no operands), and a windowed group's forward-
-                    # binding option at a window boundary (--label up).  Carry
-                    # the oparg converter so the PreOption grabs and converts it.
-                    for s in o.strings:
-                        if s in own_strings:
-                            continue
-                        preopts.append(self.PreOption(
-                            s, o.name, slot.name, childcls, o, o.converters[0]))
-                elif o.kind == 'fold':
-                    # a FOLD option on the group (counter/accumulator/mapping,
-                    # e.g. -v on a Logging mixin): conjure the group and fold the
-                    # occurrence into its MultiOption.  converters[0] is the
-                    # MultiOption class (the factory).
-                    for s in o.strings:
-                        if s in own_strings:
-                            continue
-                        preopts.append(self.PreOption(
-                            s, o.name, slot.name, childcls, o,
-                            factory=o.converters[0]))
+            for o in slot.child.options:        # flat recognition: the rule
+                conjure = o.conjure             # says whether naming it may
+                if conjure is None:             # conjure the group, and how
+                    continue
+                for s in o.strings:
+                    if s in own_strings:        # shadowed: the command owns it
+                        continue
+                    preopts.append(self.PreOption(
+                        s, o.name, slot.name, childcls, o, **conjure))
             if slot.repeat:                             # windowed *args
                 items.append(self.Repeat(
                     preopts + [self.Argument(slot.name, childcls, required=False)]))
@@ -1424,24 +1345,18 @@ def _build_class(plan, classes):
                 for sub in child_plan.slots:
                     if isinstance(sub.child, Terminal) or sub.repeat:
                         continue
-                    subcls = classes[_converter_key(sub.child)]
+                    subcls = classes[sub.child.key]
                     subchain = chain + [(sub.name, subcls)]
                     for o in sub.child.options:
+                        conjure = o.conjure
+                        if conjure is None:
+                            continue
                         for s in o.strings:
                             if s in own_strings:
                                 continue
-                            if o.kind == 'flag':
-                                preopts.append(self.PreOption(
-                                    s, o.name, sub.name, subcls, o,
-                                    chain=subchain))
-                            elif o.kind == 'value' and len(o.converters) == 1:
-                                preopts.append(self.PreOption(
-                                    s, o.name, sub.name, subcls, o,
-                                    converter=o.converters[0], chain=subchain))
-                            elif o.kind == 'fold':
-                                preopts.append(self.PreOption(
-                                    s, o.name, sub.name, subcls, o,
-                                    factory=o.converters[0], chain=subchain))
+                            preopts.append(self.PreOption(
+                                s, o.name, sub.name, subcls, o,
+                                chain=subchain, **conjure))
                     _nest(sub.child, subchain)
             _nest(slot.child, [(slot.name, childcls)])
             for k, pre in enumerate(preopts):           # leap over optionals
@@ -1467,8 +1382,6 @@ def _build_class(plan, classes):
                 child_cls.fixup_converters(child_conv)
 
     dct = {'register': register, 'trailing': _n_trailing(plan),
-           'binds': plan.binds, '_iterable': plan.callable in (tuple, list),
-           'constructs': plan.constructs, '_bound_inner': plan.bound_inner,
            '__module__': __name__}
     if children:                                # else the base no-op suffices
         dct['_fixup_children'] = classmethod(fixup_children)
