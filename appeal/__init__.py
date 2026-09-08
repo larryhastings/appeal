@@ -760,6 +760,11 @@ def _owner_path(plan, target):
     return None
 
 
+def _whole_program():
+    "The help topic a bare -h means on a program with no commands."
+    return ''
+
+
 def _is_class_command(obj):
     """
     A class, or a wrapped class (e.g. big's BoundInnerClass): the
@@ -1112,6 +1117,7 @@ class Appeal:
             self.version = None
             self._finalized = True      # the ROOT runs the pass
             self._precommand_options = {}
+            self._precommand_overrides = {}
             self._decorations = parent.root._decorations
             self._method_owner = parent._method_owner
             self._init_caches()
@@ -1169,6 +1175,8 @@ class Appeal:
         self.default_mappings = default_mappings
         self._finalized = False
         self._precommand_options = {}   # param -> (strings...)
+        self._precommand_overrides = {} # param -> (annotation, default) from
+                                        # app.option(annotation=, default=)
         # EVERYTHING @app.option/@app.parameter expressed, keyed
         # by the decorated callable (ruled 2026-08-09: Appeal
         # never modifies objects the user owns--decoration writes
@@ -1875,9 +1883,10 @@ class Appeal:
                     raise AppealConfigurationError(
                         f"option: the precommand has no parameter "
                         f"{name!r} (only 'help' and 'version')")
-                callable.__self__.root._precommand_options[name] = \
-                    tuple(options)
-                callable.__self__.root._invalidate()
+                root = callable.__self__.root
+                root._precommand_options[name] = tuple(options)
+                root._precommand_overrides[name] = (annotation, default)
+                root._invalidate()
                 return callable
             if (isinstance(callable, _MethodType)
                     and isinstance(callable.__self__, Appeal)):
@@ -2490,12 +2499,26 @@ class Appeal:
         else:
             def precommand(*, help: optional[str] = None):
                 app.help_and_version_precommand(help=help)
+        from .frontend import empty
+        overrides = app.root._precommand_overrides
         if want_v:
+            annotation, default = overrides.get('version', (empty, empty))
             app.root._decorations.add_option(precommand, 'version',
-                                             mapped['version'])
+                                             mapped['version'],
+                                             annotation=annotation,
+                                             default=default)
         if want_h:
+            annotation, default = overrides.get('help', (empty, empty))
+            if annotation is empty and not app.root._has_commands:
+                # a program with no commands (grep): -h/--help take no
+                # topic.  A zero-argument converter makes the option a
+                # flag whose presence yields the whole-program topic
+                # (Larry, 2026-09-08); absent, help stays None
+                annotation, default = _whole_program, None
             app.root._decorations.add_option(precommand, 'help',
-                                             mapped['help'])
+                                             mapped['help'],
+                                             annotation=annotation,
+                                             default=default)
         precommand.precommand = True    # for display: hosts the slot only
         app.root._precommand_flags[id(precommand)] = (True, True, True)
         return self._build(precommand, name=self.root._prog())

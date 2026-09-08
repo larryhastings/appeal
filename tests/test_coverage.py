@@ -5192,3 +5192,53 @@ def test_unknown_option_hints_misspelled_then_misplaced():
     # misspelled and misplaced: nothing
     assert err(['build', '--regio']) == "unknown option '--regio'"
     assert err(['--zzz']) == "unknown option '--zzz'"
+
+
+def test_commandless_help_takes_no_topic():
+    # Larry (2026-09-08): a program with no commands (grep) has no help
+    # topics, so -h/--help take no oparg--`grep -h foo` used to read foo
+    # as a topic and say "unknown command 'foo'".  default_mappings
+    # remaps help through the ordinary app.option machinery: a
+    # zero-argument converter makes the option a nullary flag whose
+    # presence yields the whole-program topic.
+    import contextlib, io
+    def run(app, argv):
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                return ('result', app.process(argv).result)
+        except SystemExit as e:
+            return ('exit', e.code, out.getvalue().splitlines()[0])
+    app = Appeal(name='grep')
+    @app.global_command()
+    def grep(pattern, *files, ignore_case=False):
+        return (pattern, files, ignore_case)
+    page = ('exit', None, 'usage: grep [-i|--ignore-case] <PATTERN> [<FILES>]...')
+    assert run(app, ['-h']) == page
+    assert run(app, ['-h', 'foo']) == page             # foo isn't a topic
+    assert run(app, ['--help', 'foo']) == page
+    try:
+        app.process(['--help=foo'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert str(e) == "option '--help' doesn't take a value", e
+    assert run(app, ['help']) == ('result', ('help', (), False))
+    # a program WITH commands keeps the optional topic
+    tool = Appeal(name='tool')
+    @tool.command()
+    def build(target):
+        return target
+    assert run(tool, ['-h', 'build'])[2] == 'usage: tool build <TARGET>'
+    assert run(tool, ['--help=build'])[2] == 'usage: tool build <TARGET>'
+    # app.option(annotation=, default=) on the precommand is honored
+    # (it used to record only the strings): a commandful program may
+    # make its help a bare flag too
+    def whole(): return ''
+    tool2 = Appeal(name='tool2')
+    @tool2.command()
+    def build2(target):
+        return target
+    tool2.option('help', '-h', '--help', annotation=whole)(
+        tool2.help_and_version_precommand)
+    assert run(tool2, ['-h', 'build2'])[2] == 'usage: tool2 <COMMAND>'
