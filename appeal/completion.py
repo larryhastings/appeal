@@ -245,7 +245,7 @@ def _completion_scan(options, words, maximum=None, boundary=None,
             pending = (key, nargs, remaining) if remaining else None
             continue
         if word == '--' and not force_positional:
-            force_positional = True             # line-wide, like the parse
+            force_positional = True             # for this scan, like the era
             continue
         if force_positional or not is_option_token(word, (flag, oparg, opargs)):
             # the scanner's own rule: a lone '-', and a negative number

@@ -651,11 +651,14 @@ parent's options reach its subcommands.
 **Scanning an era**, token by token (the rule, in Larry's words): if
 an oparg is owed--optional opargs included--the token is it,
 unconditionally (`foo -h --version` asks for help on `--version`).
-`--` is remembered and discarded, and it is **line-wide**: no later
-token on the line is an option, in this era or any other, though
-command words still dispatch (docopt's rule; argparse and click scope
-it per level, git and clap kill later commands too--ruled
-2026-09-07).  Otherwise a dash token is an option: unknown, with
+`--` is remembered and discarded: no later token **in this era** is
+an option.  A later era starts fresh--click's rule (Larry,
+2026-09-08, reversing docopt's line-wide rule of the day before: with
+a required global argument that starts with a dash, `tool -- -x stash
+-v` must still let `stash` take its `-v`)--unless the era bleeds, in
+which case the `--` state relays into the next era along with the
+era's options.  Where a command word goes, `--` is consumed and the
+next token is the word.  Otherwise a dash token is an option: unknown, with
 nothing owed, it **ends the era** and is retried in the next; unknown
 with an argument still owed, it's an error; a short cluster mixing
 known and unknown letters is an error; known, it's consumed.  Any

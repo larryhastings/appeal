@@ -727,9 +727,11 @@ class Engine:
                                         # the one beneath) is ever examined
         self.handlers = {}
         self.conjured = {}
-        self.force_positional = dashdash    # `--` is LINE-WIDE (ruled
-                                        # 2026-09-07): once seen, no later
-                                        # token on the line is an option
+        self.force_positional = dashdash    # `--` seen: no later token in
+                                        # THIS era is an option.  Era-scoped
+                                        # (Larry, 2026-09-08, click-style);
+                                        # it reaches the next era only by
+                                        # bleed, like the era's options
         self.reserved = 0               # trailing operands lifted out of the
                                         # stream (option-aware pocket); counted
                                         # in `consumed` since they never hit pos
@@ -935,8 +937,8 @@ class Engine:
 
             tok = self.peek()
             if tok == '--' and not self.force_positional:
-                # line-wide: from here on nothing is an option, in this era
-                # or any later one (the dispatcher carries the state along)
+                # from here on nothing in this era is an option (the
+                # dispatcher relays the state onward iff the era bleeds)
                 self.advance(); self.force_positional = True; continue
 
             if (tok is not None and not self.force_positional

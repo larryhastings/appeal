@@ -786,20 +786,27 @@ def _refuse_orphan_method(callable):
 
 
 class _Line:
-    "One command line's parse in progress: the steps, and the line-wide state."
-    __slots__ = ('argv', 'steps', 'dashdash', 'bled', 'tried', 'path')
+    "One command line's parse in progress: the steps, and the state eras relay."
+    __slots__ = ('argv', 'steps', 'dashdash', 'bled', 'tried', 'forced', 'path')
     def __init__(self, argv):
         self.argv = argv
         self.steps = []
         self.path = []                  # the command words dispatched, root
                                         # down: what a misplaced option's
                                         # placement is judged against
-        self.dashdash = False           # `--` seen: nothing later is an option
+        self.dashdash = False           # `--` seen in the last era, and that
+                                        # era bled it: the next era starts
+                                        # with nothing an option (era-scoped,
+                                        # Larry 2026-09-08; relayed by bleed)
         self.bled = {}                  # option handlers bled into the next era
         self.tried = {}                 # the last era's option strings (its own
                                         # and what bled into it): the scope a
                                         # mistyped option in command position
                                         # suggests from, wherever it surfaces
+        self.forced = False             # ...and whether that era had seen `--`:
+                                        # a dash token it declined was an
+                                        # operand to it, so it's diagnosed as
+                                        # a word, not an option
 
 
 class _Step:
@@ -2836,7 +2843,8 @@ class Appeal:
     def _parcel_era(self, era, line, pos, table):
         """
         Parcel one era's tokens (from pos) onto its converters, list its
-        steps, relay bleed and the line-wide state; returns the new pos.
+        steps, relay bleed (the options, and the `--` state); returns the
+        new pos.
         A structural error raises wearing the right usage trailer.
         """
         argv = line.argv
@@ -2886,9 +2894,10 @@ class Appeal:
                 steps[0].attach_usage(e)
             raise
         pos += proc.consumed                    # the whole era's tokens
-        line.dashdash = proc.force_positional
+        line.dashdash = proc.force_positional if era.bleed else False
         line.bled = proc.handlers if era.bleed else {}
         line.tried = proc.handlers
+        line.forced = proc.force_positional
         line.steps.extend(steps)
         return pos
 
@@ -2916,8 +2925,9 @@ class Appeal:
             word = argv[pos]
             if word == '--' and not line.dashdash:
                 # `--` where a command word goes (a line with no head era,
-                # say): line-wide from here, and the next token is the word
-                line.dashdash = True
+                # say): consumed, and the next token is the word.  It forces
+                # nothing beyond that--click's rule: the word's own eras
+                # start fresh (Larry, 2026-09-08)
                 pos += 1
                 continue
             if word not in table:
@@ -2930,17 +2940,16 @@ class Appeal:
                 elif not top:
                     return dispatched, pos      # pop back: a parent may own it
                 else:
-                    dash = word.startswith('-') and not line.dashdash
+                    dash = word.startswith('-') and not line.forced
                     err = _unexpected(word, line.tried if dash else table,
-                                      line.dashdash,
+                                      line.forced,
                                       self.root._option_placements(line.path))
                     # a leading dash-token is an unknown OPTION (program usage
                     # line, decision B); a bare word is an unknown COMMAND (the
                     # overview page, decision A)
                     err.usage = (_line_trailer(self.stylesheet,
                                                self._program_usage_markup())
-                                 if word.startswith('-') and not line.dashdash
-                                 else _overview_trailer(self))
+                                 if dash else _overview_trailer(self))
                     raise err
             depth = len(self._prog().split()) - 1     # root: 0
             line.path[depth:] = [word]                # this set's word, replacing
@@ -2966,10 +2975,18 @@ class Appeal:
                 if not top:
                     return dispatched, pos
                 tok = argv[pos]
-                dash = tok.startswith('-') and not line.dashdash
-                pool = line.tried if dash else table     # the LAST era's,
-                err = _unexpected(tok, pool, line.dashdash, # a subcommand's
-                                  self.root._option_placements(line.path))
+                dash = tok.startswith('-') and not line.forced
+                if not dash and tok in table:
+                    # a second command on a line that runs one: say so,
+                    # rather than "unknown command 'show' (did you mean
+                    # 'show'?)"
+                    err = UsageError(
+                        f"unexpected second command {tok!r}: this program "
+                        f"runs one command per line")
+                else:
+                    pool = line.tried if dash else table   # the LAST era's,
+                    err = _unexpected(tok, pool, line.forced,    # a sub-
+                                      self.root._option_placements(line.path))
                 err.usage = (_line_trailer(self.stylesheet,
                                            self._program_usage_markup())
                              if dash                     # an unknown option

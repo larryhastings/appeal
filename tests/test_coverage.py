@@ -2796,29 +2796,68 @@ def test_era_flags():
     assert node._node_bleed
 
 
-def test_double_dash_is_line_wide():
-    # ruled 2026-09-07 (docopt-style): after `--` no token on the line
-    # is an option, in this era or any later one--but command words
-    # still dispatch
+def test_double_dash_is_era_scoped():
+    # ruled 2026-09-08 (click-style, reversing the line-wide rule of
+    # 2026-09-07): `--` turns off option recognition for the rest of
+    # ITS era; a later era starts fresh--unless the era bleeds, in
+    # which case the `--` state relays along with its options.  So a
+    # required global argument that starts with a dash doesn't cost
+    # the commands after it their options:  tool -- -x stash -v
     def pair(x, y):
         return (x, y)
-    app = Appeal(name='dd', default_mappings=None)
+    app = Appeal(name='dd', default_mappings=None, repeat=True)
+    seen = []
+    @app.global_command()
+    def head(argument): seen.append(('head', argument))
     @app.command()
-    def commit(msg, *, amend=False):
+    def stash(*, verbose=False): seen.append(('stash', verbose))
+    @app.command()
+    def commit(msg, *, amend=False): seen.append(('commit', msg, amend))
+    @app.command()
+    def show(p: pair): seen.append(('show', p))
+    app.process(['--', '-x', 'stash', '-v'])
+    assert seen == [('head', '-x'), ('stash', True)], seen
+    # a command's own era: `--` then its operands, options off there only
+    seen.clear()
+    app.process(['a', 'commit', '--', '-m', 'show', '--', '-a', 'b'])
+    assert seen == [('head', 'a'), ('commit', '-m', False),
+                    ('show', ('-a', 'b'))], seen
+    # `--` where a command word goes: consumed, the word dispatches, and
+    # the word's eras start fresh (--amend is an option again; a dash
+    # operand needs its own `--`)
+    app2 = Appeal(name='dd2', default_mappings=None)
+    @app2.command()
+    def commit2(msg, *, amend=False):
         return (msg, amend)
-    @app.command()
-    def show(p: pair):
-        return p
-    # `--` before the command word: it dispatches; its later options die
-    assert app.process(['--', 'commit', '-m']).result == ('-m', False)
+    assert app2.process(['--', 'commit2', '--amend', 'x']).result == ('x', True)
+    assert app2.process(['--', 'commit2', '--', '-m']).result == ('-m', False)
+    # bleed carries the state: a bleeding precommand's `--` reaches the
+    # next era, so --flag there is an operand--and with nothing to take
+    # it, an unknown command, not an unknown option
+    app3 = Appeal(name='dd3', default_mappings=None)
+    @app3.precommand(bleed=True)
+    def pre(x): return x
+    @app3.command()
+    def cmd(*, flag=False): return flag
     try:
-        app.process(['--', 'commit', '-m', '--amend'])
+        app3.process(['--', '-x', 'cmd', '--flag'])
         assert False, 'expected AppealUsageError'
     except appeal.AppealUsageError as e:
-        assert "unknown command '--amend'" in str(e), e
-    # `--` protects operands reaching a NESTED converter (R06)
-    assert app.process(['show', '--', '-a', 'b']).result == ('-a', 'b')
-    assert app.process(['--', 'show', '-a', 'b']).result == ('-a', 'b')
+        assert str(e) == "unknown command '--flag'", e
+    app4 = Appeal(name='dd4', default_mappings=None)
+    @app4.precommand()                              # the last: doesn't bleed
+    def pre4(x): return x
+    @app4.command()
+    def cmd4(*, flag=False): return flag
+    assert app4.process(['--', '-x', 'cmd4', '--flag']).result is True
+    # a second command on a line that runs one is named as such (it
+    # used to be "unknown command 'cmd4' (did you mean 'cmd4'?)")
+    try:
+        app4.process(['x', 'cmd4', 'cmd4'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert str(e) == ("unexpected second command 'cmd4': this program "
+                          "runs one command per line"), e
 
 
 def test_astra_r04_precommand_operands_in_registration_order():

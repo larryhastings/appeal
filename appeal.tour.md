@@ -267,10 +267,11 @@ on 2026-09-07:
 4. A short bundle mixing owned and unowned letters is an error, not a
    boundary.
 
-`--` is **line-wide**: once seen, no later token on the line is an
-option, in this era or any later one.  Command words still dispatch
-after it (docopt's behavior, chosen after surveying click, argparse,
-docopt, fire, git, and clap).
+`--` is **era-scoped**: once seen, no later token in that era is an
+option.  The next era starts fresh (click's behavior), unless the era
+bleeds, in which case the `--` state relays along with the era's
+options.  Where a command word goes, `--` is consumed and the next
+token is the word.
 
 
 ## 5: The dispatcher: eras, command words, and the tree

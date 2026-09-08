@@ -596,8 +596,8 @@ Some option syntax worth knowing, all demonstrated on `--color`:
   Option More Than Once](#specifying-an-option-more-than-once)
   below.
 * `--` (two dashes alone) turns off option recognition for
-  the rest of the command-line, so arguments can start with
-  dashes: `fgrep -- -weird-pattern`.
+  the rest of the current command's arguments, so arguments
+  can start with dashes: `fgrep -- -weird-pattern`.
 * A negative number is an argument, not an option: `add -5 3`
   just works (unless your program actually defines a `-5`
   option, in which case you have only yourself to blame).
@@ -2531,11 +2531,12 @@ things POSIX allows, and allows some things POSIX disallows.
   command-line, Appeal doesn't care.  If you want Appeal to
   stop recognizing strings starting with dashes as options,
   specify `--` (two dashes with nothing else).  All subsequent
-  strings on the command-line will be used as arguments, even
-  if they start with a `-`--for the rest of the line, every
-  command included; command words still dispatch.  (The rule
-  docopt uses; argparse and click forget the `--` at each
-  subcommand, git and clap stop recognizing subcommands too.)
+  strings will be used as arguments, even if they start with a
+  `-`--until the current command's arguments end; the next
+  command on the line starts fresh, so `tool -- -x stash -v`
+  hands `-x` to the program and `-v` to `stash`.  (The rule
+  click and argparse use.  A precommand that bleeds its options
+  into the next era carries its `--` along too.)
 * A lone `-` is always an operand, never an option--it reaches
   your converter verbatim.  `appeal.file()` gives it the classic
   stdin/stdout meaning; without it, the string `'-'` is yours.

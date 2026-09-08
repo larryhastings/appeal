@@ -55,6 +55,7 @@ exclude = [
     "appeal.opus.4.8.review.txt",
     "appeal.fable.5.review.notes.md",
     "appeal.sol.review.md",
+    "appeal.candidates.md",             # Larry's review list (2026-09-08)
     "appeal.1.0.break.audit.md",
     "appeal.proposal.md",               # design history
     "appeal.streaming.md",
