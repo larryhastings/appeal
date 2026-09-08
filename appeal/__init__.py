@@ -444,10 +444,11 @@ def _stamp_decoration(plan, entry):
 
 def _group_eras(plans):
     """
-    The head plans, grouped into eras: a boundary=True plan ends its
-    era.  Every plan in an era must agree on immediate=, and the
-    immediate eras must be a PREFIX--an era that executes during the
-    scan can't follow one that waits (Larry's rules, 2026-09-07).
+    The head plans, grouped into eras: a boundary=True plan (the
+    default) ends its era; boundary=False merges it with the next.
+    Every plan in an era must agree on immediate=, and the immediate
+    eras must be a PREFIX--an era that executes during the scan can't
+    follow one that waits (Larry's rules, 2026-09-07).
     """
     eras = []
     era = []
@@ -456,11 +457,8 @@ def _group_eras(plans):
         if plan.boundary:
             eras.append(era)
             era = []
-    if era or eras:
-        # a boundary BEGINS a new era even when nothing registers in it:
-        # the metadata precommand's bleed lands in the (empty) user
-        # precommand era and stops there--never in the first command's
-        eras.append(era)
+    if era:
+        eras.append(era)                # a trailing boundary=False plan
     waiting = None                      # the first non-immediate era's name
     for era in eras:
         immediate = {p.immediate for p in era}
@@ -469,8 +467,6 @@ def _group_eras(plans):
             raise AppealConfigurationError(
                 f"precommands {names} parse as one era but disagree on "
                 f"immediate=; give the era a boundary, or agree")
-        if not immediate:
-            continue                    # an empty era: nothing to run or wait
         if immediate == {True}:
             if waiting is not None:
                 raise AppealConfigurationError(
@@ -484,12 +480,13 @@ def _group_eras(plans):
 
 def _merge_era_options(plans):
     """
-    The precommands parse as ONE merged era (Larry, 2026-09-03): every
-    era's options are recognized together at the head of the line, so
-    `foo -q --version` works no matter which precommand maps which.
-    One namespace needs one owner per string.  A string the user WROTE
-    twice--a long (from a parameter name) or an explicit @app.option
-    claim--in two different eras is a build error naming both owners.
+    One owner per option string across the whole head: every head
+    era's options reach the head's last era by bleed (`foo -q
+    --version` works no matter which precommand maps which), and a
+    string two eras both owned would bind by position--refused
+    (Larry, 2026-09-03; the rule outlives the merged era).  A string
+    the user WROTE twice--a long (from a parameter name) or an explicit
+    @app.option claim--in two precommands is a build error naming both.
     An AUTO-proposed short yields instead: explicit claims trump it,
     and among autos the first-declared era keeps the letter and later
     ones simply go without--the same rule the letters already follow
@@ -520,8 +517,8 @@ def _merge_era_options(plans):
                     continue
                 raise AppealConfigurationError(
                     f"option {s!r} is declared by two precommands "
-                    f"({prior.name!r} and {plan.name!r}); the precommands "
-                    f"parse as one era, so an option string needs one owner")
+                    f"({prior.name!r} and {plan.name!r}); an option string "
+                    f"needs one owner across the precommands")
     claimed = dict(written)
     for plan, option, s in autos:
         prior = claimed.get(s)
@@ -1609,7 +1606,7 @@ class Appeal:
     default_command = default           # transitional alias for the old name
 
     def precommand(self, *, index=-1, config=None, strict=None,
-                   boundary=False, bleed=False, immediate=False):
+                   boundary=True, bleed=None, immediate=False):
         """
         Register a precommand era.  A class here is class-as-app (its __init__
         is the era's grammar; its methods/inner classes bind to the instance).
@@ -1629,15 +1626,21 @@ class Appeal:
         (adapting an existing rc file that also holds non-CLI junk).  It
         only means something with config=, and is refused without it.
 
-        The era flags (Larry, 2026-09-07).  boundary=True: this
-        precommand ends its era--the next precommand starts a new one
-        (by default every precommand parses in ONE merged era).
-        bleed=True: the era's options stay mapped into the next era
-        (thrown away at ITS end unless it bleeds too).  immediate=True:
-        the era executes as soon as it scans clean, before the rest of
-        the line is judged--how -h/--help/--version outrank a malformed
+        The era flags (Larry, 2026-09-07; defaults ruled 2026-09-08).
+        Each precommand is an era of its own.  boundary=True (the
+        default): this precommand ends its era; boundary=False merges
+        it with the next precommand into one era.  bleed: the era's
+        options stay mapped into the next era (thrown away at ITS end
+        unless it bleeds too).  The default, None, means "bleed if
+        followed by a precommand": every precommand era bleeds into
+        the next, and the last one--and every command era--doesn't,
+        so `foo -q --version` works and no head option reaches the
+        first command; True/False override.  immediate=True: the era
+        executes as soon as it scans clean, before the rest of the
+        line is judged--how -h/--help/--version outrank a malformed
         line; allowed only on the leading eras.  Appeal's own metadata
-        precommand declares all three.
+        precommand is boundary=True, immediate=True, and bleeds by the
+        default rule.
         """
         if strict is not None and config is None:
             raise AppealConfigurationError(
@@ -2531,7 +2534,7 @@ class Appeal:
                                              mapped['help'],
                                              annotation=annotation,
                                              default=default)
-        app.root._precommand_flags[id(precommand)] = (True, True, True)
+        app.root._precommand_flags[id(precommand)] = (True, None, True)
         return self._build(precommand, name=self.root._prog())
 
     @property
@@ -2559,8 +2562,11 @@ class Appeal:
         The ordered head eras' plans (Larry's repeatable precommand, 2026-08-21):
         the help/version precommand at the head (when default_mappings mapped
         anything to it), then each precommand the user registered, front-to-back.
-        Empty when there's no head at all.  The precommands parse as ONE merged
-        era (Larry, 2026-09-03)--see _merge_era_options.
+        Empty when there's no head at all.  Each precommand is an era of its
+        own unless it says boundary=False; a bleed left None resolves here
+        (Larry, 2026-09-08): True if another precommand era follows, else
+        False.  One owner per option string across the whole head--see
+        _merge_era_options.
         """
         self._finalize()
         if self._era_plans is not None:
@@ -2578,9 +2584,13 @@ class Appeal:
         flags = self.root._precommand_flags
         for plan in plans:
             plan.boundary, plan.bleed, plan.immediate = flags.get(
-                id(plan.callable), (False, False, False))
-        for era in _group_eras(plans):
-            _merge_era_options(era)             # one owner per string PER ERA
+                id(plan.callable), (True, None, False))
+        eras = _group_eras(plans)
+        for i, era in enumerate(eras):
+            for plan in era:
+                if plan.bleed is None:          # "bleed if followed by a
+                    plan.bleed = i < len(eras) - 1     # precommand era"
+        _merge_era_options(plans)               # one owner per string
         self._era_plans = plans
         return self._era_plans
 
@@ -2659,13 +2669,10 @@ class Appeal:
         # operands fill in registration order; invocation is registration
         # order.  An era's options BLEED into the next when it says so.
         tried = {}                      # the option strings in scope at command
-                                        # position--every head era's until a
-                                        # command runs, then that command's: a
-                                        # mistyped option there suggests from them
+                                        # position: the last era's (its own and
+                                        # what bled into it)--a mistyped option
+                                        # there suggests from them
         for era in self.head_eras():
-            if not era:                             # an empty era: no tokens,
-                line.bled = {}                      # no bleed onward
-                continue
             classes = [converter_for(p) for p in era]
             convs = [cls() for cls in classes]
             proc = backend.Engine(argv[pos:], convs[0], table,
@@ -2700,7 +2707,7 @@ class Appeal:
             pos += proc.consumed                    # the whole era's tokens
             line.dashdash = proc.force_positional
             line.bled = proc.handlers if any(p.bleed for p in era) else {}
-            tried.update(proc.handlers)
+            tried = proc.handlers
             steps.extend(era_steps)
 
         dispatched = False              # did a command word of THIS node run?

@@ -632,15 +632,18 @@ command-line.
 
 `@app.global_command()` is the friendly name for
 `@app.precommand()`, and you can register several: each
-runs before the commands, in registration order.  Their
-options are all recognized together at the head of the
-line, so `foo -q --version` works whichever precommand
-maps which option.  Three keywords shape that head, and
+runs before the commands, in registration order, and each
+parses its own stretch of the line--its *era*.  By default
+each precommand's options stay recognized in the next
+precommand's era, so `foo -q --version` works whichever
+precommand maps which option, and none of them reach the
+first command.  Three keywords shape that head, and
 Appeal's own `-h`/`--help`/`--version` handling is just a
-precommand that uses all three: `boundary=True` ends the
-precommand's era (the next precommand starts a new one);
-`bleed=True` keeps the era's options recognized one era
-further along the line; `immediate=True` runs the era as
+precommand using them: `boundary` (default True) ends the
+precommand's era, `boundary=False` merges it with the next;
+`bleed` keeps the era's options recognized one era further
+along the line, and its default, None, means "bleed if
+followed by a precommand"; `immediate=True` runs the era as
 soon as it scans clean, before anything later on the line
 is judged--which is why `foo -h` prints help even when the
 program's required arguments are missing.  Only the leading

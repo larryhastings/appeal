@@ -2747,7 +2747,7 @@ def test_era_flags():
     except appeal.AppealConfigurationError as e:
         assert 'must lead the line' in str(e), e
     app6 = Appeal(name='mixed', default_mappings=None)
-    @app6.precommand(immediate=True)
+    @app6.precommand(immediate=True, boundary=False)    # merged with `no`
     def yes(*, y=False):
         pass
     @app6.precommand()
@@ -2761,6 +2761,13 @@ def test_era_flags():
         assert False, 'expected AppealConfigurationError'
     except appeal.AppealConfigurationError as e:
         assert 'disagree on immediate=' in str(e), e
+    # a trailing boundary=False precommand still closes the last era
+    app6b = Appeal(name='trail', default_mappings=None)
+    @app6b.precommand(boundary=False)
+    def tail(*, t=False):
+        return t
+    assert app6b.process(['-t']).result is True
+    assert [p.boundary for p in app6b.global_plans()] == [False]
     # two waiting (non-immediate) eras in a row are fine: only an
     # immediate one after a waiting one is refused
     app8 = Appeal(name='waits', default_mappings=None)
@@ -5292,3 +5299,80 @@ def test_option_stacks_per_string_annotations():
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert "option '-f' is declared twice" in str(e), e
+
+
+def test_bleed_defaults_to_followed_by_a_precommand():
+    # Larry (2026-09-08): each precommand is its own era, and bleed=None
+    # (the default) means "bleed if followed by a precommand": every
+    # precommand era's options reach the next precommand era, and the
+    # last one's--and no command era's--reach the first command.
+    # True/False override.  No merged era, no empty-era trick.
+    def misplaced(app, argv):
+        try:
+            app.process(argv)
+        except appeal.AppealUsageError as e:
+            return str(e)
+        assert False, f'expected AppealUsageError for {argv!r}'
+    # no user precommands: the metadata era is last, so --version stops
+    # before the first command
+    app = Appeal(name='a', version='1.0')
+    @app.command()
+    def go(): return 'went'
+    assert app.process(['go']).result == 'went'
+    assert misplaced(app, ['go', '--version']) == \
+        "option '--version' can't be used here; it goes before the command"
+    assert [p.bleed for p in app.global_plans()] == [False]
+    # one user precommand: metadata bleeds into it (foo -q --version
+    # prints the version), it doesn't bleed into the command
+    import contextlib, io
+    app1 = Appeal(name='b', version='2.0')
+    seen = []
+    @app1.precommand()
+    def quiet(*, quiet=False): seen.append(('quiet', quiet))
+    @app1.command()
+    def go1(): seen.append('go1')
+    assert [p.bleed for p in app1.global_plans()] == [True, False]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app1.process(['-q', '--version'])
+            assert False, 'main exits'
+        except SystemExit:
+            pass
+    assert out.getvalue().strip() == '2.0'
+    assert misplaced(app1, ['go1', '--quiet']) == \
+        "option '--quiet' can't be used here; it goes before the command"
+    # two user precommands: a chain--the first's options reach the
+    # second's era, and neither reaches the command
+    app2 = Appeal(name='c', default_mappings=None)
+    seen.clear()
+    @app2.precommand()
+    def first(*, alpha=False): seen.append(('first', alpha))
+    @app2.precommand()
+    def second(*, beta=False): seen.append(('second', beta))
+    @app2.command()
+    def go2(): seen.append('go2')
+    assert [p.bleed for p in app2.global_plans()] == [True, False]
+    app2.process(['--beta', '--alpha', 'go2'])       # alpha bled into second's era
+    assert seen == [('first', True), ('second', True), 'go2'], seen
+    assert misplaced(app2, ['go2', '--alpha']) == \
+        "option '--alpha' can't be used here; it goes before the command"
+    # explicit bleed=False on the first cuts the chain; explicit
+    # bleed=True on the last leaks into the first command
+    app3 = Appeal(name='d', default_mappings=None)
+    seen.clear()
+    @app3.precommand(bleed=False)
+    def cut(*, alpha=False): seen.append(('cut', alpha))
+    @app3.precommand(bleed=True)
+    def leak(*, beta=False): seen.append(('leak', beta))
+    @app3.command()
+    def go3(*, gamma=False): seen.append('go3')  # takes something: a
+    assert [p.bleed for p in app3.global_plans()] == [False, True]  # bleed can land
+    # --alpha after --beta: cut's era ended at --beta, and cut didn't
+    # bleed, so leak's era doesn't know --alpha; it lands in command
+    # position, where the scope tried is leak's era (not every head era)
+    assert misplaced(app3, ['--beta', '--alpha', 'go3']) == \
+        "option '--alpha' can't be used here; it goes before the command"
+    seen.clear()
+    app3.process(['go3', '--beta'])
+    assert seen == [('cut', False), ('leak', True), 'go3'], seen

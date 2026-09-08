@@ -6907,7 +6907,7 @@ def test_precommands_parse_as_one_merged_era():
     except SystemExit:
         assert 'usage:' in out.getvalue(), out.getvalue()
 
-    # one era needs one owner per string: a string the user WROTE in
+    # one owner per string across the head: a string the user WROTE in
     # two precommands is a build error naming both
     app3 = _appeal.Appeal(name='dup', default_mappings=None)
     @app3.precommand()
@@ -6920,7 +6920,7 @@ def test_precommands_parse_as_one_merged_era():
         app3.process(['w'])
         assert False, 'expected AppealConfigurationError'
     except _appeal.AppealConfigurationError as e:
-        assert "'--quiet'" in str(e) and 'one era' in str(e), e
+        assert "'--quiet'" in str(e) and 'one owner' in str(e), e
 
     # ...but an AUTO short yields, first-declared-first-served: quiet
     # keeps -q, quota goes long-only--the same rule as within one plan

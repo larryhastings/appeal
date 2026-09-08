@@ -548,8 +548,8 @@ class Plan:
         # options mapped into the next era, immediate= executes the era
         # during the scan; a command's bleed= keeps its options mapped
         # into the next command
-        self.boundary = False
-        self.bleed = False
+        self.boundary = True    # the era flags: stamped by global_plans
+        self.bleed = None       # (None: "bleed if followed by a precommand")
         self.immediate = False
 
     def __repr__(self):

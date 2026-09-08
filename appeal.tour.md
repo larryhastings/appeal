@@ -290,29 +290,32 @@ converters.  There are two sorts:
 * **Head eras** come before any command word.  Appeal's own metadata
   precommand (`-h/--help`, `--version`) is the first; then the user's
   precommands, in registration order, with a class moved ahead of its
-  own member precommands.  By default all the user's precommands parse
-  as *one merged era*: their options are recognized together, so
-  `prog -q --version` works no matter which precommand owns which
-  string, and one string may have only one owner across the era.
+  own member precommands.  Each precommand is an era of its own, and
+  by default each era's options stay recognized in the next (bleed,
+  below), so `prog -q --version` works no matter which precommand owns
+  which string.  One string may have only one owner across the head.
 * **Command eras**: each command word names a Converter, and the tokens
   after it up to saturation are its era.
 
 Three flags on `@app.precommand()` shape the head:
 
-* `boundary=True`: this precommand ends its era; the next one starts a
-  new era.  A boundary begins a new era even if nothing else registers
-  in it.
-* `bleed=True`: the era's option handlers stay recognized in the *next*
+* `boundary` (default True): this precommand ends its era.
+  `boundary=False` merges it with the next precommand into one era.
+* `bleed`: the era's option handlers stay recognized in the *next*
   era, still bound to their own converter.  They're discarded at that
-  era's end unless it bleeds too.  So the metadata precommand's
-  `--version` reaches the user's precommand era and stops there; it
-  never reaches the first command.  (`@app.command(bleed=True)` relays
-  a command's options one command further, the same way.)
+  era's end unless it bleeds too.  The default, None, resolves when the
+  head plans are assembled: "bleed if followed by a precommand", so
+  every precommand era bleeds into the next and the last one doesn't.
+  That is how the metadata precommand's `--version` reaches the user's
+  precommand eras and never the first command.  True and False
+  override.  (`@app.command(bleed=True)` relays a command's options one
+  command further, the same way.)
 * `immediate=True`: the era executes as soon as it has scanned clean,
   before the rest of the line is judged.  That is how `-h` beats a
   malformed line.  Immediate eras must be a prefix of the head.
 
-The metadata precommand declares all three.
+The metadata precommand is `boundary=True`, `immediate=True`, and
+bleeds by the default rule.
 
 `_run_node(line, pos, top)` is the dispatcher for one node.  It:
 

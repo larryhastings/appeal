@@ -582,42 +582,45 @@ flat spelling reads the current level and is for shallow configs.
 
 `@app.precommand()` is repeatable: each registration is another
 precommand, invoked front-to-back (registration order; `index=`
-places one explicitly) before any command.  By default they all parse
-as ONE era at the head of the line: every precommand's options are
-recognized together, so `foo -q --version` works no matter which
-precommand maps which string, in either spelling order.  One era
-means one owner per string: two precommands that WROTE the same
-option name (a long from a parameter, or an explicit @app.option
-claim) are a build error naming both; an auto-proposed short letter
-simply yields to the first claimant--the same first-declared-wins
-rule the letters follow inside one plan.  Each precommand receives
-the values the shared parse bound to it; operands fill in
-registration order.
+places one explicitly) before any command.  Each precommand is an
+**era of its own** at the head of the line, and by default each era's
+options stay recognized in the next one, so `foo -q --version` works
+no matter which precommand maps which string, in either spelling
+order.  One owner per string across the head: two precommands that
+WROTE the same option name (a long from a parameter, or an explicit
+@app.option claim) are a build error naming both; an auto-proposed
+short letter simply yields to the first claimant--the same
+first-declared-wins rule the letters follow inside one plan.
 
-**The era flags** (Larry's design, 2026-09-07), keywords of
-`@app.precommand()`:
+**The era flags** (Larry's design, 2026-09-07; defaults 2026-09-08),
+keywords of `@app.precommand()`.  There is no hidden behavior here:
+every default is a stated rule, and each flag can be set explicitly.
 
-* `boundary=True`: this precommand **ends its era**; the next
-  precommand starts a new one.  A boundary begins a new era even
-  when no later precommand registers in it--that empty era is where
-  a bleed lands and stops.
-* `bleed=True`: the era's options **stay mapped into the next era**,
-  still bound to their own precommand.  They're thrown away at the
-  end of THAT era unless it bleeds too--one hop per flag.  A later
-  era's own option wins a collision with a bled one.
+* `boundary` (default True): this precommand **ends its era**.
+  `boundary=False` merges it with the next precommand into one era
+  (operands fill in registration order; the era's members must agree
+  on `immediate`).
+* `bleed`: the era's options **stay mapped into the next era**, still
+  bound to their own precommand.  They're thrown away at the end of
+  THAT era unless it bleeds too--one hop per flag.  A later era's own
+  option wins a collision with a bled one.  The default, None, means
+  **"bleed if followed by a precommand"**: every precommand era bleeds
+  into the next, and the last one--and every command era--does not,
+  so no head option reaches the first command.  True and False
+  override the rule.
 * `immediate=True`: the era **executes during the scan**, as soon as
   it parcels clean--before anything later on the line is judged.
   Only the leading eras may be immediate (an immediate era after a
-  waiting one is a build error), and every precommand sharing an era
-  must agree.  A nonzero int from an immediate era halts the line.
+  waiting one is a build error).  A nonzero int from an immediate era
+  halts the line.
 
-Appeal's own metadata precommand (`-h`/`--help`/`--version`) declares
-all three: it is the first era alone, its options reach the user
-precommand era (`foo -q --version`) and no further, and it runs
-first--so `foo -h` prints help even when the program's required
-operands are missing, and `foo --version garbage` prints the
-version.  Nothing is special-cased: those are the flags, and a user
-precommand may claim them (`--dump-config`, say).
+Appeal's own metadata precommand (`-h`/`--help`/`--version`) is the
+first era, `immediate=True`, and bleeds by the default rule: its
+options reach the user's precommand eras (`foo -q --version`) and no
+further, and it runs first--so `foo -h` prints help even when the
+program's required operands are missing, and `foo --version garbage`
+prints the version.  Nothing is special-cased: those are the flags,
+and a user precommand may claim them (`--dump-config`, say).
 
 **Command eras.**  Each command word is an era of its own (one
 required argument, the word; no options), followed by the command's
