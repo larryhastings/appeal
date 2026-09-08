@@ -589,38 +589,42 @@ flat spelling reads the current level and is for shallow configs.
 `@app.precommand()` is repeatable: each registration is another
 precommand, invoked front-to-back (registration order; `index=`
 places one explicitly) before any command.  Each precommand is an
-**era of its own** at the head of the line, and by default each era's
-options stay recognized in the next one, so `foo -q --version` works
-no matter which precommand maps which string, in either spelling
-order.  One owner per string across the head: two precommands that
-WROTE the same option name (a long from a parameter, or an explicit
-@app.option claim) are a build error naming both; an auto-proposed
-short letter simply yields to the first claimant--the same
-first-declared-wins rule the letters follow inside one plan.
+**era of its own** at the head of the line, and the precommand eras
+**share their options with each other**: every precommand's options
+are recognized in the precommand eras before and after it, so `foo -q
+--version` works no matter which precommand maps which string, and
+`foo --beta aval` works when `aval` is an earlier precommand's operand
+and `--beta` a later one's option.  One owner per string across the
+head: two precommands that WROTE the same option name (a long from a
+parameter, or an explicit @app.option claim) are a build error naming
+both; an auto-proposed short letter simply yields to the first
+claimant--the same first-declared-wins rule the letters follow inside
+one plan.
 
-**The era flags** (Larry's design, 2026-09-07; defaults 2026-09-08),
-keywords of `@app.precommand()`.  There is no hidden behavior here:
-every default is a stated rule, and each flag can be set explicitly.
+**The era flags** (Larry's design, 2026-09-08), keywords of
+`@app.precommand()`.  There is no hidden behavior here: every default
+is a stated rule.
 
-* `boundary` (default True): this precommand **ends its era**.
-  `boundary=False` merges it with the next precommand into one era
-  (operands fill in registration order; the era's members must agree
-  on `immediate`).
-* `bleed`: the era's options **stay mapped into the next era**, still
-  bound to their own precommand.  They're thrown away at the end of
-  THAT era unless it bleeds too--one hop per flag.  A later era's own
-  option wins a collision with a bled one.  The default, None, means
-  **"bleed if followed by a precommand"**: every precommand era bleeds
-  into the next, and the last one--and every command era--does not,
-  so no head option reaches the first command.  True and False
-  override the rule.
+* `share` (default False): the precommand eras share among themselves,
+  as above, and no head option reaches the first command.
+  `share=True` shares the era's options **forwards into the first
+  command's eras** as well (and on through a command that shares too),
+  for a program whose global options should also be accepted after
+  the command word.  An option shared into an era stays bound to its
+  own precommand; the era's own option wins a collision.  What an era
+  shares forwards is its whole table--its own options and those
+  shared into it.
 * `immediate=True`: the era **executes first**, once the whole line
   has parceled--before the line is judged, and before any waiting era
   runs, wherever it sits (a command's help era is one).  A nonzero
   int from an immediate era halts the line.
 
-Appeal's own metadata precommand (`-h`/`--help`/`--version`) is the
-first era, `immediate=True`, and bleeds by the default rule: its
+Internally an era's share is one of FORWARDS, BACKWARDS, True (both),
+False (neither), or PRECOMMAND (both, but only among the precommand
+eras)--`precommand(share=False)` is PRECOMMAND, `share=True` is True,
+`command(share=True)` is FORWARDS.  A share with no neighbor on that
+side is harmless.  Appeal's own metadata precommand
+(`-h`/`--help`/`--version`) is the first era and `immediate=True`: its
 options reach the user's precommand eras (`foo -q --version`) and no
 further, and it runs first--so `foo -h` prints help even when the
 program's required operands are missing, and `foo --version garbage`
@@ -632,7 +636,7 @@ command era (the word itself; the command's own plan too when it
 takes nothing), the command's **help era**, and--when the command
 takes anything--its arguments-options-opargs era.  The help era
 (Larry, 2026-09-08) maps `-h`/`--help` onto the command: it is
-`immediate` and bleeds into the arguments-options-opargs era, so
+`immediate` and shares forwards into the arguments-options-opargs era, so
 `tool build -h` and `tool build lib -h` both print build's page and
 exit before anything on the line runs--`tool -q db stop -h` prints
 stop's page and runs neither `quiet` nor `db`.  The path is the
@@ -641,12 +645,13 @@ its subcommands listed.  The command's own strings win (claim `-h`
 and the era maps only `--help`); `@app.command(default_mappings=...)`
 is the policy--the stock `default_command_mappings()`, a subset of
 it, or `None` for no help era; the constructor's
-`default_mappings=None` turns every one off.  Relay: a command era that takes nothing relays bled
-options iff the command's `bleed` says so; one that takes something
-always relays into its help and arguments-options-opargs eras, and
-that last era bleeds onward iff the command's `bleed` says so
-(`@app.command(bleed=True)`, `subcommand(..., bleed=True)`), so a
-parent's options reach its subcommands.
+`default_mappings=None` turns every one off.  Relay: a command era
+that takes nothing relays shared options iff the command's `share`
+says so; one that takes something always relays into its help and
+arguments-options-opargs eras, and that last era shares onward iff
+the command's `share` says so (`@app.command(share=True)`,
+`subcommand(..., share=True)`), so a parent's options reach its
+subcommands.
 
 **Scanning an era**, token by token (the rule, in Larry's words): if
 an oparg is owed--optional opargs included--the token is it,
@@ -655,9 +660,9 @@ unconditionally (`foo -h --version` asks for help on `--version`).
 an option.  A later era starts fresh--click's rule (Larry,
 2026-09-08, reversing docopt's line-wide rule of the day before: with
 a required global argument that starts with a dash, `tool -- -x stash
--v` must still let `stash` take its `-v`)--unless the era bleeds, in
-which case the `--` state relays into the next era along with the
-era's options.  Where a command word goes, `--` is consumed and the
+-v` must still let `stash` take its `-v`)--unless the era shares
+forwards, in which case the `--` state relays into the next era along
+with the era's options.  Where a command word goes, `--` is consumed and the
 next token is the word.  Otherwise a dash token is an option: unknown, with
 nothing owed, it **ends the era** and is retried in the next; unknown
 with an argument still owed, it's an error; a short cluster mixing

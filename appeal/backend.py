@@ -95,9 +95,9 @@ class PreOptionInstruction:
         # the owner is conjured (a chain of them for a nested group); the
         # option itself is the ORDINARY binding of its kind (Astra R09)
         if self.chain is not None:
-            target = _Chain(self.chain)
+            target = _Chain(self.chain, processor.conjured)
         else:
-            target = _Conjure(self.slot, self.converter_cls)
+            target = _Conjure(self.slot, self.converter_cls, processor.conjured)
         if self.factory is not None:
             binding = MultiBinding(target, self.name, self.rule)
         elif self.converter is not None:
@@ -408,16 +408,20 @@ class _Conjure:
     Argument picks it up.  Marked _summoned: if it then starves for
     operands, the option wasn't available yet.
     """
-    __slots__ = ('slot', 'converter_cls')
-    def __init__(self, slot, converter_cls):
+    __slots__ = ('slot', 'converter_cls', 'conjured')
+    def __init__(self, slot, converter_cls, conjured):
         self.slot = slot
         self.converter_cls = converter_cls
+        self.conjured = conjured        # the REGISTERING era's stash: an
+                                        # option shared into another era
+                                        # still conjures for its own era's
+                                        # fill to pick up
     def resolve(self, processor):
-        obj = processor.conjured.get(self.slot)
+        obj = self.conjured.get(self.slot)
         if obj is None:
             obj = self.converter_cls()
             obj._summoned = True
-            processor.conjured[self.slot] = obj
+            self.conjured[self.slot] = obj
         return obj
 
 
@@ -428,17 +432,18 @@ class _Chain:
     the top, each stashed by its slot so each level's Argument picks
     its instance up during normal filling; the deepest is the owner.
     """
-    __slots__ = ('chain',)
-    def __init__(self, chain):
+    __slots__ = ('chain', 'conjured')
+    def __init__(self, chain, conjured):
         self.chain = chain                  # [(slot_name, converter_cls), ...]
+        self.conjured = conjured            # the registering era's stash
     def resolve(self, processor):
         owner = None
         for slot_name, cls in self.chain:
-            obj = processor.conjured.get(slot_name)
+            obj = self.conjured.get(slot_name)
             if obj is None:
                 obj = cls()
                 obj._summoned = True
-                processor.conjured[slot_name] = obj
+                self.conjured[slot_name] = obj
             owner = obj
         return owner
 
@@ -717,7 +722,7 @@ class Engine:
     --the first two fused per era, since a structural error ends the
     parcel either way.)
     """
-    def __init__(self, argv, root, commands=(), dashdash=False):
+    def __init__(self, argv, root, commands=(), dashdash=False, conjured=None):
         self.argv = list(argv)
         self.pos = 0
         self.end = len(self.argv)       # exclusive: trailing pockets shrink it
@@ -726,7 +731,10 @@ class Engine:
                                         # pop = pop(); only the top (and
                                         # the one beneath) is ever examined
         self.handlers = {}
-        self.conjured = {}
+        self.conjured = {} if conjured is None else conjured    # slot -> the
+                                        # instance an option summoned early;
+                                        # shared with the handlers harvested
+                                        # for an era before this one
         self.force_positional = dashdash    # `--` seen: no later token in
                                         # THIS era is an option.  Era-scoped
                                         # (Larry, 2026-09-08, click-style);
@@ -1113,6 +1121,20 @@ class Engine:
         arg.owner.args.append(obj)
         self.stack.pop()
         self.enter(obj)                             # pocket + front-splice
+
+
+def handlers_of(converter, conjured):
+    """
+    A converter's option handlers, registered ahead of its era--for an
+    earlier era that shares BACKWARDS (Larry, 2026-09-08: `prog --b-opt
+    aval` recognizes B's option while A's operand is still owed).  The
+    bindings target the converter itself, and conjure into `conjured`,
+    the stash the converter's own era will read from.
+    """
+    scratch = Engine([], converter, conjured=conjured)
+    converter.register(scratch)         # registers the options (prepend
+    return scratch.handlers             # does that eagerly); the stack is
+                                        # discarded with the scratch engine
 
 
 def _halts(result):

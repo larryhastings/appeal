@@ -635,23 +635,20 @@ command-line.
 `@app.global_command()` is the friendly name for
 `@app.precommand()`, and you can register several: each
 runs before the commands, in registration order, and each
-parses its own stretch of the line--its *era*.  By default
-each precommand's options stay recognized in the next
-precommand's era, so `foo -q --version` works whichever
-precommand maps which option, and none of them reach the
-first command.  Three keywords shape that head, and
-Appeal's own `-h`/`--help`/`--version` handling is just a
-precommand using them: `boundary` (default True) ends the
-precommand's era, `boundary=False` merges it with the next;
-`bleed` keeps the era's options recognized one era further
-along the line, and its default, None, means "bleed if
-followed by a precommand"; `immediate=True` runs the era as
-soon as it scans clean, before anything later on the line
-is judged--which is why `foo -h` prints help even when the
-program's required arguments are missing.  Only the leading
-eras may be immediate.  Commands can bleed too:
-`@app.command(bleed=True)` keeps that command's options
-recognized through the next command on the line.
+parses its own stretch of the line--its *era*.  The
+precommands' options are recognized across all of their
+eras, so `foo -q --version` works whichever precommand maps
+which option, and none of them reach the first command.
+Two keywords shape that head, and Appeal's own
+`-h`/`--help`/`--version` handling is just a precommand using
+them: `share=True` keeps the precommand's options recognized
+after the first command word as well; `immediate=True` runs
+the era before anything on the line is judged--which is why
+`foo -h` prints help even when the program's required
+arguments are missing.  Commands can share too:
+`@app.command(share=True)` keeps that command's options
+recognized through the next command on the line (its
+subcommands, say).
 
 On the flip side of this coin, Appeal also supports
 *subcommands:* your command can *itself* be followed by
@@ -2535,8 +2532,8 @@ things POSIX allows, and allows some things POSIX disallows.
   `-`--until the current command's arguments end; the next
   command on the line starts fresh, so `tool -- -x stash -v`
   hands `-x` to the program and `-v` to `stash`.  (The rule
-  click and argparse use.  A precommand that bleeds its options
-  into the next era carries its `--` along too.)
+  click and argparse use.  A precommand that shares its options
+  forwards into the next era carries its `--` along too.)
 * A lone `-` is always an operand, never an option--it reaches
   your converter verbatim.  `appeal.file()` gives it the classic
   stdin/stdout meaning; without it, the string `'-'` is yours.

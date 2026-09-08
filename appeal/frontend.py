@@ -475,7 +475,7 @@ class Plan:
                  'tree_trailing', 'scoped_keys', 'auto_help',
                  'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0',
                  'bound_inner', 'decoration', 'compiled',
-                 'boundary', 'bleed', 'immediate')
+                 'share', 'immediate')
 
     def __init__(self, callable, name, slots, options,
                  minimum, maximum, valid_counts):
@@ -543,14 +543,15 @@ class Plan:
         self.valid_counts = valid_counts
         self.unbounded_from = None
         self.compiled = None    # the backend's class, built once (converter_for)
-        # the era flags (Larry, 2026-09-07), stamped by the app: a
-        # precommand's boundary= ends its era, bleed= keeps the era's
-        # options mapped into the next era, immediate= executes the era
-        # during the scan; a command's bleed= keeps its options mapped
-        # into the next command
-        self.boundary = True    # the era flags: stamped by global_plans
-        self.bleed = None       # (None: "bleed if followed by a precommand")
-        self.immediate = False
+        # the era flags (Larry, 2026-09-08), stamped by the app: share
+        # says which neighboring eras recognize this era's options
+        # (FORWARDS into the next, BACKWARDS into the previous, True
+        # both, PRECOMMAND both but only among precommands, False
+        # neither); immediate executes the era before the line is judged
+        self.share = False      # the era flags: what the plan's era shares
+        self.immediate = False  # (FORWARDS/BACKWARDS/PRECOMMAND/True/False)
+                                # and whether it executes first; stamped by
+                                # global_plans / _plan_for_node
 
     def __repr__(self):
         return (f'<Plan {self.name} slots={len(self.slots)} '

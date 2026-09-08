@@ -2637,12 +2637,14 @@ def test_parse_once_edges():
         assert str(e) == "config: expected a sequence of 2 (at where)", e
 
 
-def test_era_flags():
-    # Larry's era model (2026-09-07): precommand(boundary=, bleed=,
-    # immediate=); Appeal's metadata precommand declares all three
+def test_era_share_and_immediate():
+    # Larry's era model (2026-09-08): precommand(share=, immediate=);
+    # command(share=).  Appeal's metadata precommand is immediate and
+    # shares among the precommands like any other
     import contextlib
-    # bleed: the metadata era's -h/--version reach the user precommand
-    # era ('foo -q --version'), and stop there--never the first command
+    # the precommand eras share with each other: the metadata era's
+    # -h/--version reach the user precommand era ('foo -q --version'),
+    # and stop there--never the first command
     app = Appeal(name='b', version='2.0')
     @app.precommand()
     def quiet(*, quiet=False):
@@ -2663,12 +2665,12 @@ def test_era_flags():
         assert False, 'expected AppealUsageError'
     except appeal.AppealUsageError as e:
         assert "unknown option '--version'" in str(e), e
-    # a user precommand that bleeds: its option is recognized in the
-    # FIRST command's era, bound to the precommand; the command's own
+    # precommand(share=True): its options are recognized in the FIRST
+    # command's era too, bound to the precommand; the command's own
     # options win a collision; a second command doesn't get it
     seen = []
     app2 = Appeal(name='bl', default_mappings=None, repeat=True)
-    @app2.precommand(bleed=True)
+    @app2.precommand(share=True)
     def logging(*, verbose=False, level=1):
         seen.append(('logging', verbose, level))
     @app2.command()
@@ -2689,14 +2691,14 @@ def test_era_flags():
         # is misplaced, not "did you mean '--verbose'"
         assert str(e) == "option '--verbose' can't be used here; " \
                          "it goes before the command", e
-    # command(bleed=True): its options relay one command further--
-    # through a command with no options-and-arguments era of its own
+    # command(share=True): its options relay one command further--
+    # through a command with no arguments-options-opargs era of its own
     seen.clear()
     app3 = Appeal(name='cb', default_mappings=None, repeat=True)
-    @app3.command(bleed=True)
+    @app3.command(share=True)
     def first(*, tag=''):
         seen.append(('first', tag))
-    @app3.command(bleed=True)
+    @app3.command(share=True)
     def relay():                        # nothing of its own: relays
         seen.append(('relay',))
     @app3.command()
@@ -2708,7 +2710,7 @@ def test_era_flags():
     app3.process(['first', 'relay', 'last', '--tag', 'T', '--other'])
     assert seen == [('first', 'T'), ('relay',), ('last', True)], seen
     seen.clear()
-    try:                                # last doesn't bleed: stop can't see it
+    try:                                # last doesn't share: stop can't see it
         app3.process(['first', 'last', 'stop', '--tag', 'x'])
         assert False, 'expected AppealUsageError'
     except appeal.AppealUsageError as e:
@@ -2717,7 +2719,7 @@ def test_era_flags():
     # immediate: a user immediate era executes before the rest of the
     # line is judged, and its nonzero result halts the run
     app4 = Appeal(name='im', default_mappings=None)
-    @app4.precommand(boundary=True, immediate=True)
+    @app4.precommand(immediate=True)
     def early(*, bail=False):
         seen.append(('early', bail))
         return 3 if bail else None
@@ -2730,13 +2732,13 @@ def test_era_flags():
     seen.clear()
     app4.process(['work'])
     assert seen == [('early', False), ('work',)]
-    # an immediate era anywhere executes FIRST (ruled 2026-09-08: a
-    # command's help era is one)--here `late` runs before `waits`
+    # an immediate era anywhere executes FIRST (a command's help era is
+    # one)--here `late` runs before `waits`, though it's declared after
     app5 = Appeal(name='order', default_mappings=None)
-    @app5.precommand(boundary=True)
+    @app5.precommand()
     def waits(*, w=False):
         seen.append(('waits', w))
-    @app5.precommand(boundary=True, immediate=True)
+    @app5.precommand(immediate=True)
     def late(*, l=False):
         seen.append(('late', l))
     @app5.command()
@@ -2745,62 +2747,44 @@ def test_era_flags():
     seen.clear()
     app5.process(['-w', '-l', 'go'])
     assert seen == [('late', True), ('waits', True), ('go',)], seen
-    # ...and an era's members must agree on immediate=
-    app6 = Appeal(name='mixed', default_mappings=None)
-    @app6.precommand(immediate=True, boundary=False)    # merged with `no`
-    def yes(*, y=False):
-        pass
-    @app6.precommand()
-    def no(*, n=False):
-        pass
-    @app6.command()
-    def go6():
-        pass
-    try:
-        app6.process(['go6'])
-        assert False, 'expected AppealConfigurationError'
-    except appeal.AppealConfigurationError as e:
-        assert 'disagree on immediate=' in str(e), e
-    # a trailing boundary=False precommand still closes the last era
-    app6b = Appeal(name='trail', default_mappings=None)
-    @app6b.precommand(boundary=False)
-    def tail(*, t=False):
-        return t
-    assert app6b.process(['-t']).result is True
-    assert [p.boundary for p in app6b.global_plans()] == [False]
-    # two waiting (non-immediate) eras in a row are fine: only an
-    # immediate one after a waiting one is refused
+    # two waiting eras in a row, both sharing among the precommands
     app8 = Appeal(name='waits', default_mappings=None)
-    @app8.precommand(boundary=True)
+    @app8.precommand()
     def w1(*, a=False):
         seen.append(('w1', a))
-    @app8.precommand(boundary=True)
+    @app8.precommand()
     def w2(*, b=False):
         seen.append(('w2', b))
     @app8.command()
     def go8():
         seen.append(('go8',))
     seen.clear()
-    app8.process(['-a', '-b', 'go8'])
+    app8.process(['-b', '-a', 'go8'])           # either order
     assert seen == [('w1', True), ('w2', True), ('go8',)], seen
-    # subcommand(bleed=True) on a nested path registers the flag too
+    # share= on precommand is a bool, spelled for the user
+    try:
+        app8.precommand(share=appeal.FORWARDS)
+        assert False, 'expected AppealConfigurationError'
+    except appeal.AppealConfigurationError as e:
+        assert 'share= is True or False' in str(e), e
+    # subcommand(share=True) on a nested path registers the flag too
     app7 = Appeal(name='sub', default_mappings=None)
     @app7.command()
     def db():
         pass
-    @app7.subcommand('db', bleed=True)
+    @app7.subcommand('db', share=True)
     def migrate(*, dry=False):
         return dry
-    assert app7.plan_for('migrate').bleed
-    node = app7.command('db', bleed=True)  # the name path stamps the node
-    assert node._node_bleed
+    assert app7.plan_for('migrate').share == appeal.FORWARDS
+    node = app7.command('db', share=True)  # the name path stamps the node
+    assert node._node_share
 
 
 def test_double_dash_is_era_scoped():
     # ruled 2026-09-08 (click-style, reversing the line-wide rule of
     # 2026-09-07): `--` turns off option recognition for the rest of
-    # ITS era; a later era starts fresh--unless the era bleeds, in
-    # which case the `--` state relays along with its options.  So a
+    # ITS era; a later era starts fresh--unless the era shares FORWARDS,
+    # in which case the `--` state relays along with its options.  So a
     # required global argument that starts with a dash doesn't cost
     # the commands after it their options:  tool -- -x stash -v
     def pair(x, y):
@@ -2831,11 +2815,11 @@ def test_double_dash_is_era_scoped():
         return (msg, amend)
     assert app2.process(['--', 'commit2', '--amend', 'x']).result == ('x', True)
     assert app2.process(['--', 'commit2', '--', '-m']).result == ('-m', False)
-    # bleed carries the state: a bleeding precommand's `--` reaches the
+    # sharing carries the state: a sharing precommand's `--` reaches the
     # next era, so --flag there is an operand--and with nothing to take
     # it, one argument too many, not an unknown option
     app3 = Appeal(name='dd3', default_mappings=None)
-    @app3.precommand(bleed=True)
+    @app3.precommand(share=True)
     def pre(x): return x
     @app3.command()
     def cmd(*, flag=False): return flag
@@ -2845,7 +2829,7 @@ def test_double_dash_is_era_scoped():
     except appeal.AppealUsageError as e:
         assert str(e) == "unexpected argument '--flag'", e
     app4 = Appeal(name='dd4', default_mappings=None)
-    @app4.precommand()                              # the last: doesn't bleed
+    @app4.precommand()                              # the last: doesn't share on
     def pre4(x): return x
     @app4.command()
     def cmd4(*, flag=False): return flag
@@ -5332,29 +5316,34 @@ def test_option_stacks_per_string_annotations():
         assert "option '-f' is declared twice" in str(e), e
 
 
-def test_bleed_defaults_to_followed_by_a_precommand():
-    # Larry (2026-09-08): each precommand is its own era, and bleed=None
-    # (the default) means "bleed if followed by a precommand": every
-    # precommand era's options reach the next precommand era, and the
-    # last one's--and no command era's--reach the first command.
-    # True/False override.  No merged era, no empty-era trick.
+def test_precommand_share_defaults():
+    # Larry (2026-09-08): each precommand is its own era, and the
+    # precommand eras share their options with each other (share=False,
+    # the default: PRECOMMAND on the era--FORWARDS into the next
+    # precommand era, BACKWARDS into the previous, never across the
+    # first command word).  share=True forces both directions, so the
+    # last precommand's options reach the first command.  A share with
+    # no neighbor on that side is harmless.
+    from appeal import FORWARDS, BACKWARDS, PRECOMMAND
     def misplaced(app, argv):
         try:
             app.process(argv)
         except appeal.AppealUsageError as e:
             return str(e)
         assert False, f'expected AppealUsageError for {argv!r}'
-    # no user precommands: the metadata era is last, so --version stops
-    # before the first command
+    def resolved(app):
+        return [(e.share, e.forwards, e.backwards) for e in app._head_eras()]
+    # no user precommands: the metadata era has no neighbor, so --version
+    # stops before the first command
     app = Appeal(name='a', version='1.0')
     @app.command()
     def go(): return 'went'
     assert app.process(['go']).result == 'went'
     assert misplaced(app, ['go', '--version']) == \
         "option '--version' can't be used here; it goes before the command"
-    assert [p.bleed for p in app.global_plans()] == [False]
-    # one user precommand: metadata bleeds into it (foo -q --version
-    # prints the version), it doesn't bleed into the command
+    assert resolved(app) == [(PRECOMMAND, False, False)]
+    # one user precommand: the two share (foo -q --version prints the
+    # version); neither reaches the command
     import contextlib, io
     app1 = Appeal(name='b', version='2.0')
     seen = []
@@ -5362,7 +5351,7 @@ def test_bleed_defaults_to_followed_by_a_precommand():
     def quiet(*, quiet=False): seen.append(('quiet', quiet))
     @app1.command()
     def go1(): seen.append('go1')
-    assert [p.bleed for p in app1.global_plans()] == [True, False]
+    assert resolved(app1) == [(PRECOMMAND, True, False), (PRECOMMAND, False, True)]
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         try:
@@ -5373,40 +5362,42 @@ def test_bleed_defaults_to_followed_by_a_precommand():
     assert out.getvalue().strip() == '2.0'
     assert misplaced(app1, ['go1', '--quiet']) == \
         "option '--quiet' can't be used here; it goes before the command"
-    # two user precommands: a chain--the first's options reach the
-    # second's era, and neither reaches the command
+    # two user precommands, either order of options--and BACKWARDS is
+    # what lets a later precommand's option precede an earlier one's
+    # operand (the merged era's one real use, kept: `prog --beta aval`)
     app2 = Appeal(name='c', default_mappings=None)
     seen.clear()
     @app2.precommand()
-    def first(*, alpha=False): seen.append(('first', alpha))
+    def first(aval): seen.append(('first', aval))
     @app2.precommand()
     def second(*, beta=False): seen.append(('second', beta))
     @app2.command()
     def go2(): seen.append('go2')
-    assert [p.bleed for p in app2.global_plans()] == [True, False]
-    app2.process(['--beta', '--alpha', 'go2'])       # alpha bled into second's era
-    assert seen == [('first', True), ('second', True), 'go2'], seen
-    assert misplaced(app2, ['go2', '--alpha']) == \
-        "option '--alpha' can't be used here; it goes before the command"
-    # explicit bleed=False on the first cuts the chain; explicit
-    # bleed=True on the last leaks into the first command
+    assert resolved(app2) == [(PRECOMMAND, True, False), (PRECOMMAND, False, True)]
+    app2.process(['--beta', 'x', 'go2'])
+    assert seen == [('first', 'x'), ('second', True), 'go2'], seen
+    seen.clear()
+    app2.process(['x', '--beta', 'go2'])
+    assert seen == [('first', 'x'), ('second', True), 'go2'], seen
+    assert misplaced(app2, ['x', 'go2', '--beta']) == \
+        "option '--beta' can't be used here; it goes before the command"
+    # share=True on the last precommand: its options reach the command
     app3 = Appeal(name='d', default_mappings=None)
     seen.clear()
-    @app3.precommand(bleed=False)
-    def cut(*, alpha=False): seen.append(('cut', alpha))
-    @app3.precommand(bleed=True)
+    @app3.precommand()
+    def alpha(*, alpha=False): seen.append(('alpha', alpha))
+    @app3.precommand(share=True)
     def leak(*, beta=False): seen.append(('leak', beta))
     @app3.command()
-    def go3(*, gamma=False): seen.append('go3')  # takes something: a
-    assert [p.bleed for p in app3.global_plans()] == [False, True]  # bleed can land
-    # --alpha after --beta: cut's era ended at --beta, and cut didn't
-    # bleed, so leak's era doesn't know --alpha; it lands in command
-    # position, where the scope tried is leak's era (not every head era)
-    assert misplaced(app3, ['--beta', '--alpha', 'go3']) == \
-        "option '--alpha' can't be used here; it goes before the command"
+    def go3(*, gamma=False): seen.append('go3')  # takes something: the
+    assert resolved(app3) == [(PRECOMMAND, True, False), (True, True, True)]
+    app3.process(['go3', '--beta'])                # share can land
+    assert seen == [('alpha', False), ('leak', True), 'go3'], seen
+    # what an era shares forwards is its whole table--its own options
+    # and those shared into it--so alpha's option rides along with leak's
     seen.clear()
-    app3.process(['go3', '--beta'])
-    assert seen == [('cut', False), ('leak', True), 'go3'], seen
+    app3.process(['go3', '--alpha'])
+    assert seen == [('alpha', True), ('leak', False), 'go3'], seen
 
 
 def test_help_reaches_subcommands_by_word_path():
@@ -5468,23 +5459,23 @@ def test_help_reaches_subcommands_by_word_path():
 
 def test_command_era_relay_rules():
     # Larry's relay rules, confirmed 2026-09-08: a command that takes
-    # nothing is one era, and it relays what bled into it iff its own
-    # bleed says so; a command that takes something is a command era
-    # that ALWAYS relays into its own options-arguments-opargs era,
-    # and that era bleeds onward iff the command's bleed says so.  So
-    # @app.command(bleed=True) lets a parent's options reach its
+    # nothing is one era, and it relays what was shared into it iff its
+    # own share says so; a command that takes something is a command
+    # era that ALWAYS relays into its own arguments-options-opargs era,
+    # and that era shares onward iff the command's share says so.  So
+    # @app.command(share=True) lets a parent's options reach its
     # subcommands, either way.
     seen = []
-    def make(db_bleed, db_takes_something):
+    def make(db_share, db_takes_something):
         seen.clear()
         app = Appeal(name='tool', default_mappings=None)
-        @app.precommand(bleed=True)         # leak the head into the first command
+        @app.precommand(share=True)         # the head reaches the first command
         def head(*, verbose=False): seen.append(('head', verbose))
         if db_takes_something:
-            @app.command(bleed=db_bleed)
+            @app.command(share=db_share)
             def db(*, url=''): seen.append(('db', url))
         else:
-            @app.command(bleed=db_bleed)
+            @app.command(share=db_share)
             def db(): seen.append(('db',))
         @app.subcommand('db')
         def stop(*, force=False): seen.append(('stop', force))
@@ -5498,29 +5489,28 @@ def test_command_era_relay_rules():
         except appeal.AppealUsageError as e:
             return str(e)
         assert False, f'expected AppealUsageError for {argv!r}'
-    # db's own option reaches stop's era when db bleeds
+    # db's own option reaches stop's era when db shares
     assert run(make(True, True), ['db', '--url', 'X', 'stop', '--url', 'Y']) == \
         [('head', False), ('db', 'Y'), ('stop', False)]
-    # ...and doesn't when it doesn't; the refusal suggests from STOP's
-    # era (it used to suggest '--url' as its own correction, judging
-    # from db's table after the subcommand handed the word back)
+    # ...and doesn't when it doesn't; the refusal judges by STOP's era
     assert refused(make(False, True), ['db', 'stop', '--url', 'Y']) == \
         "option '--url' can't be used here; it goes after 'db', " \
         "but before any subcommand"
-    # the head's option relays through db's o-a-o era to stop
+    # the head's option relays through db's arguments-options-opargs
+    # era to stop
     assert run(make(True, True), ['db', 'stop', '--verbose']) == \
         [('head', True), ('db', ''), ('stop', False)]
-    # ...and through a bare command era that bleeds
+    # ...and through a bare command era that shares
     assert run(make(True, False), ['db', 'stop', '--verbose']) == \
         [('head', True), ('db',), ('stop', False)]
-    # a bare command era that doesn't bleed stops the relay
+    # a bare command era that doesn't share stops the relay
     assert refused(make(False, False), ['db', 'stop', '--verbose']) == \
         "option '--verbose' can't be used here; it goes before the command"
 
 
 def test_per_command_help_era():
     # Larry (2026-09-08): every command gets a help era right after its
-    # command era--immediate, bleeding into the command's
+    # command era--immediate, sharing FORWARDS into the command's
     # arguments-options-opargs era--so `tool build -h` prints build's
     # page and exits without running anything, `tool db stop -h` is
     # stop's page (the path is the topic: no oparg), and `tool build

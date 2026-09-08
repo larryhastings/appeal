@@ -122,8 +122,8 @@ than by the Plan object; section 8.)
   operand remains; an optional is skipped only to leave room for a
   required operand after it, never to reach a *later* optional.
 
-A Plan also carries the era flags (`boundary`, `bleed`, `immediate`;
-section 5) and, once the back end has built it, `compiled`: the
+A Plan also carries the era flags (`share`, `immediate`; section 5)
+and, once the back end has built it, `compiled`: the
 Converter class.  The back end reads *only* the Plan.  It never looks
 at annotations, signatures, or attributes of the callable.  If it needs
 a fact, the fact is put on the Plan.
@@ -269,8 +269,8 @@ on 2026-09-07:
 
 `--` is **era-scoped**: once seen, no later token in that era is an
 option.  The next era starts fresh (click's behavior), unless the era
-bleeds, in which case the `--` state relays along with the era's
-options.  Where a command word goes, `--` is consumed and the next
+shares forwards, in which case the `--` state relays along with the
+era's options.  Where a command word goes, `--` is consumed and the next
 token is the word.
 
 
@@ -292,44 +292,46 @@ converters.  There are two sorts:
   precommand (`-h/--help`, `--version`) is the first; then the user's
   precommands, in registration order, with a class moved ahead of its
   own member precommands.  Each precommand is an era of its own, and
-  by default each era's options stay recognized in the next (bleed,
+  the precommand eras share their options with each other (share,
   below), so `prog -q --version` works no matter which precommand owns
   which string.  One string may have only one owner across the head.
 * **Command eras**: each command word opens up to three eras: the word
-  itself, the command's **help era** (`-h`/`--help`, immediate, bleeding
-  into the next era so `build lib -h` works), and, when the command takes
+  itself, the command's **help era** (`-h`/`--help`, immediate, sharing
+  forwards into the next era so `build lib -h` works), and, when the command takes
   anything, its arguments-options-opargs era: the tokens after the word
   up to saturation.
 
-Three flags on `@app.precommand()` shape the head:
+Two flags on `@app.precommand()` shape the head:
 
-* `boundary` (default True): this precommand ends its era.
-  `boundary=False` merges it with the next precommand into one era.
-* `bleed`: the era's option handlers stay recognized in the *next*
-  era, still bound to their own converter.  They're discarded at that
-  era's end unless it bleeds too.  The default, None, resolves when the
-  head plans are assembled: "bleed if followed by a precommand", so
-  every precommand era bleeds into the next and the last one doesn't.
-  That is how the metadata precommand's `--version` reaches the user's
-  precommand eras and never the first command.  True and False
-  override.  (`@app.command(bleed=True)` relays a command's options one
-  command further, the same way.)
+* `share` (default False): which neighboring eras recognize this era's
+  options, still bound to this era's converter.  Internally an era's
+  share is FORWARDS (the next era), BACKWARDS (the previous), True
+  (both), False (neither), or PRECOMMAND (both, but only among
+  precommand eras); `precommand(share=False)` is PRECOMMAND and
+  `share=True` is True, so a precommand's options always reach the
+  other precommands, and reach the first command only when asked.
+  FORWARDS carries the `--` state along.  BACKWARDS is done by
+  registering the next era's handlers into this era before it parses,
+  so `prog --beta aval` works when `aval` belongs to the earlier era.
+  (`@app.command(share=True)` is FORWARDS: a command's options relay
+  one command further.)
 * `immediate=True`: the era executes first, once the whole line has
   parceled, before the line is judged and before any waiting era runs,
   wherever it sits.  That is how `-h` beats a malformed line, at the
   head and after a command word.
 
-The metadata precommand is `boundary=True`, `immediate=True`, and
-bleeds by the default rule.
+The metadata precommand is `immediate=True` and shares like any other
+precommand.
 
 An era is an object, `Appeal.Era` (private): its kind (`head`,
-`command`, `help`, `aoo`), its plans, `immediate`, `bleed`, and the
+`command`, `help`, `aoo`), its plan, `share` (resolved against its
+neighbors into `forwards` and `backwards`), `immediate`, and the
 command word it belongs to.  A node produces them: `_head_eras()` once
 per line, `_command_eras(word)` as each word dispatches.  One method,
 `_parcel_era`, parcels any era: builds its Converter instances, makes an
 Engine over `argv[pos:]`, enters the converters (last-registered first,
 so the first-registered precommand's operands fill first), seeds any
-bled handlers, parses, lists the steps, relays bleed, and advances `pos`
+shared handlers, parses, lists the step, relays what it shares, and advances `pos`
 by what the era consumed.
 
 `_run_node(line, pos, top)` is the dispatcher for one node.  It:
@@ -475,7 +477,7 @@ and the line `tool -q build lib --jobs 4`:
 2. Head era one, the metadata precommand: its Engine sees `-q`, which it
    doesn't own; the stack is empty (this era takes no operands), so the
    era ends having consumed nothing.  Its `--help`/`--version` handlers
-   bleed into the next era.  It's `immediate`, so its step is first in
+   are shared into the next era.  It's `immediate`, so its step is first in
    the list.
 3. Head era two, `logging`: Engine over `['-q', 'build', 'lib', '--jobs', '4']`,
    seeded with the bled handlers.  `-q` carves as the flag `q`; its
@@ -518,7 +520,7 @@ ran.
 * **an option is "not available yet", or conjuring misbehaves**:
   `PreOptionInstruction.register`, `_Conjure`, `_Chain`,
   `_availability_message`.
-* **eras, bleed, `--help` precedence, class-as-app**: `__init__._run_node`,
+* **eras, share, `--help` precedence, class-as-app**: `__init__._run_node`,
   `Processor.__call__`, `_group_eras`, `_merge_era_options`.
 * **a value converts at the wrong time, or an error un-runs something**:
   the records in `backend.py` (`_Raw`, `_Fold`, `finish`) and

@@ -38,6 +38,17 @@ import sys
 # lazily.
 
 
+# an era's share (Larry's design, 2026-09-08): which neighboring eras
+# recognize its options.  FORWARDS: the next era; BACKWARDS: the previous
+# one; True: both; False: neither; PRECOMMAND: both, but only among the
+# precommand eras--never across the first command word.  precommand()
+# spells share=False as PRECOMMAND and share=True as True; command()
+# spells share=True as FORWARDS.
+FORWARDS = 'forwards'
+BACKWARDS = 'backwards'
+PRECOMMAND = 'precommand'
+
+
 def did_you_mean(word, candidates):
     """
     The suggestion tail for an unknown-name error: " (did you
@@ -442,40 +453,13 @@ def _stamp_decoration(plan, entry):
             _stamp_decoration(o.child, entry)
 
 
-def _group_eras(plans):
-    """
-    The head plans, grouped into eras: a boundary=True plan (the
-    default) ends its era; boundary=False merges it with the next.
-    Every plan in an era must agree on immediate=.  (Immediate eras
-    anywhere on the line execute first, in line order--a command's
-    help era is one--so they needn't lead the line; ruled 2026-09-08.)
-    """
-    eras = []
-    era = []
-    for plan in plans:
-        era.append(plan)
-        if plan.boundary:
-            eras.append(era)
-            era = []
-    if era:
-        eras.append(era)                # a trailing boundary=False plan
-    for era in eras:
-        immediate = {p.immediate for p in era}
-        if len(immediate) > 1:
-            names = ', '.join(repr(p.name) for p in era)
-            raise AppealConfigurationError(
-                f"precommands {names} parse as one era but disagree on "
-                f"immediate=; give the era a boundary, or agree")
-    return eras
-
-
 def _merge_era_options(plans):
     """
-    One owner per option string across the whole head: every head
-    era's options reach the head's last era by bleed (`foo -q
-    --version` works no matter which precommand maps which), and a
-    string two eras both owned would bind by position--refused
-    (Larry, 2026-09-03; the rule outlives the merged era).  A string
+    One owner per option string across the whole head: the precommand
+    eras share their options with each other (`foo -q --version` works
+    no matter which precommand maps which), and a string two eras both
+    owned would bind by position--refused (Larry, 2026-09-03; the rule
+    outlives the merged era).  A string
     the user WROTE twice--a long (from a parameter name) or an explicit
     @app.option claim--in two precommands is a build error naming both.
     An AUTO-proposed short yields instead: explicit claims trump it,
@@ -1135,9 +1119,9 @@ class Appeal:
                                   # tracks the primary until dispatch runs them all)
         self._precommand_explicit = set()  # ids given an explicit index=
         self._precommand_config = {}       # id(callable) -> the bound config
-        self._precommand_flags = {}        # id(callable) -> (boundary, bleed,
+        self._precommand_flags = {}        # id(callable) -> (share,
                                            #   immediate), the era flags
-        self._bleeding = set()             # ids of commands with bleed=True
+        self._sharing = set()              # ids of commands with share=True
         self._command_mappings_of = {}     # id(callable) -> default_mappings=
                                            # given to subcommand(), applied
                                            # when the path resolves
@@ -1145,7 +1129,7 @@ class Appeal:
         self._auto_impl = None    # synthesized fn for a pure dispatcher
         self._node_default = None # this node's default command
         self._node_repeat = False # this node's set cycles
-        self._node_bleed = False  # this command's options bleed onward
+        self._node_share = False  # this command's options are shared FORWARDS
         self._command_mappings = _STOCK_COMMAND_MAPPINGS   # the help era's policy
         if parent is not None:
             # a subcommand node is a full Appeal; the program
@@ -1639,7 +1623,7 @@ class Appeal:
                 f"(commands are words, not options)")
         return word
 
-    def command(self, name=None, *, repeat=False, parent=None, bleed=False,
+    def command(self, name=None, *, repeat=False, parent=None, share=False,
                 default_mappings=_UNSET):
         """
         @app.command() registers a command under the callable's name with
@@ -1670,7 +1654,7 @@ class Appeal:
                 raise AppealConfigurationError(
                     "command(): give a name or parent=, not both")
             name = parent
-        return self.subcommand(None, name, repeat=repeat, bleed=bleed,
+        return self.subcommand(None, name, repeat=repeat, share=share,
                                default_mappings=default_mappings)
 
     def default(self):
@@ -1688,7 +1672,7 @@ class Appeal:
     default_command = default           # transitional alias for the old name
 
     def precommand(self, *, index=-1, config=None, strict=None,
-                   boundary=True, bleed=None, immediate=False):
+                   share=False, immediate=False):
         """
         Register a precommand era.  A class here is class-as-app (its __init__
         is the era's grammar; its methods/inner classes bind to the instance).
@@ -1708,25 +1692,25 @@ class Appeal:
         (adapting an existing rc file that also holds non-CLI junk).  It
         only means something with config=, and is refused without it.
 
-        The era flags (Larry, 2026-09-07; defaults ruled 2026-09-08).
-        Each precommand is an era of its own.  boundary=True (the
-        default): this precommand ends its era; boundary=False merges
-        it with the next precommand into one era.  bleed: the era's
-        options stay mapped into the next era (thrown away at ITS end
-        unless it bleeds too).  The default, None, means "bleed if
-        followed by a precommand": every precommand era bleeds into
-        the next, and the last one--and every command era--doesn't,
-        so `foo -q --version` works and no head option reaches the
-        first command; True/False override.  immediate=True: the era
-        executes as soon as it scans clean, before the rest of the
-        line is judged--how -h/--help/--version outrank a malformed
-        line; allowed only on the leading eras.  Appeal's own metadata
-        precommand is boundary=True, immediate=True, and bleeds by the
-        default rule.
+        The era flags (Larry's design, 2026-09-08).  Each precommand is
+        an era of its own, and the precommand eras share their options
+        with each other: every precommand's options are recognized in
+        the precommand eras before and after it, so `foo -q --version`
+        and `foo --b-opt aval` both work whichever precommand owns
+        which string--and none of them reach the first command.  That
+        is share=False, the default (PRECOMMAND on the era).
+        share=True shares the era's options FORWARDS as well--into the
+        first command's eras (and, via a command's own share=True, on
+        through it).  immediate=True: the era executes before the line
+        is judged--how -h/--help/--version outrank a malformed line.
+        Appeal's own metadata precommand is immediate=True.
         """
         if strict is not None and config is None:
             raise AppealConfigurationError(
                 "precommand(): strict= only means something with config=")
+        if not isinstance(share, bool):
+            raise AppealConfigurationError(
+                f"precommand(): share= is True or False, not {share!r}")
         def decorator(callable):
             if index == -1:
                 self._precommands.append(callable)
@@ -1736,14 +1720,15 @@ class Appeal:
             if config is not None:
                 self._precommand_config[id(callable)] = (
                     config, True if strict is None else strict)
-            self._precommand_flags[id(callable)] = (boundary, bleed, immediate)
+            self._precommand_flags[id(callable)] = (
+                True if share else PRECOMMAND, immediate)
             self._impl = self._precommands[-1]
             self._invalidate()
             return callable
         return decorator
     global_command = precommand         # transitional alias for the old name
 
-    def subcommand(self, parent, name=None, *, repeat=False, bleed=False,
+    def subcommand(self, parent, name=None, *, repeat=False, share=False,
                    default_mappings=_UNSET):
         """
         Register a command under `parent`--a command word PATH
@@ -1785,8 +1770,8 @@ class Appeal:
                 if repeat and not node._node_repeat:
                     node._node_repeat = True
                     self._invalidate()
-                if bleed and not node._node_bleed:
-                    node._node_bleed = True
+                if share and not node._node_share:
+                    node._node_share = True
                     self._invalidate()
                 if default_mappings is not _UNSET:
                     node._command_mappings = default_mappings
@@ -1795,7 +1780,7 @@ class Appeal:
             def decorator(callable):
                 node = self._child(self._command_word(None, callable))
                 node._node_repeat = node._node_repeat or repeat
-                node._node_bleed = node._node_bleed or bleed
+                node._node_share = node._node_share or share
                 if default_mappings is not _UNSET:
                     node._command_mappings = default_mappings
                 return node(callable)
@@ -1806,8 +1791,8 @@ class Appeal:
                 f"(a string) or None, not {parent!r}")
         root = self.root
         def decorator(callable):
-            if bleed:
-                root._bleeding.add(id(callable))
+            if share:
+                root._sharing.add(id(callable))
             if default_mappings is not _UNSET:
                 root._command_mappings_of[id(callable)] = default_mappings
             if root._finalized:
@@ -2393,8 +2378,9 @@ class Appeal:
                 _refuse_orphan_method(callable)
             plan = self._build(callable, name=word, method_of=owner)
             plan.argv0 = self.root._prog()
-            plan.bleed = (node._node_bleed
-                          or id(callable) in self.root._bleeding)
+            plan.share = (FORWARDS if (node._node_share
+                                       or id(callable) in self.root._sharing)
+                          else False)
             plan = self._plans.setdefault(id(node), plan)
         return plan
 
@@ -2640,7 +2626,7 @@ class Appeal:
                                              mapped['help'],
                                              annotation=annotation,
                                              default=default)
-        app.root._precommand_flags[id(precommand)] = (True, None, True)
+        app.root._precommand_flags[id(precommand)] = (PRECOMMAND, True)
         return self._build(precommand, name=self.root._prog())
 
     @property
@@ -2669,10 +2655,9 @@ class Appeal:
         the help/version precommand at the head (when default_mappings mapped
         anything to it), then each precommand the user registered, front-to-back.
         Empty when there's no head at all.  Each precommand is an era of its
-        own unless it says boundary=False; a bleed left None resolves here
-        (Larry, 2026-09-08): True if another precommand era follows, else
-        False.  One owner per option string across the whole head--see
-        _merge_era_options.
+        own; its share (PRECOMMAND by default) resolves against its
+        neighbors when the eras are built (_head_eras).  One owner per
+        option string across the whole head--see _merge_era_options.
         """
         self._finalize()
         if self._era_plans is not None:
@@ -2689,13 +2674,8 @@ class Appeal:
             plans.append(self._build(era, method_of=owner))
         flags = self.root._precommand_flags
         for plan in plans:
-            plan.boundary, plan.bleed, plan.immediate = flags.get(
-                id(plan.callable), (True, None, False))
-        eras = _group_eras(plans)
-        for i, era in enumerate(eras):
-            for plan in era:
-                if plan.bleed is None:          # "bleed if followed by a
-                    plan.bleed = i < len(eras) - 1     # precommand era"
+            plan.share, plan.immediate = flags.get(
+                id(plan.callable), (PRECOMMAND, False))
         _merge_era_options(plans)               # one owner per string
         self._era_plans = plans
         return self._era_plans
@@ -2755,31 +2735,49 @@ class Appeal:
         """
         One era of a command line--the private API the dispatcher
         parcels by (Larry, 2026-09-08).  kind: 'head' (a precommand
-        era: its plans, all parsed by one Engine), 'command' (the
-        command word itself--no plans when the command takes
-        something; the command's plan when it takes nothing),
-        'help' (the command's help era: -h/--help, immediate, bleeding
-        into the arguments-options-opargs era after it), 'aoo' (the
-        command's arguments-options-opargs era: its plan).  immediate:
-        executes first, before the line is judged.  bleed: its option
-        handlers stay mapped into the next era.  word/callable: the
-        command, for the step and its usage trailer.
+        era), 'command' (the command word itself--no plan when the
+        command takes something; the command's plan when it takes
+        nothing), 'help' (the command's help era: -h/--help), 'aoo'
+        (the command's arguments-options-opargs era).  plan: the one
+        plan the era parses, or None.  share: which neighboring eras
+        recognize this era's options--FORWARDS, BACKWARDS, True (both),
+        False (neither), or PRECOMMAND (both, but only among
+        precommand eras); resolve() settles it against the actual
+        neighbors into .forwards/.backwards.  A share with no neighbor
+        on that side is harmless.  immediate: executes first, before
+        the line is judged.  word/callable: the command, for the step
+        and its usage trailer.
         """
-        __slots__ = ('kind', 'plans', 'immediate', 'bleed', 'word', 'callable')
-        def __init__(self, kind, plans=(), *, immediate=False, bleed=False,
+        __slots__ = ('kind', 'plan', 'share', 'immediate', 'forwards',
+                     'backwards', 'word', 'callable')
+        def __init__(self, kind, plan=None, *, share=False, immediate=False,
                      word=None, callable=None):
             self.kind = kind
-            self.plans = list(plans)
+            self.plan = plan
+            self.share = share
             self.immediate = immediate
-            self.bleed = bleed
+            self.forwards = self.backwards = False
             self.word = word
             self.callable = callable
 
+        def resolve(self, precommand_before, precommand_after):
+            "Settle share against the neighbors: which precommand eras exist."
+            share = self.share
+            if share == PRECOMMAND:
+                self.forwards = precommand_after
+                self.backwards = precommand_before
+            else:
+                self.forwards = share is True or share == FORWARDS
+                self.backwards = share is True or share == BACKWARDS
+            return self
+
     def _head_eras(self):
-        "The head eras: the precommand plans grouped by their boundaries."
-        return [self.Era('head', plans, immediate=plans[0].immediate,
-                         bleed=any(p.bleed for p in plans))
-                for plans in _group_eras(self.global_plans())]
+        "The head eras, one per precommand plan, their shares resolved."
+        plans = self.global_plans()
+        return [self.Era('head', plan, share=plan.share,
+                         immediate=plan.immediate)
+                .resolve(i > 0, i < len(plans) - 1)
+                for i, plan in enumerate(plans)]
 
     def _help_plan(self):
         """
@@ -2810,7 +2808,7 @@ class Appeal:
             help.__qualname__ = f'help({" ".join(path)})'
             root._decorations.add_option(help, 'help', strings)
             plan = self._build(help, name=self._prog())
-            plan.boundary, plan.bleed, plan.immediate = True, True, True
+            plan.share, plan.immediate = FORWARDS, True
             plan = self._plans.setdefault('help', plan)
         return plan
 
@@ -2819,68 +2817,72 @@ class Appeal:
         The eras a command word opens: the command era (the word; the
         command's plan too when it takes nothing), its help era, and
         its arguments-options-opargs era when it takes something.
-        Relay (Larry's rules): a bare command era relays what bled into
-        it iff its own bleed says so; a command taking something always
-        relays into its help and arguments-options-opargs eras, and
-        that last era bleeds onward iff the command's bleed says so.
+        Relay (Larry's rules): a bare command era relays what was
+        shared into it iff the command's own share says so; a command
+        taking something always relays into its help and
+        arguments-options-opargs eras, and that last era shares onward
+        iff the command's share says so.
         """
         node = self._children[word]
         callable = self._table()[word]
         plan = self._plan_for_node(node, word)
         takes = bool(plan.slots or plan.options)
-        eras = [self.Era('command', () if takes else [plan],
-                         bleed=True if takes else plan.bleed,
+        eras = [self.Era('command', None if takes else plan,
+                         share=FORWARDS if takes else plan.share,
                          word=word, callable=callable)]
         help_plan = node._help_plan()
         if help_plan is not None:
-            eras.append(self.Era('help', [help_plan], immediate=True,
-                                 bleed=True, word=word, callable=callable))
+            eras.append(self.Era('help', help_plan, immediate=True,
+                                 share=FORWARDS, word=word, callable=callable))
         if takes:
-            eras.append(self.Era('aoo', [plan], bleed=plan.bleed,
+            eras.append(self.Era('aoo', plan, share=plan.share,
                                  word=word, callable=callable))
-        return eras
+        return [era.resolve(False, False) for era in eras]
 
-    def _parcel_era(self, era, line, pos, table):
+    def _parcel_era(self, era, line, pos, table, conv=None, conjured=None,
+                    ahead=None):
         """
-        Parcel one era's tokens (from pos) onto its converters, list its
-        steps, relay bleed (the options, and the `--` state); returns the
-        new pos.
-        A structural error raises wearing the right usage trailer.
+        Parcel one era's tokens (from pos) onto its converter, list its
+        step, relay what it shares FORWARDS (its options, and the `--`
+        state); returns the new pos.  conv/conjured: the head builds its
+        converters and conjure stashes ahead of time, so that `ahead`--
+        the next era's (converter, stash), given when this era shares
+        BACKWARDS--can have its handlers registered here before this
+        era parses.  A structural error raises wearing the right usage
+        trailer.
         """
         argv = line.argv
-        if not era.plans:                       # the word of a command that
+        if era.plan is None:                    # the word of a command that
             return pos                          # takes something: no tokens of
                                                 # its own, and it always relays
                                                 # into its help/aoo eras
-        classes = [converter_for(p) for p in era.plans]
-        convs = [cls() for cls in classes]
-        proc = backend.Engine(argv[pos:], convs[0], table,
-                              dashdash=line.dashdash)
+        cls = converter_for(era.plan)
+        if conv is None:
+            conv = cls()
+        proc = backend.Engine(argv[pos:], conv, table,
+                              dashdash=line.dashdash, conjured=conjured)
         if era.kind == 'head':
-            steps = [
-                _Step('era', self, cls, conv, proc, plan=plan,
-                      config=self._precommand_config.get(id(plan.callable)),
-                      immediate=era.immediate)
-                for cls, plan, conv in zip(classes, era.plans, convs)]
+            step = _Step('era', self, cls, conv, proc, plan=era.plan,
+                         config=self._precommand_config.get(
+                             id(era.plan.callable)),
+                         immediate=era.immediate)
         elif era.kind == 'help':
-            steps = [_Step('help', self, classes[0], convs[0], proc,
-                           immediate=True, word=era.word)]
+            step = _Step('help', self, cls, conv, proc, immediate=True,
+                         word=era.word)
         else:
-            steps = [_Step('command', self, classes[0], convs[0], proc,
-                           word=era.word, callable=era.callable)]
+            step = _Step('command', self, cls, conv, proc,
+                         word=era.word, callable=era.callable)
         try:
-            # enter LAST-first: each entry lays its work at the front, so
-            # the first-registered precommand's operands fill first
-            for conv in reversed(convs):
-                proc.enter(conv)
-            proc.seed(line.bled)
+            proc.enter(conv)
+            proc.seed(line.bled)                # shared forwards into here
+            if ahead is not None:               # the next era, shared back
+                proc.seed(backend.handlers_of(*ahead))
             proc._loop()
-            for step in steps:
-                if step.config:
-                    # config KEY vetting is structural -- fire its
-                    # refusals in the scan (the value merge is at execute)
-                    _config_vet(step.plan, frozenset(table), step.config[0],
-                                self.plan_for, step.config[1])
+            if step.config:
+                # config KEY vetting is structural -- fire its refusals
+                # in the scan (the value merge is at execute)
+                _config_vet(step.plan, frozenset(table), step.config[0],
+                            self.plan_for, step.config[1])
         except AppealDataError as e:
             if era.kind == 'head':
                 # an era-level error (a bad program-wide option, a config
@@ -2891,14 +2893,14 @@ class Appeal:
                 e.usage = _line_trailer(self.stylesheet,
                                         self._program_usage_markup())
             else:
-                steps[0].attach_usage(e)
+                step.attach_usage(e)
             raise
         pos += proc.consumed                    # the whole era's tokens
-        line.dashdash = proc.force_positional if era.bleed else False
-        line.bled = proc.handlers if era.bleed else {}
+        line.dashdash = proc.force_positional if era.forwards else False
+        line.bled = proc.handlers if era.forwards else {}
         line.tried = proc.handlers
         line.forced = proc.force_positional
-        line.steps.extend(steps)
+        line.steps.append(step)
         return pos
 
     def _run_node(self, line, pos, top):
@@ -2917,8 +2919,18 @@ class Appeal:
         steps = line.steps
         table = self._table()
 
-        for era in self._head_eras():
-            pos = self._parcel_era(era, line, pos, table)
+        # the head: converters and conjure stashes built ahead, so an era
+        # whose successor shares BACKWARDS can register the successor's
+        # handlers before it parses
+        eras = self._head_eras()
+        convs = [converter_for(era.plan)() for era in eras]
+        stashes = [{} for era in eras]
+        for i, era in enumerate(eras):
+            ahead = None
+            if i + 1 < len(eras) and eras[i + 1].backwards:
+                ahead = (convs[i + 1], stashes[i + 1])
+            pos = self._parcel_era(era, line, pos, table, convs[i],
+                                   stashes[i], ahead)
 
         dispatched = False              # did a command word of THIS node run?
         while pos < len(argv):
