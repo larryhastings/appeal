@@ -2403,11 +2403,11 @@ class Appeal:
 
     def _option_owners(self):
         """
-        Every option string in the program -> where it lives, in words,
-        for the misplaced-option hint ("unknown option '--jobs' here (it
-        belongs to the 'build' command)").  The head eras' options are
-        program options; each command's (subcommands included, by their
-        word path) are its own.  Built on demand--only an error asks.
+        Every option string in the program -> where it goes, in words,
+        for the misplaced-option error ("option '--jobs' can't be used
+        here; it goes after 'build'").  The head eras' options go before
+        the command; a command's (subcommands included, by their word
+        path) go after it.  Built on demand--only an error asks.
         """
         from .frontend import all_options
         places = {}                     # string -> {where: True}, in order
@@ -2428,16 +2428,11 @@ class Appeal:
         for s, where in places.items():
             phrases = []
             if None in where:
-                phrases.append("it's a program option; it goes before "
-                               "the command")
+                phrases.append('before the command')
             commands = [repr(w) for w in where if w is not None]
-            if len(commands) == 1:
-                phrases.append(f"it belongs to the {commands[0]} command")
-            elif commands:
-                phrases.append(f"it belongs to the "
-                               f"{', '.join(commands[:-1])} and "
-                               f"{commands[-1]} commands")
-            owners[s] = '; '.join(phrases)
+            if commands:
+                phrases.append('after ' + ' or '.join(commands))
+            owners[s] = ', or '.join(phrases)
         return owners
 
     @property

@@ -2706,7 +2706,8 @@ def test_era_flags():
         app3.process(['first', 'last', 'stop', '--tag', 'x'])
         assert False, 'expected AppealUsageError'
     except appeal.AppealUsageError as e:
-        assert "unknown option '--tag'" in str(e), e
+        assert str(e) == "option '--tag' can't be used here; " \
+                         "it goes after 'first'", e
     # immediate: a user immediate era executes before the rest of the
     # line is judged, and its nonzero result halts the run
     app4 = Appeal(name='im', default_mappings=None)
@@ -5163,24 +5164,24 @@ def test_unknown_option_hints_misspelled_then_misplaced():
     assert err(['--hepl']) == "unknown option '--hepl' (did you mean '--help'?)"
     assert err(['build', '--verbos']) == \
         "unknown option '--verbos' (did you mean '--verify'?)"
-    # misplaced: the exact string lives elsewhere
+    # misplaced: the exact string lives elsewhere; the error says where
+    # it goes (Larry's placement wording)
     assert err(['build', '--verbose']) == \
-        "unknown option '--verbose' here (it's a program option; " \
-        "it goes before the command)"
+        "option '--verbose' can't be used here; it goes before the command"
     assert err(['--jobs', 'build']) == \
-        "unknown option '--jobs' here (it belongs to the 'build' command)"
+        "option '--jobs' can't be used here; it goes after 'build'"
     assert err(['build', '--region']) == \
-        "unknown option '--region' here (it belongs to the 'deploy' command)"
+        "option '--region' can't be used here; it goes after 'deploy'"
     assert err(['--verify', 'build']) == \
-        "unknown option '--verify' here (it belongs to the 'build' and " \
-        "'deploy' commands)"
+        "option '--verify' can't be used here; it goes after 'build' " \
+        "or 'deploy'"
     assert err(['build', '--force']) == \
-        "unknown option '--force' here (it belongs to the 'db add' command)"
+        "option '--force' can't be used here; it goes after 'db add'"
     assert err(['--flag', 'build']) == \
-        "unknown option '--flag' here (it belongs to the 'pair' command)"
+        "option '--flag' can't be used here; it goes after 'pair'"
     assert err(['build', '--trace']) == \
-        "unknown option '--trace' here (it's a program option; it goes " \
-        "before the command; it belongs to the 'deploy' command)"
+        "option '--trace' can't be used here; it goes before the " \
+        "command, or after 'deploy'"
     # a close in-scope match wins over an exact one elsewhere
     assert err(['build', '--version']) == \
         "unknown option '--version' (did you mean '--verify'?)"
