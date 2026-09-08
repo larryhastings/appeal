@@ -647,10 +647,13 @@ you'd write anyway *is* the help.
 
 ### Documenting individual arguments and options
 
-To describe individual parameters, add a Markdown **heading** named
-`Arguments`, `Options`, or `Commands` (any level, and the case doesn't
-matter), and under it a **definition list**: the parameter's name on its own
-line, then its description on the next line after a `:`.
+To describe individual parameters, add a line that is exactly
+`# Arguments`, `# Options`, or `# Commands`--one octothorpe, one space, that
+capitalization, at the left margin, and not inside a code fence--and under
+it a **definition list**: the parameter's name on its own line, then its
+description on the next line after a `:`.  Any other spelling (`## Options`,
+`# options`, `Options` underlined with dashes) is ordinary prose, and stays
+in your documentation.
 
 ```Python
 @app.command()
@@ -660,7 +663,7 @@ def serve(host, port: int = 8080, *, verbose=False):
 
     Longer prose about serving, wrapped and formatted for you.
 
-    ## Arguments
+    # Arguments
 
     host
     : The host to serve on.
@@ -668,7 +671,7 @@ def serve(host, port: int = 8080, *, verbose=False):
     port
     : The port. Defaults to 8080.
 
-    ## Options
+    # Options
 
     verbose
     : Print more output.

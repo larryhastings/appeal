@@ -80,7 +80,8 @@ If you can write Python, you're ready to use Appeal!
 
 Appeal's only dependency is
 [my **big** library](https://github.com/larryhastings/big)--and
-that's only at compile-time.
+it's only imported when help, usage, or an error is rendered.
+Parsing your command line never touches it.
 
 Appeal supports Python 3.6 and up.  It provides POSIX-style
 command line semantics, making it best-in-class for UNIX,
@@ -2196,7 +2197,14 @@ usage) printed to **standard error**, and exit status 2.
 Unknown commands and unknown long options come with a
 suggestion when something in your grammar is close--`unknown
 command 'stauts' (did you mean 'status'?)`--the way git does
-it.  And control-C exits quietly with status 130 (128+SIGINT,
+it.  A mistyped option is matched against the options that were
+in scope where it appeared: the options that go before the
+command, or the command's own.  An option that's spelled right
+but in the wrong place gets told where it goes instead:
+`option '--jobs' can't be used here; it goes after 'build'`,
+or `it goes before the command`.  (An option that's both
+misspelled and misplaced gets no guess; that would be trying
+too hard.)  And control-C exits quietly with status 130 (128+SIGINT,
 the POSIX convention)--in `main()` only; `process()` propagates
 the raw `KeyboardInterrupt`, because automation gets real
 exceptions.  That's the whole of Appeal's signal handling, on
@@ -2536,9 +2544,7 @@ things POSIX allows, and allows some things POSIX disallows.
 * Appeal is *lazy* and *late-binding*: decorators only record.
   Plans are built, docstrings parsed, and parsers compiled at
   first use--and per command, so a program with fifty commands
-  compiles only the one the user invoked.  (Standalone
-  emission is deliberately eager: the whole-program artifact
-  must build--and refuse--everything.)
+  compiles only the one the user invoked.
 * Almost any callable can be a converter--but not *every*
   callable.  A converter used for a `*args` parameter must,
   somewhere in its annotation tree, require at least one

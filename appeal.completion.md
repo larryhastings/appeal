@@ -179,10 +179,12 @@ messages.  Concretely, these spans:
     usage: mytool [-v|--verbose] [-t|--times times] shape [width]
     ^prefix ^prog  ^option        ^option  ^metavar  ^operand
 
-    arguments:            <- heading
-      shape   the shape   <- label column / description
-    options:              <- heading
-      -v|--verbose  ...   <- label column
+    Arguments             <- heading (the template's)
+    ---------
+    <SHAPE>  the shape    <- label column / description
+    Options               <- heading
+    -------
+    -v|--verbose  ...     <- label column
 
     error: wrong number of arguments...   <- 'error:' prefix
 

@@ -179,12 +179,12 @@ def build_demo(stylesheet, errors, margin):
         """
         Start the server.
 
-        ## Arguments
+        # Arguments
 
         host
         : The interface to bind.
 
-        ## Options
+        # Options
 
         port
         : The TCP port to bind.  Defaults to 8080, or the value

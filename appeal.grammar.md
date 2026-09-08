@@ -362,15 +362,23 @@ the strings: claim `-h` and help keeps only `--help`; claim
 and (for a program with commands) no automatic `help` command--the
 program answers only what it declares itself.
 
-**Parameter documentation**: a top-level docstring line shaped
-`name: description` (indented lines continue it) documents the
-parameter of that name--anywhere in the command's tree, converter
-parameters included.  Entries render as `arguments:` and
-`options:` tables (labels from the plan: `-t|--times times`,
-usage names for operands), descriptions wrapped into the column
-by the trio.  A name matching no parameter stays prose
-(`Note: remember this` is safe).  The structure is parsed at
-build time; the formatting happens at run time.
+**Parameter documentation**: the docstring is Markdown.  A line
+that is exactly `# Arguments`, `# Options`, or `# Commands` (one
+octothorpe, one space, that case, at the left margin, outside any
+code fence) opens a special section, which must contain one
+definition list: a parameter name (or command word) on a line by
+itself, then `: description` (Markdown; continuation lines indent to
+the column after `: `).  Any other spelling is prose.  An entry
+documents the parameter of that name anywhere in the command's tree,
+converter parameters included; a converter's own docstring documents
+its parameters once, for every command that uses it, and the nearest
+enclosing scope wins on a clash.  Entries render as the Arguments and
+Options tables (labels from the plan: `-t|--times <TIMES>`, usage
+names for operands), the template dressing the headings.  A name
+that matches no parameter is a build-time error; a name two sibling
+converters both declare is ambiguous at the command and must be
+documented in the converter.  The structure is parsed at build time;
+the formatting happens at run time.
 
 **Command sets**: the command listing shows each command with the
 first line of its docstring, plus the automatic `help` command
