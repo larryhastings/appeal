@@ -2397,6 +2397,9 @@ class Appeal:
         return self._program_doc() if root.doc is None else root.doc
 
     def _prog(self):
+        "The program name; for a subcommand set, the word path to it (tool db)."
+        if self.parent is not None:
+            return f'{self.parent._prog()} {self.name}'
         return self.name or _os.path.basename(self.script) or 'program'
 
     def _option_owners(self):
