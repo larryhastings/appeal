@@ -2833,7 +2833,7 @@ def test_double_dash_is_era_scoped():
     assert app2.process(['--', 'commit2', '--', '-m']).result == ('-m', False)
     # bleed carries the state: a bleeding precommand's `--` reaches the
     # next era, so --flag there is an operand--and with nothing to take
-    # it, an unknown command, not an unknown option
+    # it, one argument too many, not an unknown option
     app3 = Appeal(name='dd3', default_mappings=None)
     @app3.precommand(bleed=True)
     def pre(x): return x
@@ -2843,21 +2843,13 @@ def test_double_dash_is_era_scoped():
         app3.process(['--', '-x', 'cmd', '--flag'])
         assert False, 'expected AppealUsageError'
     except appeal.AppealUsageError as e:
-        assert str(e) == "unknown command '--flag'", e
+        assert str(e) == "unexpected argument '--flag'", e
     app4 = Appeal(name='dd4', default_mappings=None)
     @app4.precommand()                              # the last: doesn't bleed
     def pre4(x): return x
     @app4.command()
     def cmd4(*, flag=False): return flag
     assert app4.process(['--', '-x', 'cmd4', '--flag']).result is True
-    # a second command on a line that runs one is named as such (it
-    # used to be "unknown command 'cmd4' (did you mean 'cmd4'?)")
-    try:
-        app4.process(['x', 'cmd4', 'cmd4'])
-        assert False, 'expected AppealUsageError'
-    except appeal.AppealUsageError as e:
-        assert str(e) == ("unexpected second command 'cmd4': this program "
-                          "runs one command per line"), e
 
 
 def test_astra_r04_precommand_operands_in_registration_order():
@@ -5623,3 +5615,54 @@ def test_per_command_help_era():
     # the app-level blanket switch turns per-command help off too
     tool5 = make(default_mappings=None)       # the blanket switch
     assert refused(tool5, ['build', 'lib', '-h']) == "unknown option '-h'"
+
+
+def test_one_word_too_many():
+    # Larry (2026-09-08): a word after a command that took all it can is
+    # an unexpected ARGUMENT wearing that command's usage line--whether
+    # or not the word happens to be a command's name (it used to be
+    # "unknown command 'show' (did you mean 'show'?)", and "unknown
+    # command 'extra'" on a program with no commands at all).  Only
+    # where subcommands are expected is a stray word an unknown command.
+    import contextlib, io
+    def error(app, argv):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                app.main(argv)
+                assert False, 'main exits'
+            except SystemExit as e:
+                assert e.code == 2, e.code
+        return err.getvalue().splitlines()[:2]
+    g = Appeal(name='grep')
+    @g.global_command()
+    def grep(pattern, *, ignore_case=False): return pattern
+    assert error(g, ['pat', 'extra']) == [
+        "error: unexpected argument 'extra'",
+        'usage: grep [-h|--help] [-i|--ignore-case] <PATTERN>']
+    t = Appeal(name='tool')
+    @t.command()
+    def commit(msg, *, amend=False): return (msg, amend)
+    @t.command()
+    def show(p): return p
+    @t.command()
+    def db(): pass
+    @t.subcommand('db')
+    def push(): pass
+    assert error(t, ['commit', 'hello', 'show']) == [
+        "error: unexpected argument 'show'",
+        'usage: tool commit [-h|--help] [-a|--amend] <MSG>']
+    assert error(t, ['commit', 'hello', 'extra']) == [
+        "error: unexpected argument 'extra'",
+        'usage: tool commit [-h|--help] [-a|--amend] <MSG>']
+    assert error(t, ['db', 'push', 'extra']) == [
+        "error: unexpected argument 'extra'",
+        'usage: tool db push [-h|--help]']
+    # where subcommands are expected, a stray word IS an unknown command
+    assert error(t, ['db', 'psuh']) == [
+        "error: unknown command 'psuh' of 'tool db' (did you mean 'push'?)",
+        'usage: tool db [-h|--help] <COMMAND>']
+    # a dash token is still an option problem, with the program usage
+    assert error(t, ['commit', 'hello', '--nope'])[0] == \
+        "error: unknown option '--nope'"

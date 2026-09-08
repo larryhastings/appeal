@@ -2941,15 +2941,21 @@ class Appeal:
                     return dispatched, pos      # pop back: a parent may own it
                 else:
                     dash = word.startswith('-') and not line.forced
-                    err = _unexpected(word, line.tried if dash else table,
-                                      line.forced,
-                                      self.root._option_placements(line.path))
+                    if not dash and not table:
+                        # a program with no commands: one word too many
+                        err = UsageError(f"unexpected argument {word!r}")
+                    else:
+                        err = _unexpected(word, line.tried if dash else table,
+                                          line.forced,
+                                          self.root._option_placements(line.path))
                     # a leading dash-token is an unknown OPTION (program usage
                     # line, decision B); a bare word is an unknown COMMAND (the
-                    # overview page, decision A)
+                    # overview page, decision A)--or, with no commands to be
+                    # unknown, an extra argument (the program usage line)
                     err.usage = (_line_trailer(self.stylesheet,
                                                self._program_usage_markup())
-                                 if dash else _overview_trailer(self))
+                                 if dash or not table
+                                 else _overview_trailer(self))
                     raise err
             depth = len(self._prog().split()) - 1     # root: 0
             line.path[depth:] = [word]                # this set's word, replacing
@@ -2976,21 +2982,27 @@ class Appeal:
                     return dispatched, pos
                 tok = argv[pos]
                 dash = tok.startswith('-') and not line.forced
-                if not dash and tok in table:
-                    # a second command on a line that runs one: say so,
-                    # rather than "unknown command 'show' (did you mean
-                    # 'show'?)"
-                    err = UsageError(
-                        f"unexpected second command {tok!r}: this program "
-                        f"runs one command per line")
-                else:
-                    pool = line.tried if dash else table   # the LAST era's,
-                    err = _unexpected(tok, pool, line.forced,    # a sub-
+                deepest = self.root._node_at_path(' '.join(line.path))
+                if dash:
+                    # an option nobody owned: the last era's strings suggest
+                    err = _unexpected(tok, line.tried, line.forced,
                                       self.root._option_placements(line.path))
-                err.usage = (_line_trailer(self.stylesheet,
-                                           self._program_usage_markup())
-                             if dash                     # an unknown option
-                             else _overview_trailer(self))   # an unknown command
+                    err.usage = _line_trailer(self.stylesheet,
+                                              self._program_usage_markup())
+                elif deepest._has_commands:
+                    # the deepest command dispatched has subcommands, and this
+                    # isn't one of them
+                    err = UsageError(
+                        f"unknown command {tok!r} of {deepest._prog()!r}"
+                        f"{did_you_mean(tok, deepest._table())}")
+                    err.usage = _overview_trailer(deepest)
+                else:
+                    # the deepest command took all it can: one word too many
+                    # (that the word happens to be a command's is no help to
+                    # the user--Larry, 2026-09-08)
+                    err = UsageError(f"unexpected argument {tok!r}")
+                    err.usage = _line_trailer(self.stylesheet,
+                                              deepest._head_usage_markup())
                 raise err
 
         if not dispatched:
