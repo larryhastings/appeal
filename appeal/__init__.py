@@ -446,9 +446,9 @@ def _group_eras(plans):
     """
     The head plans, grouped into eras: a boundary=True plan (the
     default) ends its era; boundary=False merges it with the next.
-    Every plan in an era must agree on immediate=, and the immediate
-    eras must be a PREFIX--an era that executes during the scan can't
-    follow one that waits (Larry's rules, 2026-09-07).
+    Every plan in an era must agree on immediate=.  (Immediate eras
+    anywhere on the line execute first, in line order--a command's
+    help era is one--so they needn't lead the line; ruled 2026-09-08.)
     """
     eras = []
     era = []
@@ -459,7 +459,6 @@ def _group_eras(plans):
             era = []
     if era:
         eras.append(era)                # a trailing boundary=False plan
-    waiting = None                      # the first non-immediate era's name
     for era in eras:
         immediate = {p.immediate for p in era}
         if len(immediate) > 1:
@@ -467,14 +466,6 @@ def _group_eras(plans):
             raise AppealConfigurationError(
                 f"precommands {names} parse as one era but disagree on "
                 f"immediate=; give the era a boundary, or agree")
-        if immediate == {True}:
-            if waiting is not None:
-                raise AppealConfigurationError(
-                    f"precommand {era[0].name!r} is immediate=True but "
-                    f"follows {waiting!r}, which isn't: immediate eras must "
-                    f"lead the line")
-        elif waiting is None:
-            waiting = era[0].name
     return eras
 
 
@@ -839,8 +830,7 @@ class _Step:
         "A command's error wears its usage line (deepest-command-wins)."
         if e.usage is None:
             node = self.node
-            markup = node.plan_for(self.word).usage(
-                f'{node._prog()} {self.word}')
+            markup = node._children[self.word]._head_usage_markup()
             e.usage = _line_trailer(node.stylesheet, markup)
 
     def execute(self, holder, env):
@@ -880,6 +870,10 @@ class _Step:
             result = self.proc.execute()
             holder.instances.append((None, None))
             return result
+        if self.kind == 'help':
+            # a command's help era (immediate): -h present prints the
+            # command's page and exits; absent, nothing--and nothing logged
+            return self.proc.execute()
         try:
             result = self.proc.execute()
         except AppealDataError as e:
@@ -937,9 +931,9 @@ class Processor:
             problem = e
         env = {}                            # class-as-app instance store
         self.result = None
-        for step in steps:
-            if not step.immediate:
-                break
+        for step in steps:                  # the immediate eras, wherever
+            if not step.immediate:          # they sit (a command's help era
+                continue                    # follows waiting eras), in order
             self.result = step.execute(self, env)
             if _halts(self.result):         # an immediate era halted: done
                 return self.result
@@ -977,20 +971,54 @@ class Processor:
             return fn
         return None
 
-# the default_mappings menu, importable (spell your subset with
-# these: default_mappings(*default_mappings_help))
-default_mappings_help = ('-h', '--help', 'help')
-default_mappings_version = ('-V', '--version', 'version')
+# the default_global_mappings menu, importable (spell your subset with
+# these: default_global_mappings(*default_global_mappings_help))
+default_global_mappings_help = ('-h', '--help', 'help')
+default_global_mappings_version = ('-V', '--version', 'version')
+# the default_command_mappings menu
+default_command_mappings_help = ('-h', '--help')
 
 
-def default_mappings(*options):
+def default_command_mappings(*options):
+    """
+    The FACTORY for the stock per-command defaults policy (Larry's
+    design, 2026-09-08): the option strings a command's help era maps
+    when the command hasn't claimed them--'-h', '--help'; empty means
+    both.  Returns the policy callable--@app.command()'s default is
+    default_mappings=default_command_mappings().  Pass
+    default_mappings=None for no per-command help.  `tool build -h`
+    prints build's page and exits; a command with subcommands lists
+    them (`tool db -h`), and `tool db stop -h` is stop's page--the
+    path is the topic, so the option takes no oparg.
+    """
+    if not options:
+        options = default_command_mappings_help
+    for o in options:
+        if o not in default_command_mappings_help:
+            raise AppealConfigurationError(
+                f"default_command_mappings: unknown mapping {o!r}; the "
+                f"menu is {sorted(default_command_mappings_help)}")
+    requested = frozenset(options)
+
+    def default_command_mappings_policy(node, claimed):
+        "The strings to map, given what the command already claims."
+        return [s for s in default_command_mappings_help
+                if s in requested and s not in claimed]
+    default_command_mappings_policy.requested = requested
+    return default_command_mappings_policy
+
+
+_STOCK_COMMAND_MAPPINGS = default_command_mappings()
+
+
+def default_global_mappings(*options):
     """
     The FACTORY for the stock program-level defaults policy
     (Larry's design, 2026-07-25).  List the mappings you want:
     '-h', '--help', '-V', '--version' (precommand options),
     'help', 'version' (commands); empty means all of them.
     Returns the policy callable--the constructor default is
-    default_mappings=default_mappings().  Pass
+    default_mappings=default_global_mappings().  Pass
     default_mappings=None for no default mappings at all.
 
     Order is insignificant (the listing keeps v1's order, version
@@ -999,8 +1027,8 @@ def default_mappings(*options):
     mapped--user declarations always win.
     """
     if not options:
-        options = default_mappings_help + default_mappings_version
-    valid = set(default_mappings_help + default_mappings_version)
+        options = default_global_mappings_help + default_global_mappings_version
+    valid = set(default_global_mappings_help + default_global_mappings_version)
     for o in options:
         if o in valid:
             continue
@@ -1009,12 +1037,12 @@ def default_mappings(*options):
                     '-version': '--version'}.get(o)
             hint = f" (did you mean {near!r}?)" if near else ''
             raise AppealConfigurationError(
-                f"default_mappings: unknown mapping {o!r}{hint}; "
+                f"default_global_mappings: unknown mapping {o!r}{hint}; "
                 f"the menu is {sorted(valid)}")
         raise AppealConfigurationError(
-            f"default_mappings: {o!r} isn't a mapping name.  "
-            f"default_mappings is a factory--pass the constructor "
-            f"default_mappings=default_mappings(), not the "
+            f"default_global_mappings: {o!r} isn't a mapping name.  "
+            f"default_global_mappings is a factory--pass the constructor "
+            f"default_mappings=default_global_mappings(), not the "
             f"factory itself")
     requested = frozenset(options)
 
@@ -1073,7 +1101,7 @@ class Appeal:
     first use (see "Laziness and late binding" in the grammar doc).
     """
     def __init__(self, name=None, *,
-                 default_mappings=default_mappings(),
+                 default_mappings=default_global_mappings(),
                  default_options=_DEFAULT_OPTIONS,
                  doc=None,
                  errors=None,
@@ -1103,11 +1131,15 @@ class Appeal:
         self._precommand_flags = {}        # id(callable) -> (boundary, bleed,
                                            #   immediate), the era flags
         self._bleeding = set()             # ids of commands with bleed=True
+        self._command_mappings_of = {}     # id(callable) -> default_mappings=
+                                           # given to subcommand(), applied
+                                           # when the path resolves
                                            # mapping (filled by the user later)
         self._auto_impl = None    # synthesized fn for a pure dispatcher
         self._node_default = None # this node's default command
         self._node_repeat = False # this node's set cycles
         self._node_bleed = False  # this command's options bleed onward
+        self._command_mappings = _STOCK_COMMAND_MAPPINGS   # the help era's policy
         if parent is not None:
             # a subcommand node is a full Appeal; the program
             # knobs are the root's, copied as processed values
@@ -1487,7 +1519,7 @@ class Appeal:
             from .presentation import merge_docs
             plan = root._plan_for_node(node, topic)
             text = render_help_page(
-                plan.usage(f'{parent._prog()} {topic}'), merge_docs(plan),
+                node._head_usage_markup(), merge_docs(plan),
                 root.templates,
                 margin=help_margin(root.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=root.stylesheet,
@@ -1600,7 +1632,8 @@ class Appeal:
                 f"(commands are words, not options)")
         return word
 
-    def command(self, name=None, *, repeat=False, parent=None, bleed=False):
+    def command(self, name=None, *, repeat=False, parent=None, bleed=False,
+                default_mappings=_UNSET):
         """
         @app.command() registers a command under the callable's name with
         underscores turned to dashes (upload_database -> upload-database).
@@ -1619,14 +1652,19 @@ class Appeal:
         node's set cycle: after a subcommand's arguments, the
         next token may name another one.  parent= is the older
         v2 spelling of the same fetch: command(parent='db') ==
-        command('db').
+        command('db').  default_mappings= is the command's help-era
+        policy (Larry, 2026-09-08): the stock
+        default_command_mappings() maps -h/--help onto the command
+        when it hasn't claimed them; None turns the command's help
+        off.
         """
         if parent is not None:
             if name is not None:
                 raise AppealConfigurationError(
                     "command(): give a name or parent=, not both")
             name = parent
-        return self.subcommand(None, name, repeat=repeat, bleed=bleed)
+        return self.subcommand(None, name, repeat=repeat, bleed=bleed,
+                               default_mappings=default_mappings)
 
     def default(self):
         """
@@ -1698,7 +1736,8 @@ class Appeal:
         return decorator
     global_command = precommand         # transitional alias for the old name
 
-    def subcommand(self, parent, name=None, *, repeat=False, bleed=False):
+    def subcommand(self, parent, name=None, *, repeat=False, bleed=False,
+                   default_mappings=_UNSET):
         """
         Register a command under `parent`--a command word PATH
         string, root-relative: subcommand('db') for a child of
@@ -1742,11 +1781,16 @@ class Appeal:
                 if bleed and not node._node_bleed:
                     node._node_bleed = True
                     self._invalidate()
+                if default_mappings is not _UNSET:
+                    node._command_mappings = default_mappings
+                    self._invalidate()
                 return node
             def decorator(callable):
                 node = self._child(self._command_word(None, callable))
                 node._node_repeat = node._node_repeat or repeat
                 node._node_bleed = node._node_bleed or bleed
+                if default_mappings is not _UNSET:
+                    node._command_mappings = default_mappings
                 return node(callable)
             return decorator
         if not isinstance(parent, str):
@@ -1757,6 +1801,8 @@ class Appeal:
         def decorator(callable):
             if bleed:
                 root._bleeding.add(id(callable))
+            if default_mappings is not _UNSET:
+                root._command_mappings_of[id(callable)] = default_mappings
             if root._finalized:
                 # late registration: the tree exists, attach now
                 root._attach_subcommand(parent, name, repeat,
@@ -1785,6 +1831,8 @@ class Appeal:
                                     # refused there, naming them
         child = node._child(self._command_word(name, callable))
         child._node_repeat = child._node_repeat or repeat
+        if id(callable) in self._command_mappings_of:
+            child._command_mappings = self._command_mappings_of[id(callable)]
         child(callable)
 
     def _resolve_subcommands(self):
@@ -2119,7 +2167,7 @@ class Appeal:
             self.global_plan, entries,
             doc=self._program_doc_override(), listing=False)
         pages = [(word,
-                  self.plan_for(word).usage(f'{prog} {word}'),
+                  self._children[word]._head_usage_markup(),
                   merge_docs(self.plan_for(word)))
                  for word in table]
         return man_page(prog, corpus, self._head_usage_markup(),
@@ -2518,11 +2566,12 @@ class Appeal:
         if self.parent is None:
             plans = self.global_plans()
         else:
-            plans = [self.global_plan] if self.global_plan is not None else []
+            plans = [p for p in (self._help_plan(), self.global_plan)
+                     if p is not None]
         for plan in plans:
-            rest = plan.usage().partition(' ')[2]   # drop the program span
-            if rest:
-                parts.append(rest)
+            body = plan.usage_body()
+            if body:
+                parts.append(body)
         if self._table():
             # the placeholder keeps the argument DECORATION (<COMMAND>: a
             # hole to fill) but wears the command ROLE--the words that can
@@ -2644,10 +2693,6 @@ class Appeal:
         self._era_plans = plans
         return self._era_plans
 
-    def head_eras(self):
-        "The head eras: the precommand plans grouped by their boundaries."
-        return _group_eras(self.global_plans())
-
     def _ordered_precommands(self):
         """
         Registration order, with one adjustment (Larry's wand, 2026-08-25):
@@ -2699,62 +2744,172 @@ class Appeal:
         processor(args)
         return processor
 
+    class Era:
+        """
+        One era of a command line--the private API the dispatcher
+        parcels by (Larry, 2026-09-08).  kind: 'head' (a precommand
+        era: its plans, all parsed by one Engine), 'command' (the
+        command word itself--no plans when the command takes
+        something; the command's plan when it takes nothing),
+        'help' (the command's help era: -h/--help, immediate, bleeding
+        into the arguments-options-opargs era after it), 'aoo' (the
+        command's arguments-options-opargs era: its plan).  immediate:
+        executes first, before the line is judged.  bleed: its option
+        handlers stay mapped into the next era.  word/callable: the
+        command, for the step and its usage trailer.
+        """
+        __slots__ = ('kind', 'plans', 'immediate', 'bleed', 'word', 'callable')
+        def __init__(self, kind, plans=(), *, immediate=False, bleed=False,
+                     word=None, callable=None):
+            self.kind = kind
+            self.plans = list(plans)
+            self.immediate = immediate
+            self.bleed = bleed
+            self.word = word
+            self.callable = callable
+
+    def _head_eras(self):
+        "The head eras: the precommand plans grouped by their boundaries."
+        return [self.Era('head', plans, immediate=plans[0].immediate,
+                         bleed=any(p.bleed for p in plans))
+                for plans in _group_eras(self.global_plans())]
+
+    def _help_plan(self):
+        """
+        This command node's help-era plan: a flag whose presence prints
+        the node's page (the node's word path is the topic, so no
+        oparg) and exits.  None when the node's policy maps nothing:
+        default_mappings=None on the command, the app's
+        default_mappings=None, or
+        every string already claimed by the command's own options.
+        """
+        plan = self._plans.get('help')
+        if plan is None:
+            root = self.root
+            if self.parent is None or not root._help_enabled:
+                return None
+            from .frontend import all_options
+            own = root._plan_for_node(self, self.name)
+            claimed = {s for owner, o in all_options(own) for s in o.strings}
+            policy = self._command_mappings
+            strings = policy(self, claimed) if policy is not None else []
+            if not strings:
+                return None
+            node = self
+            path = self._prog().split()[1:]
+            def help(*, help=False):
+                if help:
+                    _sys.exit(root.help(*path))
+            help.__qualname__ = f'help({" ".join(path)})'
+            root._decorations.add_option(help, 'help', strings)
+            plan = self._build(help, name=self._prog())
+            plan.boundary, plan.bleed, plan.immediate = True, True, True
+            plan = self._plans.setdefault('help', plan)
+        return plan
+
+    def _command_eras(self, word):
+        """
+        The eras a command word opens: the command era (the word; the
+        command's plan too when it takes nothing), its help era, and
+        its arguments-options-opargs era when it takes something.
+        Relay (Larry's rules): a bare command era relays what bled into
+        it iff its own bleed says so; a command taking something always
+        relays into its help and arguments-options-opargs eras, and
+        that last era bleeds onward iff the command's bleed says so.
+        """
+        node = self._children[word]
+        callable = self._table()[word]
+        plan = self._plan_for_node(node, word)
+        takes = bool(plan.slots or plan.options)
+        eras = [self.Era('command', () if takes else [plan],
+                         bleed=True if takes else plan.bleed,
+                         word=word, callable=callable)]
+        help_plan = node._help_plan()
+        if help_plan is not None:
+            eras.append(self.Era('help', [help_plan], immediate=True,
+                                 bleed=True, word=word, callable=callable))
+        if takes:
+            eras.append(self.Era('aoo', [plan], bleed=plan.bleed,
+                                 word=word, callable=callable))
+        return eras
+
+    def _parcel_era(self, era, line, pos, table):
+        """
+        Parcel one era's tokens (from pos) onto its converters, list its
+        steps, relay bleed and the line-wide state; returns the new pos.
+        A structural error raises wearing the right usage trailer.
+        """
+        argv = line.argv
+        if not era.plans:                       # the word of a command that
+            return pos                          # takes something: no tokens of
+                                                # its own, and it always relays
+                                                # into its help/aoo eras
+        classes = [converter_for(p) for p in era.plans]
+        convs = [cls() for cls in classes]
+        proc = backend.Engine(argv[pos:], convs[0], table,
+                              dashdash=line.dashdash)
+        if era.kind == 'head':
+            steps = [
+                _Step('era', self, cls, conv, proc, plan=plan,
+                      config=self._precommand_config.get(id(plan.callable)),
+                      immediate=era.immediate)
+                for cls, plan, conv in zip(classes, era.plans, convs)]
+        elif era.kind == 'help':
+            steps = [_Step('help', self, classes[0], convs[0], proc,
+                           immediate=True, word=era.word)]
+        else:
+            steps = [_Step('command', self, classes[0], convs[0], proc,
+                           word=era.word, callable=era.callable)]
+        try:
+            # enter LAST-first: each entry lays its work at the front, so
+            # the first-registered precommand's operands fill first
+            for conv in reversed(convs):
+                proc.enter(conv)
+            proc.seed(line.bled)
+            proc._loop()
+            for step in steps:
+                if step.config:
+                    # config KEY vetting is structural -- fire its
+                    # refusals in the scan (the value merge is at execute)
+                    _config_vet(step.plan, frozenset(table), step.config[0],
+                                self.plan_for, step.config[1])
+        except AppealDataError as e:
+            if era.kind == 'head':
+                # an era-level error (a bad program-wide option, a config
+                # value) gets the program usage line (decision B).  It's
+                # born in the scan, before any deeper site can speak--
+                # help's own errors happen at execute, in pass 2
+                assert e.usage is None
+                e.usage = _line_trailer(self.stylesheet,
+                                        self._program_usage_markup())
+            else:
+                steps[0].attach_usage(e)
+            raise
+        pos += proc.consumed                    # the whole era's tokens
+        line.dashdash = proc.force_positional
+        line.bled = proc.handlers if era.bleed else {}
+        line.tried = proc.handlers
+        line.steps.extend(steps)
+        return pos
+
     def _run_node(self, line, pos, top):
         """
-        Parcel and scan one set node's eras + command words, appending
-        the steps to execute; recurse for subcommands.  Runs no user
-        code: converters are instantiated (Appeal's classes) and tokens
-        are parceled onto them as records.  Returns (dispatched, pos):
-        whether a command word of THIS node was parceled, and where the
-        node's tokens end.  A structural error raises (the caller notes
-        it: pass 2 raises it after the immediate eras run).
+        Parcel and scan one set node's eras--its head eras, then the
+        eras each command word opens--appending the steps to execute;
+        recurse for subcommands.  Runs no user code: converters are
+        instantiated (Appeal's classes) and tokens are parceled onto
+        them as records.  Returns (dispatched, pos): whether a command
+        word of THIS node was parceled, and where the node's tokens end.
+        A structural error raises (the caller notes it: pass 2 raises it
+        after the immediate eras run).
         """
         self._finalize()
         argv = line.argv
         steps = line.steps
         table = self._table()
 
-        # the head eras, in order.  Within an era every precommand's options
-        # are recognized together (one owner per string, settled at build);
-        # operands fill in registration order; invocation is registration
-        # order.  An era's options BLEED into the next when it says so.
-        for era in self.head_eras():
-            classes = [converter_for(p) for p in era]
-            convs = [cls() for cls in classes]
-            proc = backend.Engine(argv[pos:], convs[0], table,
-                                  dashdash=line.dashdash)
-            era_steps = [
-                _Step('era', self, cls, conv, proc, plan=plan,
-                      config=self._precommand_config.get(id(plan.callable)),
-                      immediate=plan.immediate)
-                for cls, plan, conv in zip(classes, era, convs)]
-            try:
-                # enter LAST-first: each entry lays its work at the front,
-                # so the first-registered precommand's operands fill first
-                for conv in reversed(convs):
-                    proc.enter(conv)
-                proc.seed(line.bled)
-                proc._loop()
-                for step in era_steps:
-                    if step.config:
-                        # config KEY vetting is structural -- fire its
-                        # refusals in the scan (the value merge is at execute)
-                        _config_vet(step.plan, frozenset(table), step.config[0],
-                                    self.plan_for, step.config[1])
-            except AppealDataError as e:
-                # an era-level error (a bad program-wide option, a config
-                # value) gets the program usage line (decision B).  It's
-                # born in the scan, before any deeper site can speak--help's
-                # own errors happen at execute, in pass 2
-                assert e.usage is None
-                e.usage = _line_trailer(self.stylesheet,
-                                        self._program_usage_markup())
-                raise
-            pos += proc.consumed                    # the whole era's tokens
-            line.dashdash = proc.force_positional
-            line.bled = proc.handlers if any(p.bleed for p in era) else {}
-            line.tried = proc.handlers
-            steps.extend(era_steps)
+        for era in self._head_eras():
+            pos = self._parcel_era(era, line, pos, table)
 
         dispatched = False              # did a command word of THIS node run?
         while pos < len(argv):
@@ -2787,40 +2942,13 @@ class Appeal:
                                  if word.startswith('-') and not line.dashdash
                                  else _overview_trailer(self))
                     raise err
-            c = table[word]
             depth = len(self._prog().split()) - 1     # root: 0
             line.path[depth:] = [word]                # this set's word, replacing
                                                       # a cycling set's previous
-            # the node's cached plan (the compiled class lives on it)
-            plan = self._plan_for_node(self._children[word], word)
-            cls = converter_for(plan)
-            pos += 1
-            conv = cls()
-            proc = backend.Engine(argv[pos:], conv, table,
-                                  dashdash=line.dashdash)
-            step = _Step('command', self, cls, conv, proc, word=word,
-                         callable=c)
-            # the command era relays bled options into its own options-
-            # arguments-opargs era--when it has one; a command taking
-            # nothing stops the bleed, unless it bleeds itself
-            has_oao = bool(plan.slots or plan.options)
-            if has_oao:
-                proc.seed(line.bled)
-            try:
-                proc.parse()
-            except AppealDataError as e:
-                step.attach_usage(e)
-                raise
+            pos += 1                                  # the word itself
+            for era in self._command_eras(word):
+                pos = self._parcel_era(era, line, pos, table)
             dispatched = True
-            pos += proc.consumed
-            line.tried = proc.handlers
-            line.dashdash = proc.force_positional
-            if plan.bleed:
-                if has_oao:
-                    line.bled = proc.handlers   # its own options, and the bled
-            else:
-                line.bled = {}
-            steps.append(step)
 
             # recurse into the command's subcommand node: it may dispatch a
             # subcommand OR (the line stops at the parent) run that node's

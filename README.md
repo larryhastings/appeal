@@ -313,11 +313,12 @@ Already, a lot has happened!  Let's go over it piece by piece:
   on the command-line takes one positional argument,
   which we identify as `name` in the usage string.
 * Appeal also automatically created help for our
-  program: a `help` command, plus `-h` and `--help`
-  options at the head of the line (`hello -h`, or
-  `hello -h <command>` for one command's page).  Usage
-  shows you what command-line options and arguments
-  the command will accept.
+  program: a `help` command, `-h` and `--help` at the
+  head of the line (`hello -h`, or `hello -h <command>`
+  for one command's page), and `-h`/`--help` on every
+  command (`hello world -h`).  Usage shows you what
+  command-line options and arguments the command will
+  accept.
 
 So!  If you ran this command at the command-line:
 
@@ -2240,7 +2241,7 @@ spellings are the same classes--catch whichever you like.)
 
 ## API Reference
 
-`Appeal(name=None, *, theme=None, version=None, repeat=False, errors=None, script=sys.argv[0], margin=79, indent=4, positional_argument_usage_format='{name}', default_options=default_options, help=True)`
+`Appeal(name=None, *, default_mappings=default_global_mappings(), default_options=default_options, doc=None, errors=None, lazy=False, margin=None, repeat=False, script=sys.argv[0], stylesheet=None, version=None)`
 
 Creates a new Appeal instance.
 
@@ -2252,9 +2253,13 @@ Creates a new Appeal instance.
   when Appeal is imported--the only place Appeal consults
   `sys.argv[0]`, so the program name is a controllable input.
   Tests (and embedders) pass `script=` explicitly.
-* `theme` colors Appeal's output: `None` means the stock theme
-  (when the environment and terminal permit), `False` means
-  never, or pass an `appeal.Theme` of your own.
+* `stylesheet` colors Appeal's output: `None` means the stock
+  theme (when the environment and terminal permit), `False` means
+  never, or pass a complete composed big `StyleSheet` of your own,
+  used verbatim.  See "Color" in `appeal.documentation.md`.
+* `doc` is the program's own documentation (Markdown): it beats
+  the global command's docstring, which beats the module's, as the
+  prose at the top of the program's help page.
 * `version` is your program's version string.  It wires up
   `--version` (as the first token--prints the bare string,
   exits 0) and, when the program has commands, an automatic
@@ -2266,24 +2271,18 @@ Creates a new Appeal instance.
 * `errors` is the file object error messages print to,
   default `sys.stderr` (resolved at error time, like
   `print(file=None)`).  `sys.stdout` is 0.6's behavior.
-  Standalone scripts can bake `sys.stderr` or `sys.stdout`;
-  any other stream refuses at emission, by name.
-* `margin` (default 79) caps the help page's wrap width; at
-  render time the page uses the terminal's width or this cap,
-  whichever is narrower (pipes and redirects get the cap, so
-  captured output is stable).
-* `indent` (default 4) sets the left indent of the help tables.
-  It works by re-indenting the section templates, which own
-  layout--overwrite `app.templates` to go further.
-* `positional_argument_usage_format` (default `'{name}'`) is a
-  format string that decorates how operands appear in usage
-  lines and help tables--positional arguments and option opargs
-  alike.  It interpolates the parameter's `{name}` (and, if you
-  like, `{name.upper()}`), and nothing else: `'<{name}>'` wraps
-  every operand in angle brackets (`--number <number>`),
-  `'{name.upper()}'` shouts them (`--number NUMBER`).  An
-  explicit `@app.parameter(usage=...)` rename is literal and
-  overrides the format outright.
+* `margin` is the help page's wrap width.  `None` (the default)
+  measures: a terminal gets its real width, a pipe or capture
+  gets 79, so redirected output is stable.  A positive int wraps
+  at exactly that width, terminal or not.
+* `lazy` (default `False`): by default the first `process()` or
+  `main()` builds every command's plan, so a configuration error
+  anywhere surfaces at startup; `lazy=True` builds each command
+  only when it's invoked.
+* Operands' placeholders (`<HOST>`) are the stylesheet's
+  `argument_decoration` entry, so their shape follows the theme;
+  an explicit `@app.parameter(usage=...)` rename rides the same
+  decoration.
 * `default_options` is the policy that turns an automatically-
   mapped keyword-only parameter into option strings: a callable
   `(name, annotation, default)` returning a list of option
@@ -2293,19 +2292,27 @@ Creates a new Appeal instance.
   shorts" policy), `default_short_option` drops the long, or pass
   your own.  It runs at build time.  All three ship on the
   `appeal` namespace.
-* `help` (default `True`) is Appeal's automatic help.  `True`
-  gives the program `-h`/`--help` (before any command word) and,
-  for a program with commands, a `help` command.  `help=False` suppresses all of
-  it--the program answers `-h`/`--help` only if it declares them
-  itself.  (Even with `help=True`, a command that claims its own
-  `--help` still wins; `help=False` is the blanket off switch.)
+* `default_mappings` is the policy for Appeal's automatic help and
+  version: the stock `default_global_mappings()` maps `-h`/`--help`
+  and `-V`/`--version` before any command word and, for a program
+  with commands, the `help` and `version` commands; a subset
+  (`default_global_mappings('-h', '--help')`) maps fewer; `None`
+  maps nothing, and is the blanket off switch--per-command
+  `-h`/`--help` goes with it.  Strings you claim yourself always
+  win.  Each command's own help is the same shape one level down:
+  `@app.command(default_mappings=default_command_mappings())`.
 
-Help is on by default: the program answers `-h`/`--help`, and a
-program with commands gets a `help` command, unless you define
-your own or pass `help=False`.  The `help` command takes a topic
-as words, so `mytool help db stop` reaches a subcommand's page
-(and `mytool help db` lists db's subcommands).  Version works the
-same way, when you supply one: `Appeal(version='1.2.3')` gives
+Help is on by default: the program answers `-h`/`--help`, every
+command answers `-h`/`--help` after its word (`mytool db stop -h`
+prints stop's page and runs nothing), and a program with commands
+gets a `help` command, unless you define your own or pass
+`default_mappings=None`.  The `help` command takes a topic as words, so
+`mytool help db stop` reaches a subcommand's page (and `mytool
+help db` lists db's subcommands).  A command keeps any of those
+strings it claims itself; `@app.command(default_mappings=None)`
+turns one command's help off, and
+`default_command_mappings('--help')` maps a subset.  Version works
+the same way, when you supply one: `Appeal(version='1.2.3')` gives
 you `--version` and a `version` command for free.
 
 `Appeal.command(name=None, *, repeat=False)`

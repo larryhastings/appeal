@@ -1029,7 +1029,9 @@ class SmokeTests(AppealTestsBase):
         # every operand rides the one argument_decoration transform
         # now (ruled 2026-08-24, uniform): renames decorate too, so
         # all three show <FILE>
-        self.assertIn("<FILE> <FILE> [<FILE>]...", text)
+        # (the line wraps after [-h|--help] joined it, 2026-09-08)
+        self.assertIn("<FILE> <FILE>", text)
+        self.assertIn("[<FILE>]...", text)
 
     def test_two_or_more_files_1(self):
         self.bind_two_or_more_files()

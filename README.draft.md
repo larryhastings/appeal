@@ -1286,7 +1286,7 @@ The program. Construct one, decorate your functions onto it, and call
   `command` placeholder follow it.)
 * `default_options`, `default_mappings` — the automatic `-x`/`--long`
   derivation policy; pass `None` to suppress the automatic short/long
-  options, or a factory to customize. See `appeal.default_mappings`.
+  options, or a factory to customize. See `appeal.default_global_mappings`.
 
 ### Registering commands
 

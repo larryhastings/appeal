@@ -369,9 +369,10 @@ any other option--`tool [-h|--help [<TOPIC>]] [-V|--version]
 2026-09-08, reversing v1, which hid them).  The user's options always win
 the strings: claim `-h` and help keeps only `--help`; claim
 `--help` and there is no automatic help at all.  The constructor's
-`help=False` is the blanket off switch: no automatic `-h`/`--help`
-and (for a program with commands) no automatic `help` command--the
-program answers only what it declares itself.
+`default_mappings=None` is the blanket off switch: no automatic
+`-h`/`--help` at the head or on any command, and (for a program
+with commands) no automatic `help` command--the program answers
+only what it declares itself.
 
 **Parameter documentation**: the docstring is Markdown.  A line
 that is exactly `# Arguments`, `# Options`, or `# Commands` (one
@@ -613,11 +614,10 @@ every default is a stated rule, and each flag can be set explicitly.
   into the next, and the last one--and every command era--does not,
   so no head option reaches the first command.  True and False
   override the rule.
-* `immediate=True`: the era **executes during the scan**, as soon as
-  it parcels clean--before anything later on the line is judged.
-  Only the leading eras may be immediate (an immediate era after a
-  waiting one is a build error).  A nonzero int from an immediate era
-  halts the line.
+* `immediate=True`: the era **executes first**, once the whole line
+  has parceled--before the line is judged, and before any waiting era
+  runs, wherever it sits (a command's help era is one).  A nonzero
+  int from an immediate era halts the line.
 
 Appeal's own metadata precommand (`-h`/`--help`/`--version`) is the
 first era, `immediate=True`, and bleeds by the default rule: its
@@ -627,14 +627,26 @@ program's required operands are missing, and `foo --version garbage`
 prints the version.  Nothing is special-cased: those are the flags,
 and a user precommand may claim them (`--dump-config`, say).
 
-**Command eras.**  Each command word is an era of its own (one
-required argument, the word; no options), followed by the command's
-options-arguments-opargs era when it takes anything.  A command era
-relays bled options into its own o-a-o era; a command that takes
-nothing stops the bleed.  `@app.command(bleed=True)` (and
-`subcommand(..., bleed=True)`) keeps the command's options mapped
-one command further: on the o-a-o era when there is one, else on the
-command era itself, so the relay continues through it.
+**Command eras.**  Each command word opens up to three eras: the
+command era (the word itself; the command's own plan too when it
+takes nothing), the command's **help era**, and--when the command
+takes anything--its arguments-options-opargs era.  The help era
+(Larry, 2026-09-08) maps `-h`/`--help` onto the command: it is
+`immediate` and bleeds into the arguments-options-opargs era, so
+`tool build -h` and `tool build lib -h` both print build's page and
+exit before anything on the line runs--`tool -q db stop -h` prints
+stop's page and runs neither `quiet` nor `db`.  The path is the
+topic, so the option takes no oparg: `tool db -h` is db's page with
+its subcommands listed.  The command's own strings win (claim `-h`
+and the era maps only `--help`); `@app.command(default_mappings=...)`
+is the policy--the stock `default_command_mappings()`, a subset of
+it, or `None` for no help era; the constructor's
+`default_mappings=None` turns every one off.  Relay: a command era that takes nothing relays bled
+options iff the command's `bleed` says so; one that takes something
+always relays into its help and arguments-options-opargs eras, and
+that last era bleeds onward iff the command's `bleed` says so
+(`@app.command(bleed=True)`, `subcommand(..., bleed=True)`), so a
+parent's options reach its subcommands.
 
 **Scanning an era**, token by token (the rule, in Larry's words): if
 an oparg is owed--optional opargs included--the token is it,

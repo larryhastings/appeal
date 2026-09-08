@@ -1118,7 +1118,7 @@ def test_default_mappings_design():
     # a custom default_mappings policy composes with the stock one
     # (the factory returns the policy; call it, then adjust)
     def custom(app_):
-        _appeal.default_mappings()(app_)
+        _appeal.default_global_mappings()(app_)
         app_.command('about')(app_.print_version)
     app6 = _appeal.Appeal(name='t6', version='2', default_mappings=custom)
     @app6.command()
@@ -1314,7 +1314,7 @@ def test_help_knobs():
     # usage line only
     only_usage = captured(app.help, 'serve', summary=False,
                           doc=False).strip()
-    assert only_usage == 'usage: t serve [-v|--verbose] <HOST>'
+    assert only_usage == 'usage: t serve [-h|--help] [-v|--verbose] <HOST>'
     # no usage line
     no_usage = captured(app.help, 'serve', usage=False)
     assert 'usage:' not in no_usage
@@ -3363,8 +3363,8 @@ def test_help_disabled():
 
     # a command set: no `help` command, no per-command --help
     app3 = Appeal(name='tool',
-                  default_mappings=appeal.default_mappings(
-                      *appeal.default_mappings_version))
+                  default_mappings=appeal.default_global_mappings(
+                      *appeal.default_global_mappings_version))
     @app3.command()
     def add(x: int, y: int):
         "Add."
@@ -5619,7 +5619,7 @@ def test_documentation_man():
     assert '.SH NAME\nmytool \\- A demonstration tool.' in text
     assert ('.B mytool [\\-h|\\-\\-help [<TOPIC>]] [\\-V|\\-\\-version] '
             '[\\-t|\\-\\-trace] <COMMAND>') in text, text
-    assert '.B mytool greet [\\-s|\\-\\-shout] <NAME>' in text
+    assert '.B mytool greet [\\-h|\\-\\-help] [\\-s|\\-\\-shout] <NAME>' in text, text
     assert '.SH OPTIONS' in text and 'Print a trace' in text
     assert '.SS "mytool greet"' in text
     assert '.B \\-s|\\-\\-shout' in text and 'LOUDER.' in text

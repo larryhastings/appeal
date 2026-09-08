@@ -2730,22 +2730,22 @@ def test_era_flags():
     seen.clear()
     app4.process(['work'])
     assert seen == [('early', False), ('work',)]
-    # the immediate eras must LEAD the line, and an era must agree
+    # an immediate era anywhere executes FIRST (ruled 2026-09-08: a
+    # command's help era is one)--here `late` runs before `waits`
     app5 = Appeal(name='order', default_mappings=None)
     @app5.precommand(boundary=True)
     def waits(*, w=False):
-        pass
+        seen.append(('waits', w))
     @app5.precommand(boundary=True, immediate=True)
     def late(*, l=False):
-        pass
+        seen.append(('late', l))
     @app5.command()
     def go():
-        pass
-    try:
-        app5.process(['go'])
-        assert False, 'expected AppealConfigurationError'
-    except appeal.AppealConfigurationError as e:
-        assert 'must lead the line' in str(e), e
+        seen.append(('go',))
+    seen.clear()
+    app5.process(['-w', '-l', 'go'])
+    assert seen == [('late', True), ('waits', True), ('go',)], seen
+    # ...and an era's members must agree on immediate=
     app6 = Appeal(name='mixed', default_mappings=None)
     @app6.precommand(immediate=True, boundary=False)    # merged with `no`
     def yes(*, y=False):
@@ -4527,7 +4527,7 @@ def test_reachable_grind_more():
 
 def test_reachable_grind_config_doc_version():
     import appeal, io, contextlib
-    from appeal import default_mappings
+    from appeal import default_global_mappings
     # a config value that fails conversion is reported as config: ...
     app = appeal.Appeal('a', default_mappings=None)
     @app.global_command(config={'jobs': 'notanint'})
@@ -4546,7 +4546,7 @@ def test_reachable_grind_config_doc_version():
     assert 'Doc prose' in app2.documentation('commonmark')
     # a version-only default_mappings: the version precommand branch
     app3 = appeal.Appeal('c', version='1.0',
-                         default_mappings=default_mappings('-V', '--version',
+                         default_mappings=default_global_mappings('-V', '--version',
                                                            'version'))
     @app3.command()
     def cmd():
@@ -4969,16 +4969,16 @@ def test_init_misconfig_and_edges():
 
 
 def test_default_mappings_refusals():
-    from appeal import default_mappings, AppealConfigurationError
+    from appeal import default_global_mappings, AppealConfigurationError
     # an unknown mapping gets a did-you-mean hint
     try:
-        default_mappings('-v')
+        default_global_mappings('-v')
         assert False, 'expected refusal'
     except AppealConfigurationError as e:
         assert "did you mean '-V'" in str(e)
     # a non-string isn't a mapping name at all
     try:
-        default_mappings(5)
+        default_global_mappings(5)
         assert False, 'expected refusal'
     except AppealConfigurationError as e:
         assert "isn't a mapping name" in str(e)
@@ -5239,8 +5239,8 @@ def test_commandless_help_takes_no_topic():
     @tool.command()
     def build(target):
         return target
-    assert run(tool, ['-h', 'build'])[2] == 'usage: tool build <TARGET>'
-    assert run(tool, ['--help=build'])[2] == 'usage: tool build <TARGET>'
+    assert run(tool, ['-h', 'build'])[2] == 'usage: tool build [-h|--help] <TARGET>'
+    assert run(tool, ['--help=build'])[2] == 'usage: tool build [-h|--help] <TARGET>'
     # app.option(annotation=, default=) on the precommand is honored
     # (it used to record only the strings): a commandful program may
     # make its help a bare flag too
@@ -5412,13 +5412,13 @@ def test_help_reaches_subcommands_by_word_path():
         assert False, f'expected AppealUsageError for {argv!r}'
     # the shallow page lists the subcommands (git-style)...
     lines = page(['help', 'db'])
-    assert lines[0] == 'usage: tool db [-u|--url <URL>] <COMMAND>', lines
+    assert lines[0] == 'usage: tool db [-h|--help] [-u|--url <URL>] <COMMAND>', lines
     assert any(l.startswith('stop ') for l in lines), lines
     # ...and the path reaches the subcommand's own page
     lines = page(['help', 'db', 'stop'])
-    assert lines[0] == 'usage: tool db stop [<FORCE>]', lines
+    assert lines[0] == 'usage: tool db stop [-h|--help] [<FORCE>]', lines
     assert 'Stop the database.' in lines, lines
-    assert page(['help', 'db', 're_start'])[0] == 'usage: tool db re-start'
+    assert page(['help', 'db', 're_start'])[0] == 'usage: tool db re-start [-h|--help]'
     # a bad word names where it went wrong, with a suggestion from there
     assert refused(['help', 'db', 'stpo']) == \
         "unknown command 'stpo' of 'tool db' (did you mean 'stop'?)"
@@ -5426,13 +5426,13 @@ def test_help_reaches_subcommands_by_word_path():
         "unknown command 'x' of 'tool db stop'"
     assert refused(['help', 'dbb']) == "unknown command 'dbb' (did you mean 'db'?)"
     # -h takes one word, never a path
-    assert page(['-h', 'db'])[0] == 'usage: tool db [-u|--url <URL>] <COMMAND>'
+    assert page(['-h', 'db'])[0] == 'usage: tool db [-h|--help] [-u|--url <URL>] <COMMAND>'
     assert refused(['-h', 'db stop']) == "unknown command 'db stop'"
     # the API spelling
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         tool.help('db', 'stop')
-    assert out.getvalue().splitlines()[0] == 'usage: tool db stop [<FORCE>]'
+    assert out.getvalue().splitlines()[0] == 'usage: tool db stop [-h|--help] [<FORCE>]'
 
 
 def test_command_era_relay_rules():
@@ -5485,3 +5485,102 @@ def test_command_era_relay_rules():
     # a bare command era that doesn't bleed stops the relay
     assert refused(make(False, False), ['db', 'stop', '--verbose']) == \
         "option '--verbose' can't be used here; it goes before the command"
+
+
+def test_per_command_help_era():
+    # Larry (2026-09-08): every command gets a help era right after its
+    # command era--immediate, bleeding into the command's
+    # arguments-options-opargs era--so `tool build -h` prints build's
+    # page and exits without running anything, `tool db stop -h` is
+    # stop's page (the path is the topic: no oparg), and `tool build
+    # lib -h` works with -h after the operands.  default_mappings= on
+    # the command is the policy (default_command_mappings()); None
+    # turns it off; the command's own strings win.
+    import contextlib, io
+    seen = []
+    def make(**kw):
+        seen.clear()
+        tool = Appeal(name='tool', version='1.0', **kw)
+        @tool.precommand()
+        def quiet(*, quiet=False): seen.append(('quiet', quiet))
+        @tool.command()
+        def build(target, *, jobs: int = 1): seen.append(('build', target, jobs))
+        @tool.command()
+        def db(*, url=''): seen.append(('db', url))
+        @tool.subcommand('db')
+        def stop(*, force=False): seen.append(('stop', force))
+        @tool.command()
+        def bare(): seen.append(('bare',))
+        return tool
+    def page(app, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                app.process(argv)
+            except SystemExit as e:
+                assert e.code in (0, None), e.code
+                return out.getvalue().splitlines()[0]
+        assert False, f'expected help to exit for {argv!r}'
+    def refused(app, argv):
+        try:
+            app.process(argv)
+        except appeal.AppealUsageError as e:
+            return str(e)
+        assert False, f'expected AppealUsageError for {argv!r}'
+    tool = make()
+    assert page(tool, ['build', '-h']) == \
+        'usage: tool build [-h|--help] [-j|--jobs <JOBS>] <TARGET>'
+    assert seen == [], seen                  # nothing ran, target missing or not
+    assert page(tool, ['build', 'lib', '--help']) == \
+        'usage: tool build [-h|--help] [-j|--jobs <JOBS>] <TARGET>'
+    assert page(tool, ['db', 'stop', '-h']) == \
+        'usage: tool db stop [-h|--help] [-f|--force]'
+    assert page(tool, ['-q', 'db', '--url', 'x', 'stop', '-h']) == \
+        'usage: tool db stop [-h|--help] [-f|--force]'
+    assert seen == [], seen                  # quiet and db never ran
+    assert page(tool, ['db', '-h']) == \
+        'usage: tool db [-h|--help] [-u|--url <URL>] <COMMAND>'
+    assert page(tool, ['bare', '-h']) == 'usage: tool bare [-h|--help]'
+    assert refused(tool, ['build', '--help=x']) == \
+        "option '--help' expected 'true' or 'false'"      # a flag's spelling
+    # a structural problem BEFORE the help era wins: the parcel stopped
+    assert refused(tool, ['bulid', '-h']) == \
+        "unknown command 'bulid' (did you mean 'build'?)"
+    # ...but one after it doesn't: help outranks a missing operand
+    assert page(tool, ['build', '-h', '--jobs']) == \
+        'usage: tool build [-h|--help] [-j|--jobs <JOBS>] <TARGET>'
+    # the command's own strings win: only the free one is mapped
+    tool2 = Appeal(name='t2')
+    @tool2.command()
+    def go(*, h=False): return h
+    assert tool2.process(['go', '-h']).result is True
+    assert page(tool2, ['go', '--help']) == 'usage: t2 go [--help] [-h]'
+    # default_mappings=None on the command: no help era at all
+    tool3 = Appeal(name='t3')
+    @tool3.command(default_mappings=None)
+    def silent(x): return x
+    assert refused(tool3, ['silent', '-h']) == "unknown option '-h'"  # x owed
+    assert refused(tool3, ['silent', 'x', '-h']) == \
+        "option '-h' can't be used here; it goes before the command"
+    assert 'help' not in tool3._children['silent']._plans
+    # a subset, on the fetch and on subcommand()
+    tool4 = Appeal(name='t4')
+    only_long = appeal.default_command_mappings('--help')
+    @tool4.command(default_mappings=only_long)
+    def alpha(): pass
+    tool4.command('beta', default_mappings=only_long)(lambda: None)
+    @tool4.subcommand('alpha', default_mappings=only_long)
+    def deep(): pass
+    for argv in (['alpha', '--help'], ['beta', '--help'], ['alpha', 'deep', '--help']):
+        assert page(tool4, argv).startswith('usage: t4 '), argv
+    for argv in (['alpha', '-h'], ['beta', '-h'], ['alpha', 'deep', '-h']):
+        assert refused(tool4, argv) == \
+            "option '-h' can't be used here; it goes before the command", argv
+    try:
+        appeal.default_command_mappings('-x')
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert "unknown mapping '-x'" in str(e), e
+    # the app-level blanket switch turns per-command help off too
+    tool5 = make(default_mappings=None)       # the blanket switch
+    assert refused(tool5, ['build', 'lib', '-h']) == "unknown option '-h'"

@@ -294,8 +294,11 @@ converters.  There are two sorts:
   by default each era's options stay recognized in the next (bleed,
   below), so `prog -q --version` works no matter which precommand owns
   which string.  One string may have only one owner across the head.
-* **Command eras**: each command word names a Converter, and the tokens
-  after it up to saturation are its era.
+* **Command eras**: each command word opens up to three eras: the word
+  itself, the command's **help era** (`-h`/`--help`, immediate, bleeding
+  into the next era so `build lib -h` works), and, when the command takes
+  anything, its arguments-options-opargs era: the tokens after the word
+  up to saturation.
 
 Three flags on `@app.precommand()` shape the head:
 
@@ -310,23 +313,30 @@ Three flags on `@app.precommand()` shape the head:
   precommand eras and never the first command.  True and False
   override.  (`@app.command(bleed=True)` relays a command's options one
   command further, the same way.)
-* `immediate=True`: the era executes as soon as it has scanned clean,
-  before the rest of the line is judged.  That is how `-h` beats a
-  malformed line.  Immediate eras must be a prefix of the head.
+* `immediate=True`: the era executes first, once the whole line has
+  parceled, before the line is judged and before any waiting era runs,
+  wherever it sits.  That is how `-h` beats a malformed line, at the
+  head and after a command word.
 
 The metadata precommand is `boundary=True`, `immediate=True`, and
 bleeds by the default rule.
 
+An era is an object, `Appeal.Era` (private): its kind (`head`,
+`command`, `help`, `aoo`), its plans, `immediate`, `bleed`, and the
+command word it belongs to.  A node produces them: `_head_eras()` once
+per line, `_command_eras(word)` as each word dispatches.  One method,
+`_parcel_era`, parcels any era: builds its Converter instances, makes an
+Engine over `argv[pos:]`, enters the converters (last-registered first,
+so the first-registered precommand's operands fill first), seeds any
+bled handlers, parses, lists the steps, relays bleed, and advances `pos`
+by what the era consumed.
+
 `_run_node(line, pos, top)` is the dispatcher for one node.  It:
 
-1. Runs each head era: builds the era's Converter instances, makes an
-   Engine over `argv[pos:]`, enters the converters (last-registered
-   first, so the first-registered precommand's operands fill first),
-   seeds any bled handlers, parses, and advances `pos` by what the era
-   consumed.
-2. Loops over command words: looks the word up in the table, makes an
-   Engine for that command, parses its era, then recurses into the
-   child node if it has subcommands or a default.
+1. Parcels each head era.
+2. Loops over command words: looks the word up in the table, parcels
+   the eras the word opens, then recurses into the child node if it has
+   subcommands or a default.
 3. If no command word of this node was named: runs the node's default,
    or for a top-level set with no default, lists the commands and
    returns 1.
@@ -357,9 +367,10 @@ rule you set: **parcel, scan, execute**.
    If something is structurally wrong, the walk stops, and the error
    is *noted*, not raised.
 2. **Immediate eras run.**  The steps listed so far that came from
-   `immediate=True` eras execute, in order.  If one halts (returns a
-   nonzero non-bool int, which is what `--help` does after printing),
-   the run is over.
+   `immediate=True` eras execute, in line order, wherever they sit
+   (the head's metadata era, a command's help era).  If one halts
+   (returns a nonzero non-bool int, or exits, which is what `--help`
+   does after printing), the run is over.
 3. **The problem, if any, is raised.**  So `tool --help build badcmd`
    prints `build`'s help (the scan noted `badcmd` as a problem, but the
    immediate era outranks it), while `tool badcmd --help` reports the

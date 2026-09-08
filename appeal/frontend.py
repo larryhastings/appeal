@@ -557,14 +557,29 @@ class Plan:
                 f'options={len(self.options)} '
                 f'arity=({self.minimum}, {self.maximum})>')
 
-    def usage(self, argv0=None):
+    def usage(self):
         """
-        A one-line usage string, read straight off the tree.
+        A one-line usage string, read straight off the tree: the
+        program span (the plan's argv0 and command word, else the
+        plan's name), then usage_body().
+        """
+        from big.stylesheet import style, escape_styles
+        if self.argv0:
+            head = (style('program', escape_styles(self.argv0)) + ' '
+                    + style('command', escape_styles(self.name)))
+        else:
+            head = style('program', escape_styles(self.name))
+        return f'{head} {self.usage_body()}'.rstrip()
+
+    def usage_body(self):
+        """
+        The usage line's body--options and operands, no program span.
         v1's shape, kept: options first (all strings, pipe-joined,
         converter names as metavars), then operands; inside a
         group's brackets, the group's options come first--so every
         bracket reads left-to-right as something you can type
-        (announce-first, truth in advertising).
+        (announce-first, truth in advertising).  A line that spans
+        several eras (the program's, a command's) composes bodies.
         """
         from big.stylesheet import style, escape_styles
         from .presentation import decorate_argument
@@ -651,14 +666,7 @@ class Plan:
             bits.extend(slot_text(s, rename) for s in plan.slots)
             return ' '.join(bits)
 
-        if argv0 is not None:
-            head = style('program', escape_styles(argv0))
-        elif self.argv0:
-            head = (style('program', escape_styles(self.argv0)) + ' '
-                    + style('command', escape_styles(self.name)))
-        else:
-            head = style('program', escape_styles(self.name))
-        return f'{head} {body_text(self)}'.rstrip()
+        return body_text(self)
 
     def sole_terminal_slot(self):
         """
