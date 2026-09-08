@@ -1,304 +1,555 @@
 # A guided tour of the Appeal 1.0 implementation
 
-*For Larry, who asked "where is the engine?" — the interpreter-only
-answer.  Rewritten 2026-08-25, after the codegen/standalone machinery was
-removed and the tree settled into eight modules; every count and claim
-below was checked against the tree that day.*
+*For Larry, who wants to read the code and needs the map first.
+Rewritten 2026-09-08 against the tree as it stands that day; every
+name, count, and example below was checked against it.  Where the old
+tour (2026-08-25) described a two-pass dry/live engine and Conjure*
+bindings, that engine no longer exists; this document replaces it.*
 
-> **A note on names.**  This release is **Appeal 1.0**; the previous
-> releases were the 0.6 line.  In the engineering docs the rewrite is
-> nicknamed **v2** and shipping Appeal 0.6.x is **v1** — the codenames the
-> rewrite was carried out under.  "v1 semantics" means "what 0.6 did, kept
-> on purpose."
+This is a reader's document, not a reference.  It defines each term
+before it uses it, and ties each mechanism to the command line it
+exists for.  Sections build on each other; read them in order the
+first time.
 
-> **What changed since the last tour.**  Appeal used to be a *compiler*: it
-> had two parser "rungs" — an interpreter (`interpreter.py`, rung 1) and a
-> code generator (`codegen.py`, rung 3) that emitted standalone scripts —
-> plus `plan.py`, `build.py`, and a `runtime.py` snippet warehouse, and every
-> case ran through both rungs for parity.  All of that is gone.  Appeal is
-> now a single interpreter.  The eight files below replace those six; the
-> library is smaller and there is exactly one code path from a command line
-> to your function.
 
-## Where the engine went
+## 0: The shape of the thing
 
-There are three moving parts, and they run in this order:
+There is one path from a command line to your function, and it has
+three stages:
 
-1. **`frontend.py` — signature → `Plan`.**  It reads a callable's parameters
-   (without `inspect`, to stay fast) and builds a `Plan`: a small tree of
-   slots, option rules, and terminals describing *what the grammar is*.  A
-   Plan is inert data — no argv, no side effects.
+1. **Front end** (`frontend.py`): read a callable's signature, produce a
+   **Plan**.  A Plan is plain data describing the grammar: which
+   positional operands the callable takes, which options, in what shape.
+   No argv is involved.  This runs once per callable per process.
 
-2. **`backend.py` — `Plan` → `Converter` classes → run.**  It turns each Plan
-   into a `Converter` subclass whose `register()` method emits a handful of
-   **instructions** (Argument, Option, PreOption, Repeat).  An `Engine` then
-   walks the actual `argv` against those instructions and calls your
-   function.  This is the interpreter — the thing the old tour went looking
-   for and couldn't find in one place.
+2. **Back end** (`backend.py`): turn a Plan into a **Converter class**,
+   then run an **Engine** that walks argv against it.  This is the
+   parser.  The Engine does not call your function while it parses; it
+   records what it found, and calls your function afterward.
 
-3. **`__init__.py` — the `Appeal` object and the `Processor`.**  `Appeal` is
-   your program's description (the command tree).  `Processor` is one run: it
-   drives the backend over one command line, first in a dry structural
-   pre-scan, then live.
+3. **Dispatcher** (`__init__.py`): the `Appeal` object is a tree of
+   command words; `Processor` runs one command line by walking that tree,
+   asking the back end to parse each piece, then executing the pieces in
+   order.
 
-Everything else is a consumer of those three: **`presentation.py`** renders
-help/usage/errors, **`converters.py`** is the type vocabulary,
-**`load.py`** runs a command from structured data instead of a string, and
-**`schema.py`** describes the plan tree as plain data (the `app.schema(format,
-version)` formats); **`mcp.py`** / **`completion.py`** serve MCP tools and shell
-completion (the MCP server consumes schema.py's JSON-Schema projection).
-None of them are on the fast path of a successful parse.
+Everything else is a consumer of the Plan: `presentation.py` renders
+help, usage, and errors; `completion.py` answers shell tab completion;
+`load.py` runs a callable from a dict or a CSV row instead of argv;
+`schema.py` describes the Plan as JSON-safe data; `mcp.py` serves
+commands as MCP tools.  None of those are imported until something asks
+for them.  `import appeal` loads `__init__`, `frontend`, `backend`, and
+`converters` and nothing else, not even from the standard library.
 
-## The one mental key: instructions, a queue, and a handler table
+A word about the word **converter**, which this codebase uses in two
+senses and you will have to hold both:
 
-If you hold one picture in your head, hold this one.
+* A *converter* in the user's sense is any callable that turns
+  command-line strings into a value: `int`, or your `def point(x: int,
+  y: int)`.  Annotating a parameter with one says "this parameter is
+  filled by running that callable on the next operand(s)".
+* A *Converter* (capital C, `backend.Converter`) is a generated class,
+  one per Plan, that the Engine parses *into*.  An instance of it holds
+  the operands and options found so far for one use of one callable.
+  When the parse is done, calling the instance calls your callable.
 
-A `Converter`, when the Engine **enters** it, calls its `register()`, which
-drops **instructions** into the running Engine:
+When the text says "the converter's Plan" it means the Plan built from
+the user's callable; "a Converter instance" always means the generated
+object.
 
-* an **`ArgumentInstruction`** (a positional operand) is pushed onto
-  `engine.queue` — the list of operands still waiting to be filled;
-* an **`OptionInstruction`** or **`PreOptionInstruction`** installs a
-  **handler** (a *binding*) into `engine.handlers`, keyed by the option
-  string (`--verbose`, `-v`).
 
-Then the Engine walks `argv` left to right:
+## 1: The front end: a signature becomes a Plan
 
-* a **non-option** token fills the next `ArgumentInstruction` off the queue;
-* an **option** token looks its string up in `engine.handlers` and **fires
-  the binding**, which sets a value, folds an occurrence, or *conjures* a
-  converter that isn't there yet.
+`build_plan(callable)` is the entry point.  For
 
-Three rulings fall out of this shape, and they're the whole personality of
-the parser:
-
-* **Flat recognition.**  Options are registered *eagerly* — the moment a
-  converter's instructions are laid down, before its operands arrive (a
-  `*args` window's options are registered up front too).  So an option is
-  recognized *anywhere* on the line, not only after you've reached its
-  group.  That's why `draw a --bold` says "`--bold` only becomes available
-  if you specify `<WIDTH>`" instead of "unknown option": `--bold` is known;
-  it just has no `size` to attach to yet.
-
-* **Eras and regions.**  Entering a converter runs *its* `register()`, so its
-  options enter the tables exactly when it's in scope and leave when it's
-  not.  Shared option strings bind *announce-first* (the leading occurrence
-  goes to the first window; later ones track the current region).
-
-* **Conjuring.**  A `PreOptionInstruction` installs a `Conjure*` binding:
-  firing the option *summons* the converter instance before its operands
-  exist (the binding sets `instance._summoned = True`).  An all-optional
-  converter is fully conjured this way; a converter with a required operand
-  is summoned but then *starves* if the operand never arrives — that
-  starvation is the availability error above.
-
-## File by file
-
-Eight modules, ~9,500 lines.
-
-### `frontend.py` (~2,300 lines) — signature in, Plan out
-
-Reads callables and builds Plans.
-
-* **`signature()` / `Signature` / `Parameter`** — Appeal's own parameter
-  reader.  It pulls names, kinds, defaults, and annotations off `__code__`
-  and `__annotations__` directly; `inspect` is only imported as a last
-  resort (Argument-Clinic'd builtins).  This is the ~7ms-per-import that the
-  fast path avoids.
-* **`Plan`, `Slot`, `OptionRule`, `Terminal`** — the noun.  A `Plan` has
-  ordered `slots` (positional operands, each a `Terminal` leaf or a nested
-  child `Plan`) and `options` (`OptionRule`s).  `usage()` renders the plan's
-  usage line, with role spans for coloring.
-* **`build_plan(callable)`** — the entry point.  Walks the signature, maps
-  parameters to slots and options (leaf converter, converter group, `*args`
-  repeat, fold, flag, …), runs the analyses (option reachability, the
-  same-world rule), and returns the top `Plan`.
-* **`_is_option_group` / `_is_multiparam_converter` / `dereference_annotated`
-  / `_oparg_names`** — the classification helpers that decide what a
-  parameter *is*.
-
-### `backend.py` (~1,500 lines) — the interpreter
-
-The Plan consumer.
-
-* **The instructions** — `ArgumentInstruction`, `OptionInstruction`,
-  `PreOptionInstruction`, `RepeatInstruction`.  Each has a `register()` that
-  acts on the Engine (queue or handler table).  These are the "opcodes,"
-  except there's no program counter — they're declarative registrations that
-  a reactive loop consumes.
-* **The bindings** (option handlers) — `LiveBinding` (a flag),
-  `ValueBinding` (one oparg), `MultiBinding` (a fold: counter/accumulator/
-  mapping), `GroupBinding` (a converter-group option), and the four
-  **`Conjure*` bindings** (`ConjureBinding`, `ConjureValueBinding`,
-  `ConjureFoldBinding`, `ConjureChainBinding`) that a `PreOption` installs to
-  summon a not-yet-built converter — including down a nested chain.
-* **`build_converters([plan, ...])`** — compiles Plans into `Converter`
-  subclasses (`_build_class` per plan; group refs and fixups resolve through
-  the class table).  A `Converter` holds two phases: parse (fill `args`/
-  `kwargs`) and render (`__call__`, which finalizes deferred values and calls
-  your function).
-* **`Engine`** — one converter, one token stream.  `enter()` registers a
-  converter's instructions and reserves trailing operands; the run loop fills
-  the queue and fires handlers; `run()` does it, `consumed` reports how far
-  it got.  The `dry` flag is the structural pre-scan: it validates shape
-  (arity, unknown options) without converting or calling anything.
-* **`execute(commands, argv, ...)`** — the low-level "run this table of
-  converter classes against this argv" entry the facade calls.
-* **The dry-run helpers** — `_own_shape`, `_group_capacity`, `_valid_counts`,
-  `_availability_message`, `_takes_many` — read a converter's shape (by
-  dry-running its `register`) to size options and write good errors.
-
-### `converters.py` (~500 lines) — the vocabulary
-
-The built-in converter factories and the `MultiOption` protocol: `split`,
-`validate`, `validate_range`, `counter`, `accumulator`, `mapping`, `file`,
-`optional`, plus `convert()` (the leaf conversion that turns
-`ValueError`/`TypeError` into a polite `UsageError`).  Low-level: depends
-only on the exceptions.
-
-### `__init__.py` (~2,550 lines) — the facade, the tree, the Processor
-
-The public surface and the dispatcher.
-
-* **`Appeal`** — your program.  It's a *tree* of `Appeal` nodes (one per
-  command word); `@app.command()` / `@app.precommand()` / `@app.default()`
-  register callables, `@app.subcommand(path)` mounts deeper.  Registration
-  is lazy; plans build on first use (or eagerly, at first `process()`, unless
-  `lazy=True`).
-* **`Processor`** — one run.  `Processor(app)(argv)` runs the whole line
-  twice: a **dry** `_run_node` (structural pre-scan across the entire command
-  set — every command's arity and options, no bodies) then a **live**
-  `_run_node` that pops the converters the dry pass built and actually
-  converts and calls.  A structural error anywhere aborts before anything
-  runs; a *conversion* error partway down doesn't un-run an earlier command
-  (streaming dispatch).
-* **`_run_node`** — dispatch for one set node: run its **eras** (the
-  precommands, hoisted so a class runs before its own members), then its
-  **command words**, recursing for subcommands.  A class-as-app constructs
-  its instance once and stashes it in `env`; method commands bind to it from
-  there.
-* **`run_main`** — `main()`'s driver: catch `AppealError`, print it politely
-  (through the stylesheet), map to an exit code.
-* **config layering** — `_config_vet` / `_config_apply`: a dict bound to a
-  precommand (`@app.precommand(config=...)`) layers onto that precommand's
-  options at dispatch (defaults < config < argv).
-* **the exceptions** — `AppealError` and its children (`ConfigurationError` =
-  your bug; `DataError`/`UsageError` = the user's input; `CommandError` = a
-  command failing on purpose).
-
-### `presentation.py` (~1,400 lines) — all human-facing output
-
-Lazy: imported only when help, usage, or an error actually renders, so the
-success path never pays big's startup.  It scans docstrings (a hand-written
-scanner, no Markdown parser), transforms README-grade Markdown, assembles the
-help page as a template-ordered set of pieces, and renders them through big's
-markdown + stylesheet pipeline — colored on a tty, stripped otherwise.  Help
-tables carry their role coloring structurally, as big `StyledText` nodes.
-
-### The other consumers
-
-* **`load.py`** (~400 lines) — `read_mapping` / `read_iterable` / `read_csv`:
-  run a command from a dict, a list, or a CSV row, through the *same*
-  converters, no command line involved.
-* **`schema.py`** (~270 lines) — the plan tree as plain data: the full
-  description (`app.schema('appeal', '1.0')`) and the JSON-Schema
-  projection (`app.schema('mcp', '2024-11-05')`) both live here, with
-  the version inventories; generic machinery, MCP is one consumer.
-* **`mcp.py`** (~150 lines) — serve the commands as MCP tools (stdio, stdlib
-  only), schemas from schema.py; the class-as-app constructs once at
-  server startup.
-* **`completion.py`** (~560 lines) — shell tab completion off the same plans.
-
-## The dispatcher and the Processor: two passes
-
-`Processor(app)(argv)` is the whole run, and it makes two passes over the
-line:
-
-```
-built = []
-app._run_node(argv, 0, self, top=True, dry=True,  built=built)   # pre-scan
-built.reverse()
-app._run_node(argv, 0, self, top=True,           built=built)    # live
+```python
+def serve(host, port: int = 8080, *, verbose=False, retries: int = 1):
+    ...
 ```
 
-The **dry pass** validates the entire command set structurally and records
-each `Converter` class it builds into `built` (in traversal order).  The
-**live pass** pops those classes back off — nothing is built or planned
-twice — and this time converts operands and calls your functions.  Because
-the two passes visit the same converters in the same order, the pre-scan can
-reject a malformed line (bad arity three commands deep) before the *first*
-command runs, while a genuine conversion failure mid-line still leaves the
-commands that already ran, run.
+it produces a `Plan` with two **slots** and two **option rules**.
 
-`_run_node` handles one set node.  For that node it:
+* A **Slot** is one positional parameter: its name, whether it's
+  required, its default, and its **child**.  The child is either a
+  **Terminal**, wrapping a one-string-in callable (`str` for `host`,
+  `int` for `port`), or another Plan, when the parameter's annotation
+  is itself a callable that takes operands (a **group**; more below).
+  `repeat=True` marks a `*args` slot.
 
-1. runs the **head eras** — the help/version precommand, then each
-   registered precommand, in registration order but with a class hoisted
-   ahead of its own member precommands (it builds the instance they need);
-2. dispatches **command words** left to right, entering subcommand sets
-   recursively;
-3. if nothing was named, runs the node's **default**, or prints the listing.
+* An **OptionRule** is one keyword-only parameter: its option strings
+  (`('-v', '--verbose')`), the parameter name it fills, and its
+  **kind**: `flag` (presence stores a value, consumes nothing), `value`
+  (consumes one operand and converts it), `fold` (repeatable: a
+  counter, an accumulator, a mapping), `nullary` (a zero-argument
+  callable that presence *calls*), or `group` (an option whose
+  annotation is a callable taking operands of its own).
 
-A class era constructs its instance and stashes it (`env[cls.constructs] =
-instance`); a method/BIC era or command binds its `self` from `env` (`conv.
-bound = env.get(cls.binds)`).  That `env` dict — created fresh per run — is
-the whole of the class-as-app machinery.
+The interesting case is a **group**.  Given
 
-## Deep dive: one signature, start to finish
+```python
+def point(x: int, y: int): return (x, y)
+def draw(shape, spot: point = None, *, bold=False): ...
+```
 
-`build_plan(cmd)` for `def cmd(src, dst='.', *, verbose=False)`:
+the slot `spot` has a child Plan built from `point`, with its own two
+slots.  Plans nest to any depth, and a Plan is built once per callable
+per process and shared: `def line(a: point, b: point)` has two slots
+pointing at the *same* `point` Plan.  (That sharing is why the
+documentation code identifies rows by their path from the root rather
+than by the Plan object; section 8.)
 
-1. `signature(cmd)` reads three parameters off `__code__`: `src`
-   (positional, required), `dst` (positional, default `'.'`), `verbose`
-   (keyword-only, default `False`).
-2. Each positional becomes a `Slot` with a `Terminal` child (leaf converter
-   `str`); `verbose`, keyword-only with a bool default, becomes an
-   `OptionRule` of kind `flag`.
-3. The analyses run: option reachability (no option is stomped by a greedy
-   earlier one), the same-world rule (if `cmd` were a method, its class must
-   own it).
-4. Out comes a `Plan` with two slots and one option — inert, ready to be
-   compiled or rendered.
+**What the front end decides**, all of it in `frontend.py`:
 
-## Deep dive: one argv, start to finish
+* `signature()` reads parameters off `__code__` and `__annotations__`
+  directly, so the fast path never imports `inspect` (7 ms).
+* `_child_for` classifies each parameter: terminal or group, `*args`,
+  option kind.  Builtin generics are handled by feature detection
+  (`list[int]`, `X | None`); the `typing` module is not consulted.
+* `_finalize_options` assigns option strings: a parameter's long option
+  is its name with underscores turned to dashes, and a short option is
+  proposed from the first letter and claimed if free.  Within one
+  command every string has exactly one owner.  A string declared by two
+  *sibling* groups (`a: point, b: point` both have `--flag`) is
+  **scoped**: it's legal, and which window it binds to is decided by
+  position on the line.
+* `_analyze` computes the operand-count footprint: `minimum`, `maximum`,
+  and `valid_counts`, the exact set of operand counts the fill rule
+  accepts.  It gets that set by *simulating* the Engine's fill rule on
+  counts (`_greedy_body`), so the number in an error message cannot
+  disagree with what the parser does.
+* `_promote_optionality`: an optional operand followed by a required
+  one can never actually be skipped, so it becomes required.  This is
+  the rule you named **fill left to right**: a slot fills whenever an
+  operand remains; an optional is skipped only to leave room for a
+  required operand after it, never to reach a *later* optional.
 
-`app.process(['src', '--verbose'])` for that command:
+A Plan also carries the era flags (`boundary`, `bleed`, `immediate`;
+section 5) and, once the back end has built it, `compiled`: the
+Converter class.  The back end reads *only* the Plan.  It never looks
+at annotations, signatures, or attributes of the callable.  If it needs
+a fact, the fact is put on the Plan.
 
-1. `Processor(app)(['src','--verbose'])`.  Eager mode compiles every command
-   in the tree first (so a config error anywhere surfaces now).
-2. **Dry pass.**  `_run_node` builds `cmd`'s `Converter` class, makes an
-   `Engine`, enters the converter (registers one Argument for `src`, one for
-   `dst`, a `LiveBinding` handler for `--verbose`/`-v`), and walks the tokens:
-   `src` fills the `src` Argument; `--verbose` fires its handler; `dst` is
-   optional and absent.  No conversion, no call.  The built class is recorded.
-3. **Live pass.**  Same walk, but now `src` is converted (`str('src')`),
-   `--verbose` stores `not False`, `dst` takes its default, and the
-   `Converter` renders — calling `cmd(src='src', dst='.', verbose=True)`.
-4. `.result` is the return value; `.instances` logs `(command, None)`.
 
-## Where to look when…
+## 2: The back end, part one: a Plan becomes a Converter class
 
-* **a signature reads wrong** → `frontend.build_plan` and its classifiers.
-* **a command line parses wrong** → `backend.Engine` (the run loop) and the
-  binding that owns the option.
-* **an option is "unavailable" / conjuring misbehaves** → the `Conjure*`
-  bindings and `_availability_message`.
-* **dispatch / eras / class-as-app** → `__init__._run_node`.
-* **help/usage/errors look wrong** → `presentation.py`.
-* **config layering** → `__init__._config_apply` / `_config_vet`.
+`converter_for(plan)` returns the Plan's Converter class, building it on
+first use and caching it on `plan.compiled`.  The class is small.  It
+has:
 
-## Things to type at it
+* `converter`: the user's callable, wired on as a class attribute.
+* `register(self, engine)`: the method that lays down the Plan's
+  **instructions** into an Engine (next section).
+* `args` and `kwargs` on each instance: where parsed operands and
+  options land.
+* `__call__`: finish every value in `args` and `kwargs`, then call the
+  user's callable with them.  This is the moment your function runs.
+
+`_build_class` writes `register` from the Plan, in memory, once.  There
+is no generated source anymore; the class is built by ordinary Python
+closures.
+
+
+## 3: The back end, part two: the Engine
+
+The Engine is the parser.  Hold this picture:
+
+* An Engine owns a slice of argv, a **stack** of instructions, and a
+  **handler table** mapping option strings to **bindings**.
+* An **instruction** says what the parser expects next.  There are
+  four: `ArgumentInstruction` (a positional operand goes here),
+  `OptionInstruction` (install this option's binding), `PreOptionInstruction`
+  (install a binding for an option that belongs to a group that hasn't
+  been entered yet), and `RepeatInstruction` (a `*args` template: re-lay
+  these instructions for each element).
+* A **binding** is the object that fires when an option token is seen.
+  There are four kinds, matching the option kinds: `LiveBinding` (flag),
+  `ValueBinding` (one operand, or a nullary), `MultiBinding` (a fold),
+  `GroupBinding` (an option whose value is a group).  A binding knows
+  its **target**, the Converter instance whose `kwargs` it writes to.
+
+`engine.enter(converter)` calls the converter's `register`, which pushes
+its instructions onto the stack in order.  Then `engine.parse()` runs
+the loop:
+
+1. Pop and register every option instruction at the top of the stack.
+   Options register *eagerly*, before the operands they sit beside, so
+   an option is recognized anywhere in its era, not only after its
+   group has been reached.  This is **flat recognition**.
+2. Look at the next token.  If it's an option (section 4 says what that
+   means), look it up in the handler table and **invoke** its binding,
+   which consumes any opargs it takes.
+3. Otherwise, if the top of the stack is an `ArgumentInstruction`, fill
+   it with the token: leaf operands are recorded (not converted yet;
+   section 6); a group operand constructs the child Converter and
+   enters it, which pushes *its* instructions on top.
+4. When the stack is empty, the converter has **saturated**: it has
+   taken every operand it can.  The Engine yields.  Whatever token is
+   next belongs to someone else: a command word, or a later era.
+5. If the stack is empty and the next token is an option the table
+   doesn't know, that also ends the era.  If the stack is *not* empty
+   and an unknown option arrives, that's an error.
+
+The stack is a plain list with the top at the end.  Instructions are
+only ever pushed at the top and popped from the top, and the code looks
+at most one item below the top (to see whether a `RepeatInstruction`
+follows).
+
+**Conjuring.**  With `draw(shape, spot: point = None)` where `point`
+has `--flag`, the line `draw circle --flag 3 4` names `--flag` before
+any operand has started the `point` group.  `PreOptionInstruction` makes
+that work: `draw`'s `register` installs a binding for `--flag` whose
+target is not an existing instance but a `_Conjure`: "the Converter for
+slot `spot`, built on first use".  Naming `--flag` builds the `point`
+instance early, marks it `_summoned`, and stashes it by slot; when the
+fill reaches the `spot` slot it picks up the stashed instance instead
+of making a fresh one.  If the summoned instance then never gets its
+required operands, the error says the option "only becomes available
+if you specify <X> <Y>", which is truer than "unknown option".  A
+`_Chain` target does the same for an option buried two groups down.
+Once the owner is resolved, a conjured option is the *ordinary* binding
+of its kind; there is no separate conjure implementation.
+
+**Shadowing.**  If the command itself declares `--flag`, a group's
+`--flag` is not advertised at the command level: the command's own
+option wins, and the group only gets its `--flag` after an operand has
+entered it.
+
+**Windows.**  A `*args` group (`def cmd(*points: point)`) is laid down
+by a `RepeatInstruction`: before each element the template's
+instructions are re-pushed, so each element gets a fresh Converter and
+its options re-register.  Each element is a **window**; an option
+between elements binds to the window being built, and an option past
+the last operand binds to the nearest built instance rather than
+starting an empty one.
+
+**Trailing operands.**  For `def cp(*src, dst)`, `dst` is a required
+operand *after* an absorbing `*args`.  `enter()` reserves the last N
+operands from the end of the era's tokens before any filling starts,
+skipping over options and their opargs so `cp a b dst --verbose`
+reserves `dst` and not `--verbose`.  Reserved tokens are lifted out of
+the stream and delivered by keyword.  Working out how many tokens an
+option occupies, for that skip, is the one place the Engine reads a
+token without consuming it (`_option_span`), and it uses the same
+carving function the real parse uses.
+
+
+## 4: What is an option token?  The scanner's rules
+
+One function answers this for the engine and for completion, so they
+can't disagree: `is_option_token(tok, classifiers)`.
+
+* `-` and `--` are never options.
+* Anything else starting with a dash is an option, with one exception:
+  a dash followed by a digit.  `-243` might be the bundle `-2 -4 -3` or
+  might be a negative number.  Rule: if it carves completely as a
+  short-option bundle against the options currently registered, it's
+  options; else if it parses as a float, it's an operand; else it's an
+  option, so the parse raises the honest "unknown option".
+
+Short options are carved by `parse_short_options(tok, classifiers)`,
+where `classifiers` is three sets of letters: the options taking no
+oparg (these bundle: `-vd`), exactly one (`-uFILE`, or `-u FILE`), and
+two or more (must be last, values as separate words).  The function is
+a generator and re-reads the classifiers before each letter, because
+invoking one letter can register the next (`-me`: `-m` enters a group
+that declares `-e`).
+
+Four rules govern opargs and era boundaries; they're the ones you set
+on 2026-09-07:
+
+1. An option's oparg grabs the next token unconditionally, even one
+   that looks like an option (`make -j -5` style), and even when the
+   oparg is optional.  Only end of line or `--` declines it.
+2. "Need" includes optional slots: while any slot is still open, the
+   era is still consuming.
+3. An unknown long option with nothing owed ends the era (the token
+   belongs to whoever is next).  An unknown option while something is
+   still owed is an error.
+4. A short bundle mixing owned and unowned letters is an error, not a
+   boundary.
+
+`--` is **line-wide**: once seen, no later token on the line is an
+option, in this era or any later one.  Command words still dispatch
+after it (docopt's behavior, chosen after surveying click, argparse,
+docopt, fire, git, and clap).
+
+
+## 5: The dispatcher: eras, command words, and the tree
+
+An `Appeal` object is a **node** in a tree.  Each node has a **table**
+of command words to child nodes, an optional **global command** (its
+own body), an ordered list of **precommands**, and possibly a
+**default** command for a bare line.  `@app.command()` registers a
+word; `@app.subcommand('parent')` registers a word one level down;
+`@app.precommand()` adds a precommand; a class registered as the global
+command is a class-as-app whose methods are the commands.
+
+A command line is read left to right as a sequence of **eras**.  An era
+is a stretch of the line parsed by one Engine against one set of
+converters.  There are two sorts:
+
+* **Head eras** come before any command word.  Appeal's own metadata
+  precommand (`-h/--help`, `--version`) is the first; then the user's
+  precommands, in registration order, with a class moved ahead of its
+  own member precommands.  By default all the user's precommands parse
+  as *one merged era*: their options are recognized together, so
+  `prog -q --version` works no matter which precommand owns which
+  string, and one string may have only one owner across the era.
+* **Command eras**: each command word names a Converter, and the tokens
+  after it up to saturation are its era.
+
+Three flags on `@app.precommand()` shape the head:
+
+* `boundary=True`: this precommand ends its era; the next one starts a
+  new era.  A boundary begins a new era even if nothing else registers
+  in it.
+* `bleed=True`: the era's option handlers stay recognized in the *next*
+  era, still bound to their own converter.  They're discarded at that
+  era's end unless it bleeds too.  So the metadata precommand's
+  `--version` reaches the user's precommand era and stops there; it
+  never reaches the first command.  (`@app.command(bleed=True)` relays
+  a command's options one command further, the same way.)
+* `immediate=True`: the era executes as soon as it has scanned clean,
+  before the rest of the line is judged.  That is how `-h` beats a
+  malformed line.  Immediate eras must be a prefix of the head.
+
+The metadata precommand declares all three.
+
+`_run_node(line, pos, top)` is the dispatcher for one node.  It:
+
+1. Runs each head era: builds the era's Converter instances, makes an
+   Engine over `argv[pos:]`, enters the converters (last-registered
+   first, so the first-registered precommand's operands fill first),
+   seeds any bled handlers, parses, and advances `pos` by what the era
+   consumed.
+2. Loops over command words: looks the word up in the table, makes an
+   Engine for that command, parses its era, then recurses into the
+   child node if it has subcommands or a default.
+3. If no command word of this node was named: runs the node's default,
+   or for a top-level set with no default, lists the commands and
+   returns 1.
+
+Every era and command it parses becomes a **`_Step`** appended to the
+**`_Line`**.  A `_Line` is one command line's parse in progress: the
+argv, the steps so far, whether `--` has been seen, and the handlers
+bled into the next era.  A `_Step` is one unit to execute later: its
+kind (`era`, `command`, `default`, `listing`), its Converter instance,
+its Engine, and its config binding if any.
+
+
+## 6: The three passes
+
+This is the part that changed most since the last tour, and it's the
+rule you set: **parcel, scan, execute**.
+
+`Processor(app)(argv)` does:
+
+1. **Parcel and scan.**  `_run_node` walks the whole line, era by era,
+   command by command, as section 5 describes.  Every Engine's
+   `parse()` matches tokens to instructions and checks structure: the
+   counts, unknown options, a starved oparg.  It runs *no user code*.
+   A leaf operand becomes a `_Raw` record (the text and its converter),
+   a fold occurrence becomes a `_FoldOccurrence`, a zero-argument
+   converter becomes a `_Nullary`.  These sit in the Converter's
+   `args`/`kwargs` and in the Engine's `pending` list, in token order.
+   If something is structurally wrong, the walk stops, and the error
+   is *noted*, not raised.
+2. **Immediate eras run.**  The steps listed so far that came from
+   `immediate=True` eras execute, in order.  If one halts (returns a
+   nonzero non-bool int, which is what `--help` does after printing),
+   the run is over.
+3. **The problem, if any, is raised.**  So `tool --help build badcmd`
+   prints `build`'s help (the scan noted `badcmd` as a problem, but the
+   immediate era outranks it), while `tool badcmd --help` reports the
+   bad command: `--help` never got an era of its own to scan clean in.
+   (`tool --help badcmd` is a third thing: `--help` takes an optional
+   topic, so `badcmd` is the topic, and help says it isn't a command.)
+4. **Execute.**  The remaining steps run left to right.  For each,
+   `Engine.execute()` resolves the pending records in token order (this
+   is where `int('x')` fails and becomes a polite usage error) and then
+   calls the Converter instance, which calls your function.  A
+   conversion error in the third command does not un-run the first two.
+   That's **streaming dispatch**.
+
+Why records rather than converting during the scan: a user's converter
+is user code, and it must not run before its whole line has been
+judged.  `finish()` is the one function that turns a record, a fold, or
+a child Converter into its final value; `Converter.__call__` applies it
+to everything it holds.
+
+Class-as-app is threaded through the same loop with an `env` dict: a
+step whose Converter `constructs` an instance stashes it under the
+class's name; a method command's step reads it back as `self`.
+
+
+## 7: Config layering
+
+`@app.precommand(config=some_dict)` binds a mapping to a precommand.
+At execute time, before the era's Converter is called, `_config_apply`
+layers the mapping in: **defaults < config < argv**, per option.  Each
+key is vetted against the era's options (strictly, unless `strict=False`
+says to take what matches and ignore the rest).  Each vetted value is
+read with the same by-name readers `load.py` uses for `read_mapping`,
+then **assigned to its owner**: the era's Converter for its own
+options; the argv-built nested instance when a nested converter's
+option is named and argv already built that converter; otherwise the
+nested converter is built from the mapping with defaults for the rest.
+Nothing is turned back into command-line text.  An owner behind a
+`*args` window can't be addressed by a mapping and says so.
+
+
+## 8: Presentation
+
+`presentation.py` is imported only when help, usage, or an error
+renders.  It has three parts.
+
+**The docstring dialect.**  `scan_docstring` is a hand-written line
+scanner, no Markdown parser.  A docstring is Markdown; the first
+paragraph is the summary.  Exactly the line `# Arguments`, `# Options`,
+or `# Commands`, one octothorpe, one space, that case, at the left
+margin, outside a code fence, opens a special section that must hold
+one definition list: a parameter name on a line, `: description`
+under it.  Any other spelling is prose.  The scanner tracks fences so a
+`# Options` inside a code block is code, and uses big's content-column
+rule so a nested definition list inside a description keeps its colon.
+
+**The merge.**  `merge_docs(plan)` walks the Plan tree and layers every
+callable's entries: a converter documents its own parameters once, every
+command using it inherits that, and the nearest enclosing scope wins on
+a clash.  Rows are identified by their **occurrence path**, the chain
+of slot and option ids from the root, not by parameter name and not by
+Plan object, because the same Plan appears at two paths when a
+converter is used twice.  A bare name that two sibling groups both
+declare is refused at the command with the candidates named.
+
+**The page.**  `help_page_pieces` assembles the page from the template
+(`app.templates`, which sets the order and dresses the headings) and
+the corpus.  The Arguments/Options/Commands tables are built directly
+as big `DefinitionList` nodes: each row's display is a role-tagged
+`StyledText` term, its description parsed into the definition's blocks,
+nested option rows as a nested list.  Nothing is written back out as
+Markdown and re-parsed.  `render_baked_help` wraps the pieces at the
+real margin and paints them through the stylesheet: a theme is a dict
+of role to style, plain and uncolored are one structure over two
+palettes, and color appears only when the stream wants it.
+
+Errors ride the same pipeline: `run_main` catches `AppealError`, prints
+`error: ...` to stderr with the usage line attached (a command's error
+wears that command's usage; an era's error wears the program's), and
+returns 2.  Unknown commands and unknown long options suggest a near
+match with `difflib.get_close_matches`, from the option strings in scope
+where the token appeared; an exact option string that lives elsewhere
+in the program gets "can't be used here; it goes after 'build'"
+instead.  Never both.
+
+
+## 9: One command line, start to finish
+
+```python
+app = appeal.Appeal(name='tool', version='1.0')
+
+@app.precommand()
+def logging(*, quiet=False): ...
+
+@app.command()
+def build(target, *, jobs: int = 1): ...
+```
+
+and the line `tool -q build lib --jobs 4`:
+
+1. `Processor(app)(argv)` makes a `_Line`.  `_run_node(line, 0, top=True)`.
+2. Head era one, the metadata precommand: its Engine sees `-q`, which it
+   doesn't own; the stack is empty (this era takes no operands), so the
+   era ends having consumed nothing.  Its `--help`/`--version` handlers
+   bleed into the next era.  It's `immediate`, so its step is first in
+   the list.
+3. Head era two, `logging`: Engine over `['-q', 'build', 'lib', '--jobs', '4']`,
+   seeded with the bled handlers.  `-q` carves as the flag `q`; its
+   `LiveBinding` writes `quiet=True` into logging's Converter.  `build`
+   isn't an option and the stack is empty: saturated, yield.  Consumed 1.
+4. Command word `build`: a Converter, an Engine over `['lib', '--jobs', '4']`.
+   `register` pushes an `OptionInstruction` for `--jobs`/`-j` and an
+   `ArgumentInstruction` for `target`.  The option registers.  `lib`
+   fills `target` as a `_Raw(str, 'lib')`.  `--jobs` invokes its
+   `ValueBinding`, which grabs `4` as `_Raw(int, '4')` into `kwargs`.
+   Stack empty, end of line: saturated.
+5. `build`'s child node has no subcommands; the line is consumed.  Steps:
+   `[era(metadata), era(logging), command(build)]`.
+6. The immediate era runs: nothing to do, returns None.  No problem was
+   noted.  The `logging` step resolves nothing (a flag has no record)
+   and calls `logging(quiet=True)`.  The `build` step resolves `lib`
+   and `int('4')`, then calls `build('lib', jobs=4)`.
+7. `processor.result` is `build`'s return value.
+
+Now `tool build lib --jobs x`: step 4 records `_Raw(int, 'x')` without
+complaint; the structure is fine.  Step 6 fails resolving it:
+`error: invalid value for 'jobs': 'x' (invalid literal for int() with
+base 10: 'x')` with `build`'s usage line attached.  `logging` already
+ran.
+
+And `tool build --jobz 4`: in step 4 `--jobz` is unknown while `target`
+is still owed: a structural error, noted.  No immediate era halts, so it
+is raised: `unknown option '--jobz' (did you mean '--jobs'?)`.  Nothing
+ran.
+
+
+## 10: Where to look when…
+
+* **a signature reads wrong** (wrong kind, wrong strings, wrong arity):
+  `frontend._child_for`, `_build_option_rule`, `_finalize_options`,
+  `_analyze`.
+* **a line parses wrong**: `backend.Engine._loop`, `_fill_argument`,
+  `_invoke_option`; the token rules in `is_option_token` and
+  `parse_short_options`.
+* **an option is "not available yet", or conjuring misbehaves**:
+  `PreOptionInstruction.register`, `_Conjure`, `_Chain`,
+  `_availability_message`.
+* **eras, bleed, `--help` precedence, class-as-app**: `__init__._run_node`,
+  `Processor.__call__`, `_group_eras`, `_merge_era_options`.
+* **a value converts at the wrong time, or an error un-runs something**:
+  the records in `backend.py` (`_Raw`, `_Fold`, `finish`) and
+  `_Step.execute`.
+* **config**: `_config_vet`, `_config_apply`, `_config_assign`.
+* **help text, docstrings, colors**: `presentation.py`; `scan_docstring`
+  for the dialect, `merge_docs` for inheritance, `rows_document` for the
+  tables, the theme dicts for color.
+* **error wording**: `_unexpected` and `did_you_mean` (unknown things),
+  `_availability_message`, `_count_list` (counts).
+
+
+## 11: Things to type at it
+
+Run these from the checkout, so `import appeal` finds the tree.
 
 ```python
 import appeal
 from appeal.frontend import build_plan
-from appeal.backend import build_converters, _converter_key
+from appeal.backend import converter_for, Engine
 
-p = build_plan(lambda src, dst='.', *, verbose=False: None)
-p.slots            # the positional operands
-p.options          # the OptionRules
-p.usage()          # the usage line (with role spans)
+def point(x: int, y: int): return (x, y)
+def draw(shape, spot: point = None, *, bold=False): return (shape, spot, bold)
 
-cls = build_converters([p])[_converter_key(p)]
-cls().register     # what the Engine calls to lay down instructions
+p = build_plan(draw)
+p.slots                 # [<Slot shape <Terminal str> required>, <Slot spot <Plan point ...>>]
+p.options               # [<OptionRule -b/--bold (flag) -> bold>]
+p.valid_counts          # {1, 3}: shape alone, or shape plus a full point
+p.slots[1].child        # the point Plan, shared by every use of point
+
+cls = converter_for(p)  # the generated Converter class, cached on p.compiled
+conv = cls()
+e = Engine(['circle', '--flag', '3', '4'], conv)   # --flag isn't declared: watch it fail
+```
+
+```python
+e = Engine(['circle', '3', '4', '--bold'], cls())
+e.parse()               # structure only: no int() has run yet
+e.root.args             # ['circle' record, <point Converter instance>]
+e.root.args[1].args     # [_Raw(int,'3'), _Raw(int,'4')]
+e.execute()             # resolves the records in token order, then calls draw
+```
+
+```python
+app = appeal.Appeal(name='t')
+app.command()(draw)
+app.process(['draw', 'circle', '3', '4', '--bold']).result
+app.process(['draw', 'circle', '--bold', '3', 'x'])   # a conversion error, after the scan passed
 ```
