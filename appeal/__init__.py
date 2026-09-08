@@ -1438,7 +1438,6 @@ class Appeal:
         node = root._node_for(topic)
         from .presentation import help_margin, render_help_page
         if node is not None and node._table():
-            from .frontend import command_set_usage
             from .presentation import summary as _summary, command_set_corpus
             node_table = node._table()
             entries = [(w, _summary(c)) for w, c in node_table.items()]
@@ -1447,8 +1446,7 @@ class Appeal:
                 node.global_plan, entries,
                 doc=node._program_doc_override())
             text = render_help_page(
-                command_set_usage(node._prog(), node._display_global(),
-                                  node._decoration_entry()),
+                node._head_usage_markup(),
                 corpus, node.templates, margin=help_margin(node.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=node.stylesheet,
                 suppress=suppress).rstrip('\n')
@@ -1952,15 +1950,13 @@ class Appeal:
         from .presentation import (render_help_page, help_margin)
         table = self._table()
         if table:
-            from .frontend import command_set_usage
             from .presentation import summary, command_set_corpus
             entries = [(w, summary(c)) for w, c in table.items()]
             corpus = command_set_corpus(
                 self.global_plan, entries,
                 doc=self._program_doc_override())
             return render_help_page(
-                command_set_usage(self._prog(), self._display_global(),
-                                  self._decoration_entry()),
+                self._head_usage_markup(),
                 corpus, self.templates,
                 margin=help_margin(self.margin, file),
                 file=file, stylesheet=self.stylesheet,
@@ -1976,7 +1972,7 @@ class Appeal:
             corpus['summary'] = parsed['summary']
             corpus['documentation'] = parsed['documentation']
         return render_help_page(
-            plan.usage(), corpus, self.templates,
+            self._head_usage_markup(), corpus, self.templates,
             margin=help_margin(self.margin, file),
             file=file, stylesheet=self.stylesheet,
             suppress=suppress).rstrip('\n')
@@ -1988,11 +1984,7 @@ class Appeal:
         option: the command-set line for a set, the plan's usage for a
         bare app.
         """
-        if self._table():
-            from .frontend import command_set_usage
-            return command_set_usage(self._prog(), self._display_global(),
-                                     self._decoration_entry())
-        return self.plan.usage()
+        return self._head_usage_markup()
 
     def help(self, topic='', *, usage=True, summary=True, doc=True):
         """
@@ -2072,13 +2064,12 @@ class Appeal:
                 f"documentation format {format!r} isn't supported "
                 f"(only 'gfm', 'commonmark', and 'troff', for now)")
         from .presentation import command_set_corpus, man_page, merge_docs, summary
-        from .frontend import command_set_usage
         prog = self._prog()
         version = str(self.version) if self.version is not None else None
         table = self._table()
         if not table:
             plan = self.plan
-            return man_page(prog, merge_docs(plan), plan.usage(prog),
+            return man_page(prog, merge_docs(plan), self._head_usage_markup(),
                             version=version)
         entries = [(w, summary(c)) for w, c in table.items()]
         corpus = command_set_corpus(
@@ -2088,9 +2079,7 @@ class Appeal:
                   self.plan_for(word).usage(f'{prog} {word}'),
                   merge_docs(self.plan_for(word)))
                  for word in table]
-        return man_page(prog, corpus,
-                        command_set_usage(prog, self._display_global(),
-                                          self._decoration_entry()),
+        return man_page(prog, corpus, self._head_usage_markup(),
                         command_pages=pages, version=version)
 
     def schema(self, format, version):
@@ -2458,18 +2447,36 @@ class Appeal:
         return {word: self.plan_for(word) for word in self._table()}
 
 
-    def _display_global(self):
+    def _head_usage_markup(self):
         """
-        The global plan for DISPLAY (usage lines, corpora): None
-        when the precommand merely hosts the slot--v1 never
-        advertised auto options in usage, and the corpus goldens
-        pin those lines.
+        The usage LINE for this node's program: the program name, then
+        everything typed before a command word--every head era's options
+        and operands in era order, the metadata precommand's -h/--help/
+        --version first (Larry, 2026-09-08: they aren't special enough
+        to break the rules; v1 hid them)--then the <COMMAND> placeholder
+        when this node dispatches commands.  A subcommand set's line
+        shows its own command's options and operands.
         """
-        plan = self.global_plan
-        if plan is not None and getattr(plan.callable,
-                                        'precommand', False):
-            return None
-        return plan
+        from big.stylesheet import style, escape_styles
+        parts = [style('program', escape_styles(self._prog()))]
+        if self.parent is None:
+            plans = self.global_plans()
+        else:
+            plans = [self.global_plan] if self.global_plan is not None else []
+        for plan in plans:
+            rest = plan.usage().partition(' ')[2]   # drop the program span
+            if rest:
+                parts.append(rest)
+        if self._table():
+            # the placeholder keeps the argument DECORATION (<COMMAND>: a
+            # hole to fill) but wears the command ROLE--the words that can
+            # fill it are printed in that same style in the listing below,
+            # so the paint cross-references them (Larry's ruling, 2026-09-07)
+            from .presentation import decorate_argument
+            parts.append(style('command',
+                               decorate_argument('command',
+                                                 self._decoration_entry())))
+        return ' '.join(parts)
 
     def _precommand_plan(self):
         """
@@ -2488,17 +2495,19 @@ class Appeal:
         want_h = bool(mapped.get('help'))
         # the closures mirror Appeal.precommand's signature:
         # optional[str] marks the topic's oparg optional (bare -h
-        # gives ''), version=False is a flag
+        # gives ''), version=False is a flag.  The parameter is named
+        # `topic` for the usage line ([-h|--help [<TOPIC>]]); the
+        # user-facing mapping name stays 'help'
         if want_v and want_h:
-            def precommand(*, help: optional[str] = None,
+            def precommand(*, topic: optional[str] = None,
                            version=False):
-                app.help_and_version_precommand(help=help, version=version)
+                app.help_and_version_precommand(help=topic, version=version)
         elif want_v:
             def precommand(*, version=False):
                 app.help_and_version_precommand(version=version)
         else:
-            def precommand(*, help: optional[str] = None):
-                app.help_and_version_precommand(help=help)
+            def precommand(*, topic: optional[str] = None):
+                app.help_and_version_precommand(help=topic)
         from .frontend import empty
         overrides = app.root._precommand_overrides
         if want_v:
@@ -2515,11 +2524,10 @@ class Appeal:
                 # flag whose presence yields the whole-program topic
                 # (Larry, 2026-09-08); absent, help stays None
                 annotation, default = _whole_program, None
-            app.root._decorations.add_option(precommand, 'help',
+            app.root._decorations.add_option(precommand, 'topic',
                                              mapped['help'],
                                              annotation=annotation,
                                              default=default)
-        precommand.precommand = True    # for display: hosts the slot only
         app.root._precommand_flags[id(precommand)] = (True, True, True)
         return self._build(precommand, name=self.root._prog())
 

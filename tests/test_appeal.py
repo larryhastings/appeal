@@ -1327,7 +1327,7 @@ def test_help_knobs():
     assert 'Start the server.' in no_doc      # summary survives
     # bare listing obeys the knobs too
     bare = captured(app.help, doc=False)
-    assert 'usage: t <COMMAND>' in bare
+    assert bare.startswith('usage: t [-h|--help [<TOPIC>]]'), bare
     assert 'Commands' not in bare
     # the help COMMAND has no --usage/--summary/--doc surface
     knob_options = [s for s in app.commands['help'].options
@@ -1690,7 +1690,8 @@ def test_template_dresses_the_page():
     assert text.index('Arguments\n') < text.index('Options\n'), text
     assert '-l|--loud  Speak up.' in text, text
     assert '<THING>  The thing.' in text, text
-    assert text.startswith('usage: g'), text
+    # the usage line names the PROGRAM (p), not the global's function
+    assert text.startswith('usage: p [-h|--help] [-l|--loud] <THING>'), text
 
 
 def test_optional_oparg_subscript():
@@ -2648,9 +2649,10 @@ def test_help_flag():
         # 2026-07-19); the summary follows
         assert text.splitlines()[0].startswith('usage: '), text
         assert 'Draws a shape.' in text
-        assert ('usage: draw [-v|--verbose] <SHAPE> [[-b|--bold] <WIDTH>]'
-                in text)
-        assert '--help' not in text                  # never advertised (v1)
+        assert ('usage: draw [-h|--help] [-v|--verbose] <SHAPE> '
+                '[[-b|--bold] <WIDTH>]' in text), text
+        # -h/--help ride in usage like any option (Larry, 2026-09-08;
+        # v1 hid them); a commandless program's help takes no topic
         assert '    indented code paragraphs pass through intact' in text
         assert max(len(line) for line in text.splitlines()) <= 79
     # help wins even when required operands are missing
@@ -2854,7 +2856,8 @@ def test_command_set_help():
     # `help`: the listing, with summaries and the help row (v1's shape)
     result, listing = grab(['help'])
     assert result is None
-    assert listing.startswith('usage: pile <COMMAND>')
+    assert listing.startswith('usage: pile [-h|--help [<TOPIC>]]'), listing
+    assert listing.splitlines()[0].endswith('<COMMAND>'), listing
     assert 'add-item  Adds an item to the pile.' in listing
     assert 'remove    Removes an item.' in listing
     assert 'help      Print usage documentation on a specific command.' in listing
@@ -2931,7 +2934,7 @@ def test_set_level_help_flag():
         return code, out.getvalue()
 
     code, text = grab(['--help'])
-    assert code == 0 and text.startswith('usage: pile <COMMAND>'), text
+    assert code == 0 and text.startswith('usage: pile [-h|--help [<TOPIC>]]'), text
     assert 'add-item  Adds an item.' in text        # _ -> - in the command word
     hcode, htext = grab(['help'])                    # the `help` command: same listing
     assert hcode == 'returned' and htext == text
@@ -4881,7 +4884,7 @@ def test_repl():
             'calc> hello, world\n'                        # bare, no quotes
             # an unknown command earns the base help page (decision A)
             "calc> error: unknown command 'bogus'\n"
-            'usage: calc <COMMAND>\n'
+            'usage: calc [-h|--help [<TOPIC>]] [-V|--version] <COMMAND>\n'
             '\n'
             'Commands\n'
             '--------\n'
@@ -5614,7 +5617,8 @@ def test_documentation_man():
     text = app.documentation('troff')
     assert text.startswith('.TH MYTOOL 1 "" "mytool 2.0" ""\n')
     assert '.SH NAME\nmytool \\- A demonstration tool.' in text
-    assert '.B mytool [\\-t|\\-\\-trace] <COMMAND>' in text
+    assert ('.B mytool [\\-h|\\-\\-help [<TOPIC>]] [\\-V|\\-\\-version] '
+            '[\\-t|\\-\\-trace] <COMMAND>') in text, text
     assert '.B mytool greet [\\-s|\\-\\-shout] <NAME>' in text
     assert '.SH OPTIONS' in text and 'Print a trace' in text
     assert '.SS "mytool greet"' in text
@@ -5929,7 +5933,8 @@ def test_version():
     # the listing documents it (before help, v1's order)
     code, out = main(app, ['help'])
     assert code == 0
-    assert out.index('version') < out.index('help ')
+    rows = out[out.index('Commands'):]          # past the usage line
+    assert rows.index('version') < rows.index('help ')
     assert "Print the program's version." in out
     # help DESCRIBES the auto commands (fixed 2026-07-11: this
     # errored in-process and raised raw TypeError in standalone)
@@ -6666,9 +6671,9 @@ def test_argument_decoration_follows_the_stylesheet():
         return app
 
     stock = rendered(build(None), ['-h'])
-    assert 'usage: serve <HOST> [<PORT>]' in stock, stock
+    assert 'usage: serve [-h|--help] <HOST> [<PORT>]' in stock, stock
     custom = rendered(build(sheet), ['-h'])
-    assert 'usage: serve host [port]' in custom, custom
+    assert 'usage: serve [-h|--help] host [port]' in custom, custom
     assert '<HOST>' not in custom, custom       # the table rows follow too
 
     # the command-set placeholder follows the same shape
@@ -6677,7 +6682,7 @@ def test_argument_decoration_follows_the_stylesheet():
     def push(target):
         pass
     listing = rendered(app, ['-h'])
-    assert 'usage: prog command' in listing, listing
+    assert 'usage: prog [-h|--help [topic]] command' in listing, listing
 
     # groups follow it too--positional converter groups AND group
     # options (the stamp walks the whole plan tree)

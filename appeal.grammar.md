@@ -357,8 +357,11 @@ pass through intact).  On a program with commands, `-h`/`--help`
 take an optional topic (`tool -h build`); on a program with none
 (grep) they take no oparg at all--`grep -h foo` is help, not a
 request for a topic named foo (Larry, 2026-09-08).  Help wins
-even when required operands are missing, exits successfully, and
-never appears in the usage line.  The user's options always win
+even when required operands are missing and exits successfully.
+`-h`/`--help` and `--version` ride in the program's usage line like
+any other option--`tool [-h|--help [<TOPIC>]] [-V|--version]
+<COMMAND>`--they aren't special enough to break the rules (Larry,
+2026-09-08, reversing v1, which hid them).  The user's options always win
 the strings: claim `-h` and help keeps only `--help`; claim
 `--help` and there is no automatic help at all.  The constructor's
 `help=False` is the blanket off switch: no automatic `-h`/`--help`

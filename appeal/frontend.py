@@ -692,31 +692,6 @@ class Plan:
         return n
 
 
-def command_set_usage(prog, global_plan, decoration=None):
-    """
-    The usage LINE for a multi-command program: the program name,
-    the global command's options and operands (if any), and the
-    'command' word.  The command listing is rendered separately,
-    from the corpus (help.command_set_corpus).
-    """
-    from big.stylesheet import style, escape_styles
-    from .presentation import decorate_argument
-    parts = [style('program', escape_styles(prog))]
-    if global_plan is not None:
-        # usage() leads with the program span; drop it, keep the rest
-        rest = global_plan.usage().partition(' ')[2]
-        if rest:
-            parts.append(rest)
-    # the placeholder keeps the argument DECORATION (<COMMAND>: a hole
-    # to fill) but wears the command ROLE--the words that can fill it
-    # are printed in that same style in the listing below, so the
-    # paint cross-references them (Larry's ruling, 2026-09-07)
-    parts.append(style('command',
-                       decorate_argument('command', decoration)))
-    return ' '.join(parts)
-
-
-
 from . import (
     AppealConfigurationError, Option, accumulator, is_multioption,
     is_option, mapping,

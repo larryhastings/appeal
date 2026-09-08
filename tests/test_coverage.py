@@ -2030,9 +2030,11 @@ def test_command_placeholder_wears_command_role():
     # DECORATION (a hole to fill) but wears the command ROLE, cross-
     # referencing the listing's words below (Larry's ruling,
     # 2026-09-07)
-    from appeal.frontend import command_set_usage
-    markup = command_set_usage('vcs', None)
-    assert '⦃command⦙<COMMAND>⦄' in markup, markup
+    app = Appeal(name='vcs', default_mappings=None)
+    @app.command()
+    def commit(): pass
+    markup = app._head_usage_markup()
+    assert markup == '⦃program⦙vcs⦄ ⦃command⦙<COMMAND>⦄', markup
 
 
 def test_defaults_inference_class_and_tuple():
@@ -5214,7 +5216,8 @@ def test_commandless_help_takes_no_topic():
     @app.global_command()
     def grep(pattern, *files, ignore_case=False):
         return (pattern, files, ignore_case)
-    page = ('exit', None, 'usage: grep [-i|--ignore-case] <PATTERN> [<FILES>]...')
+    page = ('exit', None,
+            'usage: grep [-h|--help] [-i|--ignore-case] <PATTERN> [<FILES>]...')
     assert run(app, ['-h']) == page
     assert run(app, ['-h', 'foo']) == page             # foo isn't a topic
     assert run(app, ['--help', 'foo']) == page
@@ -5241,4 +5244,51 @@ def test_commandless_help_takes_no_topic():
         return target
     tool2.option('help', '-h', '--help', annotation=whole)(
         tool2.help_and_version_precommand)
-    assert run(tool2, ['-h', 'build2'])[2] == 'usage: tool2 <COMMAND>'
+    assert run(tool2, ['-h', 'build2'])[2] == 'usage: tool2 [-h|--help] <COMMAND>'
+
+
+def test_option_stacks_per_string_annotations():
+    # Larry (2026-09-08): several @app.option declarations for ONE
+    # parameter, each its own rule with its own converter--the value
+    # is whatever the last-given option's converter produced
+    app = Appeal(name='t')
+    def test(*, value=False):
+        return value
+    app.option('value', '-i', '--int', annotation=int)(test)
+    app.option('value', '-f', '--float', annotation=float)(test)
+    app.option('value', '-s', '--str', annotation=str)(test)
+    app.option('value', '-b', '--flag', annotation=bool)(test)
+    app.command()(test)
+    assert app.process(['test']).result is False
+    assert app.process(['test', '-i', '3']).result == 3
+    assert app.process(['test', '-f', '3.0']).result == 3.0
+    assert app.process(['test', '-s', 'abc']).result == 'abc'
+    assert app.process(['test', '-b']).result is True
+    assert app.process(['test', '--flag']).result is True
+    assert app.process(['test', '--int=4']).result == 4
+    assert app.process(['test', '-i', '3', '-s', 'x']).result == 'x'
+    try:
+        app.process(['test', '-i', '3.0'])
+        assert False, 'expected AppealUsageError'
+    except appeal.AppealUsageError as e:
+        assert "invalid value for 'value': '3.0'" in str(e), e
+    # every rule is advertised, in declaration order
+    import contextlib, io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.help('test')
+    text = out.getvalue()
+    assert text.index('-i|--int <VALUE>') < text.index('-f|--float <VALUE>') \
+        < text.index('-s|--str <VALUE>') < text.index('-b|--flag'), text
+    # one string declared twice for one parameter is a build error
+    app2 = Appeal(name='t2')
+    def test2(*, value=False):
+        return value
+    app2.option('value', '-f', '--float', annotation=float)(test2)
+    app2.option('value', '-f', '--flag', annotation=bool)(test2)
+    app2.command()(test2)
+    try:
+        app2.process(['test2'])
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert "option '-f' is declared twice" in str(e), e
