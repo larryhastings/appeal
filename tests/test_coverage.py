@@ -5125,3 +5125,65 @@ def test_astra_r08_tables_are_nodes_and_the_scanner_knows_code():
     assert to_commonmark(doc) == \
         'Gone here.\n\n```\n~~kept~~\nterm\n: not a list\n```\n', \
         to_commonmark(doc)
+
+
+def test_unknown_option_hints_misspelled_then_misplaced():
+    # Larry's ruling (2026-09-08): a mistyped option suggests from the
+    # scope that was tried--the head eras for an option in command
+    # position (the bug: it used to suggest from the command table,
+    # which has no options, so a mistyped PROGRAM option got nothing),
+    # the command's own era after a command word.  Failing that, an
+    # EXACT option string that lives elsewhere in the program is
+    # misplaced, and the hint says where it lives.  Misspelled AND
+    # misplaced gets no hint (trying too hard).
+    app = Appeal(name='t')
+    @app.global_command()
+    def g(*, verbose=False, trace=False): pass
+    @app.command()
+    def build(*, verify=False, jobs: int = 1): pass
+    @app.command()
+    def deploy(*, verify=False, region='', trace=False): pass
+    @app.command()
+    def db(): pass
+    @app.subcommand('db')
+    def add(*, force=False): pass
+    def win(x, *, flag=False): return (x, flag)
+    @app.command()
+    def pair(a: win, b: win): pass      # one string, two windows, one owner
+    app._child('ghost')                 # a bodyless node: not a command
+    def err(argv):
+        try:
+            app.process(argv)
+        except appeal.AppealUsageError as e:
+            return str(e)
+        assert False, f'expected AppealUsageError for {argv!r}'
+    # misspelled: the scope tried
+    assert err(['--verbos']) == \
+        "unknown option '--verbos' (did you mean '--verbose'?)"
+    assert err(['--hepl']) == "unknown option '--hepl' (did you mean '--help'?)"
+    assert err(['build', '--verbos']) == \
+        "unknown option '--verbos' (did you mean '--verify'?)"
+    # misplaced: the exact string lives elsewhere
+    assert err(['build', '--verbose']) == \
+        "unknown option '--verbose' here (it's a program option; " \
+        "it goes before the command)"
+    assert err(['--jobs', 'build']) == \
+        "unknown option '--jobs' here (it belongs to the 'build' command)"
+    assert err(['build', '--region']) == \
+        "unknown option '--region' here (it belongs to the 'deploy' command)"
+    assert err(['--verify', 'build']) == \
+        "unknown option '--verify' here (it belongs to the 'build' and " \
+        "'deploy' commands)"
+    assert err(['build', '--force']) == \
+        "unknown option '--force' here (it belongs to the 'db add' command)"
+    assert err(['--flag', 'build']) == \
+        "unknown option '--flag' here (it belongs to the 'pair' command)"
+    assert err(['build', '--trace']) == \
+        "unknown option '--trace' here (it's a program option; it goes " \
+        "before the command; it belongs to the 'deploy' command)"
+    # a close in-scope match wins over an exact one elsewhere
+    assert err(['build', '--version']) == \
+        "unknown option '--version' (did you mean '--verify'?)"
+    # misspelled and misplaced: nothing
+    assert err(['build', '--regio']) == "unknown option '--regio'"
+    assert err(['--zzz']) == "unknown option '--zzz'"

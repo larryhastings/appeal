@@ -2401,6 +2401,45 @@ class Appeal:
     def _prog(self):
         return self.name or _os.path.basename(self.script) or 'program'
 
+    def _option_owners(self):
+        """
+        Every option string in the program -> where it lives, in words,
+        for the misplaced-option hint ("unknown option '--jobs' here (it
+        belongs to the 'build' command)").  The head eras' options are
+        program options; each command's (subcommands included, by their
+        word path) are its own.  Built on demand--only an error asks.
+        """
+        from .frontend import all_options
+        places = {}                     # string -> {where: True}, in order
+        def claim(plan, where):
+            for owner, o in all_options(plan):
+                for s in o.strings:
+                    places.setdefault(s, {})[where] = True
+        for plan in self.global_plans():
+            claim(plan, None)                       # None: a program option
+        def walk(node, path):
+            for word, child in node._children.items():
+                if child._command_callable() is None:
+                    continue
+                claim(self._plan_for_node(child, word), path + word)
+                walk(child, path + word + ' ')
+        walk(self, '')
+        owners = {}
+        for s, where in places.items():
+            phrases = []
+            if None in where:
+                phrases.append("it's a program option; it goes before "
+                               "the command")
+            commands = [repr(w) for w in where if w is not None]
+            if len(commands) == 1:
+                phrases.append(f"it belongs to the {commands[0]} command")
+            elif commands:
+                phrases.append(f"it belongs to the "
+                               f"{', '.join(commands[:-1])} and "
+                               f"{commands[-1]} commands")
+            owners[s] = '; '.join(phrases)
+        return owners
+
     @property
     def plan(self):
         "The lone plan of a global-command-only app."
@@ -2590,6 +2629,9 @@ class Appeal:
         # are recognized together (one owner per string, settled at build);
         # operands fill in registration order; invocation is registration
         # order.  An era's options BLEED into the next when it says so.
+        head_options = {}               # every head era's strings: the pool a
+                                        # mistyped option in command position
+                                        # suggests from (those eras were tried)
         for era in self.head_eras():
             if not era:                             # an empty era: no tokens,
                 line.bled = {}                      # no bleed onward
@@ -2628,6 +2670,7 @@ class Appeal:
             pos += proc.consumed                    # the whole era's tokens
             line.dashdash = proc.force_positional
             line.bled = proc.handlers if any(p.bleed for p in era) else {}
+            head_options.update(proc.handlers)
             steps.extend(era_steps)
 
         dispatched = False              # did a command word of THIS node run?
@@ -2649,7 +2692,9 @@ class Appeal:
                 elif not top:
                     return dispatched, pos      # pop back: a parent may own it
                 else:
-                    err = _unexpected(word, table, line.dashdash)
+                    dash = word.startswith('-') and not line.dashdash
+                    err = _unexpected(word, head_options if dash else table,
+                                      line.dashdash, self.root._option_owners())
                     # a leading dash-token is an unknown OPTION (program usage
                     # line, decision B); a bare word is an unknown COMMAND (the
                     # overview page, decision A)
@@ -2707,7 +2752,8 @@ class Appeal:
                 tok = argv[pos]
                 dash = tok.startswith('-') and not line.dashdash
                 pool = proc.handlers if dash else table
-                err = _unexpected(tok, pool, line.dashdash)
+                err = _unexpected(tok, pool, line.dashdash,
+                                  self.root._option_owners())
                 err.usage = (_line_trailer(self.stylesheet,
                                            self._program_usage_markup())
                              if dash                     # an unknown option

@@ -1118,7 +1118,7 @@ def _halts(result):
     return isinstance(result, int) and not isinstance(result, bool) and result
 
 
-def _unexpected(token, candidates=(), dashdash=False):
+def _unexpected(token, candidates=(), dashdash=False, owners=None):
     """
     Diagnose a token nobody claimed.  Commands never start with a dash, so a
     leading-dash leftover is a mistyped option (--verison), not a mystery
@@ -1126,11 +1126,20 @@ def _unexpected(token, candidates=(), dashdash=False):
     `candidates` is the pool to suggest from: option strings for a dash token
     (long ones only), command words otherwise.  After `--` (dashdash) nothing
     is an option, so a dash token is an unknown command like any other.
+
+    Two hints, never both (Larry's ruling, 2026-09-08): a MISSPELLED option
+    suggests from the scope that was tried ("did you mean '--verbose'?");
+    failing that, a MISPLACED one--the exact string is an option somewhere
+    else in the program--says where it lives.  `owners` maps every option
+    string in the program to that description.  Misspelled AND misplaced
+    is trying too hard: no hint.
     """
     if not dashdash and token.startswith('-') and token not in ('-', '--'):
         longs = [c for c in candidates if c.startswith('--')]
-        return UsageError(
-            f"unknown option {token!r}{did_you_mean(token, longs)}")
+        hint = did_you_mean(token, longs)
+        if not hint and owners and token in owners:
+            hint = f" here ({owners[token]})"
+        return UsageError(f"unknown option {token!r}{hint}")
     return UsageError(
         f"unknown command {token!r}{did_you_mean(token, candidates)}")
 
