@@ -796,12 +796,16 @@ def _refuse_orphan_method(callable):
 
 class _Line:
     "One command line's parse in progress: the steps, and the line-wide state."
-    __slots__ = ('argv', 'steps', 'dashdash', 'bled')
+    __slots__ = ('argv', 'steps', 'dashdash', 'bled', 'tried')
     def __init__(self, argv):
         self.argv = argv
         self.steps = []
         self.dashdash = False           # `--` seen: nothing later is an option
         self.bled = {}                  # option handlers bled into the next era
+        self.tried = {}                 # the last era's option strings (its own
+                                        # and what bled into it): the scope a
+                                        # mistyped option in command position
+                                        # suggests from, wherever it surfaces
 
 
 class _Step:
@@ -2701,10 +2705,6 @@ class Appeal:
         # are recognized together (one owner per string, settled at build);
         # operands fill in registration order; invocation is registration
         # order.  An era's options BLEED into the next when it says so.
-        tried = {}                      # the option strings in scope at command
-                                        # position: the last era's (its own and
-                                        # what bled into it)--a mistyped option
-                                        # there suggests from them
         for era in self.head_eras():
             classes = [converter_for(p) for p in era]
             convs = [cls() for cls in classes]
@@ -2740,7 +2740,7 @@ class Appeal:
             pos += proc.consumed                    # the whole era's tokens
             line.dashdash = proc.force_positional
             line.bled = proc.handlers if any(p.bleed for p in era) else {}
-            tried = proc.handlers
+            line.tried = proc.handlers
             steps.extend(era_steps)
 
         dispatched = False              # did a command word of THIS node run?
@@ -2763,7 +2763,7 @@ class Appeal:
                     return dispatched, pos      # pop back: a parent may own it
                 else:
                     dash = word.startswith('-') and not line.dashdash
-                    err = _unexpected(word, tried if dash else table,
+                    err = _unexpected(word, line.tried if dash else table,
                                       line.dashdash, self.root._option_owners())
                     # a leading dash-token is an unknown OPTION (program usage
                     # line, decision B); a bare word is an unknown COMMAND (the
@@ -2796,7 +2796,7 @@ class Appeal:
                 raise
             dispatched = True
             pos += proc.consumed
-            tried = proc.handlers
+            line.tried = proc.handlers
             line.dashdash = proc.force_positional
             if plan.bleed:
                 if has_oao:
@@ -2822,9 +2822,9 @@ class Appeal:
                     return dispatched, pos
                 tok = argv[pos]
                 dash = tok.startswith('-') and not line.dashdash
-                pool = proc.handlers if dash else table
-                err = _unexpected(tok, pool, line.dashdash,
-                                  self.root._option_owners())
+                pool = line.tried if dash else table     # the LAST era's,
+                err = _unexpected(tok, pool, line.dashdash, # a subcommand's
+                                  self.root._option_owners())   # included
                 err.usage = (_line_trailer(self.stylesheet,
                                            self._program_usage_markup())
                              if dash                     # an unknown option

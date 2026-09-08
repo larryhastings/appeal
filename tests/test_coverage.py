@@ -5433,3 +5433,54 @@ def test_help_reaches_subcommands_by_word_path():
     with contextlib.redirect_stdout(out):
         tool.help('db', 'stop')
     assert out.getvalue().splitlines()[0] == 'usage: tool db stop [<FORCE>]'
+
+
+def test_command_era_relay_rules():
+    # Larry's relay rules, confirmed 2026-09-08: a command that takes
+    # nothing is one era, and it relays what bled into it iff its own
+    # bleed says so; a command that takes something is a command era
+    # that ALWAYS relays into its own options-arguments-opargs era,
+    # and that era bleeds onward iff the command's bleed says so.  So
+    # @app.command(bleed=True) lets a parent's options reach its
+    # subcommands, either way.
+    seen = []
+    def make(db_bleed, db_takes_something):
+        seen.clear()
+        app = Appeal(name='tool', default_mappings=None)
+        @app.precommand(bleed=True)         # leak the head into the first command
+        def head(*, verbose=False): seen.append(('head', verbose))
+        if db_takes_something:
+            @app.command(bleed=db_bleed)
+            def db(*, url=''): seen.append(('db', url))
+        else:
+            @app.command(bleed=db_bleed)
+            def db(): seen.append(('db',))
+        @app.subcommand('db')
+        def stop(*, force=False): seen.append(('stop', force))
+        return app
+    def run(app, argv):
+        app.process(argv)
+        return list(seen)
+    def refused(app, argv):
+        try:
+            app.process(argv)
+        except appeal.AppealUsageError as e:
+            return str(e)
+        assert False, f'expected AppealUsageError for {argv!r}'
+    # db's own option reaches stop's era when db bleeds
+    assert run(make(True, True), ['db', '--url', 'X', 'stop', '--url', 'Y']) == \
+        [('head', False), ('db', 'Y'), ('stop', False)]
+    # ...and doesn't when it doesn't; the refusal suggests from STOP's
+    # era (it used to suggest '--url' as its own correction, judging
+    # from db's table after the subcommand handed the word back)
+    assert refused(make(False, True), ['db', 'stop', '--url', 'Y']) == \
+        "option '--url' can't be used here; it goes after 'db'"
+    # the head's option relays through db's o-a-o era to stop
+    assert run(make(True, True), ['db', 'stop', '--verbose']) == \
+        [('head', True), ('db', ''), ('stop', False)]
+    # ...and through a bare command era that bleeds
+    assert run(make(True, False), ['db', 'stop', '--verbose']) == \
+        [('head', True), ('db',), ('stop', False)]
+    # a bare command era that doesn't bleed stops the relay
+    assert refused(make(False, False), ['db', 'stop', '--verbose']) == \
+        "option '--verbose' can't be used here; it goes before the command"

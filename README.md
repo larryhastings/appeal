@@ -314,9 +314,10 @@ Already, a lot has happened!  Let's go over it piece by piece:
   which we identify as `name` in the usage string.
 * Appeal also automatically created help for our
   program: a `help` command, plus `-h` and `--help`
-  options on every command.  Usage shows you what
-  command-line options and arguments the command
-  will accept.
+  options at the head of the line (`hello -h`, or
+  `hello -h <command>` for one command's page).  Usage
+  shows you what command-line options and arguments
+  the command will accept.
 
 So!  If you ran this command at the command-line:
 
@@ -2293,8 +2294,8 @@ Creates a new Appeal instance.
   your own.  It runs at build time.  All three ship on the
   `appeal` namespace.
 * `help` (default `True`) is Appeal's automatic help.  `True`
-  gives every command `-h`/`--help` and, for a program with
-  commands, a `help` command.  `help=False` suppresses all of
+  gives the program `-h`/`--help` (before any command word) and,
+  for a program with commands, a `help` command.  `help=False` suppresses all of
   it--the program answers `-h`/`--help` only if it declares them
   itself.  (Even with `help=True`, a command that claims its own
   `--help` still wins; `help=False` is the blanket off switch.)
