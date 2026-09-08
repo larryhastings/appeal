@@ -2624,9 +2624,10 @@ class Appeal:
         # are recognized together (one owner per string, settled at build);
         # operands fill in registration order; invocation is registration
         # order.  An era's options BLEED into the next when it says so.
-        head_options = {}               # every head era's strings: the pool a
-                                        # mistyped option in command position
-                                        # suggests from (those eras were tried)
+        tried = {}                      # the option strings in scope at command
+                                        # position--every head era's until a
+                                        # command runs, then that command's: a
+                                        # mistyped option there suggests from them
         for era in self.head_eras():
             if not era:                             # an empty era: no tokens,
                 line.bled = {}                      # no bleed onward
@@ -2665,7 +2666,7 @@ class Appeal:
             pos += proc.consumed                    # the whole era's tokens
             line.dashdash = proc.force_positional
             line.bled = proc.handlers if any(p.bleed for p in era) else {}
-            head_options.update(proc.handlers)
+            tried.update(proc.handlers)
             steps.extend(era_steps)
 
         dispatched = False              # did a command word of THIS node run?
@@ -2688,7 +2689,7 @@ class Appeal:
                     return dispatched, pos      # pop back: a parent may own it
                 else:
                     dash = word.startswith('-') and not line.dashdash
-                    err = _unexpected(word, head_options if dash else table,
+                    err = _unexpected(word, tried if dash else table,
                                       line.dashdash, self.root._option_owners())
                     # a leading dash-token is an unknown OPTION (program usage
                     # line, decision B); a bare word is an unknown COMMAND (the
@@ -2721,6 +2722,7 @@ class Appeal:
                 raise
             dispatched = True
             pos += proc.consumed
+            tried = proc.handlers
             line.dashdash = proc.force_positional
             if plan.bleed:
                 if has_oao:

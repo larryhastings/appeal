@@ -2682,7 +2682,11 @@ def test_era_flags():
         app2.process(['one', 'two', '--verbose'])
         assert False, 'expected AppealUsageError'
     except appeal.AppealUsageError as e:
-        assert "unknown option '--verbose'" in str(e), e
+        # a cycling set is back in command position after 'two': the
+        # scope tried is two's era (nothing), not the head--'--verbose'
+        # is misplaced, not "did you mean '--verbose'"
+        assert str(e) == "option '--verbose' can't be used here; " \
+                         "it goes before the command", e
     # command(bleed=True): its options relay one command further--
     # through a command with no options-and-arguments era of its own
     seen.clear()
