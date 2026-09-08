@@ -796,10 +796,13 @@ def _refuse_orphan_method(callable):
 
 class _Line:
     "One command line's parse in progress: the steps, and the line-wide state."
-    __slots__ = ('argv', 'steps', 'dashdash', 'bled', 'tried')
+    __slots__ = ('argv', 'steps', 'dashdash', 'bled', 'tried', 'path')
     def __init__(self, argv):
         self.argv = argv
         self.steps = []
+        self.path = []                  # the command words dispatched, root
+                                        # down: what a misplaced option's
+                                        # placement is judged against
         self.dashdash = False           # `--` seen: nothing later is an option
         self.bled = {}                  # option handlers bled into the next era
         self.tried = {}                 # the last era's option strings (its own
@@ -2442,13 +2445,16 @@ class Appeal:
             return f'{self.parent._prog()} {self.name}'
         return self.name or _os.path.basename(self.script) or 'program'
 
-    def _option_owners(self):
+    def _option_placements(self, path):
         """
         Every option string in the program -> where it goes, in words,
         for the misplaced-option error ("option '--jobs' can't be used
         here; it goes after 'build'").  The head eras' options go before
         the command; a command's (subcommands included, by their word
-        path) go after it.  Built on demand--only an error asks.
+        path) go after it--and when that command is an ancestor of where
+        the option surfaced (`path`, the words dispatched so far), the
+        option went too far: "after 'db', but before any subcommand"
+        (Larry, 2026-09-08).  Built on demand--only an error asks.
         """
         from .frontend import all_options
         places = {}                     # string -> {where: True}, in order
@@ -2470,10 +2476,17 @@ class Appeal:
             phrases = []
             if None in where:
                 phrases.append('before the command')
-            commands = [repr(w) for w in where if w is not None]
-            if commands:
-                phrases.append('after ' + ' or '.join(commands))
-            owners[s] = ', or '.join(phrases)
+            commands = [w.split() for w in where if w is not None]
+            # the option's command was dispatched and the line went on into
+            # one of its subcommands: the option went too far
+            deep = [w for w in commands
+                    if path[:len(w)] == w and len(path) > len(w)]
+            flat = [repr(' '.join(w)) for w in commands if w not in deep]
+            phrases.extend(f"after {' '.join(w)!r}, but before any subcommand"
+                           for w in deep)
+            if flat:
+                phrases.append('after ' + ' or '.join(flat))
+            owners[s] = '; or '.join(phrases) if deep else ', or '.join(phrases)
         return owners
 
     @property
@@ -2764,7 +2777,8 @@ class Appeal:
                 else:
                     dash = word.startswith('-') and not line.dashdash
                     err = _unexpected(word, line.tried if dash else table,
-                                      line.dashdash, self.root._option_owners())
+                                      line.dashdash,
+                                      self.root._option_placements(line.path))
                     # a leading dash-token is an unknown OPTION (program usage
                     # line, decision B); a bare word is an unknown COMMAND (the
                     # overview page, decision A)
@@ -2774,6 +2788,9 @@ class Appeal:
                                  else _overview_trailer(self))
                     raise err
             c = table[word]
+            depth = len(self._prog().split()) - 1     # root: 0
+            line.path[depth:] = [word]                # this set's word, replacing
+                                                      # a cycling set's previous
             # the node's cached plan (the compiled class lives on it)
             plan = self._plan_for_node(self._children[word], word)
             cls = converter_for(plan)
@@ -2824,7 +2841,7 @@ class Appeal:
                 dash = tok.startswith('-') and not line.dashdash
                 pool = line.tried if dash else table     # the LAST era's,
                 err = _unexpected(tok, pool, line.dashdash, # a subcommand's
-                                  self.root._option_owners())   # included
+                                  self.root._option_placements(line.path))
                 err.usage = (_line_trailer(self.stylesheet,
                                            self._program_usage_markup())
                              if dash                     # an unknown option

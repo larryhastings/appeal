@@ -5474,7 +5474,8 @@ def test_command_era_relay_rules():
     # era (it used to suggest '--url' as its own correction, judging
     # from db's table after the subcommand handed the word back)
     assert refused(make(False, True), ['db', 'stop', '--url', 'Y']) == \
-        "option '--url' can't be used here; it goes after 'db'"
+        "option '--url' can't be used here; it goes after 'db', " \
+        "but before any subcommand"
     # the head's option relays through db's o-a-o era to stop
     assert run(make(True, True), ['db', 'stop', '--verbose']) == \
         [('head', True), ('db', ''), ('stop', False)]
