@@ -1408,31 +1408,60 @@ class Appeal:
         "Print the program's version."
         print(self.root.version)
 
-    def _help_topic_page(self, topic, suppress=frozenset()):
-        "help(topic)'s command-page path, split for readability."
+    def _help_topic_page(self, words, suppress=frozenset()):
+        """
+        help(*words)'s command-page path.  One word names a command
+        (a direct one, or a unique deeper one--_node_for); several
+        walk the tree from the root, `help db stop`.  A word that
+        isn't a command where it stands refuses naming that place,
+        with a suggestion from its table; the trailer is that set's
+        overview.
+        """
         root = self.root
         table = root._table()
-        if topic == 'help':
-            print('Print usage documentation on a specific command.')
-            return
-        fn = table.get(topic)
-        if fn is None and topic.replace('_', '-') in table:
-            topic = topic.replace('_', '-')     # accept the underscore spelling
+        topic = words[0]
+        if len(words) == 1:
+            if topic == 'help':
+                print('Print usage documentation on a specific command.')
+                return
             fn = table.get(topic)
-        if getattr(fn, '__func__', None) is Appeal.print_version:
-            # a stock command describes itself with its summary
-            print(_inspect.getdoc(fn))
-            return
-        if topic not in table:
-            err = UsageError(f"unknown command {topic!r}"
-                             f"{did_you_mean(topic, table)}")
-            err.usage = _overview_trailer(root)     # the overview page
-            raise err
+            if fn is None and topic.replace('_', '-') in table:
+                topic = topic.replace('_', '-')     # accept the underscore spelling
+                fn = table.get(topic)
+            if getattr(fn, '__func__', None) is Appeal.print_version:
+                # a stock command describes itself with its summary
+                print(_inspect.getdoc(fn))
+                return
+            if topic not in table:
+                err = UsageError(f"unknown command {topic!r}"
+                                 f"{did_you_mean(topic, table)}")
+                err.usage = _overview_trailer(root)     # the overview page
+                raise err
+            node = root._node_for(topic)
+            parent = node.parent
+        else:
+            # a word path: each word must be a command of the set before it
+            node = root
+            for word in words:
+                parent = node
+                node_table = parent._table()
+                if word not in node_table:
+                    alt = word.replace('_', '-')
+                    if alt in node_table:
+                        word = alt
+                    else:
+                        where = (f" of {parent._prog()!r}" if parent is not root
+                                 else '')
+                        err = UsageError(f"unknown command {word!r}{where}"
+                                         f"{did_you_mean(word, node_table)}")
+                        err.usage = _overview_trailer(parent)
+                        raise err
+                node = parent._children[word]
+            topic = word
         # render the topic's page directly from plans (the one engine has no
         # baked-help compile step).  A topic that is itself a command SET shows
         # its subcommand listing (like `prog topic --help`); a leaf shows its
         # command page.
-        node = root._node_for(topic)
         from .presentation import help_margin, render_help_page
         if node is not None and node._table():
             from .presentation import summary as _summary, command_set_corpus
@@ -1449,9 +1478,10 @@ class Appeal:
                 suppress=suppress).rstrip('\n')
         else:
             from .presentation import merge_docs
-            plan = root.plan_for(topic)
+            plan = root._plan_for_node(node, topic)
             text = render_help_page(
-                plan.usage(), merge_docs(plan), root.templates,
+                plan.usage(f'{parent._prog()} {topic}'), merge_docs(plan),
+                root.templates,
                 margin=help_margin(root.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=root.stylesheet,
                 suppress=suppress).rstrip('\n')
@@ -1469,8 +1499,8 @@ class Appeal:
         """
         if version:
             _sys.exit(self.print_version())
-        if help is not None:
-            _sys.exit(self.help(help))
+        if help is not None:                # '' is the bare page; a word
+            _sys.exit(self.help(*([help] if help else [])))   # is one topic
 
     def _command_callable(self):
         """
@@ -1989,14 +2019,17 @@ class Appeal:
         """
         return self._head_usage_markup()
 
-    def help(self, topic='', *, usage=True, summary=True, doc=True):
+    def help(self, *topic, usage=True, summary=True, doc=True):
         """
         Print usage documentation on a specific command.
         (That summary line doubles as the help command's listing
         row.)  Bare: the --help text (bare apps) or the command
         listing (sets), v1-style--also returned.  With a topic:
-        that command's help page.  This method IS the help
-        command (and -h/--help, via the precommand); subclass and
+        that command's help page; a subcommand's page is reached by
+        its word path, `help db stop` (Larry, 2026-09-08--the words
+        as they're typed on the line, never split out of one
+        string).  This method IS the help command (and -h/--help,
+        via the precommand, which passes one word); subclass and
         override to customize every spelling at once.
 
         The knobs (Larry's design, 2026-08-05; v1's usage()
@@ -2018,7 +2051,7 @@ class Appeal:
                              'commands'))
         suppress = frozenset(suppress)
         if topic:
-            return self._help_topic_page(topic, suppress)
+            return self._help_topic_page(list(topic), suppress)
         print(self._overview_text(_sys.stdout, suppress))
         # returns None: help is a COMMAND implementation now
         # (ruled 2026-07-25), and a command's return value is its

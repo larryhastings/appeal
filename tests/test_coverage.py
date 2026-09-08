@@ -5376,3 +5376,60 @@ def test_bleed_defaults_to_followed_by_a_precommand():
     seen.clear()
     app3.process(['go3', '--beta'])
     assert seen == [('cut', False), ('leak', True), 'go3'], seen
+
+
+def test_help_reaches_subcommands_by_word_path():
+    # Larry (2026-09-08): help(*topic)--`myprog help db stop` reaches a
+    # subcommand's page by the words as typed on the line.  -h keeps a
+    # single-word topic: its argument is never split into a path.
+    import contextlib, io
+    tool = Appeal(name='tool', version='1.0')
+    @tool.command()
+    def db(*, url=''):
+        "Database things."
+    @tool.subcommand('db')
+    def stop(force=False):
+        "Stop the database."
+    @tool.subcommand('db')
+    def start():
+        "Start it."
+    @tool.subcommand('db')
+    def re_start():
+        "Restart it."
+    def page(argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                tool.process(argv)
+            except SystemExit:
+                pass
+        return out.getvalue().splitlines()
+    def refused(argv):
+        try:
+            tool.process(argv)
+        except appeal.AppealUsageError as e:
+            return str(e)
+        assert False, f'expected AppealUsageError for {argv!r}'
+    # the shallow page lists the subcommands (git-style)...
+    lines = page(['help', 'db'])
+    assert lines[0] == 'usage: tool db [-u|--url <URL>] <COMMAND>', lines
+    assert any(l.startswith('stop ') for l in lines), lines
+    # ...and the path reaches the subcommand's own page
+    lines = page(['help', 'db', 'stop'])
+    assert lines[0] == 'usage: tool db stop [<FORCE>]', lines
+    assert 'Stop the database.' in lines, lines
+    assert page(['help', 'db', 're_start'])[0] == 'usage: tool db re-start'
+    # a bad word names where it went wrong, with a suggestion from there
+    assert refused(['help', 'db', 'stpo']) == \
+        "unknown command 'stpo' of 'tool db' (did you mean 'stop'?)"
+    assert refused(['help', 'db', 'stop', 'x']) == \
+        "unknown command 'x' of 'tool db stop'"
+    assert refused(['help', 'dbb']) == "unknown command 'dbb' (did you mean 'db'?)"
+    # -h takes one word, never a path
+    assert page(['-h', 'db'])[0] == 'usage: tool db [-u|--url <URL>] <COMMAND>'
+    assert refused(['-h', 'db stop']) == "unknown command 'db stop'"
+    # the API spelling
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        tool.help('db', 'stop')
+    assert out.getvalue().splitlines()[0] == 'usage: tool db stop [<FORCE>]'

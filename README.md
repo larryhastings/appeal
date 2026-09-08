@@ -2299,11 +2299,13 @@ Creates a new Appeal instance.
   itself.  (Even with `help=True`, a command that claims its own
   `--help` still wins; `help=False` is the blanket off switch.)
 
-Help is on by default: every command answers `-h`/`--help`, and a
+Help is on by default: the program answers `-h`/`--help`, and a
 program with commands gets a `help` command, unless you define
-your own or pass `help=False`.  Version works the same way, when
-you supply one: `Appeal(version='1.2.3')` gives you `--version`
-and a `version` command for free.
+your own or pass `help=False`.  The `help` command takes a topic
+as words, so `mytool help db stop` reaches a subcommand's page
+(and `mytool help db` lists db's subcommands).  Version works the
+same way, when you supply one: `Appeal(version='1.2.3')` gives
+you `--version` and a `version` command for free.
 
 `Appeal.command(name=None, *, repeat=False)`
 
