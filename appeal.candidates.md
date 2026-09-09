@@ -242,6 +242,17 @@ it so you can decide whether the env should be keyed by plan identity.
   (no whole-line re-tokenizing), and structural problems deferred
   until after immediate eras.  Not important enough to build now.
 
+* **Help groups for options** (Larry, 2026-09-09, parity review item
+  20; not sure, not for 1.0).  A nicety: `app.option(..., group=
+  'Output')` tags an option, and the help's `# Options` definition
+  list renders under group headings, argparse's argument groups /
+  typer's help panels.  Where it lives when built: the decorations
+  registry already carries per-parameter presentation metadata (the
+  metavar rename), so a group tag is one more decoration; the
+  renderer sorts the definition list by it.  Nothing assumes options
+  are one flat list, so nothing to keep in mind beyond not adding
+  such an assumption.
+
 
 ## Appendix: every dated "ruled" comment in the code
 
