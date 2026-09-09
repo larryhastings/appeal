@@ -234,12 +234,15 @@ All v1 semantics, empirically probed and kept:
   scopes**: a global option after the command word is unknown
   there (matches v1), and same-named options in different commands
   never collide.
-* An empty command line with no default command is orientation,
-  not a diagnostic (ruled 2026-07-09, git-style): the command
-  listing prints to stdout, exit 1, nothing runs.  A *dangling
-  nested parent* (`prog db` with no subcommand after it) is a
-  half-typed line and stays a loud `no command specified.` error.
-  `unknown command 'x'` errors carry a usage listing the commands.
+* A program that takes commands, given none and with no default
+  command, is a usage error: `error: no command specified` on
+  stderr, followed by the command listing, exit 2--and nothing runs,
+  the global command included (Larry, 2026-09-09, reversing the
+  orientation ruling of 2026-07-09).  A default command runs instead,
+  with no error; a program with no commands at all just runs its
+  precommands.  A nested parent with no subcommand after it (`prog
+  db`) simply runs: subcommands are never required (ruled
+  2026-08-22).  `unknown command 'x'` errors carry the listing too.
 * Standalone: one script embeds every command's parser, the global
   command's, and the dispatcher; converters shared between commands
   are rendered once.

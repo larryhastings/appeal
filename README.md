@@ -690,12 +690,12 @@ its own little command set--then the subcommand.  Running
 
 What should Appeal do if your program takes commands, but the
 user doesn't supply one?  That's what the *default command* is
-for.  If you don't specify one, Appeal treats an empty command
-line as a request for orientation, not a mistake--it prints the
-usage line and the list of commands to standard output (no
-`error:` anywhere) and exits with status 1, like `git`.  To
-specify your own default command, decorate a function with
-`@app.default_command()`:
+for.  If you don't specify one, an empty command line is a
+mistake: Appeal prints `error: no command specified` followed by
+the usage line and the list of commands, to standard error, and
+exits with status 2--and runs nothing, your global command
+included.  To specify your own default command, decorate a
+function with `@app.default_command()`:
 
 ```Python
 @app.default_command()

@@ -792,9 +792,9 @@ class _Line:
 
 class _Step:
     """
-    One unit of execution the parcel/scan pass listed: an era (one
-    precommand converter of the merged head era), a command, a set's
-    default command, or the top-level listing.  execute() converts its
+    One unit of execution the parcel/scan pass listed: an era (a
+    precommand's converter), a command, or a set's default command.
+    execute() converts its
     records in token order and calls the converter; the holder's log
     and the class-as-app env are threaded through.
     """
@@ -825,9 +825,6 @@ class _Step:
         assert not self.done
         self.done = True
         node = self.node
-        if self.kind == 'listing':
-            node.help()                         # the set listing, to stdout
-            return 1
         cls, conv = self.cls, self.conv
         plan = cls.plan
         if plan.binds is not None:              # a method/BIC command: self is
@@ -3015,10 +3012,13 @@ class Appeal:
 
         if not dispatched:
             # the line stopped at this node without naming a subcommand of it.
-            # Run this node's default command; or, for a top-level set with no
-            # default, print the listing for orientation and exit 1 (git-style,
-            # ruled 2026-07-09).  A global command runs as a head era regardless
-            # -- it processes pre-command options; it doesn't answer a bare line.
+            # Run this node's default command; with no default, a PROGRAM that
+            # takes commands has been given none: a usage error wearing the
+            # command listing (Larry, 2026-09-09--reversing the orientation
+            # ruling of 2026-07-09).  Raised from the parcel, so nothing of the
+            # user's runs for it, the global command included.  A nested
+            # parent with no subcommand after it just runs: subcommands are
+            # never required (ruled 2026-08-22).
             if self._default is not None:
                 dcls = converter_for(self._default_plan())
                 dconv = dcls()
@@ -3028,7 +3028,9 @@ class Appeal:
                 pos += dproc.consumed
                 steps.append(_Step('default', self, dcls, dconv, dproc))
             elif top and self._has_commands:
-                steps.append(_Step('listing', self, None, None, None))
+                err = UsageError("no command specified")
+                err.usage = _overview_trailer(self)
+                raise err
         return dispatched, pos
 
     def main(self, args=None):
