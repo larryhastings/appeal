@@ -5989,25 +5989,34 @@ def test_exclusive_options_feed_one_parameter():
 
 
 def test_path_classes_are_leaves():
-    # Larry, 2026-09-09: pathlib.PurePath and everything under it take
-    # one string--their (*args, **kwargs) joins segments, it isn't a
-    # grammar.  Argument and option alike; user subclasses too.  And
+    # Larry, 2026-09-09: pathlib's six classes--exactly those, never a
+    # subclass--take one string: their (*args, **kwargs) joins
+    # segments, it isn't a grammar.  Argument and option alike.  And
     # pathlib is never imported for this: the check peeks at
     # sys.modules, where a Path annotation guarantees it already is.
     import pathlib, subprocess, sys
     from big.stylesheet import strip_styles
-    class MyPath(type(pathlib.Path())): pass
     app = Appeal(name='t')
     @app.command()
     def f(path: pathlib.Path, pure: pathlib.PurePath, *,
-          out: pathlib.Path = None, mine: MyPath = None):
-        return (path, pure, out, mine)
+          out: pathlib.PosixPath = None, win: pathlib.PureWindowsPath = None):
+        return (path, pure, out, win)
     assert strip_styles(app.plan_for('f').usage()) == \
-        't f [-o|--out <OUT>] [-m|--mine <MINE>] <PATH> <PURE>'
-    got = app.process(['f', 'a', 'b', '--out', 'x', '--mine', 'm']).result
+        't f [-o|--out <OUT>] [-w|--win <WIN>] <PATH> <PURE>'
+    got = app.process(['f', 'a', 'b', '--out', 'x', '--win', 'm']).result
     assert got == (pathlib.Path('a'), pathlib.PurePath('b'),
-                   pathlib.Path('x'), MyPath('m'))
-    assert type(got[3]) is MyPath
+                   pathlib.PosixPath('x'), pathlib.PureWindowsPath('m'))
+    # a user subclass is introspected like any class: its keyword-only
+    # parameter is an option, as the user meant it
+    class Tagged(type(pathlib.Path())):
+        def __init__(self, *parts, tag: str = ''):
+            super().__init__(*parts)
+            self.tag = tag
+    @app.command()
+    def g(p: Tagged): return (str(p), p.tag)
+    assert strip_styles(app.plan_for('g').usage()) == \
+        't g [-t|--tag <TAG>] [<P>]...'
+    assert app.process(['g', 'a', '--tag', 'x']).result == ('a', 'x')
     try:
         app.process(['f', 'a', 'b', 'c'])
         assert False

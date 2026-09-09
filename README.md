@@ -2571,8 +2571,10 @@ those for the arguments, options, and opargs of your command:
   are refused by name.)
 * The *leaves* of the annotation tree are a fixed list: `str`,
   `int`, `float`, `bool`, and `complex` take one string and are
-  never introspected, and so do `pathlib.PurePath` and every
-  class under it (`Path`, `PosixPath`, your own subclass).
+  never introspected, and so do `pathlib`'s six classes
+  (`PurePath`, `PurePosixPath`, `PureWindowsPath`, `Path`,
+  `PosixPath`, `WindowsPath`)--exactly those; a subclass of your
+  own is introspected like any other class.
   Every other callable, class or function, argument or option,
   is introspected: its signature is its grammar.  So
   `amount: Decimal` reads as `Decimal(value, context)`, two

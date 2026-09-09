@@ -1712,11 +1712,16 @@ from . import (
 _blessed_leaves = {str, int, float, bool, complex, verbatim}
 
 
+_PATHLIB_LEAVES = ('PurePath', 'PurePosixPath', 'PureWindowsPath',
+                   'Path', 'PosixPath', 'WindowsPath')
+
+
 def _is_leaf(annotation):
     """
-    Is this annotation a leaf: the list above, or a pathlib class?
-    pathlib.PurePath and every class under it (Path, PosixPath, ...)
-    take one string on a command line--their (*args, **kwargs) is for
+    Is this annotation a leaf: the list above, or one of pathlib's
+    six classes--exactly those, never a subclass (a subclass may add
+    a keyword-only parameter and mean it as an option)?  They take
+    one string on a command line--their (*args, **kwargs) is for
     joining segments, not a grammar (Larry, 2026-09-09).  pathlib is
     never imported for this (it costs 7-9ms): if the user annotated
     with a Path class, it's in sys.modules already.
@@ -1724,8 +1729,8 @@ def _is_leaf(annotation):
     if annotation in _blessed_leaves:
         return True
     pathlib = _sys.modules.get('pathlib')
-    return (pathlib is not None and isinstance(annotation, type)
-            and issubclass(annotation, pathlib.PurePath))
+    return pathlib is not None and any(
+        annotation is getattr(pathlib, name) for name in _PATHLIB_LEAVES)
 
 # the terminal converters we bless for annotation-free defaults
 _default_type_converters = {str, int, float}
