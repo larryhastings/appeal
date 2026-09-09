@@ -1703,11 +1703,13 @@ from . import (
     )
 
 
-_FunctionType = type(lambda: None)
-
-# terminal converters: called with one operand string, never introspected
-# (verbatim among them: the engine knows it by identity)
-_blessed_leaves = {str, int, float, bool, verbatim}
+# THE LEAVES of the annotation tree (Larry, 2026-09-09, v1's list): these
+# take one operand string and are never introspected--their signatures
+# aren't their grammar (complex(real=0, imag=0) is one string, '3j').
+# Every other callable, class or function, argument or option, IS
+# introspected: its signature is its grammar.  (verbatim is a leaf the
+# engine knows by identity.)
+_blessed_leaves = {str, int, float, bool, complex, verbatim}
 
 # the terminal converters we bless for annotation-free defaults
 _default_type_converters = {str, int, float}
@@ -1762,11 +1764,6 @@ def _is_option_group(annotation):
     if not callable(annotation):
         return False
     if annotation in _blessed_leaves:
-        return False
-    if isinstance(annotation, type) and not isinstance(
-            annotation.__init__, _FunctionType):
-        # a class is a group only when a Python __init__ is its grammar;
-        # a builtin's (complex(real=0, imag=0)) is one string in
         return False
     if getattr(annotation, '__origin__', None) is not None:
         return False

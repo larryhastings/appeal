@@ -5925,9 +5925,10 @@ def test_exclusive_options_feed_one_parameter():
     # option strings feeding one parameter ARE the exclusivity--one
     # parameter holds one value, the last given wins, and each
     # alternative brings its own grammar.  Usage shows them as a
-    # choice.  Classes with a Python __init__ are groups like the
-    # equivalent functions (the bug fixed the same day); a builtin
-    # with a C signature (complex) stays one string in.
+    # choice.  Classes are groups like the equivalent functions (the
+    # bug fixed the same day): the leaves of the annotation tree are
+    # a stated list--str, int, float, bool, complex--never introspected;
+    # everything else is, argument or option alike.
     from big.stylesheet import strip_styles
     def json_format(*, indent: int = 0): return ('json', indent)
     def yaml_format(): return ('yaml',)
@@ -5969,6 +5970,15 @@ def test_exclusive_options_feed_one_parameter():
     assert got(['export3', '--format', '-i', '4']).indent == 4
     assert strip_styles(app.plan_for('export3').usage()) == \
         't export3 [-f|--format [-i|--indent <INDENT>]]'
-    # a builtin type is still a value option: one token, converted
+    # complex is a leaf: one token, converted--as an option AND an argument
     assert got(['watch', '-c', '-3j']) == -3j
     assert strip_styles(app.plan_for('watch').usage()) == 't watch [-c <C>]'
+    @app.command()
+    def watch2(c: complex): return c
+    assert got(['watch2', '3j']) == 3j
+    # a class that isn't a leaf is introspected wherever it appears
+    class Pair:
+        def __init__(self, a: int, b: int): self.pair = (a, b)
+    @app.command()
+    def pairs(p: Pair, *, q: Pair = None): return (p.pair, q and q.pair)
+    assert got(['pairs', '1', '2', '-q', '3', '4']) == ((1, 2), (3, 4))
