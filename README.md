@@ -690,19 +690,26 @@ its own little command set--then the subcommand.  Running
 
 What should Appeal do if your program takes commands, but the
 user doesn't supply one?  It runs the *default command*.  The
-stock one, `appeal.no_command`, treats an empty command line as a
-mistake: `error: no command specified`, then the usage line and
-the list of commands, to standard error, exit status 2.  Any
-callable that runs with no arguments can replace it--pass it as
-`Appeal(default_command=...)` (a function that needs arguments
-gets a wrapper; `None` means run nothing), or decorate one with
-`@app.default_command()`:
+stock one prints the program's usage line and the list of
+commands, to standard output, and exits with status 1--an
+orientation page, not an error.  Any callable that runs with no
+arguments can replace it (a function that needs arguments gets a
+wrapper; never a string); decorate it with `@app.default()`:
 
 ```Python
-@app.default_command()
+@app.default()
 def default():
     return status()
 ```
+
+The same question one level down: the line stops at `db`, which
+has subcommands.  By default `db` simply runs and that's that--
+subcommands are never required.  `Appeal(default_subcommand=...)`
+sets a *default subcommand* for every such command, run after
+the parent's body; `appeal.no_subcommand` makes them required
+(`error: no subcommand specified`, then that command's page).
+`@db_app.default()` on the command's node overrides it for `db`
+alone.
 
 Notice that the default command doesn't take any arguments
 or options.  It simply can't accept any, by definition.
@@ -2326,8 +2333,8 @@ Registering a word twice replaces: the second wins.
 `app.command('db')` returns the child **Appeal instance** for
 the word `db`, creating it if needed--the command tree is a tree
 of Appeal instances, linked by `.parent`.  Everything chains:
-`.command()` attaches subcommands, `.default_command()` picks
-what runs when the line stops at `db`, `.option()` remaps a
+`.command()` attaches subcommands, `.default()` picks what
+runs when the line stops at `db`, `.option()` remaps a
 subcommand's options, and so on--the child is an Appeal, not a
 wrapper.  `repeat=True` makes that node's subcommand set cycle.
 `Appeal(name, parent=app)` hangs a node in the tree directly.
@@ -2340,13 +2347,15 @@ whole line, if the program has no commands).  Decorating a
 class makes it your program: `__init__` is the global command
 and its decorated methods are the commands.
 
-`Appeal.default_command()`
+`Appeal.default()`
 
 Used as a decorator.  Sets the command run when the program
-has commands but the user names none.  Takes no parameters, by
-definition.  On a subcommand node
-(`@app.command('db').default_command()`) it sets what runs when
-the line stops at the parent.
+has commands but the user names none, replacing the stock one
+(usage and the command summary).  Takes no parameters, by
+definition.  On a subcommand node (`db_app = app.command('db')`,
+then `@db_app.default()`) it sets what runs when the line stops
+at the parent, replacing `Appeal(default_subcommand=...)`.
+`default_command()` is the older spelling.
 
 `Appeal.option(parameter_name, *options, annotation=..., default=...)`
 

@@ -4519,10 +4519,13 @@ def test_reachable_grind_more():
     @d2.command()
     def mig():
         pass
+    @app2.command()
+    def db():
+        pass
     try:
         app2.mcp(); assert False, 'expected CE'
-    except CE:
-        pass
+    except CE as e:
+        assert "nested subcommands aren't in mcp()" in str(e), e
     # documentation() with both a doc= and a command table
     app3 = appeal.Appeal('e', doc="Program prose here.")
     @app3.command()
@@ -4743,6 +4746,9 @@ def test_init_more_reachable_edges():
     sub = nested.command('db')
     @sub.command()
     def add(a):
+        pass
+    @nested.command()
+    def db():
         pass
     assert nested.plan_for('add') is not None
     # option() on a bound app method (help's knobs) refuses an unknown param
@@ -5624,12 +5630,12 @@ def test_one_word_too_many():
                 assert False, 'main exits'
             except SystemExit as e:
                 assert e.code == 2, e.code
-        return err.getvalue().splitlines()[:2]
+        return err.getvalue().splitlines()[:3]
     g = Appeal(name='grep')
     @g.global_command()
     def grep(pattern, *, ignore_case=False): return pattern
     assert error(g, ['pat', 'extra']) == [
-        "error: unexpected argument 'extra'",
+        "error: unexpected argument 'extra'", '',
         'usage: grep [-h|--help] [-i|--ignore-case] <PATTERN>']
     t = Appeal(name='tool')
     @t.command()
@@ -5641,17 +5647,17 @@ def test_one_word_too_many():
     @t.subcommand('db')
     def push(): pass
     assert error(t, ['commit', 'hello', 'show']) == [
-        "error: unexpected argument 'show'",
+        "error: unexpected argument 'show'", '',
         'usage: tool commit [-h|--help] [-a|--amend] <MSG>']
     assert error(t, ['commit', 'hello', 'extra']) == [
-        "error: unexpected argument 'extra'",
+        "error: unexpected argument 'extra'", '',
         'usage: tool commit [-h|--help] [-a|--amend] <MSG>']
     assert error(t, ['db', 'push', 'extra']) == [
-        "error: unexpected argument 'extra'",
+        "error: unexpected argument 'extra'", '',
         'usage: tool db push [-h|--help]']
     # where subcommands are expected, a stray word IS an unknown command
     assert error(t, ['db', 'psuh']) == [
-        "error: unknown command 'psuh' of 'tool db' (did you mean 'push'?)",
+        "error: unknown command 'psuh' of 'tool db' (did you mean 'push'?)", '',
         'usage: tool db [-h|--help] <COMMAND>']
     # a dash token is still an option problem, with the program usage
     assert error(t, ['commit', 'hello', '--nope'])[0] == \
@@ -5695,12 +5701,14 @@ def test_listing_row_is_the_whole_first_paragraph():
 
 def test_default_command_and_subcommand_handlers():
     # Larry's design (2026-09-09): a program given no command runs its
-    # default_command handler after the head eras; a line stopping at a
-    # command with subcommands runs the default_subcommand handler after
-    # the parent's body.  Callables with no arguments only; the stock
-    # root handler raises "no command specified" (global usage); the
-    # stock subcommand handler is None (subcommands optional); the
-    # provided no_subcommand requires them (the command's page)
+    # default command after the head eras--stock: print the program's
+    # usage and command summary (orientation, exit 1, not an error);
+    # @app.default() replaces it.  A line stopping at a command with
+    # subcommands runs the default subcommand after the parent's body:
+    # Appeal(default_subcommand=...) program-wide (stock None: they're
+    # optional; no_subcommand requires them), @db_app.default() per
+    # command, where db_app = app.command('db') is the command's node.
+    # Handlers are callables with no arguments; never strings.
     import contextlib, io
     def cli(app, argv):
         out, err = io.StringIO(), io.StringIO()
@@ -5724,69 +5732,69 @@ def test_default_command_and_subcommand_handlers():
         @app.command()
         def status(): ran.append('status'); return 0
         return app
-    # the stock handler: the error, the listing, exit 2--after the head
+    # the stock default command: usage and the summary, stdout, exit 1,
+    # after the head has run
     code, out, err = cli(make(), [])
-    assert code == 2 and err.startswith('error: no command specified\n'), err
-    assert 'Commands\n--------' in err and out == '' and ran == [('tool', False)]
-    # None: the head runs and the line ends quietly
-    code, out, err = cli(make(default_command=None), ['-v'])
-    assert (code, out, err) == (0, '', '') and ran == [('tool', True)], ran
-    # a real command, passed in as the handler
-    app = make(default_command=lambda: ran.append('menu'))
-    assert cli(app, [])[0] == 0 and ran == [('tool', False), 'menu'], ran
-    # never a string; never something that needs an argument
-    for bad in ('status', lambda x: None):
-        try:
-            Appeal(name='t', default_command=bad)
-            assert False, bad
-        except AppealConfigurationError as e:
-            assert 'no arguments' in str(e), e
+    assert code == 1 and err == '', err
+    assert out.startswith('usage: tool ') and 'Commands\n--------' in out, out
+    assert ran == [('tool', False)]
+    # @app.default(): a real command, run after the head
+    app = make()
+    app.default()(lambda: ran.append('menu'))
+    assert cli(app, ['-v'])[0] == 0 and ran == [('tool', True), 'menu'], ran
+    # never something that needs an argument, never a string
     try:
         Appeal(name='t', default_subcommand=lambda x, y: None)
         assert False
     except AppealConfigurationError as e:
         assert "requires 'x'" in str(e), e
-    # subcommands are optional by default: db alone just runs db
-    app = make()
-    assert cli(app, ['db'])[0] == 0 and ran == [('tool', False), 'db'], ran
-    # program-wide no_subcommand requires them, wearing db's page
-    app = make(default_subcommand=appeal.no_subcommand)
-    code, out, err = cli(app, ['db'])
-    assert code == 2 and err.startswith('error: no subcommand specified\n'), err
-    assert 'usage: tool db [-h|--help] <COMMAND>' in err and 'stop' in err, err
-    assert ran == [('tool', False), 'db'], ran        # db's body ran first
-    assert cli(app, ['db', 'stop'])[0] == 0 and ran[-1] == 'stop'
-    # ...and a command with no subcommands never consults it
-    assert cli(app, ['status'])[0] == 0
-    # per-command: the decorator form, the fetch form, the path form
-    app = Appeal(name='t2', default_subcommand=appeal.no_subcommand)
-    @app.command(default_subcommand=lambda: ran.append('db-menu'))
-    def db2(): ran.append('db2')
-    @app.subcommand('db2')
-    def stop2(): pass
-    app.command('db2', default_subcommand=lambda: ran.append('db-menu2'))
-    @app.command()
-    def cache(): ran.append('cache')
-    @app.subcommand('cache', default_subcommand=lambda: ran.append('cache-menu'))
-    def clear(): pass
-    @app.subcommand('cache')
-    def warm(): pass
-    ran.clear()
-    assert cli(app, ['db2'])[0] == 0 and ran == ['db2', 'db-menu2'], ran
-    # the path form stamped CLEAR's node (a leaf: never consulted), not
-    # cache's, so cache inherits the program's requirement
-    ran.clear()
-    code, out, err = cli(app, ['cache'])
-    assert code == 2 and 'no subcommand specified' in err, err
-    assert ran == ['cache'], ran
     try:
-        Appeal(name='t3').command('x', default_subcommand='menu')
+        Appeal(name='t', default_subcommand='status')
         assert False
     except AppealConfigurationError as e:
         assert 'no arguments' in str(e), e
+    # subcommands are optional by default: db alone just runs db
+    app = make()
+    assert cli(app, ['db'])[0] == 0 and ran == [('tool', False), 'db'], ran
+    # program-wide no_subcommand requires them: the error wears db's
+    # page (a blank line between), db's body having run first
+    app = make(default_subcommand=appeal.no_subcommand)
+    code, out, err = cli(app, ['db'])
+    assert code == 2, err
+    assert err.startswith('error: no subcommand specified\n\n'
+                          'usage: tool db [-h|--help] <COMMAND>\n'), err
+    assert 'stop' in err and ran == [('tool', False), 'db'], ran
+    assert cli(app, ['db', 'stop'])[0] == 0 and ran[-1] == 'stop'
+    # ...and a command with no subcommands never consults it
+    assert cli(app, ['status'])[0] == 0
+    # per command: the node's own default, decorated before OR after the
+    # command itself is bodied
+    app = Appeal(name='t2', default_subcommand=appeal.no_subcommand)
+    db_app = app.command('db')
+    @db_app.default()
+    def db_menu(): ran.append('db-menu')
+    @db_app.command()
+    def start(): ran.append('start')
+    @app.command()
+    def db(): ran.append('db')
+    ran.clear()
+    assert cli(app, ['db'])[0] == 0 and ran == ['db', 'db-menu'], ran
+    ran.clear()
+    assert cli(app, ['db', 'start'])[0] == 0 and ran == ['db', 'start'], ran
+    # a node with subcommands or a default and no body is refused when
+    # the program runs (Appeal never synthesizes the parent)
+    app = Appeal(name='t3')
+    cache = app.command('cache')
+    @cache.command()
+    def clear(): pass
+    try:
+        app.process(['cache'])
+        assert False
+    except AppealConfigurationError as e:
+        assert "'t3 cache' has subcommands or a default but no body" in str(e), e
     # *args/**kwargs are fine (nothing is required); a decorator default
     # that needs an argument is refused when its plan builds
-    Appeal(name='t4', default_command=lambda *a, **k: None)
+    Appeal(name='t4', default_subcommand=lambda *a, **k: None)
     app5 = Appeal(name='t5')
     @app5.command()
     def go5(): pass
@@ -5798,9 +5806,12 @@ def test_default_command_and_subcommand_handlers():
     except AppealConfigurationError as e:
         assert "'needy' requires 'x'" in str(e), e
     # a handler's error that already wears usage keeps it
-    app6 = Appeal(name='t6', default_command=lambda: (_ for _ in ()).throw(
-        appeal.AppealUsageError('custom', usage=lambda file: 'MINE')))
+    app6 = Appeal(name='t6')
     @app6.command()
     def go6(): pass
+    app6.default()(lambda: (_ for _ in ()).throw(
+        appeal.AppealUsageError('custom', usage=lambda file: 'MINE')))
     code, out, err = cli(app6, [])
-    assert code == 2 and err == 'error: custom\nMINE\n', err
+    assert code == 2 and err == 'error: custom\n\nMINE\n', err
+
+

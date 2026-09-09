@@ -235,21 +235,21 @@ All v1 semantics, empirically probed and kept:
   there (matches v1), and same-named options in different commands
   never collide.
 * A program that takes commands, given none, runs its **default
-  command** handler after the head eras: `Appeal(default_command=...)`,
-  any callable that runs with no arguments (a wrapper supplies what a
-  real command needs; never a string), `@app.default()` as the
-  decorator spelling, `None` for nothing.  The stock handler,
-  `appeal.no_command`, raises the usage error: `error: no command
-  specified` on stderr, then the command listing, exit 2 (Larry,
-  2026-09-09, reversing the orientation ruling of 2026-07-09).  It
-  runs where a command would, so the global command has already run.
-  A program with no commands at all never consults it.  A line that
-  stops at a command with subcommands runs the **default subcommand**
-  handler after the parent's body: `Appeal(default_subcommand=...)`
-  program-wide, `@app.command(default_subcommand=...)` per command,
-  stock `None`--subcommands are never required by default (ruled
-  2026-08-22); `appeal.no_subcommand` requires them, its error wearing
-  that command's page with the subcommands listed.
+  command** after the head eras: `@app.default()`, any callable that
+  runs with no arguments (a wrapper supplies what a real command
+  needs; never a string).  The stock one prints the program's usage
+  line and command summary to stdout and exits 1--orientation, not an
+  error (Larry, 2026-09-09).  It runs where a command would, so the
+  global command has already run.  A program with no commands at all
+  never consults it.  A line that stops at a command with subcommands
+  runs the **default subcommand** after the parent's body:
+  `Appeal(default_subcommand=...)` program-wide, `@db_app.default()`
+  per command (`db_app = app.command('db')`), stock `None`--
+  subcommands are never required by default (ruled 2026-08-22);
+  `appeal.no_subcommand` requires them, its error wearing that
+  command's page with the subcommands listed.  A node given
+  subcommands or a default but never a body of its own is refused
+  when the program runs: Appeal never synthesizes the parent.
 * **Which usage an error wears** (Larry's rule, 2026-09-09): an error
   outside any command's era--in the head, at command position, from
   the root's default handler--wears *global usage*: the program's usage
@@ -451,8 +451,8 @@ is a config error ("call it first, e.g. split(':')").  Converter
 (the command tree is a tree of Appeal instances--v1's model,
 restored 2026-07-18); `.command()` on it attaches subcommands:
 the parent runs first, its options come before the subcommand
-word, and a parent invoked alone is a usage error--unless the
-node has a `.default_command()`, which then runs--implemented as
+word, and a parent invoked alone just runs--then the node's
+`.default()`, if it has one--implemented as
 a nested command set with the parent as its global command, so
 it's the same machinery one level down.  `@app.command('x')`
 also RENAMES: the word is `'x'`, the decorated function's name
@@ -531,8 +531,8 @@ re-bases at the resolved command.  (v1 had a `repeat=` flag; its
 loop was broken in 0.6.4--child sets ran a leftover check before
 returning to the loop--undocumented and untested.  This is the
 rebuilt version, from Larry's spec.)
-`@app.default_command()` handles an empty command line; without
-one, the listing prints to stdout and the exit status is 1.
+`@app.default()` handles an empty command line; without one,
+usage and the listing print to stdout and the exit status is 1.
 `app.processor()` is a v1 compat shim.
 v1's exception names (`AppealUsageError`, `ConfigurationError`)
 are accepted, and `Appeal(version=..., margin=..., indent=...)`

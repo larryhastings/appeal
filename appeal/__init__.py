@@ -49,17 +49,6 @@ BACKWARDS = 'backwards'
 PRECOMMAND = 'precommand'
 
 
-def no_command():
-    """
-    The stock default command (Larry's design, 2026-09-09): a program
-    that takes commands, given none, is a usage error--`error: no
-    command specified`, then the command summary.  Appeal(
-    default_command=...) replaces it with any callable that runs
-    without arguments; None runs nothing.
-    """
-    raise UsageError("no command specified")
-
-
 def no_subcommand():
     """
     A default subcommand that REQUIRES one: `error: no subcommand
@@ -266,9 +255,11 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
     def print_trailer(trailer):
         # trailer is a callable usage(file) -> str: it renders itself
         # (colored on a tty, plain otherwise, wrapped to the stream) for
-        # the error stream -- errors ride the pipeline too (2026-08-06)
+        # the error stream -- errors ride the pipeline too (2026-08-06).
+        # A blank line sets it off from the error (Larry, 2026-09-09)
         text = trailer(error_stream())
         if text:
+            print(file=error_stream())
             print(text, file=error_stream())
 
     try:
@@ -1152,7 +1143,6 @@ class Appeal:
     first use (see "Laziness and late binding" in the grammar doc).
     """
     def __init__(self, name=None, *,
-                 default_command=no_command,
                  default_mappings=default_global_mappings(),
                  default_options=_DEFAULT_OPTIONS,
                  default_subcommand=None,
@@ -1187,10 +1177,7 @@ class Appeal:
         self._command_mappings_of = {}     # id(callable) -> default_mappings=
                                            # given to subcommand(), applied
                                            # when the path resolves
-        self._default_subcommand_of = {}   # id(callable) -> default_subcommand=,
-                                           # likewise
                                            # mapping (filled by the user later)
-        self._auto_impl = None    # synthesized fn for a pure dispatcher
         self._node_default = None # this node's default command
         self._node_repeat = False # this node's set cycles
         self._node_share = False  # this command's options are shared FORWARDS
@@ -1264,17 +1251,14 @@ class Appeal:
                 f"default_mappings must be callable or None, "
                 f"not {default_mappings!r}")
         self.default_mappings = default_mappings
-        # the default handlers (Larry's design, 2026-09-09): what runs
-        # when a program with commands is given none (stock: no_command
-        # raises the usage error), and when a line stops at a command
-        # that has subcommands (stock: None, nothing--subcommands are
-        # optional).  Callables that take no arguments; None runs nothing.
-        # @app.command(default_subcommand=...) overrides per command.
-        if default_command is not None:
-            _vet_default(default_command, 'default_command')
+        # the program-wide default subcommand (Larry's design, 2026-09-09):
+        # what runs when a line stops at a command that has subcommands,
+        # after the command's body.  Stock None: nothing--subcommands are
+        # optional; no_subcommand requires them.  A callable that takes no
+        # arguments.  @node.default() overrides it per command, and sets
+        # the root's default command (stock: print the program's usage).
         if default_subcommand is not None:
             _vet_default(default_subcommand, 'default_subcommand')
-        self._default_command = default_command
         self._default_subcommand = default_subcommand
         self._finalized = False
         self._precommand_options = {}   # param -> (strings...)
@@ -1508,6 +1492,23 @@ class Appeal:
                     or 'help' in root._children)
         root._resolve_subcommands()
         root._derive_method_owners()
+        root._refuse_bodyless_parents()
+
+    def _refuse_bodyless_parents(self):
+        """
+        `db_app = app.command('db')` may be decorated with subcommands
+        and a default before `db` itself is bodied--but by the time the
+        program runs, it must be (Larry, 2026-09-09; the no-pure-
+        dispatcher ruling of 2026-08-22: Appeal never synthesizes the
+        parent).
+        """
+        for word, node in self._iter_nodes():
+            if (node._impl is None
+                    and (node._children or node._node_default is not None)):
+                raise AppealConfigurationError(
+                    f"command {node._prog()!r} has subcommands or a default "
+                    f"but no body: decorate a function with "
+                    f"@app.command({word!r}) (Appeal never synthesizes one)")
 
     def print_version(self):
         "Print the program's version."
@@ -1609,30 +1610,24 @@ class Appeal:
 
     def _command_callable(self):
         """
-        This node's command function--synthesized (a no-op taking
-        nothing) for a pure dispatcher, a parent that was only
-        ever chained through; None for a word that was named but
-        never bound (not a command at all).
+        This node's command function, or None for a word that was
+        named but never bodied.  Never synthesized: a parent that was
+        only ever chained through is refused at finalize (Larry's
+        no-pure-dispatcher ruling, 2026-08-22).
         """
-        if self._impl is not None:
-            return self._impl
-        if not self._children:
-            return None
-        if self._auto_impl is None:
-            def dispatcher():
-                pass
-            dispatcher.__name__ = self.name or 'command'
-            dispatcher.__qualname__ = dispatcher.__name__
-            dispatcher.__doc__ = None
-            self._auto_impl = dispatcher
-        return self._auto_impl
+        return self._impl
 
     def _iter_set_nodes(self):
         "Every descendant, any depth, that parents a nested set."
-        for word, node in self._children.items():
+        for word, node in self._iter_nodes():
             if node._children:
                 yield word, node
-                yield from node._iter_set_nodes()
+
+    def _iter_nodes(self):
+        "Every descendant, any depth, with the word that names it."
+        for word, node in self._children.items():
+            yield word, node
+            yield from node._iter_nodes()
 
     # -- the flat views: read-only, derived from the tree
 
@@ -1650,14 +1645,20 @@ class Appeal:
     def _default(self):
         """
         The handler for a line that stops at this node: the node's own
-        (@node.default(), command(default_subcommand=...)), else the
-        program's--default_command at the root, default_subcommand
-        below.  None: nothing runs.
+        (@node.default()), else the stock--at the root, print the
+        program's usage (Larry, 2026-09-09: a bare line is a request for
+        orientation, not an error); below, the program's
+        default_subcommand.  None: nothing runs.
         """
         if self._node_default is not None:
             return self._node_default
         root = self.root
-        return root._default_command if self is root else root._default_subcommand
+        return self._print_usage if self is root else root._default_subcommand
+
+    def _print_usage(self):
+        "The stock default command: the program's usage and command summary."
+        self.help()
+        return 1                        # orientation, git-style: not success
 
     @property
     def _subs(self):
@@ -1708,7 +1709,7 @@ class Appeal:
         return word
 
     def command(self, name=None, *, repeat=False, parent=None, share=False,
-                default_mappings=_UNSET, default_subcommand=None):
+                default_mappings=_UNSET):
         """
         @app.command() registers a command under the callable's name with
         underscores turned to dashes (upload_database -> upload-database).
@@ -1721,8 +1722,8 @@ class Appeal:
         function's name is ignored), or keep going: `.command()`
         attaches subcommands (the parent runs first, like a
         global command of its own little set),
-        `.default_command()` picks what runs when the line stops
-        at the parent--and every other Appeal method is there,
+        `.default()` picks what runs when the line stops at the
+        parent--and every other Appeal method is there,
         because the child IS an Appeal.  repeat=True makes the
         node's set cycle: after a subcommand's arguments, the
         next token may name another one.  parent= is the older
@@ -1739,22 +1740,24 @@ class Appeal:
                     "command(): give a name or parent=, not both")
             name = parent
         return self.subcommand(None, name, repeat=repeat, share=share,
-                               default_mappings=default_mappings,
-                               default_subcommand=default_subcommand)
+                               default_mappings=default_mappings)
 
     def default(self):
         """
-        v1's API: the command run when the line stops at this
-        node--for the root, a line naming no command; for a
-        subcommand node (`@app.command('db').default_command()`),
-        a line ending at the parent.
+        The command run when the line stops at this node--for the
+        root, a line naming no command (replacing the stock one,
+        which prints the program's usage and command summary); for
+        a subcommand node (db_app = app.command('db');
+        @db_app.default()), a line ending at the parent (replacing
+        Appeal(default_subcommand=)).  Any callable that runs with
+        no arguments; never a string.
         """
         def decorator(callable):
             self._node_default = callable   # vetted when its plan builds:
             self._invalidate()              # a method's self isn't an argument
             return callable
         return decorator
-    default_command = default           # the README's spelling
+    default_command = default           # the old spelling (deprecated)
 
     def precommand(self, *, index=-1, config=None, strict=None,
                    share=False, immediate=False):
@@ -1814,7 +1817,7 @@ class Appeal:
     global_command = precommand         # transitional alias for the old name
 
     def subcommand(self, parent, name=None, *, repeat=False, share=False,
-                   default_mappings=_UNSET, default_subcommand=None):
+                   default_mappings=_UNSET):
         """
         Register a command under `parent`--a command word PATH
         string, root-relative: subcommand('db') for a child of
@@ -1842,10 +1845,6 @@ class Appeal:
         object; once a path leaves the object's world it doesn't
         come back).
         """
-        if default_subcommand is not None:
-            # this command's own handler for a line that stops at it
-            # (Larry, 2026-09-09); None means the program's
-            _vet_default(default_subcommand, 'default_subcommand')
         if parent is None:
             # the top level: the tree registration, eager
             # (nothing to resolve).  With a name, the node comes
@@ -1865,9 +1864,6 @@ class Appeal:
                 if default_mappings is not _UNSET:
                     node._command_mappings = default_mappings
                     self._invalidate()
-                if default_subcommand is not None:
-                    node._node_default = default_subcommand
-                    self._invalidate()
                 return node
             def decorator(callable):
                 node = self._child(self._command_word(None, callable))
@@ -1875,8 +1871,6 @@ class Appeal:
                 node._node_share = node._node_share or share
                 if default_mappings is not _UNSET:
                     node._command_mappings = default_mappings
-                if default_subcommand is not None:
-                    node._node_default = default_subcommand
                 return node(callable)
             return decorator
         if not isinstance(parent, str):
@@ -1889,8 +1883,6 @@ class Appeal:
                 root._sharing.add(id(callable))
             if default_mappings is not _UNSET:
                 root._command_mappings_of[id(callable)] = default_mappings
-            if default_subcommand is not None:
-                root._default_subcommand_of[id(callable)] = default_subcommand
             if root._finalized:
                 # late registration: the tree exists, attach now
                 root._attach_subcommand(parent, name, repeat,
@@ -1921,8 +1913,6 @@ class Appeal:
         child._node_repeat = child._node_repeat or repeat
         if id(callable) in self._command_mappings_of:
             child._command_mappings = self._command_mappings_of[id(callable)]
-        if id(callable) in self._default_subcommand_of:
-            child._node_default = self._default_subcommand_of[id(callable)]
         child(callable)
 
     def _resolve_subcommands(self):
@@ -3120,9 +3110,10 @@ class Appeal:
         if not dispatched:
             # the line stopped at this node without naming a subcommand of
             # it: the node's default handler runs, after the head eras (the
-            # root) or after the parent's body (below)--the stock root one,
-            # no_command, raises "no command specified"; below, the stock is
-            # nothing at all, subcommands being optional (ruled 2026-08-22).
+            # root) or after the parent's body (below)--the stock root one
+            # prints the program's usage and command summary (Larry,
+            # 2026-09-09); below, the stock is Appeal(default_subcommand=),
+            # None: subcommands are optional (ruled 2026-08-22).
             # A handler applies only where there are commands to be missing.
             # (It runs in pass 3 like any command, so what came before it
             # on the line--the global command included--has already run.)

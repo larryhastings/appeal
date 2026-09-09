@@ -1218,7 +1218,7 @@ def test_main_exits_the_process():
     @app.command()
     def fail(): return 3
     for argv, expected in ([['ok'], 0], [['fail'], 3],
-                           [['bogus'], 2], [[], 2]):
+                           [['bogus'], 2], [[], 1]):
         try:
             with contextlib.redirect_stdout(io.StringIO()), \
                  contextlib.redirect_stderr(io.StringIO()):
@@ -2423,10 +2423,15 @@ def test_command_dispatch():
     assert got == ('ok', ('remove', 'w', True)), got
     got = run_both_set([add_item, remove], None, ['add-item', 'widget'])
     assert got[0] == 'usage' and 'unknown command' in got[1], got
-    # an empty line, no default command: a usage error (Larry,
-    # 2026-09-09, reversing the orientation ruling of 2026-07-09)
-    got = run_both_set([add_item, remove], None, [])
-    assert got == ('usage', 'no command specified'), got
+    # an empty line: the stock default command prints the program's
+    # usage and command summary (stdout) and yields 1--orientation, not
+    # an error (Larry, 2026-09-09)
+    import contextlib, io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        got = run_both_set([add_item, remove], None, [])
+    assert got == ('ok', 1), got
+    assert 'Commands\n--------' in out.getvalue()
 
 def test_global_command_dispatch():
     calls = []
@@ -2563,17 +2568,13 @@ def test_appeal_facade_dispatch():
     with contextlib.redirect_stderr(io.StringIO()) as err:
         assert exit_code(lambda: app.main(['bogus'])) == 2
     assert 'unknown command' in err.getvalue()
-    # a bare line with no default command: 'no command specified' to
-    # stderr, the listing as its trailer, exit 2--and nothing runs
-    # (Larry, 2026-09-09, reversing the orientation ruling)
+    # a bare line: the stock default command prints usage and the
+    # command summary to stdout, no error, exit 1 (Larry, 2026-09-09)
     with contextlib.redirect_stderr(io.StringIO()) as err, \
             contextlib.redirect_stdout(io.StringIO()) as out:
-        assert exit_code(lambda: app.main([])) == 2
-    assert err.getvalue().startswith('error: no command specified\n'), err.getvalue()
-    # the listing is baked pieces rendered at print time (errors ride
-    # the pipeline, ruled 2026-08-06): template-dressed heading
-    assert 'Commands\n--------' in err.getvalue()
-    assert out.getvalue() == ''
+        assert exit_code(lambda: app.main([])) == 1
+    assert err.getvalue() == ''
+    assert 'Commands\n--------' in out.getvalue()
 
 def test_command_sys_exit_message():
     import contextlib, io
@@ -2885,14 +2886,12 @@ def test_command_set_help():
     def user_help(topic=''):
         return ('user help', topic)
     assert app2.process(['help', 'x']).result == ('user help', 'x')
-    # a bare line is 'no command specified'; its listing shows the
-    # user's help command, not the automatic one's row
-    try:
-        app2.process([])
-        assert False, 'expected AppealUsageError'
-    except UsageError as e:
-        assert str(e) == 'no command specified'
-        assert 'Print usage documentation' not in e.usage(io.StringIO())
+    # a bare line prints the listing, which shows the user's help
+    # command, not the automatic one's row
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert app2.process([]).result == 1
+    assert 'Print usage documentation' not in out.getvalue()
 
 
 def test_command_set_help_facade():
@@ -5443,6 +5442,16 @@ def test_appeal_tree_registration():
     @child.command()
     def leaf():
         return 'leaf!'
+    # ...but the parent must be bodied before the program runs: Appeal
+    # never synthesizes a dispatcher (Larry, 2026-08-22 and 2026-09-09)
+    try:
+        app2.process(['sub', 'leaf'])
+        assert False
+    except _appeal.ConfigurationError as e:
+        assert "'u sub' has subcommands" in str(e), e
+    @app2.command()
+    def sub():
+        pass
     assert app2.process(['sub', 'leaf']).result == 'leaf!'
 
     # chained .option() works (the child is an Appeal, so every
