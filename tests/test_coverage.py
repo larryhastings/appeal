@@ -5814,3 +5814,107 @@ def test_default_command_and_subcommand_handlers():
     assert code == 2 and err == 'error: custom\n\nMINE\n', err
 
 
+
+
+def test_verbatim():
+    # Larry's design (2026-09-09): appeal.verbatim takes the next token
+    # whatever it looks like.  Once a verbatim *args has taken its
+    # first token nothing later is an option and `--` is taken too;
+    # before that, `--` is the usual marker.  A single verbatim slot
+    # takes one token and the scan resumes.  The help era runs first,
+    # so `run -h` is help and `run -- -h` passes -h along.
+    import contextlib, io
+    from appeal import verbatim
+    assert verbatim('--x') == '--x'
+    app = Appeal(name='tron')
+    @app.command()
+    def run(*args: verbatim): return list(args)
+    def files(file, *files: verbatim): return [file, *files]
+    @app.command()
+    def cp(files: files, destination, *, verbose=False):
+        return (files, destination, verbose)
+    @app.command()
+    def add(count: verbatim, *, quiet=False): return (count, quiet)
+    @app.command()
+    def ex(*, cmd: verbatim = ''): return cmd
+    def got(argv):
+        return app.process(argv).result
+    # the whole line, options and `--` included, once begun
+    assert got(['run', 'a', '-h', '--', '-x', '--verbose']) == \
+        ['a', '-h', '--', '-x', '--verbose']
+    assert got(['run', '-x', 'a']) == ['-x', 'a']    # a dash token begins it
+    assert got(['run', '--', '-h']) == ['-h']         # `--` first: the marker
+    assert got(['run', '--', '--']) == ['--']         # ...once
+    assert got(['run']) == [] and got(['run', '--']) == []
+    # inside a converter, with a trailing operand reserved from the end
+    assert got(['cp', 'a', '-b', 'c', 'dest']) == (['a', '-b', 'c'], 'dest', False)
+    assert got(['cp', '--verbose', 'a', '--', 'c', 'dest']) == (['a', 'c'], 'dest', True)
+    assert got(['cp', 'a', '--', '--', 'dest']) == (['a', '--'], 'dest', False)
+    # a single verbatim slot: one token, then options again
+    assert got(['add', '-5']) == ('-5', False)
+    assert got(['add', '-5', '--quiet']) == ('-5', True)
+    assert got(['add', '--', '-5']) == ('-5', False)
+    try:
+        got(['add'])
+        assert False
+    except UsageError as e:
+        assert str(e) == "missing argument 'count'", e
+    # a verbatim oparg takes `--` (an ordinary oparg declines it)
+    assert got(['ex', '--cmd', '-x']) == '-x'
+    assert got(['ex', '--cmd', '--']) == '--'
+    # help still comes first
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app.main(['run', '-h'])
+        except SystemExit as e:
+            assert e.code == 0
+    assert out.getvalue().startswith('usage: tron run [-h|--help] [<ARGS>]...'), out.getvalue()
+    # completion stands down at a verbatim position; elsewhere it speaks
+    assert app.complete(['run'], '-') == []
+    assert app.complete(['run', 'a'], '-') == []
+    assert app.complete(['add'], '-') == []
+    assert app.complete(['add', 'x'], '-') == ['--help', '--quiet', '-h', '-q']
+    assert app.complete(['cp', 'a', 'b'], '-') == []
+    assert app.complete(['cp'], '-') == ['--help', '--verbose', '-h', '-v']
+    # the positions, through nesting: files' run begins after one operand
+    assert app.plan_for('run').verbatim_sites() == (set(), 0)
+    assert app.plan_for('cp').verbatim_sites() == (set(), 1)
+    assert app.plan_for('add').verbatim_sites() == ({0}, None)
+    assert app.plan_for('ex').verbatim_sites() == (set(), None)
+    # a plain *args, and a nested absorber, end the walk with no run
+    def pair(a, b): return (a, b)
+    def rest(x, *more): return (x, more)
+    @app.command()
+    def plain(p: pair, *more): pass
+    @app.command()
+    def nested(r: rest, q: verbatim = ''): pass
+    @app.command()
+    def single_in(p: pair, n: verbatim, *more): pass
+    assert app.plan_for('plain').verbatim_sites() == (set(), None)
+    assert app.plan_for('nested').verbatim_sites() == (set(), None)
+    assert app.plan_for('single-in').verbatim_sites() == ({2}, None)
+    # a program with a global verbatim *args: the head era's own
+    # completion table carries the positions too
+    solo = Appeal(name='solo')
+    @solo.global_command()
+    def solo_main(first, *args: verbatim): return (first, list(args))
+    assert solo.process(['a', '-b', '--', 'c']).result == ('a', ['-b', '--', 'c'])
+    assert solo.complete(['a'], '-') == []
+    assert solo.complete([], '-') == ['--help', '-h']
+    # ...and in a program WITH commands: the global command's line, and
+    # a parent command's, stand down at their verbatim positions too
+    both = Appeal(name='both')
+    @both.global_command()
+    def both_main(*args: verbatim): pass
+    @both.command()
+    def sub(): pass
+    assert both.complete(['x'], '-') == []
+    tree = Appeal(name='tree')
+    db_app = tree.command('db')
+    @tree.command()
+    def db(label: verbatim): pass
+    @db_app.command()
+    def wipe(): pass
+    assert tree.complete(['db'], '-') == []
+    assert tree.complete(['db', '-x'], 'w') == ['wipe']

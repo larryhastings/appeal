@@ -461,6 +461,34 @@ Run `script.py cp a b c`, and Appeal fills `src` with `('a',
 'b')` and `dest` with `'c'`--the *last* argument lands in
 `dest`, and everything before it is collected by the group.
 
+### Verbatim Arguments
+
+Sometimes an argument should be whatever the user typed, even
+if it looks like an option: a negative number, or a whole
+command line to hand to another program.  Annotate the
+parameter with `appeal.verbatim`:
+
+```Python
+@app.command()
+def run(*args: appeal.verbatim):
+    subprocess.run(['docker', 'run', *args])
+```
+
+A verbatim slot takes the next token whatever it looks like.
+Once a verbatim `*args` has taken its first token, nothing
+later on the line is an option, and `--` is taken like any
+other token; so `script.py run -x --y -- -h` passes all five
+words along.  Before that first token, `--` is still the usual
+marker: `script.py run -- -h` passes `-h`.  A single verbatim
+parameter (`count: appeal.verbatim`) takes just its one token,
+and options are recognized again after it.
+
+Appeal's own `-h` and `--help` are handled before the command's
+arguments, so `script.py run -h` is still help for `run`; to
+pass `-h` along, put `--` first.  Appeal never expands or alters
+a verbatim token--it is exactly the string the shell handed
+over.
+
 
 ## Options, Opargs, And Keyword-Only Parameters
 

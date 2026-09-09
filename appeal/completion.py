@@ -133,6 +133,7 @@ def completion_table(plan):
         'help': tuple(plan.help_option_strings()),
         'values': values,
         'operands': tuple(operands),
+        'verbatim': plan.verbatim_sites(),
         'repeat': repeat[0],
         'minimum': plan.minimum,
         'maximum': plan.maximum,
@@ -198,11 +199,14 @@ def completions_set(commands, global_plan, words, prefix='',
 
 
 def _completion_scan(options, words, maximum=None, boundary=None,
-                     minimum=None):
+                     minimum=None, verbatim=(frozenset(), None)):
     """
     A forgiving pass over the words already typed.  options maps
     each option string to (key, nargs, repeatable).  Returns
     (used, operands, pending, force_positional, leftover):
+    verbatim is the command's (singles, run) verbatim positions,
+    which take a dash word as an operand (a verbatim *args once
+    begun takes `--` too).
     pending is (key, nargs, remaining) when the cursor sits where
     an option's value belongs; leftover is the index where a new
     command word begins--at saturation (operands == maximum,
@@ -230,16 +234,20 @@ def _completion_scan(options, words, maximum=None, boundary=None,
             oparg.add(string[1])
         else:
             opargs.add(string[1])
+    singles, run = verbatim
     for index, word in enumerate(words):
         if pending:
             key, nargs, remaining = pending
             remaining -= 1
             pending = (key, nargs, remaining) if remaining else None
             continue
-        if word == '--' and not force_positional:
+        if (word == '--' and not force_positional
+                and not (run is not None and operands > run)):
             force_positional = True             # for this scan, like the era
             continue
-        if force_positional or not is_option_token(word, (flag, oparg, opargs)):
+        if (force_positional or operands in singles
+                or (run is not None and operands >= run)
+                or not is_option_token(word, (flag, oparg, opargs))):
             # the scanner's own rule: a lone '-', and a negative number
             # that isn't a short bundle, are operands (Astra R11)
             if maximum is not None and operands >= maximum:
@@ -351,15 +359,23 @@ def complete_command(table, words, prefix=''):
     shell's business (empty list = no opinion = filenames).
     """
     used, operands, pending, force_positional, _ = _completion_scan(
-        table['options'], words)
+        table['options'], words, verbatim=table['verbatim'])
     if pending:
         return _pending_candidates(table, pending, prefix)
+    if _verbatim_here(table, operands):
+        return []       # anything goes here: no opinion
     if prefix.startswith('-') and not force_positional:
         return _option_candidates(table, used, prefix)
     maximum = table.get('maximum')
     if maximum is not None and operands >= maximum:
         return []       # saturated: nothing more to say here
     return _operand_candidates(table, operands, prefix)
+
+
+def _verbatim_here(table, operands):
+    "Is the cursor at a verbatim position (where a dash word is an operand)?"
+    singles, run = table['verbatim']
+    return operands in singles or (run is not None and operands >= run)
 
 
 def complete_command_set(table, words, prefix=''):
@@ -401,10 +417,13 @@ def complete_command_set(table, words, prefix=''):
     if g is not None:
         used, operands, pending, forced, leftover = _completion_scan(
             g['options'], words, maximum=g.get('maximum'),
-            boundary=root_words, minimum=table['minimum'])
+            boundary=root_words, minimum=table['minimum'],
+            verbatim=g['verbatim'])
         if leftover is None:
             if pending:
                 return _pending_candidates(g, pending, prefix)
+            if _verbatim_here(g, operands):
+                return []
             if prefix.startswith('-') and not forced:
                 return _option_candidates(g, used, prefix)
             if operands >= table['minimum']:
@@ -446,10 +465,13 @@ def complete_command_set(table, words, prefix=''):
                 _completion_scan(parent['options'], words[index:],
                                  maximum=parent.get('maximum'),
                                  boundary=sub_words,
-                                 minimum=parent.get('minimum', 0)))
+                                 minimum=parent.get('minimum', 0),
+                                 verbatim=parent['verbatim']))
             if leftover is None:
                 if pending:
                     return _pending_candidates(parent, pending, prefix)
+                if _verbatim_here(parent, operands):
+                    return []
                 if prefix.startswith('-') and not forced:
                     return _option_candidates(parent, used, prefix)
                 if operands >= parent.get('minimum', 0):
@@ -465,10 +487,13 @@ def complete_command_set(table, words, prefix=''):
         chain = resolvable()
         used, operands, pending, forced, leftover = _completion_scan(
             entry['options'], words[index:],
-            maximum=entry.get('maximum') if chain else None)
+            maximum=entry.get('maximum') if chain else None,
+            verbatim=entry['verbatim'])
         if leftover is None:
             if pending:
                 return _pending_candidates(entry, pending, prefix)
+            if _verbatim_here(entry, operands):
+                return []
             if prefix.startswith('-') and not forced:
                 return _option_candidates(entry, used, prefix)
             maximum = entry.get('maximum')

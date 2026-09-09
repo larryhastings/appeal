@@ -182,7 +182,7 @@ AppealBaseException = AppealError
 from .converters import (
     Option, MultiOption, is_option, is_multioption,
     split, validate, validate_range, counter, file, optional,
-    accumulator, mapping,
+    accumulator, mapping, verbatim,
     )
 
 

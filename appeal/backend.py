@@ -10,7 +10,7 @@
 
 from . import (AppealConfigurationError, ConfigurationError,
                DataError, UsageError, did_you_mean)
-from .converters import convert, Option, MultiOption
+from .converters import convert, Option, MultiOption, verbatim
 from .frontend import Terminal, NO_DEFAULT
 
 
@@ -720,6 +720,9 @@ class Engine:
                                         # (Larry, 2026-09-08, click-style);
                                         # it reaches the next era only by
                                         # bleed, like the era's options
+        self.verbatim_run = False       # a verbatim *args has taken its first
+                                        # token: from here on nothing in this
+                                        # era is an option, `--` included
         self.reserved = 0               # trailing operands lifted out of the
                                         # stream (option-aware pocket); counted
                                         # in `consumed` since they never hit pos
@@ -865,11 +868,16 @@ class Engine:
         operand_indices = []
         i = self.pos
         forced = self.force_positional
+        singles, run = type(converter).plan.verbatim_sites()
         while i < self.end:
             tok = self.argv[i]
-            if not forced and tok == '--':
+            count = len(operand_indices)
+            # a verbatim position takes a dash token; `--` is still the
+            # marker there, until a verbatim *args has taken its first
+            if not forced and tok == '--' and not (run is not None and count > run):
                 forced = True; i += 1; continue
-            if forced or not self._is_option(tok):
+            if (forced or count in singles or (run is not None and count >= run)
+                    or not self._is_option(tok)):
                 operand_indices.append(i); i += 1; continue
             span = self._option_span(i)
             if span is None:
@@ -924,10 +932,15 @@ class Engine:
                 continue
 
             tok = self.peek()
-            if tok == '--' and not self.force_positional:
+            if tok == '--' and not self.force_positional and not self.verbatim_run:
                 # from here on nothing in this era is an option (the
                 # dispatcher relays the state onward iff the era bleeds)
                 self.advance(); self.force_positional = True; continue
+
+            if isinstance(front, ArgumentInstruction) and front.converter is verbatim:
+                # a verbatim slot: the next token, whatever it looks like
+                self._fill_argument(front)
+                continue
 
             if (tok is not None and not self.force_positional
                     and self._is_option(tok)):
@@ -1016,7 +1029,7 @@ class Engine:
                     self.stack.pop()
                     arg.owner.args.append(self._cv(arg.converter, raw, arg.name))
                     return
-                if tok is None or tok == '--':
+                if tok is None or (tok == '--' and arg.converter is not verbatim):
                     if arg.required:
                         # a required oparg starved mid-group: the grabbed count
                         # isn't a valid one -- name the option and its counts
@@ -1032,7 +1045,9 @@ class Engine:
                 self.stack.pop()
                 arg.owner.args.append(self._cv(arg.converter, tok, arg.name))
                 return
-            if tok is None or (not self.force_positional and self._is_option(tok)):
+            if tok is None or (not self.force_positional
+                               and arg.converter is not verbatim
+                               and self._is_option(tok)):
                 if arg.required:
                     if arg.owner._summoned and not arg.owner.args:
                         # an option summoned this converter but no operand ever
@@ -1053,6 +1068,9 @@ class Engine:
             self.advance()
             arg.owner.args.append(self._cv(arg.converter, tok, arg.name))
             self.stack.pop()
+            if (arg.converter is verbatim and self.stack
+                    and isinstance(self.stack[-1], RepeatInstruction)):
+                self.verbatim_run = True        # a verbatim *args has begun
             return
         # a converter slot: a conjured instance, or a fresh one from an operand
         obj = self.conjured.pop(arg.slot, None)

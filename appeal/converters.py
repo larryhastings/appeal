@@ -241,6 +241,23 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
     return validate_range_converter
 
 
+def verbatim(text):
+    """
+    The operand exactly as the shell handed it over, whatever it looks
+    like.  A verbatim slot takes the next token without asking whether
+    it's an option, so `count: verbatim` accepts -5 and `*args: verbatim`
+    takes the rest of the line for another program (tron run ...):
+
+        @app.command()
+        def run(*args: verbatim): ...
+
+    The rule (Larry, 2026-09-09): once a verbatim *args has taken its
+    first token, nothing later on the line is an option, and `--` is
+    taken like any other token.  Before that, `--` is the usual marker.
+    """
+    return text
+
+
 def counter(delta=1, clamp=None):
     """
     Creates a repeatable flag-like option that accumulates: it starts

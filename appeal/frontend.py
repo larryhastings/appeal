@@ -1239,6 +1239,40 @@ class Plan:
             return ()
         return tuple(s for s in ('-h', '--help') if s not in taken)
 
+    def verbatim_sites(self):
+        """
+        (singles, run): the operand positions of this plan's single
+        verbatim slots, and the position its verbatim *args begins
+        (None if it has none)--counted through nested converters.
+        Positions are exact because the fill is greedy left to right:
+        every slot before takes its maximum before a later one takes
+        anything.  Trailing operands aren't in play (pocketed from the
+        end, and always after the absorber the walk stops at).  The
+        engine's reserve scan and completion read this, so neither can
+        classify a verbatim token as an option.
+        """
+        singles = set()
+        total = 0
+        for slot in self.slots:
+            child = slot.child
+            if isinstance(child, Terminal):
+                if child.converter is verbatim:
+                    if slot.repeat:
+                        return singles, total
+                    singles.add(total)
+                if slot.repeat:                 # a plain *args takes the rest
+                    return singles, None
+                total += 1
+                continue
+            inner_singles, inner_run = child.verbatim_sites()
+            singles.update(total + i for i in inner_singles)
+            if inner_run is not None:
+                return singles, total + inner_run
+            if child.absorbs:
+                return singles, None
+            total += child.maximum
+        return singles, None
+
     def count_sites(self):
         """
         How many times each self instantiates in the tree--a converter
@@ -1657,12 +1691,13 @@ class Plan:
 
 from . import (
     AppealConfigurationError, Option, accumulator, is_multioption,
-    is_option, mapping,
+    is_option, mapping, verbatim,
     )
 
 
 # terminal converters: called with one operand string, never introspected
-_blessed_leaves = {str, int, float, bool}
+# (verbatim among them: the engine knows it by identity)
+_blessed_leaves = {str, int, float, bool, verbatim}
 
 # the terminal converters we bless for annotation-free defaults
 _default_type_converters = {str, int, float}

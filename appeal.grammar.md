@@ -686,6 +686,16 @@ known and unknown letters is an error; known, it's consumed.  Any
 other token is an argument: it fills the next slot--optional slots
 are owed too, so an era ends only at saturation--or, saturated, ends
 the era and is retried.
+* **Verbatim** (Larry, 2026-09-09): a slot annotated `appeal.verbatim`
+  takes the next token whatever it looks like, dash or not.  Once a
+  verbatim `*args` has taken its first token, nothing later in the
+  line is an option and `--` is taken too; before that first token,
+  `--` is still the marker.  A single verbatim slot takes its one
+  token and the scan resumes.  The trailing-operand reserve and
+  completion apply the same positions (`Plan.verbatim_sites()`), so
+  `cp(files: files, dest)` with `files(file, *rest: verbatim)` still
+  pockets `dest` from the end.  The help era runs first, so `run -h`
+  is help; `run -- -h` passes `-h`.
 
 ## Config layering
 

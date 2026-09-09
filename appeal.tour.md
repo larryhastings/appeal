@@ -300,6 +300,15 @@ shares forwards, in which case the `--` state relays along with the
 era's options.  Where a command word goes, `--` is consumed and the next
 token is the word.
 
+A **verbatim** slot (`*args: appeal.verbatim`, or a single parameter)
+sidesteps the rule: the Engine fills it with the next token before
+asking whether it's an option.  Once a verbatim `*args` has taken its
+first token the Engine sets `verbatim_run`, and from there `--` is a
+token like any other.  `Plan.verbatim_sites()` reports the operand
+positions where this happens, so the trailing-operand reserve scan in
+`Engine.enter` and completion's `_completion_scan` classify those
+tokens the same way.
+
 
 ## 5: The dispatcher: eras, command words, and the tree
 
