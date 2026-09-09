@@ -1332,9 +1332,21 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True):
 
 
 def summary(callable):
-    "The first line of the callable's docstring, for command listings."
+    """
+    The callable's docstring summary--its whole first paragraph,
+    joined--for command listings, which wrap it in their right column
+    (Larry, 2026-09-09: a paragraph the author wrapped in the source
+    used to be cut off at its first line).
+    """
     doc = _inspect.getdoc(callable)
-    return doc.splitlines()[0] if doc else ''
+    if not doc:
+        return ''
+    lines = []
+    for line in doc.splitlines():
+        if not line.strip():
+            break
+        lines.append(line.strip())
+    return ' '.join(lines)
 
 
 def _option_display(o, decoration=None):

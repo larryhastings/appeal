@@ -2066,15 +2066,16 @@ class Appeal:
     def help(self, *topic, usage=True, summary=True, doc=True):
         """
         Print usage documentation on a specific command.
-        (That summary line doubles as the help command's listing
-        row.)  Bare: the --help text (bare apps) or the command
-        listing (sets), v1-style--also returned.  With a topic:
-        that command's help page; a subcommand's page is reached by
-        its word path, `help db stop` (Larry, 2026-09-08--the words
-        as they're typed on the line, never split out of one
-        string).  This method IS the help command (and -h/--help,
-        via the precommand, which passes one word); subclass and
-        override to customize every spelling at once.
+
+        (That first paragraph doubles as the help command's listing
+        row, so it stays one sentence.)  Bare: the --help text (bare
+        apps) or the command listing (sets), v1-style--also returned.
+        With a topic: that command's help page; a subcommand's page is
+        reached by its word path, `help db stop` (Larry, 2026-09-08--
+        the words as they're typed on the line, never split out of one
+        string).  This method IS the help command (and -h/--help, via
+        the precommand, which passes one word); subclass and override
+        to customize every spelling at once.
 
         The knobs (Larry's design, 2026-08-05; v1's usage()
         folded in): usage=False suppresses the usage line,

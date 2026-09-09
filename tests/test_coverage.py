@@ -5656,3 +5656,38 @@ def test_one_word_too_many():
     # a dash token is still an option problem, with the program usage
     assert error(t, ['commit', 'hello', '--nope'])[0] == \
         "error: unknown option '--nope'"
+
+
+def test_listing_row_is_the_whole_first_paragraph():
+    # Larry (2026-09-09): a command's listing row is its docstring's
+    # first PARAGRAPH, wrapped in the table's right column--not its
+    # first line, which cut a source-wrapped paragraph mid-sentence
+    import contextlib, io
+    app = Appeal(name='tron', default_mappings=None)
+    @app.command()
+    def archive():
+        """
+        Shelve sessions: they drop from the list and stop auto-resuming
+        on start, but their transcripts are kept and restore brings them
+        back.
+
+        More prose, not in the listing.
+        """
+    @app.command()
+    def build():
+        "Build the image if needed."
+    from appeal.presentation import summary
+    assert summary(archive) == ("Shelve sessions: they drop from the list and "
+                                "stop auto-resuming on start, but their "
+                                "transcripts are kept and restore brings them "
+                                "back.")
+    assert summary(build) == 'Build the image if needed.'
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.help()
+    text = out.getvalue()
+    assert 'brings them back.' in text and 'More prose' not in text, text
+    # the right column wraps at the margin, the term column stays put
+    rows = [l for l in text.splitlines() if 'archive' in l or l.startswith('  ')]
+    assert rows[0].startswith('archive  Shelve sessions'), rows
+    assert all(len(l) <= 79 for l in text.splitlines()), text
