@@ -5691,3 +5691,116 @@ def test_listing_row_is_the_whole_first_paragraph():
     rows = [l for l in text.splitlines() if 'archive' in l or l.startswith('  ')]
     assert rows[0].startswith('archive  Shelve sessions'), rows
     assert all(len(l) <= 79 for l in text.splitlines()), text
+
+
+def test_default_command_and_subcommand_handlers():
+    # Larry's design (2026-09-09): a program given no command runs its
+    # default_command handler after the head eras; a line stopping at a
+    # command with subcommands runs the default_subcommand handler after
+    # the parent's body.  Callables with no arguments only; the stock
+    # root handler raises "no command specified" (global usage); the
+    # stock subcommand handler is None (subcommands optional); the
+    # provided no_subcommand requires them (the command's page)
+    import contextlib, io
+    def cli(app, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                app.main(argv)
+                code = 0
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+    ran = []
+    def make(**kw):
+        ran.clear()
+        app = Appeal(name='tool', **kw)
+        @app.global_command()
+        def tool(*, verbose=False): ran.append(('tool', verbose))
+        @app.command()
+        def db(): ran.append('db')
+        @app.subcommand('db')
+        def stop(): ran.append('stop')
+        @app.command()
+        def status(): ran.append('status'); return 0
+        return app
+    # the stock handler: the error, the listing, exit 2--after the head
+    code, out, err = cli(make(), [])
+    assert code == 2 and err.startswith('error: no command specified\n'), err
+    assert 'Commands\n--------' in err and out == '' and ran == [('tool', False)]
+    # None: the head runs and the line ends quietly
+    code, out, err = cli(make(default_command=None), ['-v'])
+    assert (code, out, err) == (0, '', '') and ran == [('tool', True)], ran
+    # a real command, passed in as the handler
+    app = make(default_command=lambda: ran.append('menu'))
+    assert cli(app, [])[0] == 0 and ran == [('tool', False), 'menu'], ran
+    # never a string; never something that needs an argument
+    for bad in ('status', lambda x: None):
+        try:
+            Appeal(name='t', default_command=bad)
+            assert False, bad
+        except AppealConfigurationError as e:
+            assert 'no arguments' in str(e), e
+    try:
+        Appeal(name='t', default_subcommand=lambda x, y: None)
+        assert False
+    except AppealConfigurationError as e:
+        assert "requires 'x'" in str(e), e
+    # subcommands are optional by default: db alone just runs db
+    app = make()
+    assert cli(app, ['db'])[0] == 0 and ran == [('tool', False), 'db'], ran
+    # program-wide no_subcommand requires them, wearing db's page
+    app = make(default_subcommand=appeal.no_subcommand)
+    code, out, err = cli(app, ['db'])
+    assert code == 2 and err.startswith('error: no subcommand specified\n'), err
+    assert 'usage: tool db [-h|--help] <COMMAND>' in err and 'stop' in err, err
+    assert ran == [('tool', False), 'db'], ran        # db's body ran first
+    assert cli(app, ['db', 'stop'])[0] == 0 and ran[-1] == 'stop'
+    # ...and a command with no subcommands never consults it
+    assert cli(app, ['status'])[0] == 0
+    # per-command: the decorator form, the fetch form, the path form
+    app = Appeal(name='t2', default_subcommand=appeal.no_subcommand)
+    @app.command(default_subcommand=lambda: ran.append('db-menu'))
+    def db2(): ran.append('db2')
+    @app.subcommand('db2')
+    def stop2(): pass
+    app.command('db2', default_subcommand=lambda: ran.append('db-menu2'))
+    @app.command()
+    def cache(): ran.append('cache')
+    @app.subcommand('cache', default_subcommand=lambda: ran.append('cache-menu'))
+    def clear(): pass
+    @app.subcommand('cache')
+    def warm(): pass
+    ran.clear()
+    assert cli(app, ['db2'])[0] == 0 and ran == ['db2', 'db-menu2'], ran
+    # the path form stamped CLEAR's node (a leaf: never consulted), not
+    # cache's, so cache inherits the program's requirement
+    ran.clear()
+    code, out, err = cli(app, ['cache'])
+    assert code == 2 and 'no subcommand specified' in err, err
+    assert ran == ['cache'], ran
+    try:
+        Appeal(name='t3').command('x', default_subcommand='menu')
+        assert False
+    except AppealConfigurationError as e:
+        assert 'no arguments' in str(e), e
+    # *args/**kwargs are fine (nothing is required); a decorator default
+    # that needs an argument is refused when its plan builds
+    Appeal(name='t4', default_command=lambda *a, **k: None)
+    app5 = Appeal(name='t5')
+    @app5.command()
+    def go5(): pass
+    @app5.default()
+    def needy(x): pass
+    try:
+        app5.process([])
+        assert False
+    except AppealConfigurationError as e:
+        assert "'needy' requires 'x'" in str(e), e
+    # a handler's error that already wears usage keeps it
+    app6 = Appeal(name='t6', default_command=lambda: (_ for _ in ()).throw(
+        appeal.AppealUsageError('custom', usage=lambda file: 'MINE')))
+    @app6.command()
+    def go6(): pass
+    code, out, err = cli(app6, [])
+    assert code == 2 and err == 'error: custom\nMINE\n', err

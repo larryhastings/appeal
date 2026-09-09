@@ -49,6 +49,52 @@ BACKWARDS = 'backwards'
 PRECOMMAND = 'precommand'
 
 
+def no_command():
+    """
+    The stock default command (Larry's design, 2026-09-09): a program
+    that takes commands, given none, is a usage error--`error: no
+    command specified`, then the command summary.  Appeal(
+    default_command=...) replaces it with any callable that runs
+    without arguments; None runs nothing.
+    """
+    raise UsageError("no command specified")
+
+
+def no_subcommand():
+    """
+    A default subcommand that REQUIRES one: `error: no subcommand
+    specified`, then the command's page with its subcommands listed.
+    Subcommands are optional by default (the stock default_subcommand
+    is None); Appeal(default_subcommand=no_subcommand) requires them
+    program-wide, @app.command(default_subcommand=no_subcommand) for
+    one command.
+    """
+    raise UsageError("no subcommand specified")
+
+
+def _vet_default(callable, what):
+    """
+    A default command/subcommand handler must be callable with no
+    arguments at all (Larry, 2026-09-09: a wrapper supplies any the
+    real command needs); refused by name otherwise.  Never a string.
+    """
+    if not builtins_callable(callable):
+        raise AppealConfigurationError(
+            f"{what} must be a callable that takes no arguments, "
+            f"not {callable!r}")
+    from .frontend import signature, empty
+    for p in signature(callable).parameters.values():
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD,
+                      p.KEYWORD_ONLY) and p.default is empty:
+            raise AppealConfigurationError(
+                f"{what} must be callable with no arguments; "
+                f"{getattr(callable, '__name__', callable)!r} requires "
+                f"{p.name!r}")
+
+
+builtins_callable = callable
+
+
 def did_you_mean(word, candidates):
     """
     The suggestion tail for an unknown-name error: " (did you
@@ -515,6 +561,19 @@ def _line_trailer(stylesheet, usage_markup):
     return trailer
 
 
+def _global_trailer(node):
+    """
+    What an error outside any command's era wears (Larry's rule,
+    2026-09-09): the program's usage, then the command summary when
+    the program has commands--the overview page; the usage line
+    alone for a program without them.
+    """
+    root = node.root
+    if root._table():
+        return _overview_trailer(root)
+    return _line_trailer(root.stylesheet, root._program_usage_markup())
+
+
 def _overview_trailer(node):
     """
     A UsageError trailer: renders `node`'s base help page (the command
@@ -840,9 +899,8 @@ class _Step:
                 self.proc.resolve()             # the merged era's records
                 result = conv()
             except AppealDataError as e:
-                if e.usage is None:             # decision B: the program line
-                    e.usage = _line_trailer(node.stylesheet,
-                                            node._program_usage_markup())
+                if e.usage is None:             # outside any command's era:
+                    e.usage = _global_trailer(node)     # global usage
                 raise
             if plan.constructs is not None:     # a global class-as-app: its
                 env[plan.constructs] = result   # methods bind to this
@@ -851,9 +909,16 @@ class _Step:
                  if plan.constructs is not None else None))
             return result
         if self.kind == 'default':
-            # a set's default command answers a BARE line: no operands
-            # reach it, so no conversion can fail here
-            result = self.proc.execute()
+            # a set's default handler answers a line that stopped at the
+            # set: a usage error it raises wears the set's page--the
+            # command summary at the root, the command's page (its
+            # subcommands listed) below (Larry's rule, 2026-09-09)
+            try:
+                result = self.proc.execute()
+            except AppealDataError as e:
+                if e.usage is None:
+                    e.usage = _overview_trailer(node)
+                raise
             holder.instances.append((None, None))
             return result
         if self.kind == 'help':
@@ -1087,8 +1152,10 @@ class Appeal:
     first use (see "Laziness and late binding" in the grammar doc).
     """
     def __init__(self, name=None, *,
+                 default_command=no_command,
                  default_mappings=default_global_mappings(),
                  default_options=_DEFAULT_OPTIONS,
+                 default_subcommand=None,
                  doc=None,
                  errors=None,
                  lazy=False,
@@ -1120,6 +1187,8 @@ class Appeal:
         self._command_mappings_of = {}     # id(callable) -> default_mappings=
                                            # given to subcommand(), applied
                                            # when the path resolves
+        self._default_subcommand_of = {}   # id(callable) -> default_subcommand=,
+                                           # likewise
                                            # mapping (filled by the user later)
         self._auto_impl = None    # synthesized fn for a pure dispatcher
         self._node_default = None # this node's default command
@@ -1195,6 +1264,18 @@ class Appeal:
                 f"default_mappings must be callable or None, "
                 f"not {default_mappings!r}")
         self.default_mappings = default_mappings
+        # the default handlers (Larry's design, 2026-09-09): what runs
+        # when a program with commands is given none (stock: no_command
+        # raises the usage error), and when a line stops at a command
+        # that has subcommands (stock: None, nothing--subcommands are
+        # optional).  Callables that take no arguments; None runs nothing.
+        # @app.command(default_subcommand=...) overrides per command.
+        if default_command is not None:
+            _vet_default(default_command, 'default_command')
+        if default_subcommand is not None:
+            _vet_default(default_subcommand, 'default_subcommand')
+        self._default_command = default_command
+        self._default_subcommand = default_subcommand
         self._finalized = False
         self._precommand_options = {}   # param -> (strings...)
         self._precommand_overrides = {} # param -> (annotation, default) from
@@ -1567,7 +1648,16 @@ class Appeal:
 
     @property
     def _default(self):
-        return self._node_default
+        """
+        The handler for a line that stops at this node: the node's own
+        (@node.default(), command(default_subcommand=...)), else the
+        program's--default_command at the root, default_subcommand
+        below.  None: nothing runs.
+        """
+        if self._node_default is not None:
+            return self._node_default
+        root = self.root
+        return root._default_command if self is root else root._default_subcommand
 
     @property
     def _subs(self):
@@ -1618,7 +1708,7 @@ class Appeal:
         return word
 
     def command(self, name=None, *, repeat=False, parent=None, share=False,
-                default_mappings=_UNSET):
+                default_mappings=_UNSET, default_subcommand=None):
         """
         @app.command() registers a command under the callable's name with
         underscores turned to dashes (upload_database -> upload-database).
@@ -1649,7 +1739,8 @@ class Appeal:
                     "command(): give a name or parent=, not both")
             name = parent
         return self.subcommand(None, name, repeat=repeat, share=share,
-                               default_mappings=default_mappings)
+                               default_mappings=default_mappings,
+                               default_subcommand=default_subcommand)
 
     def default(self):
         """
@@ -1659,11 +1750,11 @@ class Appeal:
         a line ending at the parent.
         """
         def decorator(callable):
-            self._node_default = callable
-            self._invalidate()
+            self._node_default = callable   # vetted when its plan builds:
+            self._invalidate()              # a method's self isn't an argument
             return callable
         return decorator
-    default_command = default           # transitional alias for the old name
+    default_command = default           # the README's spelling
 
     def precommand(self, *, index=-1, config=None, strict=None,
                    share=False, immediate=False):
@@ -1723,7 +1814,7 @@ class Appeal:
     global_command = precommand         # transitional alias for the old name
 
     def subcommand(self, parent, name=None, *, repeat=False, share=False,
-                   default_mappings=_UNSET):
+                   default_mappings=_UNSET, default_subcommand=None):
         """
         Register a command under `parent`--a command word PATH
         string, root-relative: subcommand('db') for a child of
@@ -1751,6 +1842,10 @@ class Appeal:
         object; once a path leaves the object's world it doesn't
         come back).
         """
+        if default_subcommand is not None:
+            # this command's own handler for a line that stops at it
+            # (Larry, 2026-09-09); None means the program's
+            _vet_default(default_subcommand, 'default_subcommand')
         if parent is None:
             # the top level: the tree registration, eager
             # (nothing to resolve).  With a name, the node comes
@@ -1770,6 +1865,9 @@ class Appeal:
                 if default_mappings is not _UNSET:
                     node._command_mappings = default_mappings
                     self._invalidate()
+                if default_subcommand is not None:
+                    node._node_default = default_subcommand
+                    self._invalidate()
                 return node
             def decorator(callable):
                 node = self._child(self._command_word(None, callable))
@@ -1777,6 +1875,8 @@ class Appeal:
                 node._node_share = node._node_share or share
                 if default_mappings is not _UNSET:
                     node._command_mappings = default_mappings
+                if default_subcommand is not None:
+                    node._node_default = default_subcommand
                 return node(callable)
             return decorator
         if not isinstance(parent, str):
@@ -1789,6 +1889,8 @@ class Appeal:
                 root._sharing.add(id(callable))
             if default_mappings is not _UNSET:
                 root._command_mappings_of[id(callable)] = default_mappings
+            if default_subcommand is not None:
+                root._default_subcommand_of[id(callable)] = default_subcommand
             if root._finalized:
                 # late registration: the tree exists, attach now
                 root._attach_subcommand(parent, name, repeat,
@@ -1819,6 +1921,8 @@ class Appeal:
         child._node_repeat = child._node_repeat or repeat
         if id(callable) in self._command_mappings_of:
             child._command_mappings = self._command_mappings_of[id(callable)]
+        if id(callable) in self._default_subcommand_of:
+            child._node_default = self._default_subcommand_of[id(callable)]
         child(callable)
 
     def _resolve_subcommands(self):
@@ -2387,6 +2491,14 @@ class Appeal:
             if owner is None:                   # a self-method no class
                 _refuse_orphan_method(self._default)   # claimed: refuse
             plan = self._build(self._default, method_of=owner)
+            if plan.minimum:
+                # a default handler runs with no arguments (Larry,
+                # 2026-09-09); a wrapper supplies any the real command needs
+                names = ', '.join(repr(s.name) for s in plan.slots
+                                  if s.required)
+                raise AppealConfigurationError(
+                    f"the default command must be callable with no "
+                    f"arguments; {plan.name!r} requires {names}")
             plan = self._plans.setdefault('default', plan)
         return plan
 
@@ -2879,12 +2991,12 @@ class Appeal:
         except AppealDataError as e:
             if era.kind == 'head':
                 # an era-level error (a bad program-wide option, a config
-                # value) gets the program usage line (decision B).  It's
-                # born in the scan, before any deeper site can speak--
-                # help's own errors happen at execute, in pass 2
+                # value) wears global usage: the program's usage and its
+                # command summary.  It's born in the scan, before any
+                # deeper site can speak--help's own errors happen at
+                # execute, in pass 2
                 assert e.usage is None
-                e.usage = _line_trailer(self.stylesheet,
-                                        self._program_usage_markup())
+                e.usage = _global_trailer(self)
             else:
                 step.attach_usage(e)
             raise
@@ -2953,14 +3065,10 @@ class Appeal:
                         err = _unexpected(word, line.tried if dash else table,
                                           line.forced,
                                           self.root._option_placements(line.path))
-                    # a leading dash-token is an unknown OPTION (program usage
-                    # line, decision B); a bare word is an unknown COMMAND (the
-                    # overview page, decision A)--or, with no commands to be
-                    # unknown, an extra argument (the program usage line)
-                    err.usage = (_line_trailer(self.stylesheet,
-                                               self._program_usage_markup())
-                                 if dash or not table
-                                 else _overview_trailer(self))
+                    # outside any command's era: global usage (the overview
+                    # page when there are commands, the usage line alone
+                    # when there aren't)
+                    err.usage = _global_trailer(self)
                     raise err
             depth = len(self._prog().split()) - 1     # root: 0
             line.path[depth:] = [word]                # this set's word, replacing
@@ -2992,8 +3100,7 @@ class Appeal:
                     # an option nobody owned: the last era's strings suggest
                     err = _unexpected(tok, line.tried, line.forced,
                                       self.root._option_placements(line.path))
-                    err.usage = _line_trailer(self.stylesheet,
-                                              self._program_usage_markup())
+                    err.usage = _global_trailer(self)
                 elif deepest._has_commands:
                     # the deepest command dispatched has subcommands, and this
                     # isn't one of them
@@ -3011,15 +3118,16 @@ class Appeal:
                 raise err
 
         if not dispatched:
-            # the line stopped at this node without naming a subcommand of it.
-            # Run this node's default command; with no default, a PROGRAM that
-            # takes commands has been given none: a usage error wearing the
-            # command listing (Larry, 2026-09-09--reversing the orientation
-            # ruling of 2026-07-09).  Raised from the parcel, so nothing of the
-            # user's runs for it, the global command included.  A nested
-            # parent with no subcommand after it just runs: subcommands are
-            # never required (ruled 2026-08-22).
-            if self._default is not None:
+            # the line stopped at this node without naming a subcommand of
+            # it: the node's default handler runs, after the head eras (the
+            # root) or after the parent's body (below)--the stock root one,
+            # no_command, raises "no command specified"; below, the stock is
+            # nothing at all, subcommands being optional (ruled 2026-08-22).
+            # A handler applies only where there are commands to be missing.
+            # (It runs in pass 3 like any command, so what came before it
+            # on the line--the global command included--has already run.)
+            handler = self._default
+            if handler is not None and self._has_commands:
                 dcls = converter_for(self._default_plan())
                 dconv = dcls()
                 dproc = backend.Engine(argv[pos:], dconv, table,
@@ -3027,10 +3135,6 @@ class Appeal:
                 dproc.parse()
                 pos += dproc.consumed
                 steps.append(_Step('default', self, dcls, dconv, dproc))
-            elif top and self._has_commands:
-                err = UsageError("no command specified")
-                err.usage = _overview_trailer(self)
-                raise err
         return dispatched, pos
 
     def main(self, args=None):

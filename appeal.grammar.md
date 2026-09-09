@@ -234,15 +234,28 @@ All v1 semantics, empirically probed and kept:
   scopes**: a global option after the command word is unknown
   there (matches v1), and same-named options in different commands
   never collide.
-* A program that takes commands, given none and with no default
-  command, is a usage error: `error: no command specified` on
-  stderr, followed by the command listing, exit 2--and nothing runs,
-  the global command included (Larry, 2026-09-09, reversing the
-  orientation ruling of 2026-07-09).  A default command runs instead,
-  with no error; a program with no commands at all just runs its
-  precommands.  A nested parent with no subcommand after it (`prog
-  db`) simply runs: subcommands are never required (ruled
-  2026-08-22).  `unknown command 'x'` errors carry the listing too.
+* A program that takes commands, given none, runs its **default
+  command** handler after the head eras: `Appeal(default_command=...)`,
+  any callable that runs with no arguments (a wrapper supplies what a
+  real command needs; never a string), `@app.default()` as the
+  decorator spelling, `None` for nothing.  The stock handler,
+  `appeal.no_command`, raises the usage error: `error: no command
+  specified` on stderr, then the command listing, exit 2 (Larry,
+  2026-09-09, reversing the orientation ruling of 2026-07-09).  It
+  runs where a command would, so the global command has already run.
+  A program with no commands at all never consults it.  A line that
+  stops at a command with subcommands runs the **default subcommand**
+  handler after the parent's body: `Appeal(default_subcommand=...)`
+  program-wide, `@app.command(default_subcommand=...)` per command,
+  stock `None`--subcommands are never required by default (ruled
+  2026-08-22); `appeal.no_subcommand` requires them, its error wearing
+  that command's page with the subcommands listed.
+* **Which usage an error wears** (Larry's rule, 2026-09-09): an error
+  outside any command's era--in the head, at command position, from
+  the root's default handler--wears *global usage*: the program's usage
+  line, then the command summary when there are commands.  An error
+  inside a command's era, in any pass, or from that command's default
+  subcommand handler, wears that command's usage.
 * Standalone: one script embeds every command's parser, the global
   command's, and the dispatcher; converters shared between commands
   are rendered once.

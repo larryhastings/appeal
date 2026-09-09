@@ -689,13 +689,14 @@ its own little command set--then the subcommand.  Running
 `deploy 9`.
 
 What should Appeal do if your program takes commands, but the
-user doesn't supply one?  That's what the *default command* is
-for.  If you don't specify one, an empty command line is a
-mistake: Appeal prints `error: no command specified` followed by
-the usage line and the list of commands, to standard error, and
-exits with status 2--and runs nothing, your global command
-included.  To specify your own default command, decorate a
-function with `@app.default_command()`:
+user doesn't supply one?  It runs the *default command*.  The
+stock one, `appeal.no_command`, treats an empty command line as a
+mistake: `error: no command specified`, then the usage line and
+the list of commands, to standard error, exit status 2.  Any
+callable that runs with no arguments can replace it--pass it as
+`Appeal(default_command=...)` (a function that needs arguments
+gets a wrapper; `None` means run nothing), or decorate one with
+`@app.default_command()`:
 
 ```Python
 @app.default_command()

@@ -4826,11 +4826,12 @@ def test_usage_attached_on_error():
     assert 'usage: calc <COMMAND>' in text and 'Commands' in text, text
     assert 'add' in text and 'Add.' in text, text     # the listing
 
-    # an unknown OPTION at top earns the program usage line, not the page
+    # an unknown OPTION at top earns global usage: the program usage
+    # line AND the command summary (Larry's rule, 2026-09-09)
     code, text = cli(app, ['--nope'])
     assert "unknown option '--nope'" in text
     assert 'usage: calc <COMMAND>' in text
-    assert 'Commands' not in text, text               # a line, not the page
+    assert 'Commands' in text and 'Add.' in text, text
 
     # a CommandError carries NO trailer--the command line was fine
     app2 = _appeal.Appeal(name='c', default_mappings=None)
