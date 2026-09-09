@@ -219,6 +219,30 @@ it so you can decide whether the env should be keyed by plan identity.
   confirmed; the ones you don't recognize are yours to reopen.
 
 
+## I: Back-pocket designs (agreed feasible, deliberately not built)
+
+* **The emergency brake: two-stage parsing** (Larry, 2026-09-09,
+  from the feature-parity review's item 2).  An immediate precommand
+  such as `--plugin X` raises a brake exception; Appeal stops, and
+  returns the tokens no executed step consumed, in original order, as
+  a list of strings.  The program maps more (the plugin registers
+  commands and options on the same Appeal), then calls
+  `app.main(remaining)`.  What it needs, none of it in the way of
+  today's code: tag each token with its original position when the
+  line comes in (the `--x=y` split, the bundle carve and the
+  trailing-operand lift all carry the token object, so the tag rides
+  along); a per-converter ledger of token ids taken (a step's engine
+  can take a token for a neighbouring era's converter, so the ledger
+  is per converter, not per engine); the exception caught in the
+  execute loop.  Two rules that fall out: the braking precommand must
+  be immediate (structural problems are raised after immediate eras
+  run, so a pass-3 brake would lose to an unknown option later on the
+  line), and a bundle is all or nothing.  What must stay true for
+  this to remain cheap: one engine per era with explicit consumption
+  (no whole-line re-tokenizing), and structural problems deferred
+  until after immediate eras.  Not important enough to build now.
+
+
 ## Appendix: every dated "ruled" comment in the code
 
 45 dated 'ruled' comments, oldest first.  'Larry' in the text means the comment credits you; the rest are mine unless you recognize them.
