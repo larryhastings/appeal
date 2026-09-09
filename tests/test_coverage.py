@@ -1100,12 +1100,13 @@ def test_nested_class_repeat_and_parse_for():
     @app.command()
     def solo():
         ran.append('solo')
-    @app.command(name='db', repeat=True)
+    db_app = app.command('db', repeat=True)
+    @db_app
     class Db:
         def __init__(self, label):
             self.label = label
             ran.append(('db', label))
-        @app.subcommand('db')
+        @db_app.command()
         def wipe(self):
             ran.append(('wipe', self.label))
     proc = app.process(['db', 'main', 'wipe'])
@@ -1861,11 +1862,12 @@ def test_completion_candidate_edges():
     @app.command()
     def go(x, *, level: int = 0):
         return x
-    @app.command(name='db')
+    db_app = app.command('db')
+    @db_app
     class Db:
         def __init__(self, label):
             self.label = label
-        @app.subcommand('db')
+        @db_app.command()
         def wipe(self):
             pass
     assert 'go' in app.complete([], 'g')
@@ -2112,7 +2114,7 @@ def test_dispatch_more_shapes():
         def wipe(self):
             return ('wipe', self.label)
     appo.command(name='db')(Db)
-    appo.subcommand('db')(Db.wipe)
+    appo.command('db').command()(Db.wipe)
     assert appo.process(['db', 'x', 'wipe']).result == ('wipe', 'x')
     # a command() tear-off never applied: the node exists without a
     # callable, and the warm-up build simply skips it
@@ -2767,12 +2769,12 @@ def test_era_share_and_immediate():
         assert False, 'expected AppealConfigurationError'
     except appeal.AppealConfigurationError as e:
         assert 'share= is True or False' in str(e), e
-    # subcommand(share=True) on a nested path registers the flag too
+    # command(share=True) on a nested node registers the flag too
     app7 = Appeal(name='sub', default_mappings=None)
     @app7.command()
     def db():
         pass
-    @app7.subcommand('db', share=True)
+    @app7.command('db').command(share=True)
     def migrate(*, dry=False):
         return dry
     assert app7.plan_for('migrate').share == appeal.FORWARDS
@@ -3452,11 +3454,12 @@ def test_completion_more_corners():
     assert app3.complete(['run2'], 'x') == []
     # a nested parent's own options and pending values
     app4 = Appeal(name='c5')
-    @app4.command(name='db')
+    db4 = app4.command('db')
+    @db4
     class Db:
         def __init__(self, label, *, tag=''):
             self.label = label
-        @app4.subcommand('db')
+        @db4.command()
         def wipe(self):
             pass
     got = app4.complete(['db'], '-')
@@ -4501,9 +4504,9 @@ def test_reachable_grind_more():
     import appeal, io, contextlib
     from appeal import AppealConfigurationError as CE
     from big.stylesheet import strip_styles
-    # a subcommand under a path that never gets a command -> compile error
+    # a subcommand under a node that never gets a body -> compile error
     app = appeal.Appeal('y')
-    @app.subcommand('ghost')
+    @app.command('ghost').command()
     def s():
         pass
     @app.command()
@@ -4977,11 +4980,6 @@ def test_init_misconfig_and_edges():
         app.command(5); assert False
     except CE:
         pass
-    # command(): a name AND a parent= are mutually exclusive
-    try:
-        app.command('two', parent='p'); assert False
-    except CE:
-        pass
     # plan_for a word that isn't a command
     try:
         app.plan_for('ghost'); assert False
@@ -5180,7 +5178,7 @@ def test_unknown_option_hints_misspelled_then_misplaced():
     def deploy(*, verify=False, region='', trace=False): pass
     @app.command()
     def db(): pass
-    @app.subcommand('db')
+    @app.command('db').command()
     def add(*, force=False): pass
     def win(x, *, flag=False): return (x, flag)
     @app.command()
@@ -5415,13 +5413,14 @@ def test_help_reaches_subcommands_by_word_path():
     @tool.command()
     def db(*, url=''):
         "Database things."
-    @tool.subcommand('db')
+    db_app = tool.command('db')
+    @db_app.command()
     def stop(force=False):
         "Stop the database."
-    @tool.subcommand('db')
+    @db_app.command()
     def start():
         "Start it."
-    @tool.subcommand('db')
+    @db_app.command()
     def re_start():
         "Restart it."
     def page(argv):
@@ -5483,7 +5482,7 @@ def test_command_era_relay_rules():
         else:
             @app.command(share=db_share)
             def db(): seen.append(('db',))
-        @app.subcommand('db')
+        @app.command('db').command()
         def stop(*, force=False): seen.append(('stop', force))
         return app
     def run(app, argv):
@@ -5534,7 +5533,7 @@ def test_per_command_help_era():
         def build(target, *, jobs: int = 1): seen.append(('build', target, jobs))
         @tool.command()
         def db(*, url=''): seen.append(('db', url))
-        @tool.subcommand('db')
+        @tool.command('db').command()
         def stop(*, force=False): seen.append(('stop', force))
         @tool.command()
         def bare(): seen.append(('bare',))
@@ -5590,13 +5589,13 @@ def test_per_command_help_era():
     assert refused(tool3, ['silent', 'x', '-h']) == \
         "option '-h' can't be used here; it goes before the command"
     assert 'help' not in tool3._children['silent']._plans
-    # a subset, on the fetch and on subcommand()
+    # a subset, on the fetch and on a node's command()
     tool4 = Appeal(name='t4')
     only_long = appeal.default_command_mappings('--help')
     @tool4.command(default_mappings=only_long)
     def alpha(): pass
     tool4.command('beta', default_mappings=only_long)(lambda: None)
-    @tool4.subcommand('alpha', default_mappings=only_long)
+    @tool4.command('alpha').command(default_mappings=only_long)
     def deep(): pass
     for argv in (['alpha', '--help'], ['beta', '--help'], ['alpha', 'deep', '--help']):
         assert page(tool4, argv).startswith('usage: t4 '), argv
@@ -5644,7 +5643,7 @@ def test_one_word_too_many():
     def show(p): return p
     @t.command()
     def db(): pass
-    @t.subcommand('db')
+    @t.command('db').command()
     def push(): pass
     assert error(t, ['commit', 'hello', 'show']) == [
         "error: unexpected argument 'show'", '',
@@ -5727,7 +5726,7 @@ def test_default_command_and_subcommand_handlers():
         def tool(*, verbose=False): ran.append(('tool', verbose))
         @app.command()
         def db(): ran.append('db')
-        @app.subcommand('db')
+        @app.command('db').command()
         def stop(): ran.append('stop')
         @app.command()
         def status(): ran.append('status'); return 0

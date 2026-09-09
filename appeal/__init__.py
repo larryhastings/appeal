@@ -1150,7 +1150,6 @@ class Appeal:
                  errors=None,
                  lazy=False,
                  margin=None,
-                 parent=None,
                  repeat=False,
                  script=_sys.argv[0],
                  stylesheet=None,
@@ -1164,7 +1163,7 @@ class Appeal:
         # function is the global command of its own little set.
         # The flat views (_commands, _subs, ...) are read-only,
         # derived from this tree.
-        self.parent = parent
+        self.parent = None        # set by _child(): the node's parent
         self._children = {}       # command word -> child Appeal
         self._impl = None         # this node's command function
         self._precommands = []    # ordered precommand eras (the head; _impl
@@ -1173,8 +1172,6 @@ class Appeal:
         self._precommand_config = {}       # id(callable) -> the bound config
         self._precommand_flags = {}        # id(callable) -> (share,
                                            #   immediate), the era flags
-        self._sharing = set()              # ids of commands with share=True
-        self._command_mappings_of = {}     # id(callable) -> default_mappings=
                                            # given to subcommand(), applied
                                            # when the path resolves
                                            # mapping (filled by the user later)
@@ -1182,29 +1179,6 @@ class Appeal:
         self._node_repeat = False # this node's set cycles
         self._node_share = False  # this command's options are shared FORWARDS
         self._command_mappings = _STOCK_COMMAND_MAPPINGS   # the help era's policy
-        if parent is not None:
-            # a subcommand node is a full Appeal; the program
-            # knobs are the root's, copied as processed values
-            for attr in ('_help_enabled', 'default_options',
-                         'default_mappings',
-                         'script', 'errors', 'repeat', 'stylesheet',
-                         'margin', '_templates'):    # the BACKING field, not the
-                setattr(self, attr, getattr(parent, attr))  # `templates` property
-                                                    # -- copying the property would
-                                                    # force render's lazy import
-            self.version = None
-            self._finalized = True      # the ROOT runs the pass
-            self._precommand_options = {}
-            self._precommand_overrides = {}
-            self._decorations = parent.root._decorations
-            self._method_owner = parent._method_owner
-            self._init_caches()
-            # parent= is internal plumbing (_child is its one caller),
-            # and a child always mounts under its command word
-            assert name is not None
-            parent._children[name] = self
-            parent._invalidate()
-            return
         # whether Appeal supplies automatic help (v1's knob): the
         # per-command -h/--help option AND, for a program with
         # commands, the `help` command.  help=False suppresses all
@@ -1269,10 +1243,6 @@ class Appeal:
         # never modifies objects the user owns--decoration writes
         # it down HERE and moves on).  One registry per tree.
         self._decorations = Decorations()
-        # @app.subcommand('path') declarations, written down at
-        # decoration and resolved lazily (ruled 2026-08-10:
-        # explicit parentage, registration order free)
-        self._pending_subcommands = []
         # how an operand renders in usage lines and help tables is
         # the `argument_decoration` stylesheet transform (host ->
         # <HOST>), not a constructor knob--restyle it there.
@@ -1377,7 +1347,23 @@ class Appeal:
         "Fetch-or-create the child Appeal for a command word."
         node = self._children.get(word)
         if node is None:
-            node = Appeal(word, parent=self)
+            # a subcommand node is a full Appeal; the program knobs are
+            # the root's, copied as processed values
+            node = Appeal(word)
+            node.parent = self
+            for attr in ('_help_enabled', 'default_options',
+                         'default_mappings',
+                         'script', 'errors', 'repeat', 'stylesheet',
+                         'margin', '_templates'):    # the BACKING field, not the
+                setattr(node, attr, getattr(self, attr))  # `templates` property
+                                                    # -- copying the property would
+                                                    # force render's lazy import
+            node.version = None
+            node._finalized = True      # the ROOT runs the pass
+            node._decorations = self.root._decorations
+            node._method_owner = self._method_owner
+            self._children[word] = node
+            self._invalidate()
         return node
 
     def __call__(self, callable):
@@ -1490,7 +1476,6 @@ class Appeal:
                 root._help_enabled = bool(
                     root._precommand_options.get('help')
                     or 'help' in root._children)
-        root._resolve_subcommands()
         root._derive_method_owners()
         root._refuse_bodyless_parents()
 
@@ -1708,7 +1693,7 @@ class Appeal:
                 f"(commands are words, not options)")
         return word
 
-    def command(self, name=None, *, repeat=False, parent=None, share=False,
+    def command(self, name=None, *, repeat=False, share=False,
                 default_mappings=_UNSET):
         """
         @app.command() registers a command under the callable's name with
@@ -1726,21 +1711,38 @@ class Appeal:
         parent--and every other Appeal method is there,
         because the child IS an Appeal.  repeat=True makes the
         node's set cycle: after a subcommand's arguments, the
-        next token may name another one.  parent= is the older
-        v2 spelling of the same fetch: command(parent='db') ==
-        command('db').  default_mappings= is the command's help-era
+        next token may name another one.  default_mappings= is the
+        command's help-era
         policy (Larry, 2026-09-08): the stock
         default_command_mappings() maps -h/--help onto the command
         when it hasn't claimed them; None turns the command's help
         off.
         """
-        if parent is not None:
-            if name is not None:
+        if name is not None:
+            # the node comes back--decorator AND chaining handle
+            if not isinstance(name, str):
                 raise AppealConfigurationError(
-                    "command(): give a name or parent=, not both")
-            name = parent
-        return self.subcommand(None, name, repeat=repeat, share=share,
-                               default_mappings=default_mappings)
+                    f"command(): the command word must be a "
+                    f"string, not {name!r}")
+            node = self._child(self._command_word(name))
+            if repeat and not node._node_repeat:
+                node._node_repeat = True
+                self._invalidate()
+            if share and not node._node_share:
+                node._node_share = True
+                self._invalidate()
+            if default_mappings is not _UNSET:
+                node._command_mappings = default_mappings
+                self._invalidate()
+            return node
+        def decorator(callable):
+            node = self._child(self._command_word(None, callable))
+            node._node_repeat = node._node_repeat or repeat
+            node._node_share = node._node_share or share
+            if default_mappings is not _UNSET:
+                node._command_mappings = default_mappings
+            return node(callable)
+        return decorator
 
     def default(self):
         """
@@ -1793,6 +1795,13 @@ class Appeal:
         is judged--how -h/--help/--version outrank a malformed line.
         Appeal's own metadata precommand is immediate=True.
         """
+        if self.parent is not None:
+            # it would even work--a node's body is the first precommand of
+            # its own little set, and more could follow it--but it's daffy
+            # from the user's side (Larry, 2026-09-09).  In the back pocket.
+            raise AppealConfigurationError(
+                f"precommand(): only the program has precommands, not the "
+                f"command {self._prog()!r}")
         if strict is not None and config is None:
             raise AppealConfigurationError(
                 "precommand(): strict= only means something with config=")
@@ -1816,128 +1825,12 @@ class Appeal:
         return decorator
     global_command = precommand         # transitional alias for the old name
 
-    def subcommand(self, parent, name=None, *, repeat=False, share=False,
-                   default_mappings=_UNSET):
-        """
-        Register a command under `parent`--a command word PATH
-        string, root-relative: subcommand('db') for a child of
-        db, subcommand('db migrate') for depth.  EXPLICIT by
-        ruling (2026-08-10): Appeal never infers subcommand-ness;
-        you say what the thing is a subcommand of, or it's a
-        top-level command.  parent=None IS the top level--
-        command() is exactly subcommand(None).
-
-        The decoration writes down what was said and moves on;
-        the path resolves at first use, so registration order is
-        free (declare the child before the parent, fine).  A path
-        nothing ever registers is a loud error naming it.  The
-        returned decorator is REUSABLE--a tear-off:
-
-            dbcmd = app.subcommand('db')
-            @dbcmd
-            def add(...): ...
-            @dbcmd
-            def remove(...): ...
-
-        A method command may mount only at its class's own mount
-        or under another method of the same class (the same-world
-        rule, ruled 2026-08-10: commands are sentences about the
-        object; once a path leaves the object's world it doesn't
-        come back).
-        """
-        if parent is None:
-            # the top level: the tree registration, eager
-            # (nothing to resolve).  With a name, the node comes
-            # back--decorator AND chaining handle, v1's shape.
-            if name is not None:
-                if not isinstance(name, str):
-                    raise AppealConfigurationError(
-                        f"command(): the command word must be a "
-                        f"string, not {name!r}")
-                node = self._child(self._command_word(name))
-                if repeat and not node._node_repeat:
-                    node._node_repeat = True
-                    self._invalidate()
-                if share and not node._node_share:
-                    node._node_share = True
-                    self._invalidate()
-                if default_mappings is not _UNSET:
-                    node._command_mappings = default_mappings
-                    self._invalidate()
-                return node
-            def decorator(callable):
-                node = self._child(self._command_word(None, callable))
-                node._node_repeat = node._node_repeat or repeat
-                node._node_share = node._node_share or share
-                if default_mappings is not _UNSET:
-                    node._command_mappings = default_mappings
-                return node(callable)
-            return decorator
-        if not isinstance(parent, str):
-            raise AppealConfigurationError(
-                f"subcommand: the parent is a command word path "
-                f"(a string) or None, not {parent!r}")
-        root = self.root
-        def decorator(callable):
-            if share:
-                root._sharing.add(id(callable))
-            if default_mappings is not _UNSET:
-                root._command_mappings_of[id(callable)] = default_mappings
-            if root._finalized:
-                # late registration: the tree exists, attach now
-                root._attach_subcommand(parent, name, repeat,
-                                        callable)
-            else:
-                root._pending_subcommands.append(
-                    (parent, name, repeat, callable))
-            root._invalidate()
-            return callable
-        return decorator
-
-    def _node_at_path(self, path):
-        "The COMMAND node at a word path, or None while unresolved."
+    def _node_at(self, path):
+        "The node at a word path (a sequence of command words)."
         node = self.root
-        for word in path.split():
-            child = node._children.get(word)
-            if child is None or child._command_callable() is None:
-                return None
-            node = child
+        for word in path:
+            node = node._children[word]
         return node
-
-    def _attach_subcommand(self, parent, name, repeat, callable):
-        node = self._node_at_path(parent)
-        assert node is not None     # the resolver calls us only once the
-                                    # path resolves; unresolvable paths are
-                                    # refused there, naming them
-        child = node._child(self._command_word(name, callable))
-        child._node_repeat = child._node_repeat or repeat
-        if id(callable) in self._command_mappings_of:
-            child._command_mappings = self._command_mappings_of[id(callable)]
-        child(callable)
-
-    def _resolve_subcommands(self):
-        """
-        Drain the subcommand ledger to a fixpoint--a parent may
-        itself arrive by subcommand--and refuse, naming paths,
-        anything left unresolvable.
-        """
-        pending = self._pending_subcommands
-        while pending:
-            remaining = []
-            progressed = False
-            for item in pending:
-                if self._node_at_path(item[0]) is None:
-                    remaining.append(item)
-                    continue
-                self._attach_subcommand(*item)
-                progressed = True
-            if not progressed:
-                paths = sorted({item[0] for item in remaining})
-                raise AppealConfigurationError(
-                    f"subcommand: no command was ever registered "
-                    f"at path{'s' if len(paths) > 1 else ''} "
-                    f"{', '.join(map(repr, paths))}")
-            pending[:] = remaining
 
     def _derive_method_owners(self):
         """
@@ -2467,9 +2360,7 @@ class Appeal:
                 _refuse_orphan_method(callable)
             plan = self._build(callable, name=word, method_of=owner)
             plan.argv0 = self.root._prog()
-            plan.share = (FORWARDS if (node._node_share
-                                       or id(callable) in self.root._sharing)
-                          else False)
+            plan.share = FORWARDS if node._node_share else False
             plan = self._plans.setdefault(id(node), plan)
         return plan
 
@@ -3085,7 +2976,7 @@ class Appeal:
                     return dispatched, pos
                 tok = argv[pos]
                 dash = tok.startswith('-') and not line.forced
-                deepest = self.root._node_at_path(' '.join(line.path))
+                deepest = self.root._node_at(line.path)
                 if dash:
                     # an option nobody owned: the last era's strings suggest
                     err = _unexpected(tok, line.tried, line.forced,

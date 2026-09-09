@@ -4599,12 +4599,13 @@ def test_command_name_override():
     def add_item(x: int):
         ran.append(('add-item', x))
 
-    @app.command(name='db')
+    db_app = app.command('db')
+    @db_app
     class Db:
         def __init__(self, label):
             self.label = label
 
-        @app.subcommand('db')
+        @db_app.command()
         def wipe(self):
             ran.append(('wipe', self.label))
 
@@ -5427,18 +5428,22 @@ def test_appeal_tree_registration():
     assert node.parent is app
     assert node.root is app
 
-    # the older v2 kwarg spelling is the same fetch
-    assert app.command(parent='x') is node
-
     # re-registration replaces (v1: the second wins)
     @app.command('x')
     def replacement(a):
         return ('replaced', a)
     assert app.process(['x', 'hi']).result == ('replaced', 'hi')
 
-    # Appeal(parent=) hangs a node in the tree directly
+    # the node is the ONE way in (Larry, 2026-09-09: no subcommand(),
+    # no command(parent=), no Appeal(parent=))
+    assert not hasattr(app, 'subcommand')
+    try:
+        _appeal.Appeal('sub', parent=app)
+        assert False
+    except TypeError:
+        pass
     app2 = _appeal.Appeal(name='u')
-    child = _appeal.Appeal('sub', parent=app2)
+    child = app2.command('sub')
     @child.command()
     def leaf():
         return 'leaf!'
@@ -6224,19 +6229,20 @@ def test_two_classes_same_method_name():
     # emitter silently shared one run_run between both sets.
     app = Appeal(name='twins')
 
-    @app.command(name='alpha')
+    alpha_app, beta_app = app.command('alpha'), app.command('beta')
+    @alpha_app
     class Alpha:
         def __init__(self):
             pass
-        @app.subcommand('alpha')
+        @alpha_app.command()
         def run(self):
             return 'alpha-run'
 
-    @app.command(name='beta')
+    @beta_app
     class Beta:
         def __init__(self):
             pass
-        @app.subcommand('beta')
+        @beta_app.command()
         def run(self):
             return 'beta-run'
 
@@ -6256,14 +6262,15 @@ def test_two_classes_same_method_name():
     # a duplicate name= within one class replaces, like every
     # other re-registration (v1's rule: the second wins)
     dup = Appeal(name='d')
-    @dup.command(name='gamma')
+    gamma_app = dup.command('gamma')
+    @gamma_app
     class Gamma:
         def __init__(self):
             pass
-        @dup.subcommand('gamma', name='x')
+        @gamma_app.command('x')
         def one(self):
             pass
-        @dup.subcommand('gamma', name='x')
+        @gamma_app.command('x')
         def two(self):
             pass
     (word_fn,) = [fn for w, fn in dup._subs['gamma'] if w == 'x']
@@ -6272,26 +6279,28 @@ def test_two_classes_same_method_name():
     # path-addressed sets can relax it later)
     try:
         bad2 = Appeal(name='p')
-        @bad2.command(name='left')
+        left, right = bad2.command('left'), bad2.command('right')
+        left_db, right_db = left.command('db'), right.command('db')
+        @left
         class Left:
             def __init__(self):
                 pass
-            @bad2.subcommand('left', name='db')
+            @left_db
             class DbL:
                 def __init__(self):
                     pass
-                @bad2.subcommand('left db')
+                @left_db.command()
                 def wipe(self):
                     pass
-        @bad2.command(name='right')
+        @right
         class Right:
             def __init__(self):
                 pass
-            @bad2.subcommand('right', name='db')
+            @right_db
             class DbR:
                 def __init__(self):
                     pass
-                @bad2.subcommand('right db')
+                @right_db.command()
                 def nuke(self):
                     pass
         # registration is lazy; the flat-view refusal fires at
@@ -6401,6 +6410,8 @@ def test_class_as_app_nested():
     out = []
     app = _appeal.Appeal(name='outer', repeat=True)
 
+    db_app = app.command('Db')      # fetched OUTSIDE: a class body's
+                                    # names aren't visible in a nested one
     @app.global_command()
     class Outer:
         def __init__(self, *, verbose=False):
@@ -6410,13 +6421,13 @@ def test_class_as_app_nested():
         def top(self, x: int):
             out.append(('top', self.verbose, x))
 
-        @app.command()
+        @db_app
         class Db:
             def __init__(self, name):
                 self.name = name
                 out.append(('db', name))
 
-            @app.subcommand('Db')
+            @db_app.command()
             def add(self, x: int):
                 out.append(('add', self.name, x))
 
@@ -7095,27 +7106,28 @@ def test_precommand_config_bound_dicts():
 
 
 def test_subcommand():
-    # @app.subcommand(parent, name=) (ruled 2026-08-10): parent
-    # is a command word PATH string or None, EXPLICIT always--
-    # Appeal never infers subcommand-ness.  Declarations resolve
-    # lazily, so registration order is free.
+    # Subcommands hang off the parent's NODE (Larry, 2026-09-09, the
+    # one API): db_app = app.command('db') fetches or creates it, in
+    # any order relative to db's own body; @db_app.command() adds
+    # subcommands.  Appeal never infers subcommand-ness.
     import appeal as _appeal
     ran = []
     app = _appeal.Appeal(name='t')
 
-    @app.subcommand('db')            # declared BEFORE its parent
+    db_app = app.command('db')       # the node, BEFORE its parent is bodied
+    @db_app.command()
     def add(x: int):
         ran.append(('add', x))
 
     @app.command()
     def db(*, verbose=False):
         ran.append(('db', verbose))
+    assert app.command('db') is db_app   # the same node, after
 
-    dbcmd = app.subcommand('db')     # the tear-off, reusable
-    @dbcmd
+    @db_app.command()
     def remove(x: int):
         ran.append(('remove', x))
-    @dbcmd
+    @db_app.command()
     def drop():
         ran.append('drop')
 
@@ -7125,36 +7137,51 @@ def test_subcommand():
     assert ran == [('db', False), ('add', 1), ('db', False),
                    ('remove', 2), ('db', False), 'drop'], ran
 
-    # a deep path attaches at depth; name= renames
-    @app.subcommand('db add', name='audit-log')
+    # depth is nodes of nodes; the word given wins over the function's
+    @db_app.command('add').command('audit-log')
     def audit():
         pass
     assert ('audit-log', audit) in app._subs['add']
+    # the manual spelling, no decorator syntax
+    def my_lucky_day():
+        ran.append('lucky')
+    db_app.command()(my_lucky_day)
+    ran.clear()
+    app.process(['db', 'my-lucky-day'])
+    assert ran == [('db', False), 'lucky'], ran
 
-    # an object is refused by name: the parent is a PATH
+    # an object is refused: the word is a string
     try:
-        app.subcommand(db)
+        app.command(db)
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert 'word path' in str(e)
+        assert 'must be a string' in str(e)
 
-    # a path nothing ever registers refuses at first use, named
+    # a node's precommand() is refused: only the program has a head
+    # (it would even work--the body is the first precommand of the
+    # node's own set--but it's daffy; in the back pocket)
+    try:
+        db_app.precommand()
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert str(e) == ("precommand(): only the program has precommands, "
+                          "not the command 't db'"), e
+
+    # option()/argument() through a node are the root's: they act on
+    # the callable decorated, whichever node they were reached by
+    assert db_app.option.__func__ is app.option.__func__
+    assert db_app.argument.__func__ is app.argument.__func__
     app2 = _appeal.Appeal(name='u')
-    @app2.subcommand('ghost')
-    def lost():
+    db2 = app2.command('db')
+    @app2.command()
+    def db():
         pass
-    try:
-        app2._subs
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert "'ghost'" in str(e)
-
-    # command() IS subcommand(None)
-    app3 = _appeal.Appeal(name='v')
-    @app3.subcommand(None)
-    def solo(x):
-        return ('solo', x)
-    assert app3.process(['solo', 'a']).result == ('solo', 'a')
+    @db2.command()
+    @db2.option('force', '-F', '--force-it')
+    def clear(*, force=False):
+        return force
+    assert app2.process(['db', 'clear', '-F']).result is True
+    assert app2.process(['db', 'clear', '--force-it']).result is True
 
 
 def test_subcommand_same_world():
@@ -7174,18 +7201,19 @@ def test_subcommand_same_world():
         @ok.command()
         def parent(self):           # (a): top-level method
             pass
-    @ok.subcommand('parent')
+    @ok.command('parent').command()
     def below():                    # plain BELOW a method: fine
         pass
     ok._subs                        # resolves without complaint
 
     # (b): a method directly under its class's own mount
     ok2 = _appeal.Appeal(name='ok2')
-    @ok2.command()
+    db2 = ok2.command('Db')
+    @db2
     class Db:
         def __init__(self):
             pass
-        @ok2.subcommand('Db')
+        @db2.command()
         def wipe(self):
             pass
     ok2._subs
@@ -7199,7 +7227,7 @@ def test_subcommand_same_world():
     class A2:
         def __init__(self):
             pass
-        @bad.subcommand('gravy')
+        @bad.command('gravy').command()
         def foo(self):
             pass
     try:
@@ -7224,7 +7252,7 @@ def test_subcommand_same_world():
         def stamp(self, x):
             return ('stamp', self.tag, x)
     tool = Tool('mine')
-    free.subcommand('anywhere')(tool.stamp)
+    free.command('anywhere').command()(tool.stamp)
     assert free.process(['anywhere', 'stamp', 'hi']).result == \
         ('stamp', 'mine', 'hi')
 
@@ -7238,7 +7266,7 @@ def test_subcommand_same_world():
         @bad2.command()
         def parent(self):
             pass
-        @bad2.subcommand('parent')
+        @bad2.command('parent').command()
         def chained(self):
             pass
     try:

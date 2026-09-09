@@ -2337,7 +2337,8 @@ of Appeal instances, linked by `.parent`.  Everything chains:
 runs when the line stops at `db`, `.option()` remaps a
 subcommand's options, and so on--the child is an Appeal, not a
 wrapper.  `repeat=True` makes that node's subcommand set cycle.
-`Appeal(name, parent=app)` hangs a node in the tree directly.
+The node is the one way to reach a subcommand set: there is no
+path-string form and no `parent=` spelling.
 
 `Appeal.global_command()`
 

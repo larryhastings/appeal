@@ -307,7 +307,8 @@ An `Appeal` object is a **node** in a tree.  Each node has a **table**
 of command words to child nodes, an optional **global command** (its
 own body), an ordered list of **precommands**, and possibly a
 **default** command for a bare line.  `@app.command()` registers a
-word; `@app.subcommand('parent')` registers a word one level down;
+word; `app.command('parent')` is the node for that word, and its own
+`.command()` registers a word one level down;
 `@app.precommand()` adds a precommand; a class registered as the global
 command is a class-as-app whose methods are the commands.
 
