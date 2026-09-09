@@ -507,7 +507,7 @@ class OptionRule:
                                present=not grammar_default))
 
         if (callable(annotation)
-                and annotation not in _blessed_leaves
+                and not _is_leaf(annotation)
                 and getattr(annotation, '__origin__', None) is None
                 and not hasattr(annotation, 'factory')
                 and annotation is not inspect.Parameter.empty
@@ -1681,7 +1681,7 @@ class Plan:
         if not callable(annotation):
             raise AppealConfigurationError(
                 f"parameter {parameter.name!r}: annotation {annotation!r} isn't callable")
-        if annotation in _blessed_leaves:
+        if _is_leaf(annotation):
             return Terminal(annotation)
         # a real converter: introspect it.  uninspectable callables
         # (some builtins, C functions) are treated as terminals.
@@ -1710,6 +1710,22 @@ from . import (
 # introspected: its signature is its grammar.  (verbatim is a leaf the
 # engine knows by identity.)
 _blessed_leaves = {str, int, float, bool, complex, verbatim}
+
+
+def _is_leaf(annotation):
+    """
+    Is this annotation a leaf: the list above, or a pathlib class?
+    pathlib.PurePath and every class under it (Path, PosixPath, ...)
+    take one string on a command line--their (*args, **kwargs) is for
+    joining segments, not a grammar (Larry, 2026-09-09).  pathlib is
+    never imported for this (it costs 7-9ms): if the user annotated
+    with a Path class, it's in sys.modules already.
+    """
+    if annotation in _blessed_leaves:
+        return True
+    pathlib = _sys.modules.get('pathlib')
+    return (pathlib is not None and isinstance(annotation, type)
+            and issubclass(annotation, pathlib.PurePath))
 
 # the terminal converters we bless for annotation-free defaults
 _default_type_converters = {str, int, float}
@@ -1763,7 +1779,7 @@ def _is_option_group(annotation):
     """
     if not callable(annotation):
         return False
-    if annotation in _blessed_leaves:
+    if _is_leaf(annotation):
         return False
     if getattr(annotation, '__origin__', None) is not None:
         return False
@@ -1787,7 +1803,7 @@ def _is_option_group(annotation):
             if annotation_ is not inspect.Parameter.empty:
                 annotation_ = dereference_annotated(annotation_)
                 if (callable(annotation_)
-                        and annotation_ not in _blessed_leaves
+                        and not _is_leaf(annotation_)
                         and not hasattr(annotation_, 'recipe')
                         and getattr(annotation_, '__origin__', None) is None
                         and _positional_arity(annotation_) > 0):
@@ -1799,7 +1815,7 @@ def _is_multiparam_converter(annotation):
     "A plain converter whose signature consumes several operands?"
     if not callable(annotation):
         return False
-    if annotation in _blessed_leaves:
+    if _is_leaf(annotation):
         return False
     if getattr(annotation, '__origin__', None) is not None:
         return False
@@ -1860,7 +1876,7 @@ def _leaf_callable(annotation, context):
     if not callable(annotation):
         raise AppealConfigurationError(
             f"{context}: {annotation!r} isn't callable")
-    if annotation in _blessed_leaves:
+    if _is_leaf(annotation):
         return annotation
     try:
         signature = inspect.signature(annotation)
@@ -1974,7 +1990,7 @@ def _is_repeat_group(annotation):
     """
     if not callable(annotation):
         return False
-    if annotation in _blessed_leaves:
+    if _is_leaf(annotation):
         return False
     if (hasattr(annotation, 'recipe')
             and not isinstance(annotation, type)):

@@ -816,13 +816,17 @@ def test_schema_leaf_fallbacks():
     from appeal.schema import mcp_input_schema
     def pairfn(a: int, b: int):
         return (a, b)
-    def cmd(p: pathlib.Path, *, spot: pairfn = None):
-        return (p, spot)
+    class Segments:                     # a scalar-acceptable *args group
+        def __init__(self, *parts): self.parts = parts
+    def cmd(p: pathlib.Path, s: Segments, *, spot: pairfn = None):
+        return (p, s, spot)
     describe = mcp_input_schema(build_plan(cmd))
     props = describe['properties']
-    # Path builds as a scalar-acceptable *args group: the describe
-    # offers the string AND the object, like the reader
-    assert props['p']['anyOf'][0] == {'type': 'string'}
+    # a Path is a leaf (Larry, 2026-09-09): one string, no grammar
+    assert props['p'] == {'type': 'string'}
+    # a scalar-acceptable *args group: the describe offers the string
+    # AND the object, like the reader
+    assert props['s']['anyOf'][0] == {'type': 'string'}
     assert props['spot']['type'] == 'array'
     # an option metavar rename rides along as 'usage'
     from appeal.frontend import Decorations
@@ -5982,3 +5986,42 @@ def test_exclusive_options_feed_one_parameter():
     @app.command()
     def pairs(p: Pair, *, q: Pair = None): return (p.pair, q and q.pair)
     assert got(['pairs', '1', '2', '-q', '3', '4']) == ((1, 2), (3, 4))
+
+
+def test_path_classes_are_leaves():
+    # Larry, 2026-09-09: pathlib.PurePath and everything under it take
+    # one string--their (*args, **kwargs) joins segments, it isn't a
+    # grammar.  Argument and option alike; user subclasses too.  And
+    # pathlib is never imported for this: the check peeks at
+    # sys.modules, where a Path annotation guarantees it already is.
+    import pathlib, subprocess, sys
+    from big.stylesheet import strip_styles
+    class MyPath(type(pathlib.Path())): pass
+    app = Appeal(name='t')
+    @app.command()
+    def f(path: pathlib.Path, pure: pathlib.PurePath, *,
+          out: pathlib.Path = None, mine: MyPath = None):
+        return (path, pure, out, mine)
+    assert strip_styles(app.plan_for('f').usage()) == \
+        't f [-o|--out <OUT>] [-m|--mine <MINE>] <PATH> <PURE>'
+    got = app.process(['f', 'a', 'b', '--out', 'x', '--mine', 'm']).result
+    assert got == (pathlib.Path('a'), pathlib.PurePath('b'),
+                   pathlib.Path('x'), MyPath('m'))
+    assert type(got[3]) is MyPath
+    try:
+        app.process(['f', 'a', 'b', 'c'])
+        assert False
+    except UsageError as e:
+        assert str(e) == "unexpected argument 'c'", e
+    code = ("import sys; sys.path.insert(0, %r)\n"
+            "import appeal\n"
+            "app = appeal.Appeal(name='t')\n"
+            "@app.command()\n"
+            "def f(x: int): return x\n"
+            "assert app.process(['f', '3']).result == 3\n"
+            "sys.stdout.write(repr('pathlib' in sys.modules))\n"
+            % os.path.dirname(os.path.dirname(os.path.abspath(appeal.__file__))))
+    proc = subprocess.run([sys.executable, '-c', code], stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, universal_newlines=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == 'False', proc.stdout

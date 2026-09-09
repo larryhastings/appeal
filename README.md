@@ -2569,8 +2569,16 @@ those for the arguments, options, and opargs of your command:
   tuple.  (These are option-repetition and shape spellings,
   not general-purpose nesting--`list[dict[...]]` and friends
   are refused by name.)
-* Exactly four built-in types are special-cased as
-  uninspectable leaves: `str`, `int`, `float`, and `bool`.
+* The *leaves* of the annotation tree are a fixed list: `str`,
+  `int`, `float`, `bool`, and `complex` take one string and are
+  never introspected, and so do `pathlib.PurePath` and every
+  class under it (`Path`, `PosixPath`, your own subclass).
+  Every other callable, class or function, argument or option,
+  is introspected: its signature is its grammar.  So
+  `amount: Decimal` reads as `Decimal(value, context)`, two
+  operands; a class whose constructor isn't its command-line
+  grammar wants a one-line wrapper, `def when(s): return
+  dateutil.parser.parse(s)`.
 
 Putting it all together: if you wanted to write an `fgrep`
 command with a usage string like this:
@@ -2653,10 +2661,10 @@ things POSIX allows, and allows some things POSIX disallows.
   in scripts break when a program grows a new option; tab
   completion serves the interactive-comfort case instead.
   (click refuses for the same reason.)
-* Many built-in types are not introspectable.  If you call
-  `inspect.signature(int)` it throws a `ValueError`.  Appeal
-  special-cases exactly four built-in types as leaves: `str`,
-  `int`, `float`, and `bool`.
+* Many built-in types are not introspectable, and the ones that
+  are (`complex(real=0, imag=0)`) don't describe a command line.
+  Appeal special-cases a fixed list as leaves: `str`, `int`,
+  `float`, `bool`, `complex`, and the `pathlib` classes.
 * Information about a particular converter is localized to
   a particular `Appeal()` instance.  If you decorate a converter
   with `@app.option()`, every place inside that `Appeal()` instance
