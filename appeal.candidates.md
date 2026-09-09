@@ -269,19 +269,18 @@ it so you can decide whether the env should be keyed by plan identity.
 
       @app.lazy()
       def foo():
-          "Frobnicate the widgets."      # the listing's summary
           import massive_module
           return massive_module.foo
 
-  The word comes from the thunk's name as usual; the returned
-  callable's name is ignored and its signature is the grammar.  The
-  thunk's own docstring is the summary, so the bare page's command
-  listing and completion never import anything; only naming the
-  command on the line, or asking for its full help page, resolves
-  the thunk.  A thunk may return a class, whose subcommand tree is
-  then built lazily with it.  Nothing today introspects a node's
-  body before its plan builds, so nothing to keep in mind beyond
-  that.
+  The word comes from the thunk's name as usual; every other piece
+  of metadata--the signature, the docstring, the options--comes from
+  the real function (Larry: one source of truth, the thunk carries
+  nothing but the name).  So invoking another command, and
+  completing command names, never resolve the thunk; the bare page's
+  listing does, since a summary is the docstring's first paragraph.
+  A thunk may return a class, whose subcommand tree is then built
+  lazily with it.  Nothing today introspects a node's body before
+  its plan builds, so nothing to keep in mind beyond that.
 
 
 ## Appendix: every dated "ruled" comment in the code
