@@ -264,6 +264,25 @@ it so you can decide whether the env should be keyed by plan identity.
   named holes, never concatenated fragments, since translations
   reorder words.
 
+* **Lazy commands** (Larry, 2026-09-09, parity review item 22; wanted
+  as a first-class feature, punted for now).  Larry's spelling:
+
+      @app.lazy()
+      def foo():
+          "Frobnicate the widgets."      # the listing's summary
+          import massive_module
+          return massive_module.foo
+
+  The word comes from the thunk's name as usual; the returned
+  callable's name is ignored and its signature is the grammar.  The
+  thunk's own docstring is the summary, so the bare page's command
+  listing and completion never import anything; only naming the
+  command on the line, or asking for its full help page, resolves
+  the thunk.  A thunk may return a class, whose subcommand tree is
+  then built lazily with it.  Nothing today introspects a node's
+  body before its plan builds, so nothing to keep in mind beyond
+  that.
+
 
 ## Appendix: every dated "ruled" comment in the code
 
