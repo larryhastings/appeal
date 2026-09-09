@@ -6410,8 +6410,6 @@ def test_class_as_app_nested():
     out = []
     app = _appeal.Appeal(name='outer', repeat=True)
 
-    db_app = app.command('Db')      # fetched OUTSIDE: a class body's
-                                    # names aren't visible in a nested one
     @app.global_command()
     class Outer:
         def __init__(self, *, verbose=False):
@@ -6421,8 +6419,13 @@ def test_class_as_app_nested():
         def top(self, x: int):
             out.append(('top', self.verbose, x))
 
-        @db_app
+        @app.command()
         class Db:
+            # the node, fetched in the class body (Larry's spelling,
+            # 2026-09-09): the body runs before the class's decorator,
+            # and the decorator bodies this same node
+            db_app = app.command('Db')
+
             def __init__(self, name):
                 self.name = name
                 out.append(('db', name))

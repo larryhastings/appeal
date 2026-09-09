@@ -1771,6 +1771,21 @@ Here's what that means:
 * A *nested class* decorated with `@app.command()` is a
   subcommand set: the inner class constructs from the parent
   instance, and *its* decorated methods are its subcommands.
+  Its methods decorate through the class's own node, fetched
+  inside the class body (a class body runs before the decorator
+  on the class does, and the node is the same one either way):
+
+  ```Python
+      @app.command()
+      class db:
+          db_app = app.command('db')
+          def __init__(self, label):
+              self.label = label
+
+          @db_app.command()
+          def wipe(self):
+              print(f"wiping {self.label}")
+  ```
 
 Where do the constructed instances go?  Appeal logs them.
 After a run, `app.instances` is a list of `(command, instance)`
