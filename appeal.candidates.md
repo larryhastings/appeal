@@ -253,6 +253,17 @@ it so you can decide whether the env should be keyed by plan identity.
   are one flat list, so nothing to keep in mind beyond not adding
   such an assumption.
 
+* **Localization of parser messages** (Larry, 2026-09-09, parity
+  review item 21; deferred, wanted if Appeal gets popular).  gettext
+  over the messages the *user* sees: 31 UsageError sites, each an
+  f-string today, each becoming a looked-up template with named
+  holes.  The help page's fixed headings already come from the app's
+  templates; `usage:`/`error:` are one string each.  Configuration
+  errors are for the author and stay English (argparse's do too).
+  What to keep true meanwhile: messages are whole sentences with
+  named holes, never concatenated fragments, since translations
+  reorder words.
+
 
 ## Appendix: every dated "ruled" comment in the code
 
