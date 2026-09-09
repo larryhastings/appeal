@@ -507,7 +507,7 @@ class OptionRule:
                                present=not grammar_default))
 
         if (callable(annotation)
-                and not isinstance(annotation, type)
+                and annotation not in _blessed_leaves
                 and getattr(annotation, '__origin__', None) is None
                 and not hasattr(annotation, 'factory')
                 and annotation is not inspect.Parameter.empty
@@ -1038,7 +1038,15 @@ class Plan:
             return f'[{body}]'
 
         def body_text(plan, rename=None):
-            bits = [option_text(o) for o in plan.options]
+            # options that feed one parameter are alternatives: the
+            # last given wins, so they read as a choice, [--json | --yaml]
+            # (Larry, 2026-09-09: exclusivity is one parameter, one value)
+            groups = {}
+            for o in plan.options:
+                groups.setdefault(o.name, []).append(option_text(o))
+            bits = [' | '.join(texts) if len(texts) == 1
+                    else '[' + ' | '.join(t[1:-1] for t in texts) + ']'
+                    for texts in groups.values()]
             bits.extend(slot_text(s, rename) for s in plan.slots)
             return ' '.join(bits)
 
@@ -1695,6 +1703,8 @@ from . import (
     )
 
 
+_FunctionType = type(lambda: None)
+
 # terminal converters: called with one operand string, never introspected
 # (verbatim among them: the engine knows it by identity)
 _blessed_leaves = {str, int, float, bool, verbatim}
@@ -1749,11 +1759,15 @@ def _is_option_group(annotation):
     parameters, nested converters, or keyword-only options--rather
     than a flat row of required terminals?
     """
-    if not callable(annotation) or isinstance(annotation, type):
+    if not callable(annotation):
         return False
     if annotation in _blessed_leaves:
-        return False   # pragma: no cover -- the blessed leaves are all
-                       # types, and types bailed at the isinstance check
+        return False
+    if isinstance(annotation, type) and not isinstance(
+            annotation.__init__, _FunctionType):
+        # a class is a group only when a Python __init__ is its grammar;
+        # a builtin's (complex(real=0, imag=0)) is one string in
+        return False
     if getattr(annotation, '__origin__', None) is not None:
         return False
     if hasattr(annotation, 'factory'):

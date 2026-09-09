@@ -630,6 +630,47 @@ Some option syntax worth knowing, all demonstrated on `--color`:
   just works (unless your program actually defines a `-5`
   option, in which case you have only yourself to blame).
 
+### Mutually Exclusive Options
+
+Other libraries have a "mutually exclusive group": declare
+`--json` and `--yaml` separately, then tell the parser they
+can't both appear.  Appeal doesn't need the second step,
+because exclusivity is what you get when two options feed *one
+parameter*:
+
+```Python
+def json_format(*, indent: int = 0):
+    return ('json', indent)
+
+def yaml_format():
+    return ('yaml',)
+
+@app.command()
+@app.option('format', '--json', annotation=json_format)
+@app.option('format', '--yaml', annotation=yaml_format)
+def export(*, format=None):
+    ...
+```
+
+The usage line says what that means:
+
+    export [--yaml | --json [-i|--indent <INDENT>]]
+
+One parameter holds one value, so `--json` and `--yaml` are
+alternatives, and the last one given wins, the same rule as any
+repeated option (a shell alias can say `--json` and the user
+can still type `--yaml`).  Each alternative brings its own
+grammar along: `--json --indent 2` works and `--yaml --indent
+2` is an error, because `--indent` belongs to `json_format`.
+An alternative that needs nothing is a plain function with no
+parameters; one that needs a value takes it as a parameter
+(`--file PATH` versus `--stdin`, both feeding `input`).  The
+same works with classes, whose `__init__` is the grammar.
+
+There is no "exactly one is required" spelling, for the same
+reason there are no required options: give the parameter a
+default instead.
+
 
 ## Commands, The Global Command, And Subcommands
 

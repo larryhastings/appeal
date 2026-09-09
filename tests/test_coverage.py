@@ -5918,3 +5918,57 @@ def test_verbatim():
     def wipe(): pass
     assert tree.complete(['db'], '-') == []
     assert tree.complete(['db', '-x'], 'w') == ['wipe']
+
+
+def test_exclusive_options_feed_one_parameter():
+    # Larry's answer to mutually exclusive groups (2026-09-09): two
+    # option strings feeding one parameter ARE the exclusivity--one
+    # parameter holds one value, the last given wins, and each
+    # alternative brings its own grammar.  Usage shows them as a
+    # choice.  Classes with a Python __init__ are groups like the
+    # equivalent functions (the bug fixed the same day); a builtin
+    # with a C signature (complex) stays one string in.
+    from big.stylesheet import strip_styles
+    def json_format(*, indent: int = 0): return ('json', indent)
+    def yaml_format(): return ('yaml',)
+    class Json:
+        def __init__(self, *, indent: int = 0): self.indent = indent
+    class Yaml:
+        pass
+    app = Appeal(name='t')
+    @app.command()
+    @app.option('format', '--json', annotation=json_format)
+    @app.option('format', '--yaml', annotation=yaml_format)
+    def export(*, format=None, verbose=False): return format
+    @app.command()
+    @app.option('format', '--json', annotation=Json)
+    @app.option('format', '--yaml', annotation=Yaml)
+    def export2(*, format=None): return format
+    @app.command()
+    def export3(*, format: Json = None): return format
+    @app.command()
+    def watch(*, c: complex = None): return c
+    got = lambda argv: app.process(argv).result
+    assert got(['export']) is None
+    assert got(['export', '--json']) == ('json', 0)
+    assert got(['export', '--json', '--indent', '2']) == ('json', 2)
+    assert got(['export', '--yaml']) == ('yaml',)
+    assert got(['export', '--json', '--yaml']) == ('yaml',)      # last wins
+    assert got(['export', '--yaml', '--json', '-i', '3']) == ('json', 3)
+    try:
+        got(['export', '--yaml', '--indent', '2'])
+        assert False
+    except UsageError as e:
+        assert 'unknown option' in str(e) or "can't be used" in str(e), e
+    assert strip_styles(app.plan_for('export').usage()) == \
+        't export [--yaml | --json [-i|--indent <INDENT>]] [-v|--verbose]'
+    # the class spellings
+    assert got(['export2', '--json', '--indent', '2']).indent == 2
+    assert isinstance(got(['export2', '--yaml']), Yaml)
+    assert got(['export3', '--format']).indent == 0
+    assert got(['export3', '--format', '-i', '4']).indent == 4
+    assert strip_styles(app.plan_for('export3').usage()) == \
+        't export3 [-f|--format [-i|--indent <INDENT>]]'
+    # a builtin type is still a value option: one token, converted
+    assert got(['watch', '-c', '-3j']) == -3j
+    assert strip_styles(app.plan_for('watch').usage()) == 't watch [-c <C>]'
