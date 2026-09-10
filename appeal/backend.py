@@ -917,15 +917,16 @@ class Engine:
         Every converter entered in this era owes its required options
         (Larry, 2026-09-10): a keyword-only parameter with no default.
         Structural--pass 1, before anything runs--like a missing
-        argument.  `supplied`: names a bound config supplies to the
-        root converter, which satisfy it too.
+        argument.  `supplied`: the ids of the OptionRules a bound
+        config supplies an occurrence of--resolved by the vet, so a
+        config key mapped under another name, or aimed at a nested
+        owner, counts (Astra D03).
         """
         for converter in self.entered:
             missing = {}
             for rule in type(converter).plan.options:
                 if (rule.required and rule.name not in converter.kwargs
-                        and not (converter is self.root
-                                 and rule.name in supplied)):
+                        and id(rule) not in supplied):
                     missing.setdefault(rule.name, []).append(rule.key)
             for keys in missing.values():
                 # several strings feeding one parameter: name them all

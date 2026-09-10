@@ -665,88 +665,107 @@ def _config_vet(plan, table_words, config, command_plan_for,
     return vetted
 
 
+def _read_bool(value, path):
+    "load's strict boolean reader, for the scan (no user code runs)."
+    from .load import _read_bool
+    return _read_bool(value, path)
+
+
 def _config_apply(conv, table, plan, config, plan_for, strict=True):
     """
-    Layer a precommand era's BOUND config mapping onto its parsed
-    converter: defaults < config < argv, atomic per option.  Keys are
-    vetted strictly (_config_vet).  Each vetted option argv did NOT set
-    is read the way a mapping is read--load's by-name reader, the same
-    converters--and ASSIGNED TO ITS OWNER: the era's converter for its
-    own options; the argv-built nested instance for a nested converter's
-    option; else that nested converter is built from the mapping, with
-    defaults for the rest.  Nothing is re-serialized as a command line
-    (Astra R02: that replay lost values--an option living on a positional
-    converter, a by-name group mapping that skipped an optional operand).
-    A false flag is ABSENT (the documented policy); conversion failures
-    carry 'config:' provenance and name the key.
+    Layer a config mapping onto a parsed converter: defaults < config <
+    argv, atomic per option.  Keys are vetted strictly (_config_vet).
+    Each vetted key is first taken to its DESTINATION--the era's
+    converter for its own options; the argv-built nested instance for
+    a nested converter's option; else the nearest owner argv never
+    built--and only then decided (Astra D01/D02, 2026-09-10: the old
+    order converted first and asked afterward, so argv's win still ran
+    the config value's converter, and a nested owner argv hadn't built
+    was rebuilt per key, each build discarding the last).  A value
+    argv already set is never converted; an unbuilt owner collects
+    every key aimed at it and is built ONCE, from one mapping, by
+    load's by-name reader--the same converters, each run once.
+    Nothing is re-serialized as a command line (Astra R02).  A false
+    flag is ABSENT (the documented policy); conversion failures carry
+    'config:' provenance and name the key.
     """
     from .frontend import Nullary
     from .load import _option_value, _read_group, _read_bool
     vetted = _config_vet(plan, frozenset(table), config, plan_for, strict)
     owners = {id(rule): owner for owner, rule in plan.all_options()}
+    pending = {}            # an owner argv never built -> its mapping
     for key, rule in vetted.items():
         raw = config[key]
         name = rule.name
         try:
-            if rule.is_flag:
-                if not _read_bool(raw, name):
-                    continue                    # false: absent, default stays
-                value = rule.present
-            elif isinstance(rule, Nullary):
-                if not _read_bool(raw, name):
+            holder = conv
+            path = _owner_path(plan, owners[id(rule)])
+            for k, step in enumerate(path):
+                node = step[1]
+                if step[0] == 'option':
+                    instance = holder.kwargs.get(node.name)
+                    slot_key = node.name
+                else:
+                    index = step[2]
+                    if index is None:
+                        raise AppealConfigurationError(
+                            f"config: {name!r} lives on a converter behind a "
+                            f"*args slot; a mapping can't say which window")
+                    instance = holder.args[index]
+                    slot_key = index
+                if isinstance(instance, Converter):
+                    holder = instance               # argv built it: descend
                     continue
-                value = rule.converters[0]()
+                # argv didn't build this level: this key joins the mapping
+                # the owner is built from, by name, nested by the rest of
+                # the path; defaults for everything else
+                mapping = {name: raw}
+                for later in reversed(path[k + 1:]):
+                    mapping = {later[1].name: mapping}
+                entry = pending.setdefault(
+                    (id(holder), id(node)), (holder, step, slot_key, {}))
+                _merge_mapping(entry[3], mapping)
+                break
             else:
-                value = _option_value(rule, raw, name, strict)
-            _config_assign(conv, plan, owners[id(rule)], name, raw, value,
-                           strict, _read_group)
+                if name in holder.kwargs:
+                    continue                        # argv wins, whole: the
+                                                    # config value never converts
+                if rule.is_flag:
+                    if not _read_bool(raw, name):
+                        continue                # false: absent, default stays
+                    holder.kwargs[name] = rule.present
+                elif isinstance(rule, Nullary):
+                    if not _read_bool(raw, name):
+                        continue
+                    holder.kwargs[name] = rule.converters[0]()
+                else:
+                    holder.kwargs[name] = _option_value(rule, raw, name, strict)
         except (AppealDataError, ValueError, TypeError) as e:
             # the reader names the innermost parameter it blamed
             param = e.param if isinstance(e, AppealDataError) else None
             raise AppealDataError(f"config: {e}",
                                   param=param or name) from None
-
-
-def _config_assign(conv, plan, owner_plan, name, raw, value, strict,
-                   read_group):
-    """
-    Put a config value on its owner, argv winning per option.  The owner
-    is reached by the plan path from the era's converter: through
-    argv-built nested instances where they exist, else by BUILDING the
-    nested converter from a by-name mapping of the config value (its
-    other parameters default).
-    """
-    holder = conv
-    path = _owner_path(plan, owner_plan)
-    for k, step in enumerate(path):
+    for holder, step, slot_key, mapping in pending.values():
         node = step[1]
-        if step[0] == 'option':
-            instance = holder.kwargs.get(node.name)
-            slot_key = node.name
-        else:
-            index = step[2]
-            if index is None:
-                raise AppealConfigurationError(
-                    f"config: {name!r} lives on a converter behind a *args "
-                    f"slot; a mapping can't say which window")
-            instance = holder.args[index]
-            slot_key = index
-        if isinstance(instance, Converter):
-            holder = instance                   # argv built it: descend
-            continue
-        # argv didn't build this level: build the rest from config, by
-        # name, defaults for everything else
-        mapping = {name: raw}
-        for later in reversed(path[k + 1:]):
-            mapping = {later[1].name: mapping}
-        built = read_group(node.child, mapping, node.name, strict)
+        try:
+            built = _read_group(node.child, mapping, node.name, strict)
+        except (AppealDataError, ValueError, TypeError) as e:
+            param = e.param if isinstance(e, AppealDataError) else None
+            raise AppealDataError(f"config: {e}",
+                                  param=param or node.name) from None
         if step[0] == 'option':
             holder.kwargs[slot_key] = built
         else:
             holder.args[slot_key] = built
-        return
-    if name not in holder.kwargs:               # argv wins, whole
-        holder.kwargs[name] = value
+
+
+def _merge_mapping(into, mapping):
+    "Fold a nested by-name mapping into another, deepest keys included."
+    for key, value in mapping.items():
+        if isinstance(value, dict) and isinstance(into.get(key), dict):
+            _merge_mapping(into[key], value)
+        else:
+            into[key] = value
 
 
 def _owner_path(plan, target):
@@ -2953,14 +2972,22 @@ class Appeal:
             if ahead is not None:               # the next era, shared back
                 proc.seed(backend.handlers_of(*ahead))
             proc._loop()
+            supplied = frozenset()
             if step.config:
                 # config KEY vetting is structural -- fire its refusals
-                # in the scan (the value merge is at execute)
+                # in the scan (the value merge is at execute).  What it
+                # resolved feeds the required check: the RULES the mapping
+                # supplies an occurrence of (a false flag supplies none)--
+                # never the raw key names (Astra D03, 2026-09-10)
                 owner = self if era.kind == 'head' else self._children[era.word]
-                _config_vet(step.plan, frozenset(owner._table()),
-                            step.config[0], owner.plan_for, step.config[1])
-            proc.check_required(
-                frozenset(step.config[0]) if step.config else frozenset())
+                vetted = _config_vet(step.plan, frozenset(owner._table()),
+                                     step.config[0], owner.plan_for,
+                                     step.config[1])
+                supplied = frozenset(
+                    id(rule) for key, rule in vetted.items()
+                    if not (rule.is_flag and not _read_bool(step.config[0][key],
+                                                            key)))
+            proc.check_required(supplied)
         except AppealDataError as e:
             if era.kind == 'head':
                 # an era-level error (a bad program-wide option, a config

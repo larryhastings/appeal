@@ -6954,3 +6954,80 @@ start  Start it.
     assert out.getvalue().startswith(
         'usage: a-very-long-program-name [-h|--help] <ALPHA_ONE> <ALPHA_TWO>\n'
         '               <ALPHA_THREE> <ALPHA_FOUR> <ALPHA_FIVE> <ALPHA_SIX>\n'), out.getvalue()
+
+
+def test_config_locates_before_converting():
+    # Astra's delta review, D01-D03 (2026-09-10): config takes each key
+    # to its destination FIRST.  A value argv already set is never
+    # converted (argv wins, whole, without running the loser's
+    # converter); an owner argv never built is built ONCE from one
+    # mapping holding every key aimed at it; the required check gets
+    # the rules the vet resolved, so a config key mapped under another
+    # name, or aimed at a nested owner, satisfies a required option,
+    # and a false flag supplies nothing.
+    def app_for(config=None):
+        return Appeal(name='probe', config=config, doc='',
+                      default_mappings=None, stylesheet=False)
+    # D01: both keys reach one unbuilt owner, whichever order
+    def group(*, first: int = 0, second: int = 0): return (first, second)
+    for config in ({'first': '1', 'second': '2'}, {'second': '2', 'first': '1'}):
+        app = app_for(config)
+        @app.precommand()
+        def main(g: group = None): return g
+        assert app.process([]).result == (1, 2), config
+    # D01: the nested value converts once
+    calls = []
+    def number(text):
+        calls.append(text); return int(text)
+    def group2(*, count: number = 0): return count
+    app = app_for({'count': '3'})
+    @app.precommand()
+    def main2(g: group2 = None): return g
+    assert app.process([]).result == 3 and calls == ['3'], calls
+    # D02: argv wins without converting the config value
+    app = app_for({'count': 'not-an-integer'})
+    @app.precommand()
+    def main3(*, count: int = 0): return count
+    assert app.process(['--count', '4']).result == 4
+    calls.clear()
+    app = app_for({'count': '3'})
+    @app.precommand()
+    def main4(*, count: number = 0): return count
+    assert app.process(['--count', '4']).result == 4 and calls == ['4'], calls
+    # D03: the config alias satisfies a required option
+    app = app_for({'token_value': 'secret'})
+    @app.precommand()
+    @app.option('token', '--token', config='token_value')
+    def main5(*, token): return token
+    assert app.process([]).result == 'secret'
+    # D03: an entered nested owner's required option, from config
+    def group3(label, *, token): return (label, token)
+    app = app_for({'token': 'secret'})
+    @app.precommand()
+    def main6(g: group3): return g
+    assert app.process(['label']).result == ('label', 'secret')
+    # D03: a false flag supplies nothing: required is reported
+    app = app_for({'flag': False})
+    @app.precommand()
+    def main7(*, flag: bool): return flag
+    try:
+        app.process([])
+        assert False
+    except UsageError as e:
+        assert 'missing option' in str(e), e
+    # an unbuilt owner two levels down: keys merge into one nested
+    # mapping; a bad value in it fails with config: provenance
+    def inner(*, a: int = 0, b: int = 0): return (a, b)
+    def outer(*, deep: inner = None, c: int = 0): return (deep, c)
+    app = app_for({'a': '1', 'b': '2', 'c': '3'})
+    @app.precommand()
+    def main8(o: outer = None): return o
+    assert app.process([]).result == ((1, 2), 3)
+    app = app_for({'a': 'x', 'b': '2'})
+    @app.precommand()
+    def main9(o: outer = None): return o
+    try:
+        app.process([])
+        assert False
+    except AppealDataError as e:
+        assert str(e).startswith("config: ") and str(e).endswith("(at o.deep.a)"), e
