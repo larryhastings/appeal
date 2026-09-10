@@ -7131,3 +7131,19 @@ def test_deprecation_is_judged_by_the_binding_that_ran():
     with contextlib.redirect_stderr(err):
         assert app2.process(['go', '--flag']).result == 'ok'
     assert err.getvalue() == "warning: option '--flag' is deprecated\n", err.getvalue()
+
+
+def test_hidden_options_are_recognized_by_completion():
+    # Astra's delta review, D06 (2026-09-10): hiding an option removed
+    # it from completion's table entirely, so a typed `--secret value`
+    # lost its arity and shifted the operand positions.  The table
+    # keeps the grammar; only the offer leaves the option out.
+    app = Appeal(name='probe', doc='', default_mappings=None, stylesheet=False)
+    @app.command()
+    @app.option('secret', '--secret', restriction='hidden')
+    def go(color: appeal.validate('red', 'blue'), *, secret='', loud=False):
+        return (color, secret)
+    assert app.process(['go', '--secret', 'value', 'red']).result == ('red', 'value')
+    assert app.complete(['go'], '--') == ['--loud']
+    assert app.complete(['go', '--secret', 'value'], '') == ['blue', 'red']
+    assert app.complete(['go', '--secret', 'value', '--loud'], '') == ['blue', 'red']

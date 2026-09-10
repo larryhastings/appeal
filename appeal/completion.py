@@ -75,9 +75,14 @@ def completion_table(plan):
     """
     options = {}
     values = {}
+    hidden = set()                      # recognized, never offered: the
+                                        # table keeps a hidden option's
+                                        # grammar so the words already typed
+                                        # scan right (Astra D06); the offer
+                                        # filters it out
     for owner, o in plan.all_options():
         if o.restriction == 'hidden':
-            continue                    # recognized, never offered
+            hidden.update(o.strings)
         entry = o.table_entry(windowed=owner.windowed)
         kind = entry[1]
         base = kind[2:] if kind[:2] in ('w:', 's:') else kind
@@ -136,6 +141,7 @@ def completion_table(plan):
         'values': values,
         'operands': tuple(operands),
         'verbatim': plan.verbatim_sites(),
+        'hidden': frozenset(hidden),
         'repeat': repeat[0],
         'minimum': plan.minimum,
         'maximum': plan.maximum,
@@ -328,9 +334,10 @@ def _pending_candidates(table, pending, prefix):
 
 
 def _option_candidates(table, used, prefix):
+    hidden = table['hidden']
     candidates = [s for s, (key, nargs, repeatable)
                   in table['options'].items()
-                  if s.startswith(prefix)
+                  if s.startswith(prefix) and s not in hidden
                   and s not in used and key not in used]
     candidates.extend(s for s in table.get('help', ())
                       if s.startswith(prefix))
