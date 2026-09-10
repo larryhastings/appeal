@@ -46,3 +46,13 @@ which goes away.  One mapping whose shape mirrors the command tree:
   keys for a newer version).
 * Update: the config-layering docs and tests; drop precommand(config=,
   strict=).
+
+## Literal and choice completion (Larry, 2026-09-10; parity review item 16)
+
+* `Literal['red', 'blue']` means `validate('red', 'blue')`: strings and
+  ints only (the leaves that round-trip).  Recognized by identity on
+  the object the user already imported (the pathlib trick: never
+  import `typing` for it).  Today it fails at parse time with "Cannot
+  instantiate typing.Literal".
+* `validate(...)` offers its values to completion: it knows the closed
+  set, it just never told the protocol.  One `completions` attribute.
