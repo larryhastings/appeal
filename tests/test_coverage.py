@@ -6626,35 +6626,82 @@ def test_nested_documentation_across_option_edges():
 
 def test_argument_edges_always_merge():
     # Larry, 2026-09-10, the dark corner: the "asked for it" gate is
-    # only at option edges.  An argument edge always merges, so rgb's
-    # entries climb through color (no sections at all) into render.
-    from big.stylesheet import strip_styles
-    from appeal.presentation import merge_docs
-    app = Appeal(name='tool')
+    # only at option edges.  The SAME color converter (rgb nested
+    # inside it, color writing no sections) used two ways: as an
+    # argument, rgb's entries climb through color into render's table;
+    # as an option, color clips them--its row is its summary, nothing
+    # beneath--though the usage line still spells the grammar out.
+    import contextlib, io
+    app = Appeal(name='tool', stylesheet=False)
     def rgb(r: float, g: float, b: float):
         """
-        A trio.
+        A trio of color float values, defining one RGB color.
 
         # Arguments
         r
-        : Red.
+        : The value of the red component of this color.
         g
-        : Green.
+        : The value of the green component of this color.
         b
-        : Blue.
+        : The value of the blue component of this color.
         """
-    def color(hue: rgb, *, saturation: float = 1):
-        "An RGB color, further influenced."
+        return (r, g, b)
+    def color(hue: rgb, *, saturation: float = 1, value: float = 1):
+        """
+        An RGB color, further influenced by saturation and value.
+        """
+        return (hue, saturation, value)
     @app.command()
     def render(text, color: color):
-        "Render text with a color."
-    corpus = merge_docs(app.plan_for('render'))
-    assert [(strip_styles(d), l) for d, l, _ in corpus['arguments']] == \
-        [('<TEXT>', []), ('<R>', ['Red.']), ('<G>', ['Green.']), ('<B>', ['Blue.'])]
-    assert [strip_styles(d) for d, _, _ in corpus['options']] == \
-        ['-s|--saturation <SATURATION>']
-    # ...but the same color as an OPTION clips rgb, sections unasked
+        """
+        Render text with a color.
+        """
     @app.command()
-    def render2(text, *, color: color = None): pass
-    (row,) = merge_docs(app.plan_for('render2'))['options']
-    assert row[1] == ['An RGB color, further influenced.'] and row[2] == ()
+    def render2(text, *, color: color):
+        """
+        Render text with a color, given as an option.
+        """
+    def page(word):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            app.help(word)
+        return out.getvalue()
+    assert page('render') == """\
+usage: tool render [-h|--help] <TEXT> [-s|--saturation <SATURATION>]
+       [-v|--value <VALUE>] <R> <G> <B>
+
+Render text with a color.
+
+Arguments
+---------
+
+<TEXT>
+<R>     The value of the red component of this color.
+<G>     The value of the green component of this color.
+<B>     The value of the blue component of this color.
+
+Options
+-------
+
+-s|--saturation <SATURATION>
+-v|--value <VALUE>
+"""
+    assert page('render2') == """\
+usage: tool render2 [-h|--help] -c|--color
+       [-s|--saturation <SATURATION>] [-v|--value <VALUE>] <R> <G> <B> <TEXT>
+
+Render text with a color, given as an option.
+
+Arguments
+---------
+
+<TEXT>
+
+Options
+-------
+
+-c|--color <R> <G> <B>  An RGB color, further influenced by saturation and
+                        value.
+"""
+
+
