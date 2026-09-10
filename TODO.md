@@ -56,3 +56,11 @@ which goes away.  One mapping whose shape mirrors the command tree:
   instantiate typing.Literal".
 * `validate(...)` offers its values to completion: it knows the closed
   set, it just never told the protocol.  One `completions` attribute.
+
+## Refuse async commands (Larry, 2026-09-10; parity review item 26)
+
+An `async def` command or converter is refused when its plan builds:
+"'fetch' is a coroutine function; wrap it: def fetch(...): return
+asyncio.run(...)".  Never run it for them (choosing an event loop is
+magic, and breaks inside a running loop).  Today it returns an
+unawaited coroutine and the command silently does nothing.
