@@ -2709,7 +2709,7 @@ class Appeal:
         Returns the Processor for this run: its .result is the command's
         return value, .instances the execution log.  (A shortcut for
         Processor(app)(args); see Processor.)  Config is no longer passed
-        here -- bind it per precommand via @app.precommand(config=...).
+        here -- bind it to the app via Appeal(config=...).
         """
         processor = Processor(self)
         processor(args)

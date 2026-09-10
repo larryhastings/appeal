@@ -209,8 +209,12 @@ def validate(*values, type=None):
             allowed = ', '.join(repr(v) for v in values)
             raise ValueError(f"must be one of {allowed}")
         return value
+    def completions(prefix):
+        # the closed set, offered to tab completion (Larry, 2026-09-10)
+        return tuple(s for s in map(str, values) if s.startswith(prefix))
     validate_converter.__name__ = 'validate'
     validate_converter.recipe = True
+    validate_converter.completions = completions
     return validate_converter
 
 

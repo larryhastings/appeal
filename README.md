@@ -1323,6 +1323,11 @@ You can pass in an explicit type using a `type=`
 named argument to `validate()`; if you omit it,
 it uses the type of the first argument.
 
+Python's own spelling of "one of these" works too:
+`typing.Literal['up', 'down']` means exactly
+`validate('up', 'down')`, everywhere an annotation goes.
+Either way, tab completion offers the choices.
+
 Appeal also has a built-in range validator
 called `validate_range()`.  It takes `start`
 and `stop` arguments the same way Python's

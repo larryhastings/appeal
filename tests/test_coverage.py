@@ -6279,3 +6279,49 @@ def test_config_tree():
         assert False
     except UsageError as e:
         assert str(e) == "missing option '--remote'", e
+
+
+def test_literal_and_choice_completion():
+    # Larry, 2026-09-10 (parity review item 16): Literal['red', 'blue']
+    # means validate('red', 'blue')--recognized through the sys.modules
+    # probe, never an import of typing--and validate offers its closed
+    # set to tab completion.  Everywhere an annotation goes: argument,
+    # option, @app.option's annotation=, *args, inside a converter.
+    import typing
+    app = Appeal(name='t')
+    @app.command()
+    def paint(color: typing.Literal['red', 'blue'], *,
+              level: typing.Literal[1, 2, 3] = 1): return (color, level)
+    @app.command()
+    @app.option('mode', '-m', '--mode', annotation=typing.Literal['fast', 'slow'])
+    def run(*, mode='fast'): return mode
+    @app.command()
+    def many(*shades: typing.Literal['light', 'dark']): return shades
+    got = lambda argv: app.process(argv).result
+    assert got(['paint', 'red']) == ('red', 1)
+    assert got(['paint', 'blue', '--level', '3']) == ('blue', 3)
+    assert got(['run', '-m', 'slow']) == 'slow'
+    assert got(['many', 'light', 'dark', 'light']) == ('light', 'dark', 'light')
+    for argv, message in ((['paint', 'green'], "invalid value for 'color': 'green' (must be one of 'red', 'blue')"),
+                          (['paint', 'red', '--level', '4'], "invalid value for 'level': '4' (must be one of 1, 2, 3)"),
+                          (['paint', 'red', '--level', 'x'], "invalid value for 'level': 'x'")):
+        try:
+            got(argv)
+            assert False, argv
+        except UsageError as e:
+            assert str(e).startswith(message), (argv, str(e))
+    # completion: the choices, filtered by the prefix
+    assert app.complete(['paint'], '') == ['blue', 'red']
+    assert app.complete(['paint'], 'r') == ['red']
+    assert app.complete(['paint', 'red', '--level'], '') == ['1', '2', '3']
+    assert app.complete(['run', '-m'], 's') == ['slow']
+    assert app.complete(['many', 'light'], 'd') == ['dark']
+    assert appeal.validate('a', 'b').completions('') == ('a', 'b')
+    # mixed types are validate's refusal, by name
+    try:
+        @app.command()
+        def mixed(x: typing.Literal['a', 1]): pass
+        app.plan_for('mixed')
+        assert False
+    except AppealConfigurationError as e:
+        assert 'non-homogeneous' in str(e), e

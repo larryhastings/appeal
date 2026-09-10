@@ -1767,9 +1767,15 @@ def dereference_annotated(annotation):
     # typing IS loaded, the local import is free (already in sys.modules).
     import sys
     typing = sys.modules.get('typing')
-    if typing is not None and \
-            type(annotation) is type(typing.Annotated[int, str]):
-        return annotation.__metadata__[-1]
+    if typing is not None:
+        if type(annotation) is type(typing.Annotated[int, str]):
+            return annotation.__metadata__[-1]
+        # Literal['red', 'blue'] means validate('red', 'blue') (Larry,
+        # 2026-09-10): Python's own spelling of "one of these"--the same
+        # sys.modules probe, never an import of typing (3.5ms)
+        if getattr(annotation, '__origin__', None) is typing.Literal:
+            from . import validate
+            return validate(*annotation.__args__)
     # X | None (PEP 604 builtin unions, 3.10+): the None arm is for the
     # type checker--it's the default's type--and X is the converter.
     # Only the BUILTIN spelling; typing.Optional/typing.Union stay

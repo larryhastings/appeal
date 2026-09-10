@@ -2,19 +2,6 @@
 
 Agreed work, not yet built.  Larry's rulings; one entry per item.
 
-## Literal and choice completion (Larry, 2026-09-10; parity review item 16)
-
-* `Literal['red', 'blue']` means `validate('red', 'blue')`: strings and
-  ints only (the leaves that round-trip).  The pathlib trick: peek
-  at sys.modules for `typing` (3.5ms to import, more than Appeal;
-  never imported for this), and if present test the annotation's
-  `__origin__` against `typing.Literal` by identity; the values are
-  `__args__`.  One more case beside the list[T]/dict[K, V] origin
-  reads.  Today it fails at parse time with "Cannot instantiate
-  typing.Literal".  (Literal is 3.8+; older Pythons can't spell it.)
-* `validate(...)` offers its values to completion: it knows the closed
-  set, it just never told the protocol.  One `completions` attribute.
-
 ## Refuse async commands (Larry, 2026-09-10; parity review item 26)
 
 An `async def` command or converter is refused when its plan builds:
