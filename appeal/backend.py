@@ -58,13 +58,14 @@ class OptionInstruction:
         conv = self.converter
         owner = _Owner(self.owner)
         if conv is bool:
-            binding = LiveBinding(owner, self.name, self.rule.present)
+            binding = LiveBinding(owner, self.name, self.rule.present, self.rule)
         elif isinstance(conv, type) and issubclass(conv, Converter):
-            binding = GroupBinding(self.owner, self.name, conv, self.strings)
+            binding = GroupBinding(self.owner, self.name, conv, self.strings,
+                                   self.rule)
         elif isinstance(conv, type) and issubclass(conv, MultiOption):
             binding = MultiBinding(owner, self.name, self.rule)
         else:
-            binding = ValueBinding(owner, self.name, conv)
+            binding = ValueBinding(owner, self.name, conv, self.rule)
         for string in self.strings:
             if overwrite or string not in processor.handlers:
                 processor.handlers[string] = binding
@@ -102,9 +103,9 @@ class PreOptionInstruction:
         if self.factory is not None:
             binding = MultiBinding(target, self.name, self.rule)
         elif self.converter is not None:
-            binding = ValueBinding(target, self.name, self.converter)
+            binding = ValueBinding(target, self.name, self.converter, self.rule)
         else:
-            binding = LiveBinding(target, self.name, self.rule.present)
+            binding = LiveBinding(target, self.name, self.rule.present, self.rule)
         processor.handlers[self.string] = binding
 
 
@@ -457,11 +458,13 @@ class LiveBinding:
     instance, or one conjured by naming the option (Astra R09: the
     conjured path once stored `value == 'true'` unchecked).
     """
-    __slots__ = ('target', 'name', 'present')
-    def __init__(self, target, name, present):
+    __slots__ = ('target', 'name', 'present', 'rule')
+    def __init__(self, target, name, present, rule):
         self.target = target
         self.name = name
         self.present = present          # the plan's presence value (not default)
+        self.rule = rule                # the OptionRule this binding is: its
+                                        # identity outlives the spelling typed
     def invoke(self, processor, value=None, spelling=None):
         owner = self.target.resolve(processor)
         if value is None:
@@ -482,8 +485,9 @@ class ValueBinding:
     `constructor(*args)`.  A bare `(constructor,)` is a nullary converter:
     presence CALLS it, at execute.
     """
-    __slots__ = ('target', 'name', 'converter')
-    def __init__(self, target, name, converter):
+    __slots__ = ('target', 'name', 'converter', 'rule')
+    def __init__(self, target, name, converter, rule):
+        self.rule = rule
         self.target = target
         self.name = name
         self.converter = converter
@@ -539,10 +543,11 @@ class MultiBinding:
     invocation; the MultiOption is constructed and fed at execute.
     """
     __slots__ = ('target', 'name', 'factory', 'converters', 'minimum',
-                 'default')
+                 'default', 'rule')
     def __init__(self, target, name, rule):
         self.target = target
         self.name = name
+        self.rule = rule
         self.factory, self.converters, self.minimum, self.default = \
             _fold_shape(rule)
     def invoke(self, processor, value=None, spelling=None):
@@ -584,8 +589,9 @@ class GroupBinding:
     Siblings fall out of the flat table: --e2 re-registers them at e2.  No
     summon -- a shared option before any --e1/--e2 has no handler (error).
     """
-    __slots__ = ('owner', 'name', 'converter_cls', 'strings')
-    def __init__(self, owner, name, converter_cls, strings=()):
+    __slots__ = ('owner', 'name', 'converter_cls', 'strings', 'rule')
+    def __init__(self, owner, name, converter_cls, strings=(), rule=None):
+        self.rule = rule
         self.owner = owner
         self.name = name
         self.converter_cls = converter_cls
@@ -732,8 +738,12 @@ class Engine:
         self.pending = []               # the records to resolve, in token order
         self.entered = []               # every converter entered, in order:
                                         # each owes its required options
-        self.spellings = []             # every option string invoked, as
-                                        # typed: a deprecated one warns
+        self.invoked = []               # every option invocation: (the string
+                                        # as typed, the binding it selected)--
+                                        # the binding's rule says whether it's
+                                        # deprecated (Astra D05: a spelling
+                                        # isn't an identity; scope and sharing
+                                        # change its owner)
 
     def seed(self, bled):
         """
@@ -997,7 +1007,7 @@ class Engine:
                 longs = [k for k in self.handlers if k.startswith('--')]
                 raise UsageError(
                     f"unknown option {tok!r}{did_you_mean(tok, longs)}")
-            self.spellings.append(tok)
+            self.invoked.append((tok, binding))
             if value is not None and _takes_many(binding):
                 raise UsageError(
                     f"option {tok!r} takes several values; separate them with "
@@ -1012,7 +1022,7 @@ class Engine:
         for option, arg in parse_short_options(tok, classifiers):
             opt = '-' + option
             binding = self.handlers[opt]
-            self.spellings.append(opt)
+            self.invoked.append((opt, binding))
             if self._nullary(binding):                  # no oparg: a flag
                 binding.invoke(self, spelling=opt)
                 classifiers[:] = self._short_classifiers()

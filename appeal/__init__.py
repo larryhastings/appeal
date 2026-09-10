@@ -868,20 +868,22 @@ def _vet_restriction(restriction, where):
             f"not {restriction!r}")
 
 
-def _warn_deprecated_options(plans, spellings):
+def _warn_deprecated_options(invoked):
     """
     Using a deprecated option warns (Larry, 2026-09-10): the engine
-    kept every option string it invoked, as typed; each that belongs
-    to a deprecated rule of `plans` earns one line on stderr.  (A head
-    era's engine may invoke a neighbouring era's option--they share--
-    so a head step consults every head plan.)
+    kept every invocation as (the string typed, the binding it
+    selected), and the binding carries its OptionRule--so a shared
+    option invoked in a neighbouring era, or a spelling two scoped
+    converters both declare, is judged by the rule that actually ran,
+    never by scanning plans for the spelling (Astra D05).  One line
+    per spelling, on stderr.
     """
-    if not spellings:
-        return
-    deprecated = {s for plan in plans for _, o in plan.all_options()
-                  if o.restriction == 'deprecated' for s in o.strings}
-    for spelling in sorted(set(spellings)):
-        if spelling in deprecated:
+    warned = set()
+    for spelling, binding in invoked:
+        rule = binding.rule
+        if (rule is not None and rule.restriction == 'deprecated'
+                and spelling not in warned):
+            warned.add(spelling)
             print(f"warning: option {spelling!r} is deprecated",
                   file=_sys.stderr)
 
@@ -926,9 +928,7 @@ class _Step:
         if plan.binds is not None:              # a method/BIC command: self is
             conv.bound = env.get(plan.binds)    # its class's instance, built by
                                                 # an earlier step
-        _warn_deprecated_options(
-            node.global_plans() if self.kind == 'era' else (plan,),
-            self.proc.spellings)
+        _warn_deprecated_options(self.proc.invoked)
         if self.kind == 'era':
             try:
                 if self.config:

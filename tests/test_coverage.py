@@ -7096,3 +7096,38 @@ def test_command_paths_come_from_the_tree():
             assert False
         except SystemExit as e:
             assert e.code == 0
+
+
+def test_deprecation_is_judged_by_the_binding_that_ran():
+    # Astra's delta review, D05 (2026-09-10): a spelling isn't an
+    # option's identity--scope and sharing change its owner--so the
+    # engine keeps (spelling, binding) per invocation and the binding's
+    # rule decides.  Two scoped converters declaring --flag, only the
+    # first deprecated: the second's invocation doesn't warn.  A
+    # deprecated precommand option shared forward and invoked in the
+    # command's era: warns.
+    import contextlib, io
+    app = Appeal(name='probe', doc='', default_mappings=None, stylesheet=False)
+    @app.option('flag', '--flag', restriction='deprecated')
+    def first(x, *, flag=False): return (x, flag)
+    def second(y, *, flag=False): return (y, flag)
+    @app.precommand()
+    def main(a: first, b: second): return (a, b)
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        assert app.process(['1', '2', '--flag']).result == (('1', False), ('2', True))
+    assert err.getvalue() == '', err.getvalue()
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        assert app.process(['--flag', '1', '2']).result == (('1', True), ('2', False))
+    assert err.getvalue() == "warning: option '--flag' is deprecated\n", err.getvalue()
+    app2 = Appeal(name='probe', doc='', default_mappings=None, stylesheet=False)
+    @app2.precommand(share=True)
+    @app2.option('flag', '--flag', restriction='deprecated')
+    def main2(*, flag=False): return None
+    @app2.command()
+    def go(): return 'ok'
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        assert app2.process(['go', '--flag']).result == 'ok'
+    assert err.getvalue() == "warning: option '--flag' is deprecated\n", err.getvalue()
