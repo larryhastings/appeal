@@ -6325,3 +6325,52 @@ def test_literal_and_choice_completion():
         assert False
     except AppealConfigurationError as e:
         assert 'non-homogeneous' in str(e), e
+
+
+def test_async_commands_are_refused():
+    # Larry, 2026-09-10 (parity review item 26): an `async def` command
+    # or converter is refused when its plan builds--never run for them.
+    # Called, it returned an unawaited coroutine and did nothing.
+    import asyncio
+    app = Appeal(name='t')
+    async def fetch_async(url): return ('fetched', url)
+    @app.command()
+    def fetch(url): return asyncio.run(fetch_async(url))     # the wrapper
+    assert app.process(['fetch', 'u']).result == ('fetched', 'u')
+    app.command()(fetch_async)
+    try:
+        app.process(['fetch-async', 'u'])
+        assert False
+    except AppealConfigurationError as e:
+        assert str(e) == ("'fetch_async' is a coroutine function; wrap it "
+                          "in a plain function that calls asyncio.run()"), e
+    # a converter, and an async generator, and a method
+    app2 = Appeal(name='t2')
+    async def slow(text): return text
+    @app2.command()
+    def use(x: slow): pass
+    try:
+        app2.process(['use', 'a'])
+        assert False
+    except AppealConfigurationError as e:
+        assert "'slow' is a coroutine function" in str(e), e
+    app3 = Appeal(name='t3')
+    @app3.command()
+    async def stream():
+        yield 1
+    try:
+        app3.process(['stream'])
+        assert False
+    except AppealConfigurationError as e:
+        assert "'stream' is a coroutine function" in str(e), e
+    app4 = Appeal(name='t4')
+    @app4.global_command()
+    class App:
+        def __init__(self): pass
+        @app4.command()
+        async def go(self): pass
+    try:
+        app4.process(['go'])
+        assert False
+    except AppealConfigurationError as e:
+        assert "'go' is a coroutine function" in str(e), e

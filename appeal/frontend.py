@@ -76,6 +76,15 @@ class Parameter:
 
 _CO_VARARGS     = 0x04
 _CO_VARKEYWORDS = 0x08
+_CO_COROUTINE   = 0x80      # async def: a coroutine function
+_CO_ASYNC_GEN   = 0x200     # async def with yield
+
+
+def _is_coroutine_function(callable):
+    "An `async def` (function, or bound method of one)--never a class."
+    fn = getattr(callable, '__func__', callable)
+    co = getattr(fn, '__code__', None)
+    return co is not None and bool(co.co_flags & (_CO_COROUTINE | _CO_ASYNC_GEN))
 
 
 class Signature:
@@ -2191,6 +2200,16 @@ class SignaturePlan(Plan):
             if not name:
                 raise AppealConfigurationError(
                     f"can't determine a name for {callable!r}")
+        if _is_coroutine_function(callable):
+            # refused, never run for them (Larry, 2026-09-10): choosing
+            # an event loop is magic, and breaks inside a running one.
+            # Called, it would return an unawaited coroutine and the
+            # command would silently do nothing.
+            fn = getattr(getattr(callable, '__func__', callable),
+                         '__name__', name)
+            raise AppealConfigurationError(
+                f"{fn!r} is a coroutine function; wrap it in a plain "
+                f"function that calls asyncio.run()")
         build = build.within(callable)
         signature = inspect.signature(callable)
         decorations = build.decorations
