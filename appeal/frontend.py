@@ -1946,8 +1946,14 @@ def _leaf_callable(annotation, context):
 
 
 def _long_option(name):
-    "The long option string for a parameter name: color -> --color."
-    return '--' + name.replace('_', '-')
+    """
+    The long option string for a parameter name: color -> --color,
+    Dry_Run -> --dry-run.  Lowercased (0.6.4's rule, restored by Larry
+    2026-09-10): a capitalized parameter asks for its capital SHORT
+    option (-U), not a capitalized long one; @app.option keeps an
+    exact spelling when that's what's wanted.
+    """
+    return '--' + name.lower().replace('_', '-')
 
 
 def _short_option(name):

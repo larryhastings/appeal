@@ -517,8 +517,10 @@ First, I'll remind you, keyword-only parameters
 are presented as options on the command-line.
 Appeal automatically took each keyword-only parameter,
 added `'--'` to the front of the parameter name,
-and turned that into an option.  (Also, if the parameter
-name has any underscores, Appeal turns those into dashes.)
+and turned that into an option.  (Also, Appeal lowercases
+the name and turns any underscores into dashes: `Dry_Run`
+becomes `--dry-run`.  A capital letter still asks for a
+capital short option, `-D`.)
 
 Second, Appeal also automatically uses the first letter of a
 keyword-only parameter as a short option.  So the

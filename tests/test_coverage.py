@@ -6705,3 +6705,34 @@ Options
 """
 
 
+
+
+def test_default_long_option_is_lowercased():
+    # 0.6.4's rule, restored (Larry, 2026-09-10): the default long
+    # option is the parameter name lowercased, underscores to dashes;
+    # a capital letter asks for the capital SHORT (-U).  @app.option
+    # keeps whatever spelling it's given.
+    from big.stylesheet import strip_styles
+    app = Appeal(name='t')
+    @app.command()
+    def sync(*, Update=False, Dry_Run=False, verbose=False, Verbose_Mode=False):
+        return (Update, Dry_Run, verbose, Verbose_Mode)
+    assert strip_styles(app.plan_for('sync').usage()) == \
+        't sync [-U|--update] [-D|--dry-run] [-v|--verbose] [-V|--verbose-mode]'
+    assert app.process(['sync', '-U', '--dry-run', '-V']).result == (True, True, False, True)
+    try:
+        app.process(['sync', '--Update'])
+        assert False
+    except UsageError as e:
+        assert str(e).startswith("unknown option '--Update'"), e
+    @app.command()
+    @app.option('Update', '--Update')
+    def exact(*, Update=False): return Update
+    assert strip_styles(app.plan_for('exact').usage()) == 't exact [--Update]'
+    assert app.process(['exact', '--Update']).result is True
+    # the long-only and short-only policies agree
+    from appeal import default_long_option, default_short_option
+    app2 = Appeal(name='t2', default_options=default_long_option)
+    @app2.command()
+    def go(*, Dry_Run=False): pass
+    assert strip_styles(app2.plan_for('go').usage()) == 't2 go [--dry-run]'
