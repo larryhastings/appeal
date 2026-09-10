@@ -420,7 +420,6 @@ _LAZY_REEXPORTS = {
     'Decorations': 'frontend', 'build_plan': 'frontend',
     'default_options': 'frontend', 'default_long_option': 'frontend',
     'default_short_option': 'frontend',
-    'map_long_option': 'frontend', 'map_short_option': 'frontend',
     'strip_first_argument_from_signature': 'frontend',
     'strip_self_from_signature': 'frontend',
     'appeal_markdown_defaults': 'presentation', 'appeal_theme': 'presentation',

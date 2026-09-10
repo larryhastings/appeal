@@ -1945,22 +1945,6 @@ def _leaf_callable(annotation, context):
     return annotation
 
 
-def _long_option(name):
-    """
-    The long option string for a parameter name: color -> --color,
-    Dry_Run -> --dry-run.  Lowercased (0.6.4's rule, restored by Larry
-    2026-09-10): a capitalized parameter asks for its capital SHORT
-    option (-U), not a capitalized long one; @app.option keeps an
-    exact spelling when that's what's wanted.
-    """
-    return '--' + name.lower().replace('_', '-')
-
-
-def _short_option(name):
-    "The short option string for a parameter name: color -> -c."
-    return '-' + name[0]
-
-
 # --- the default_options policy (v1's constructor knob, restored) ---
 #
 # A policy decides the option strings an automatically-mapped
@@ -1970,22 +1954,28 @@ def _short_option(name):
 # every short ('-x') if its letter is still free.  The policy runs
 # at build time only.
 
-def map_long_option(app, callable, name):
+def default_long_option(app, callable, name):
     """
     Map the parameter's long option: Dry_Run -> --dry-run (lowercased,
-    underscores to dashes; names of one letter get none).  A building
-    block for default_options policies (Larry, 2026-09-10).
+    0.6.4's rule restored 2026-09-10; underscores to dashes; names of
+    one letter get none; _private names get nothing).  A building block
+    for default_options policies, and the "no auto shorts" policy by
+    itself.
     """
-    if len(name) >= 2:
-        app.option(name, _long_option(name))(callable)
+    if (len(name) >= 2) and (not name.startswith('_')):
+        long_option = '--' + name.lower().replace('_', '-')
+        app.option(name, long_option)(callable)
 
 
-def map_short_option(app, callable, name):
+def default_short_option(app, callable, name):
     """
     Map the parameter's short option: Dry_Run -> -D.  A wish: the
-    build claims it only if its letter is still free.
+    build claims it only if its letter is still free; _private names
+    get nothing.  A building block, and the shorts-only policy.
     """
-    app.option(name, _short_option(name))(callable)
+    if not name.startswith('_'):
+        short_option = '-' + name[0]
+        app.option(name, short_option)(callable)
 
 
 def default_options(app, callable, name):
@@ -1994,20 +1984,12 @@ def default_options(app, callable, name):
     2026-07-22): the policy REGISTERS its mappings through the
     same app.option() spelling users write--one mechanism.
     Declining is simply not calling.  Both a long and a short--v1's
-    default.  A leading underscore means "not public surface" in
-    Python and here too: no default mapping at all (@app.option is
-    the escape hatch).  This is the whole body; copy and edit.
+    default; the blocks skip _private names ("not public surface" in
+    Python and here too; @app.option is the escape hatch).  This is
+    the whole body; copy and edit.
     """
-    if name.startswith('_'):
-        return
-    map_long_option(app, callable, name)
-    map_short_option(app, callable, name)
-
-
-# the long-only ("suppress all shorts") and short-only policies are
-# the building blocks themselves
-default_long_option = map_long_option
-default_short_option = map_short_option
+    default_long_option(app, callable, name)
+    default_short_option(app, callable, name)
 
 
 class _PolicyRegistrar:

@@ -2464,14 +2464,14 @@ Creates a new Appeal instance.
 * `default_options` is the policy that turns an automatically-
   mapped keyword-only parameter into option strings: a function
   `(app, callable, name)` that maps them through `app.option()`.
-  Its building blocks are public: `map_long_option(app, callable,
-  name)` maps `Dry_Run` to `--dry-run`, `map_short_option` maps it
-  to `-D` (a wish: claimed if the letter is free).  The stock
-  `default_options` calls both, skipping `_private` names;
-  `default_long_option` and `default_short_option` are the
-  building blocks themselves, for "no auto shorts" and "shorts
-  only"; or write your own composing them, several calls for one
-  parameter making one option.  It runs at build time.  All ship on the
+  Its building blocks are public: `default_long_option(app,
+  callable, name)` maps `Dry_Run` to `--dry-run`,
+  `default_short_option` maps it to `-D` (a wish: claimed if the
+  letter is free); both skip `_private` names.  The stock
+  `default_options` calls both; either block alone is a policy
+  too, "no auto shorts" or "shorts only"; or write your own
+  composing them, several calls for one parameter making one
+  option.  It runs at build time.  All ship on the
   `appeal` namespace.
 * `default_mappings` is the policy for Appeal's automatic help and
   version: a function of the app.  The stock one is four lines,

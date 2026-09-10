@@ -79,12 +79,12 @@ for them.
   `default_options` (v1's, restored): a policy `(app, callable,
   name)` run at build time on every automatically-mapped keyword-only
   parameter, registering through `app.option()`.  Its building blocks
-  are public (Larry, 2026-09-10): `map_long_option` (lowercased,
+  are public (Larry, 2026-09-10): `default_long_option` (lowercased,
   underscores to dashes--`Dry_Run` -> `--dry-run`; 0.6.4's rule,
-  restored the same day) and `map_short_option` (`-D`, claimed if
-  free); the stock `default_options` calls both, skipping `_private`
-  names; `default_long_option`/`default_short_option` are the blocks
-  themselves.  A policy's several calls for one parameter accumulate
+  restored the same day) and `default_short_option` (`-D`, claimed if
+  free), both skipping `_private` names; the stock `default_options`
+  calls both, and either alone is a policy.  A policy's several calls
+  for one parameter accumulate
   into one rule.  Only the option strings it produces reach the
   parser.
 * **`@app.option(parameter_name, *strings, annotation=…, default=…)`

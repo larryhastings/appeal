@@ -6490,10 +6490,14 @@ def test_restriction_hidden_and_deprecated():
         return (level, quiet, legacy)
     @app.command()
     def play(t: tune, *, alt: tune = None): return (t, alt)
-    assert app.process(['play', '3', '--quiet', '--legacy']).result == \
-        ((3, True, True), None)
-    assert app.process(['play', '3', '--alt', '4', '--quiet', '--legacy']).result == \
-        ((3, False, False), (4, True, True))
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        assert app.process(['play', '3', '--quiet', '--legacy']).result == \
+            ((3, True, True), None)
+        assert app.process(['play', '3', '--alt', '4', '--quiet', '--legacy']).result == \
+            ((3, False, False), (4, True, True))
+    # the deprecated inner option warned, once per line, to stderr
+    assert err.getvalue() == "warning: option '--legacy' is deprecated\n" * 2, err.getvalue()
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.help('play')
@@ -6825,19 +6829,19 @@ def test_map_methods():
     assert strip_styles(app7._children['gamma']._help_plan().usage()) == 't7 gamma [-H]'
 
 
-def test_map_long_and_short_option():
+def test_default_long_and_short_option():
     # Larry, 2026-09-10: the building blocks of default_options are
-    # public--map_long_option and map_short_option--so a custom policy
+    # public--default_long_option and default_short_option--so a custom policy
     # composes them; several calls for one parameter accumulate into
     # one rule (one option, two strings), exactly what the stock
     # policy produces by calling both.
     from big.stylesheet import strip_styles
-    from appeal import map_long_option, map_short_option
+    from appeal import default_long_option, default_short_option
     def mine(app, callable, name):
         # long options for everything; shorts only for lowercase names
-        map_long_option(app, callable, name)
+        default_long_option(app, callable, name)
         if name.islower():
-            map_short_option(app, callable, name)
+            default_short_option(app, callable, name)
     app = Appeal(name='t', default_options=mine)
     @app.command()
     def sync(*, Dry_Run=False, verbose=False, x=False):
@@ -6852,6 +6856,3 @@ def test_map_long_and_short_option():
     assert strip_styles(stock.plan_for('sync2').usage()) == 's sync2 [-D|--dry-run] [-x]'
     assert [o.strings for o in stock.plan_for('sync2').options] == \
         [('-D', '--dry-run'), ('-x',)]
-    # the long-only and short-only policies ARE the building blocks
-    assert appeal.default_long_option is map_long_option
-    assert appeal.default_short_option is map_short_option
