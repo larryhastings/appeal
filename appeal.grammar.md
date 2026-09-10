@@ -688,6 +688,13 @@ known and unknown letters is an error; known, it's consumed.  Any
 other token is an argument: it fills the next slot--optional slots
 are owed too, so an era ends only at saturation--or, saturated, ends
 the era and is retried.
+* **Restrictions** (Larry, 2026-09-10): `restriction=None|'hidden'|
+  'deprecated'` on `command()` and `option()`.  Hidden: recognized,
+  absent from usage, the help tables, the listing, the schema,
+  completion, and the did-you-mean pools (config can still set it).
+  Deprecated: shown with a note, and each use--the command word, or an
+  option string as typed--prints one `warning:` line to stderr at
+  execute.
 * **Verbatim** (Larry, 2026-09-09): a slot annotated `appeal.verbatim`
   takes the next token whatever it looks like, dash or not.  Once a
   verbatim `*args` has taken its first token, nothing later in the

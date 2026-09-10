@@ -79,6 +79,8 @@ def _option_schema(o, docs):
         entry['required'] = True
     else:
         entry['default'] = _default(o.default)
+    if o.restriction == 'deprecated':
+        entry['deprecated'] = True
     if o.usage_name and o.usage_name != o.name:
         entry['usage'] = o.usage_name
     if o.name in docs:
@@ -132,7 +134,8 @@ def _plan_schema(plan):
         # carries the plain visible line
         'usage': strip_styles(plan.usage()),
         'operands': [_slot_schema(s, docs) for s in plan.slots],
-        'options': [_option_schema(o, docs) for o in plan.options],
+        'options': [_option_schema(o, docs) for o in plan.options
+                    if o.restriction != 'hidden'],
         'operand_counts': _operand_counts(plan),
     }
     return entry

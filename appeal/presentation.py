@@ -1052,6 +1052,7 @@ def merge_docs(plan, command_names=None):
                            # depth nests a converter's options
                            # beneath the option that declares it
     docs = {}              # rowkey -> lines, post-merge
+    deprecated = set()     # rowkeys of deprecated options: noted in the row
     command_names = tuple(command_names) if command_names else ()
     def arg_name(s):
         # an operand's display: the name (or @app.parameter rename)
@@ -1094,6 +1095,13 @@ def merge_docs(plan, command_names=None):
             rowkey = path + (id(inner),)
             display = _option_display(inner, plan.decoration)
             ns.setdefault(inner.name, ('option', display, rowkey, child.name))
+            # (a group option's plan is built bare--undecorated--so its
+            # inner options carry no restriction today; the rows are
+            # ready for the day they do)
+            if inner.restriction == 'hidden':       # pragma: no cover
+                continue                # documentable, never shown
+            if inner.restriction == 'deprecated':   # pragma: no cover
+                deprecated.add(rowkey)
             option_rows.append((rowkey, display, (None, None), depth))
             if inner.child is not None:
                 for name, value in option_subtree(inner.child, depth + 1,
@@ -1133,6 +1141,10 @@ def merge_docs(plan, command_names=None):
                 namespace[o.name] = ('option',
                                      _option_display(o, plan.decoration),
                                      rowkey, p.name)
+            if o.restriction == 'hidden':
+                continue                # documentable, never shown
+            if o.restriction == 'deprecated':
+                deprecated.add(rowkey)
             option_rows.append((rowkey,
                                 _option_display(o, plan.decoration),
                                 anchors, 0))
@@ -1269,6 +1281,8 @@ def merge_docs(plan, command_names=None):
                 display += f' (after {before})'
             else:               # the != (None, None) guard: one anchor
                 display += f' (before {after})'     # exists, and it's after
+        if rowkey in deprecated:
+            display += ' (deprecated)'
         rows.append((rowkey, display, depth))
 
     return {

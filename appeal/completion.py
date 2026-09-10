@@ -76,6 +76,8 @@ def completion_table(plan):
     options = {}
     values = {}
     for owner, o in plan.all_options():
+        if o.restriction == 'hidden':
+            continue                    # recognized, never offered
         entry = o.table_entry(windowed=owner.windowed)
         kind = entry[1]
         base = kind[2:] if kind[:2] in ('w:', 's:') else kind

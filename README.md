@@ -2445,7 +2445,7 @@ turns one command's help off, and
 the same way, when you supply one: `Appeal(version='1.2.3')` gives
 you `--version` and a `version` command for free.
 
-`Appeal.command(name=None, *, repeat=False)`
+`Appeal.command(name=None, *, repeat=False, restriction=None)`
 
 Used as a decorator; registers the decorated callable as a
 command.  The command word is the callable's `__name__`,
@@ -2483,7 +2483,7 @@ then `@db_app.default()`) it sets what runs when the line stops
 at the parent, replacing `Appeal(default_subcommand=...)`.
 `default_command()` is the older spelling.
 
-`Appeal.option(parameter_name, *options, annotation=..., default=...)`
+`Appeal.option(parameter_name, *options, annotation=..., default=..., config=None, restriction=None)`
 
 Used as a decorator, on the callable that owns
 `parameter_name` (a command function or any converter).  Maps
@@ -2492,7 +2492,17 @@ automatic ones, and as a fresh declaration: the option's
 grammar comes from `annotation`/`default` given here, not from
 the parameter.  Option strings are validated (`-X`, or
 `--long-name` of at least four characters).  May be stacked;
-may target `**kwargs`.
+may target `**kwargs`.  `config=` is the key the parameter is
+looked up under in the config mapping (see [Config
+layering](#config-layering)).
+
+`restriction=`, on both `command()` and `option()`, is `None`,
+`'hidden'`, or `'deprecated'`.  A hidden command or option still
+works but appears nowhere: not in usage, help, the command
+listing, the schema, or tab completion--for developer switches
+and old spellings kept alive.  A deprecated one is shown with a
+note, and using it prints `warning: option '--old' is
+deprecated` (or `command 'old'`) to standard error.
 
 `Appeal.parameter(parameter_name, *, usage=None)`
 

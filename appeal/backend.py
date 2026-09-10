@@ -732,6 +732,8 @@ class Engine:
         self.pending = []               # the records to resolve, in token order
         self.entered = []               # every converter entered, in order:
                                         # each owes its required options
+        self.spellings = []             # every option string invoked, as
+                                        # typed: a deprecated one warns
 
     def seed(self, bled):
         """
@@ -994,6 +996,7 @@ class Engine:
                 longs = [k for k in self.handlers if k.startswith('--')]
                 raise UsageError(
                     f"unknown option {tok!r}{did_you_mean(tok, longs)}")
+            self.spellings.append(tok)
             if value is not None and _takes_many(binding):
                 raise UsageError(
                     f"option {tok!r} takes several values; separate them with "
@@ -1008,6 +1011,7 @@ class Engine:
         for option, arg in parse_short_options(tok, classifiers):
             opt = '-' + option
             binding = self.handlers[opt]
+            self.spellings.append(opt)
             if self._nullary(binding):                  # no oparg: a flag
                 binding.invoke(self, spelling=opt)
                 classifiers[:] = self._short_classifiers()

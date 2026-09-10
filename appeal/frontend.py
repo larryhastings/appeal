@@ -430,12 +430,15 @@ class OptionRule:
                   parameter name, unless @app.option(config=) says
                   otherwise (Larry, 2026-09-10: a command word wins a
                   collision, so the option gets another key)
+    restriction   None, 'hidden' (recognized, shown nowhere) or
+                  'deprecated' (shown with a note; using it warns)--
+                  @app.option(restriction=) (Larry, 2026-09-10)
     kind          the shape's name, as the schema and the option
                   tables spell it
     """
     __slots__ = ('strings', 'name', 'converters', 'default', 'explicit',
                  'usage_name', 'kwargs_delivered', 'annotation', 'auto_shorts',
-                 'required', 'config_key')
+                 'required', 'config_key', 'restriction')
     kind = None
     child = None                # a GroupOption's Plan; None elsewhere
     is_flag = False
@@ -457,6 +460,7 @@ class OptionRule:
                                  # the finalize pass claims each if free
         self.required = False
         self.config_key = name
+        self.restriction = None
 
     @property
     def key(self):
@@ -1067,6 +1071,8 @@ class Plan:
             # (Larry, 2026-09-09: exclusivity is one parameter, one value)
             groups = {}
             for o in plan.options:
+                if o.restriction == 'hidden':
+                    continue                    # recognized, shown nowhere
                 groups.setdefault(o.name, []).append(o)
             bits = []
             for rules in groups.values():
@@ -2098,7 +2104,8 @@ class Decorations:
 
     def add_option(self, callable, parameter_name, strings,
                    annotation=inspect.Parameter.empty,
-                   default=inspect.Parameter.empty, config=None):
+                   default=inspect.Parameter.empty, config=None,
+                   restriction=None):
         # zero strings is legal (ruled 2026-07-25): "I'm speaking
         # for this parameter: nothing"--the explicit per-parameter
         # unmap, symmetric with a policy declining.  The parameter
@@ -2107,7 +2114,7 @@ class Decorations:
             validate_option_string(s)
         declaration = {'strings': tuple(strings),
                        'annotation': annotation, 'default': default,
-                       'config': config}
+                       'config': config, 'restriction': restriction}
         overrides = self.option_overrides.setdefault(callable, {})
         declarations = overrides.setdefault(parameter_name, [])
         if declaration not in declarations:
@@ -2337,6 +2344,7 @@ class SignaturePlan(Plan):
                     rule.required = not has_default
                     if declaration['config'] is not None:
                         rule.config_key = declaration['config']
+                    rule.restriction = declaration['restriction']
                     options.append(rule)
                 continue
 
@@ -2367,6 +2375,7 @@ class SignaturePlan(Plan):
                     rule.kwargs_delivered = True
                     if declaration['config'] is not None:
                         rule.config_key = declaration['config']
+                    rule.restriction = declaration['restriction']
                     options.append(rule)
 
         if usage_names:

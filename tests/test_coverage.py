@@ -6374,3 +6374,121 @@ def test_async_commands_are_refused():
         assert False
     except AppealConfigurationError as e:
         assert "'go' is a coroutine function" in str(e), e
+
+
+def test_restriction_hidden_and_deprecated():
+    # Larry, 2026-09-10 (parity review item 19): restriction=None |
+    # 'hidden' | 'deprecated' on command() and option().  Hidden: still
+    # works, shown nowhere.  Deprecated: shown with a note, warns on use.
+    import contextlib, io
+    from big.stylesheet import strip_styles
+    ran = []
+    app = Appeal(name='t')
+    @app.global_command()
+    @app.option('debug', '--debug-dump', restriction='hidden')
+    @app.option('verbose', '-v', '--verbose')
+    @app.option('verbose', '--loud', restriction='deprecated')
+    def main(*, verbose=False, debug=False): ran.append(('main', verbose, debug))
+    @app.command()
+    @app.option('secret', '-S', '--secret', restriction='hidden')
+    @app.option('old_flag', '--old-flag', restriction='deprecated')
+    def sync(*, secret='', old_flag=False):
+        """Sync things.
+
+        # Options
+        secret
+        : Not for you.
+
+        old_flag
+        : The old way.
+        """
+        ran.append(('sync', secret, old_flag))
+    @app.command('sync-all', restriction='deprecated')
+    def sync_all():
+        "Sync everything (old spelling)."
+        ran.append('sync-all')
+    @app.command(restriction='hidden')
+    def dump_plan():
+        "Developer switch."
+        ran.append('dump-plan')
+    def run(argv):
+        ran.clear()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            app.process(argv)
+        return list(ran), err.getvalue()
+    # everything still works; deprecated use warns, once per spelling
+    assert run(['--debug-dump', 'dump-plan']) == ([('main', False, True), 'dump-plan'], '')
+    assert run(['sync', '-S', 'x']) == ([('main', False, False), ('sync', 'x', False)], '')
+    assert run(['--loud', 'sync-all']) == \
+        ([('main', True, False), 'sync-all'],
+         "warning: option '--loud' is deprecated\nwarning: command 'sync-all' is deprecated\n")
+    assert run(['sync', '--old-flag', '--old-flag']) == \
+        ([('main', False, False), ('sync', '', True)], "warning: option '--old-flag' is deprecated\n")
+    assert run(['-v', 'sync']) == ([('main', True, False), ('sync', '', False)], '')
+    # usage: hidden absent, deprecated present
+    assert strip_styles(app.global_plan.usage()) == 'main [--loud | -v|--verbose]'
+    assert strip_styles(app.plan_for('sync').usage()) == 't sync [--old-flag]'
+    # the listing and the help page
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.help()
+    page = out.getvalue()
+    assert 'dump-plan' not in page and '--debug-dump' not in page
+    assert 'sync-all  Sync everything (old spelling).  (deprecated)' in page, page
+    assert 'dump-plan' in app.plans          # plans is everything, hidden included
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.help('sync')
+    page = out.getvalue()
+    assert '--secret' not in page and 'Not for you' not in page
+    assert '--old-flag (deprecated)' in page, page
+    # completion never offers a hidden entry; the schema omits it
+    assert app.complete([], '') == ['help', 'sync', 'sync-all']
+    assert app.complete([], '-') == ['--loud', '--verbose', '-v']
+    assert app.complete(['sync'], '-') == ['--help', '--old-flag', '-h']
+    described = app.schema('appeal', '1.0')
+    assert sorted(described['commands']) == ['help', 'sync', 'sync-all']
+    names = {o['name']: o for o in described['commands']['sync']['options']}
+    assert 'secret' not in names and names['old_flag']['deprecated'] is True
+    assert 'deprecated' not in names['help'] if 'help' in names else True
+    # did-you-mean never names a hidden command
+    try:
+        app.process(['dump-plam'])
+        assert False
+    except UsageError as e:
+        assert 'did you mean' not in str(e), e
+    # inside a positional converter group: the group's own options,
+    # restricted (a group OPTION's plan is built bare, undecorated, so
+    # restrictions don't reach its inner options--nor do any other
+    # @app.option declarations)
+    @app.option('quiet', '--quiet', restriction='hidden')
+    @app.option('legacy', '--legacy', restriction='deprecated')
+    def tune(level: int = 0, *, quiet=False, legacy=False): return (level, quiet, legacy)
+    @app.command()
+    def play(t: tune): return t
+    assert app.process(['play', '3', '--quiet', '--legacy']).result == (3, True, True)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.help('play')
+    page = out.getvalue()
+    assert '--quiet' not in page and '--legacy (deprecated)' in page, page
+    assert strip_styles(app.plan_for('play').usage()) == 't play [--legacy] [<T>]'
+    # hidden subcommands stay out of completion too
+    tree = Appeal(name='s')
+    db_app = tree.command('db')
+    @tree.command()
+    def db(): pass
+    @db_app.command()
+    def start(): pass
+    @db_app.command(restriction='hidden')
+    def nuke(): pass
+    assert tree.complete(['db'], '') == ['start']
+    assert tree.process(['db', 'nuke']).result is None
+    # vetted
+    for bad in (app.command, app.option):
+        try:
+            bad('x', restriction='secret')
+            assert False
+        except AppealConfigurationError as e:
+            assert "restriction= is None, 'hidden' or 'deprecated'" in str(e), e

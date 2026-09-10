@@ -835,6 +835,34 @@ class _Line:
                                         # a word, not an option
 
 
+_RESTRICTIONS = (None, 'hidden', 'deprecated')
+
+
+def _vet_restriction(restriction, where):
+    if restriction not in _RESTRICTIONS:
+        raise AppealConfigurationError(
+            f"{where}: restriction= is None, 'hidden' or 'deprecated', "
+            f"not {restriction!r}")
+
+
+def _warn_deprecated_options(plans, spellings):
+    """
+    Using a deprecated option warns (Larry, 2026-09-10): the engine
+    kept every option string it invoked, as typed; each that belongs
+    to a deprecated rule of `plans` earns one line on stderr.  (A head
+    era's engine may invoke a neighbouring era's option--they share--
+    so a head step consults every head plan.)
+    """
+    if not spellings:
+        return
+    deprecated = {s for plan in plans for _, o in plan.all_options()
+                  if o.restriction == 'deprecated' for s in o.strings}
+    for spelling in sorted(set(spellings)):
+        if spelling in deprecated:
+            print(f"warning: option {spelling!r} is deprecated",
+                  file=_sys.stderr)
+
+
 class _Step:
     """
     One unit of execution the parcel/scan pass listed: an era (a
@@ -875,6 +903,9 @@ class _Step:
         if plan.binds is not None:              # a method/BIC command: self is
             conv.bound = env.get(plan.binds)    # its class's instance, built by
                                                 # an earlier step
+        _warn_deprecated_options(
+            node.global_plans() if self.kind == 'era' else (plan,),
+            self.proc.spellings)
         if self.kind == 'era':
             try:
                 if self.config:
@@ -911,6 +942,9 @@ class _Step:
             # a command's help era (immediate): -h present prints the
             # command's page and exits; absent, nothing--and nothing logged
             return self.proc.execute()
+        if node._children[self.word]._node_restriction == 'deprecated':
+            print(f"warning: command {self.word!r} is deprecated",
+                  file=_sys.stderr)
         try:
             if self.config:
                 # the command's config section (Larry, 2026-09-10): argv
@@ -1190,6 +1224,8 @@ class Appeal:
                                            # mapping (filled by the user later)
         self._node_default = None # this node's default command
         self._node_repeat = False # this node's set cycles
+        self._node_restriction = None   # 'hidden' / 'deprecated' (Larry,
+                                        # 2026-09-10): command(restriction=)
         self._node_share = False  # this command's options are shared FORWARDS
         self._command_mappings = _STOCK_COMMAND_MAPPINGS   # the help era's policy
         # whether Appeal supplies automatic help (v1's knob): the
@@ -1538,7 +1574,7 @@ class Appeal:
                 return
             if topic not in table:
                 err = UsageError(f"unknown command {topic!r}"
-                                 f"{did_you_mean(topic, table)}")
+                                 f"{did_you_mean(topic, root._visible_table())}")
                 err.usage = _overview_trailer(root)     # the overview page
                 raise err
             node = root._node_for(topic)
@@ -1557,7 +1593,7 @@ class Appeal:
                         where = (f" of {parent._prog()!r}" if parent is not root
                                  else '')
                         err = UsageError(f"unknown command {word!r}{where}"
-                                         f"{did_you_mean(word, node_table)}")
+                                         f"{did_you_mean(word, parent._visible_table())}")
                         err.usage = _overview_trailer(parent)
                         raise err
                 node = parent._children[word]
@@ -1570,7 +1606,7 @@ class Appeal:
         if node is not None and node._table():
             from .presentation import summary as _summary, command_set_corpus
             node_table = node._table()
-            entries = [(w, _summary(c)) for w, c in node_table.items()]
+            entries = node._listing_entries()
             # add the auto `help` row unless the set already registers one
             corpus = command_set_corpus(
                 node.global_plan, entries,
@@ -1707,7 +1743,7 @@ class Appeal:
         return word
 
     def command(self, name=None, *, repeat=False, share=False,
-                default_mappings=_UNSET):
+                default_mappings=_UNSET, restriction=None):
         """
         @app.command() registers a command under the callable's name with
         underscores turned to dashes (upload_database -> upload-database).
@@ -1731,6 +1767,7 @@ class Appeal:
         when it hasn't claimed them; None turns the command's help
         off.
         """
+        _vet_restriction(restriction, 'command()')
         if name is not None:
             # the node comes back--decorator AND chaining handle
             if not isinstance(name, str):
@@ -1747,6 +1784,9 @@ class Appeal:
             if default_mappings is not _UNSET:
                 node._command_mappings = default_mappings
                 self._invalidate()
+            if restriction is not None:
+                node._node_restriction = restriction
+                self._invalidate()
             return node
         def decorator(callable):
             node = self._child(self._command_word(None, callable))
@@ -1754,8 +1794,33 @@ class Appeal:
             node._node_share = node._node_share or share
             if default_mappings is not _UNSET:
                 node._command_mappings = default_mappings
+            if restriction is not None:
+                node._node_restriction = restriction
             return node(callable)
         return decorator
+
+    def _visible_table(self):
+        "The command table without the hidden words (Larry, 2026-09-10)."
+        return {w: c for w, c in self._table().items()
+                if self._children[w]._node_restriction != 'hidden'}
+
+    def _visible_plans(self):
+        "Every visible command's Plan (schema and completion read these)."
+        return {word: self.plan_for(word) for word in self._visible_table()}
+
+    def _listing_entries(self):
+        """
+        The command listing's (word, summary) rows: the visible words,
+        a deprecated one's summary saying so.
+        """
+        from .presentation import summary
+        rows = []
+        for word, callable in self._visible_table().items():
+            text = summary(callable)
+            if self._children[word]._node_restriction == 'deprecated':
+                text = f'{text.rstrip()} (deprecated)'.lstrip()
+            rows.append((word, text))
+        return rows
 
     def default(self):
         """
@@ -1907,7 +1972,7 @@ class Appeal:
             claim(self)
 
     def option(self, name, *options, annotation=None,
-               default=_UNSET, config=None):
+               default=_UNSET, config=None, restriction=None):
         """
         Additional decorator for @command functions: maps only the
         strings you specify for one keyword-only parameter,
@@ -1923,6 +1988,7 @@ class Appeal:
         # build's "not specified" marker is frontend.empty (the same singleton
         # build compares against); convert here at call time.
         from .frontend import empty
+        _vet_restriction(restriction, 'option()')
         if default is _UNSET:
             default = empty
         if annotation is None:
@@ -1962,12 +2028,14 @@ class Appeal:
                 root = callable.__self__.root
                 root._decorations.add_option(
                     callable, name, options,
-                    annotation=annotation, default=default, config=config)
+                    annotation=annotation, default=default, config=config,
+                    restriction=restriction)
                 root._invalidate()
                 return callable
             self.root._decorations.add_option(
                 callable, name, options,
-                annotation=annotation, default=default, config=config)
+                annotation=annotation, default=default, config=config,
+                restriction=restriction)
             self._invalidate()
             return callable
         return decorator
@@ -1985,17 +2053,20 @@ class Appeal:
             return completions(self.plan, words, prefix)
         sets = {}
         for parent, entries in self._subs.items():
+            children = self._node_for(parent)._children
             sets[parent] = {
                 'commands': {
                     name: self._build(fn, name=name,
                                 method_of=self._method_owner.get(id(fn)))
-                    for name, fn in entries},
+                    for name, fn in entries
+                    if children[name]._node_restriction != 'hidden'},
                 'repeat': self._sub_repeat.get(parent, False),
             }
         # the real help/version commands ride the table; no
         # legacy synthesis (banishment must banish)
-        return completions_set(self.plans, self.global_plan, words, prefix,
-                            repeat=self.repeat, sets=sets or None)
+        return completions_set(self._visible_plans(), self.global_plan,
+                               words, prefix,
+                               repeat=self.repeat, sets=sets or None)
 
     def _overview_text(self, file, suppress=frozenset()):
         """
@@ -2008,8 +2079,8 @@ class Appeal:
         from .presentation import (render_help_page, help_margin)
         table = self._table()
         if table:
-            from .presentation import summary, command_set_corpus
-            entries = [(w, summary(c)) for w, c in table.items()]
+            from .presentation import command_set_corpus
+            entries = self._listing_entries()
             corpus = command_set_corpus(
                 self.global_plan, entries,
                 doc=self._program_doc_override())
@@ -2133,7 +2204,7 @@ class Appeal:
             plan = self.plan
             return man_page(prog, merge_docs(plan), self._head_usage_markup(),
                             version=version)
-        entries = [(w, summary(c)) for w, c in table.items()]
+        entries = self._listing_entries()
         corpus = command_set_corpus(
             self.global_plan, entries,
             doc=self._program_doc_override(), listing=False)
@@ -2177,7 +2248,7 @@ class Appeal:
                     f"{', '.join(map(repr, _APPEAL_VERSIONS))}")
             if not table:
                 return describe(self.plan)
-            return describe_set(self.plans, self.global_plan,
+            return describe_set(self._visible_plans(), self.global_plan,
                                 self._prog())
         if format == 'mcp':
             if version not in _MCP_VERSIONS:
@@ -3003,7 +3074,8 @@ class Appeal:
                         # a program with no commands: one word too many
                         err = UsageError(f"unexpected argument {word!r}")
                     else:
-                        err = _unexpected(word, line.tried if dash else table,
+                        err = _unexpected(word, line.tried if dash
+                                          else self._visible_table(),
                                           line.forced,
                                           self.root._option_placements(line.path))
                     # outside any command's era: global usage (the overview
@@ -3051,7 +3123,7 @@ class Appeal:
                     # isn't one of them
                     err = UsageError(
                         f"unknown command {tok!r} of {deepest._prog()!r}"
-                        f"{did_you_mean(tok, deepest._table())}")
+                        f"{did_you_mean(tok, deepest._visible_table())}")
                     err.usage = _overview_trailer(deepest)
                 else:
                     # the deepest command took all it can: one word too many
@@ -3183,7 +3255,7 @@ class Appeal:
         if not table:
             commands = {self._prog(): self.global_plan}
         else:
-            commands = {word: self.plan_for(word) for word in table}
+            commands = self._visible_plans()
         tools = {}
         for word, plan in commands.items():
             bound = self._mcp_bound_plan(word, plan, instance)
