@@ -6823,3 +6823,35 @@ def test_map_methods():
     assert strip_styles(app7._children['alpha']._help_plan().usage()) == 't7 alpha [--help]'
     assert app7._children['beta']._help_plan() is None
     assert strip_styles(app7._children['gamma']._help_plan().usage()) == 't7 gamma [-H]'
+
+
+def test_map_long_and_short_option():
+    # Larry, 2026-09-10: the building blocks of default_options are
+    # public--map_long_option and map_short_option--so a custom policy
+    # composes them; several calls for one parameter accumulate into
+    # one rule (one option, two strings), exactly what the stock
+    # policy produces by calling both.
+    from big.stylesheet import strip_styles
+    from appeal import map_long_option, map_short_option
+    def mine(app, callable, name):
+        # long options for everything; shorts only for lowercase names
+        map_long_option(app, callable, name)
+        if name.islower():
+            map_short_option(app, callable, name)
+    app = Appeal(name='t', default_options=mine)
+    @app.command()
+    def sync(*, Dry_Run=False, verbose=False, x=False):
+        return (Dry_Run, verbose, x)
+    assert strip_styles(app.plan_for('sync').usage()) == \
+        't sync [--dry-run] [-v|--verbose] [-x]'
+    assert app.process(['sync', '--dry-run', '-v', '-x']).result == (True, True, True)
+    # the same strings as the stock policy, in the stock order
+    stock = Appeal(name='s')
+    @stock.command()
+    def sync2(*, Dry_Run=False, x=False): pass
+    assert strip_styles(stock.plan_for('sync2').usage()) == 's sync2 [-D|--dry-run] [-x]'
+    assert [o.strings for o in stock.plan_for('sync2').options] == \
+        [('-D', '--dry-run'), ('-x',)]
+    # the long-only and short-only policies ARE the building blocks
+    assert appeal.default_long_option is map_long_option
+    assert appeal.default_short_option is map_short_option

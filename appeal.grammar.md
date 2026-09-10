@@ -76,13 +76,17 @@ for them.
   children's, depth-first); an option whose letter is taken gets no
   short.  (Matches v1's observed behavior.)
 * This long-and-short default is the constructor knob
-  `default_options` (v1's, restored): a policy `(name, annotation,
-  default) -> list[str]` run at build time on every
-  automatically-mapped keyword-only parameter.  The stock
-  `default_options` yields the long plus the short; `default_long_option`
-  drops the short (the "no auto shorts" policy), `default_short_option`
-  drops the long, or supply your own.  It runs at build time; only the
-  option strings it produces reach the parser.
+  `default_options` (v1's, restored): a policy `(app, callable,
+  name)` run at build time on every automatically-mapped keyword-only
+  parameter, registering through `app.option()`.  Its building blocks
+  are public (Larry, 2026-09-10): `map_long_option` (lowercased,
+  underscores to dashes--`Dry_Run` -> `--dry-run`; 0.6.4's rule,
+  restored the same day) and `map_short_option` (`-D`, claimed if
+  free); the stock `default_options` calls both, skipping `_private`
+  names; `default_long_option`/`default_short_option` are the blocks
+  themselves.  A policy's several calls for one parameter accumulate
+  into one rule.  Only the option strings it produces reach the
+  parser.
 * **`@app.option(parameter_name, *strings, annotation=…, default=…)`
   blows away ALL default mappings** for one keyword-only parameter
   and maps *only* the strings you specify--no auto long, no auto

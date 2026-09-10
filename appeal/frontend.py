@@ -1970,35 +1970,44 @@ def _short_option(name):
 # every short ('-x') if its letter is still free.  The policy runs
 # at build time only.
 
+def map_long_option(app, callable, name):
+    """
+    Map the parameter's long option: Dry_Run -> --dry-run (lowercased,
+    underscores to dashes; names of one letter get none).  A building
+    block for default_options policies (Larry, 2026-09-10).
+    """
+    if len(name) >= 2:
+        app.option(name, _long_option(name))(callable)
+
+
+def map_short_option(app, callable, name):
+    """
+    Map the parameter's short option: Dry_Run -> -D.  A wish: the
+    build claims it only if its letter is still free.
+    """
+    app.option(name, _short_option(name))(callable)
+
+
 def default_options(app, callable, name):
     """
     The stock option-string policy, arglet style (Larry's design,
     2026-07-22): the policy REGISTERS its mappings through the
     same app.option() spelling users write--one mechanism.
-    Declining is simply not calling.  Both a long (names >= 2
-    chars) and a short--v1's default; the short is a wish, claimed
-    only if its letter is still free.  A leading underscore means
-    "not public surface" in Python and here too: no default
-    mapping at all (@app.option is the escape hatch).
+    Declining is simply not calling.  Both a long and a short--v1's
+    default.  A leading underscore means "not public surface" in
+    Python and here too: no default mapping at all (@app.option is
+    the escape hatch).  This is the whole body; copy and edit.
     """
     if name.startswith('_'):
         return
-    strings = []
-    if len(name) >= 2:
-        strings.append(_long_option(name))
-    strings.append(_short_option(name))
-    app.option(name, *strings)(callable)
+    map_long_option(app, callable, name)
+    map_short_option(app, callable, name)
 
 
-def default_long_option(app, callable, name):
-    "Long only, no short (the common 'suppress all shorts' policy)."
-    if len(name) >= 2:
-        app.option(name, _long_option(name))(callable)
-
-
-def default_short_option(app, callable, name):
-    "Short only, no long."
-    app.option(name, _short_option(name))(callable)
+# the long-only ("suppress all shorts") and short-only policies are
+# the building blocks themselves
+default_long_option = map_long_option
+default_short_option = map_short_option
 
 
 class _PolicyRegistrar:
@@ -2030,7 +2039,11 @@ class _PolicyRegistrar:
                 return callable
             return unmapped
         def decorator(callable):
-            self.claims[(id(callable), parameter_name)] = strings
+            # a policy may map a parameter in several calls (the long
+            # here, the short there): one claim, the strings accumulated
+            key = (id(callable), parameter_name)
+            self.claims[key] = self.claims.get(key, ()) + tuple(
+                s for s in strings if s not in self.claims.get(key, ()))
             return callable
         return decorator
 
