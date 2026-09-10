@@ -539,16 +539,21 @@ def _merge_era_options(plans):
     return plans
 
 
-def _line_trailer(stylesheet, usage_markup):
+def _line_trailer(node, usage_markup):
     """
     A UsageError trailer (see UsageError.usage): renders `usage: <line>`
-    for the output stream it's handed--stylesheet is the app's spec, so
-    color is decided against that stream (a tty gets color, a pipe plain).
+    for the output stream it's handed, wrapped at whole units exactly
+    as a help page's usage line is (the integration tests caught it
+    unwrapped, 2026-09-10)--the node's stylesheet is the app's spec,
+    so color is decided against that stream (a tty gets color, a pipe
+    plain), and its margin is the width.
     """
     def trailer(file):
-        from .presentation import resolve_stylesheet
-        return 'usage: ' + resolve_stylesheet(stylesheet, file).render(
-            usage_markup)
+        from .presentation import render_baked_help, help_margin
+        return render_baked_help(
+            (('usage', 'usage: ', usage_markup),),
+            help_margin(node.margin, file), file=file,
+            stylesheet=node.stylesheet).rstrip('\n')
     return trailer
 
 
@@ -562,7 +567,7 @@ def _global_trailer(node):
     root = node.root
     if root._table():
         return _overview_trailer(root)
-    return _line_trailer(root.stylesheet, root._program_usage_markup())
+    return _line_trailer(root, root._program_usage_markup())
 
 
 def _overview_trailer(node):
@@ -892,7 +897,7 @@ class _Step:
         if e.usage is None:
             node = self.node
             markup = node._children[self.word]._head_usage_markup()
-            e.usage = _line_trailer(node.stylesheet, markup)
+            e.usage = _line_trailer(node, markup)
 
     def execute(self, holder, env):
         assert not self.done
@@ -2694,7 +2699,12 @@ class Appeal:
         plan = self._global_plan
         if plan is None:
             pre = self._precommand_plan() if self.parent is None else None
-            if self._global is not None:
+            if self.parent is not None:
+                # a command node's own command: the parent's plan for it,
+                # method owner and all (the integration tests caught a
+                # <SELF> operand in a method command's usage, 2026-09-10)
+                plan = self.parent._plan_for_node(self, self.name)
+            elif self._global is not None:
                 plan = self._build(self._global)
                 plan.pre_plan = pre
             elif pre is not None:
@@ -3138,7 +3148,7 @@ class Appeal:
                     # (that the word happens to be a command's is no help to
                     # the user--Larry, 2026-09-08)
                     err = UsageError(f"unexpected argument {tok!r}")
-                    err.usage = _line_trailer(self.stylesheet,
+                    err.usage = _line_trailer(self,
                                               deepest._head_usage_markup())
                 raise err
 

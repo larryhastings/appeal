@@ -29,6 +29,11 @@ if sys.version_info >= (3, 9):
     modules.insert(1, 'test_39')
 else:
     print('test_39.py not run (3.9+ spellings)')
+# the integration programs annotate with typing.Literal (3.8+)
+if sys.version_info >= (3, 8):
+    modules.append('test_integration')
+else:
+    print('test_integration.py not run (Literal is 3.8+)')
 
 
 with test.suite() as run:
