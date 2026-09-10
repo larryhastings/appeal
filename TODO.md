@@ -64,3 +64,14 @@ An `async def` command or converter is refused when its plan builds:
 asyncio.run(...)".  Never run it for them (choosing an event loop is
 magic, and breaks inside a running loop).  Today it returns an
 unawaited coroutine and the command silently does nothing.
+
+## Hidden and deprecated options and commands (Larry, 2026-09-10; parity review item 19)
+
+* `app.option(..., hidden=True)` and `app.command(..., hidden=True)`:
+  still recognized, absent from usage, the help tables, the command
+  listing, the schema, and completion (hidden means hidden).  For
+  developer switches and old spellings kept for compatibility.
+* `deprecated=True` on the same two: using it prints
+  `warning: '--old' is deprecated` to stderr (with "use '--new'" when
+  a replacement is named, e.g. `deprecated='--new'`), and the help
+  says so beside the entry when it isn't hidden.
