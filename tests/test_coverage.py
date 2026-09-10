@@ -3510,7 +3510,7 @@ def test_section_template_more_fails():
     corpus = {'summary': ['Sum.'], 'documentation': ['Prose.'],
               'arguments': [('a', ['doc a'], ())],
               'options': [('-x', [], ())], 'commands': []}
-    page = render_help_page('t [-x] a', corpus, template,
+    page = render_help_page(['t', '[-x]', 'a'], corpus, template,
                             stylesheet=False)
     assert page.index('Opts:') < page.index('Sum.') < \
         page.index('Args:'), page
@@ -3851,7 +3851,7 @@ def test_branch_completion_edges():
 
 
 def test_branch_text_formatter_edges():
-    from appeal.presentation import wrap_words, split_text_with_code, usage_units, format_definition_list, merge_columns, OverflowStrategy, render_help_page, default_template, appeal_theme
+    from appeal.presentation import wrap_words, split_text_with_code, format_definition_list, merge_columns, OverflowStrategy, render_help_page, default_template, appeal_theme
 
     # code_indent=0 turns code detection off entirely
     split_text_with_code('para one\n\n    indented, not code\n',
@@ -3874,8 +3874,17 @@ def test_branch_text_formatter_edges():
     merge_columns(col1, col2,
                   overflow_strategy=OverflowStrategy.DELAY_ALL)
 
-    # usage tokenizer: doubled and trailing spaces make empty units
-    assert usage_units('prog  [x]  y ') == ['prog', '[x]', 'y']
+    # the usage line is its UNITS, structurally (no tokenizer): a bracket
+    # group one unit, a required option its strings and operands, a
+    # required group breaking only at the groups inside it
+    from big.stylesheet import strip_styles
+    def units(fn):
+        return [strip_styles(u) for u in build_plan(fn).usage_units()]
+    def prog(a, b=1, *, opt='', need): pass
+    assert units(prog) == ['prog', '[-o|--opt <OPT>]', '-n|--need <NEED>', '<A>', '[<B>]']
+    def group(x, *, deep: int = 0): pass
+    def prog2(*, g: group): pass
+    assert units(prog2) == ['prog2', '-g', '[-d|--deep <DEEP>]', '<X>']
 
     # themed table painting walks PAST a wrapped description's
     # continuation lines to find the next row
@@ -3898,7 +3907,7 @@ def test_branch_text_formatter_edges():
                                 transforms)
     sheet = (markdown_defaults | transforms | ansi_16_color_palette
              | StyleSheet(appeal_theme))
-    page = render_help_page(plan.usage(), merge_docs(plan),
+    page = render_help_page(plan.usage_units(), merge_docs(plan),
                             default_template, margin=50,
                             stylesheet=sheet)
     assert '\x1b[' in page
@@ -6704,9 +6713,8 @@ Options
 -v|--value <VALUE>
 """
     assert page('render2') == """\
-usage: tool render2 [-h|--help]
-                    -c|--color [-s|--saturation <SATURATION>] [-v|--value <VALUE>] <R> <G> <B>
-                    <TEXT>
+usage: tool render2 [-h|--help] -c|--color [-s|--saturation <SATURATION>]
+                    [-v|--value <VALUE>] <R> <G> <B> <TEXT>
 
 Render text with a color, given as an option.
 

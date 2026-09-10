@@ -1562,7 +1562,7 @@ def test_wrapped_heading_fuses():
                "almost excessively so and it's kind of pointless "
                "like this"],
               'arguments': [], 'options': [], 'commands': []}
-    pieces = help_page_pieces('x', corpus, default_template,
+    pieces = help_page_pieces(['x'], corpus, default_template,
                               suppress=('usage',))
     page = render_baked_help(pieces, margin=70, stylesheet=False)
     assert page == (
@@ -1585,7 +1585,7 @@ def test_heading_with_inline_formatting():
     corpus = {'summary': [], 'documentation':
               ['# Heading with `code` inside'],
               'arguments': [], 'options': [], 'commands': []}
-    pieces = help_page_pieces('x', corpus, default_template,
+    pieces = help_page_pieces(['x'], corpus, default_template,
                               suppress=('usage',))
     page = render_baked_help(pieces, margin=40, stylesheet=False)
     assert page == ('========================\n'
@@ -7742,9 +7742,9 @@ def test_colorized_help_paints_after_layout():
              | StyleSheet(appeal_theme))
     plan = build_plan(draw)
     corpus = merge_docs(plan)
-    plain = render_help_page(plan.usage(), corpus, default_template,
+    plain = render_help_page(plan.usage_units(), corpus, default_template,
                              stylesheet=False)
-    painted = render_help_page(plan.usage(), corpus, default_template,
+    painted = render_help_page(plan.usage_units(), corpus, default_template,
                                stylesheet=sheet)
     assert painted != plain
     assert '\x1b[' in painted

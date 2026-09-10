@@ -503,9 +503,6 @@ uncolored_theme = {
     'marker':     ('T', 'T'),
     'blockquote': ('T', 'T'),
     'term':       ('T', '⦃bold⦙T⦄'),        # deflist terms
-    'unit':       ('T', 'T'),               # a usage unit that never wraps
-                                            # apart (a required option and
-                                            # its operands)
     # GitHub alerts: bodies wear their kind's color too
     'note':              ('T', '⦃blue⦙T⦄'),
     'heading_note':      ('T', '⦃bold⦙⦃blue⦙T⦄⦄'),
@@ -635,32 +632,6 @@ def resolve_stylesheet(spec, file=None):
     return spec
 
 
-def usage_units(usage):
-    """
-    Split a usage line into its unbreakable top-level units: the
-    program span (`tool db stop`, spaces and all), bare operands, and
-    complete bracket groups like '[-t|--times <int>]'.  Wrapping
-    never splits a unit.
-    """
-    units = []
-    unit = []
-    depth = 0
-    for ch in usage:
-        if ch == ' ' and not depth:
-            if unit:
-                units.append(''.join(unit))
-                unit = []
-            continue
-        if ch in '[⦃':               # a bracket group, or a style span
-            depth += 1
-        elif ch in ']⦄':
-            depth -= 1
-        unit.append(ch)
-    if unit:
-        units.append(''.join(unit))
-    return units
-
-
 default_template = (
     'usage: {usage}\n'
     '\n'
@@ -748,11 +719,10 @@ def render_baked_help(pieces, margin=79, file=None,
     out = []
     for piece in pieces:
         if piece[0] == 'usage':
-            prefix, usage = piece[1], piece[2]
-            # the usage line already carries its role spans (built by
-            # Plan.usage) with operands decorated inline; split into
-            # units and wrap
-            units = usage_units(usage)
+            prefix, units = piece[1], list(piece[2])
+            # the usage line's UNITS carry their role spans (built by
+            # Plan.usage_units) with operands decorated inline; wrap at
+            # whole units, never inside one
             # a continuation line hangs under the first thing after the
             # program span--unless that span is long, when it hangs at 8
             # (Larry, 2026-09-10)
@@ -872,7 +842,7 @@ def rows_document(rows, header, role=None, titles=None, level=2):
     return document
 
 
-def render_help_page(usage, corpus, templates, margin=79,
+def render_help_page(usage_units, corpus, templates, margin=79,
                      file=None, stylesheet=None, suppress=(),
                      subcommands=False):
     """
@@ -894,7 +864,7 @@ def render_help_page(usage, corpus, templates, margin=79,
     machine).
     """
     return render_baked_help(
-        help_page_pieces(usage, corpus, templates, suppress, subcommands),
+        help_page_pieces(usage_units, corpus, templates, suppress, subcommands),
         margin, file=file, stylesheet=stylesheet)
 
 
@@ -911,7 +881,7 @@ def role_layout(layout):
                  for item in layout)
 
 
-def help_page_pieces(usage, corpus, templates, suppress=(),
+def help_page_pieces(usage_units, corpus, templates, suppress=(),
                      subcommands=False):
     """
     The bake half of a help page: assemble the template-ordered
@@ -965,7 +935,7 @@ def help_page_pieces(usage, corpus, templates, suppress=(),
             flush()
             nl = header.rfind('\n')
             prefix = header[nl + 1:] if nl >= 0 else header
-            pieces.append(('usage', prefix, usage))
+            pieces.append(('usage', prefix, tuple(usage_units)))
             continue
         if name in ('summary', 'doc'):
             content = '\n'.join(corpus[name if name == 'summary'

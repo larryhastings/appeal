@@ -539,7 +539,7 @@ def _merge_era_options(plans):
     return plans
 
 
-def _line_trailer(node, usage_markup):
+def _line_trailer(node, usage_units):
     """
     A UsageError trailer (see UsageError.usage): renders `usage: <line>`
     for the output stream it's handed, wrapped at whole units exactly
@@ -551,7 +551,7 @@ def _line_trailer(node, usage_markup):
     def trailer(file):
         from .presentation import render_baked_help, help_margin
         return render_baked_help(
-            (('usage', 'usage: ', usage_markup),),
+            (('usage', 'usage: ', tuple(usage_units)),),
             help_margin(node.margin, file), file=file,
             stylesheet=node.stylesheet).rstrip('\n')
     return trailer
@@ -567,7 +567,7 @@ def _global_trailer(node):
     root = node.root
     if root._table():
         return _overview_trailer(root)
-    return _line_trailer(root, root._program_usage_markup())
+    return _line_trailer(root, root._program_usage_units())
 
 
 def _overview_trailer(node):
@@ -896,8 +896,8 @@ class _Step:
         "A command's error wears its usage line (deepest-command-wins)."
         if e.usage is None:
             node = self.node
-            markup = node._children[self.word]._head_usage_markup()
-            e.usage = _line_trailer(node, markup)
+            e.usage = _line_trailer(
+                node, node._children[self.word]._head_usage_units())
 
     def execute(self, holder, env):
         assert not self.done
@@ -1623,7 +1623,7 @@ class Appeal:
                 doc=node._program_doc_override(),
                 tables_wanted=node._global is not None)
             text = render_help_page(
-                node._head_usage_markup(),
+                node._head_usage_units(),
                 corpus, node.templates, margin=help_margin(node.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=node.stylesheet,
                 suppress=suppress,
@@ -1632,7 +1632,7 @@ class Appeal:
             from .presentation import merge_docs
             plan = root._plan_for_node(node, topic)
             text = render_help_page(
-                node._head_usage_markup(), merge_docs(plan),
+                node._head_usage_units(), merge_docs(plan),
                 root.templates,
                 margin=help_margin(root.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=root.stylesheet,
@@ -2097,7 +2097,7 @@ class Appeal:
                 doc=self._program_doc_override(),
                 tables_wanted=self._global is not None)
             return render_help_page(
-                self._head_usage_markup(),
+                self._head_usage_units(),
                 corpus, self.templates,
                 margin=help_margin(self.margin, file),
                 file=file, stylesheet=self.stylesheet,
@@ -2114,19 +2114,19 @@ class Appeal:
             corpus['summary'] = parsed['summary']
             corpus['documentation'] = parsed['documentation']
         return render_help_page(
-            self._head_usage_markup(), corpus, self.templates,
+            self._head_usage_units(), corpus, self.templates,
             margin=help_margin(self.margin, file),
             file=file, stylesheet=self.stylesheet,
             suppress=suppress).rstrip('\n')
 
-    def _program_usage_markup(self):
+    def _program_usage_units(self):
         """
         The program's usage LINE markup--the trailer content for an
         era-level error (a bad program-wide option) and an unknown
         option: the command-set line for a set, the plan's usage for a
         bare app.
         """
-        return self._head_usage_markup()
+        return self._head_usage_units()
 
     def help(self, *topic, usage=True, summary=True, doc=True):
         """
@@ -2613,36 +2613,38 @@ class Appeal:
 
 
     def _head_usage_markup(self):
+        "The usage LINE for this node's program, space-joined (the man page)."
+        return ' '.join(self._head_usage_units())
+
+    def _head_usage_units(self):
         """
-        The usage LINE for this node's program: the program name, then
-        everything typed before a command word--every head era's options
-        and operands in era order, the metadata precommand's -h/--help/
+        The usage line for this node's program, as UNITS: the program
+        name, then everything typed before a command word--every head
+        era's units in era order, the metadata precommand's -h/--help/
         --version first (Larry, 2026-09-08: they aren't special enough
         to break the rules; v1 hid them)--then the <COMMAND> placeholder
         when this node dispatches commands.  A subcommand set's line
         shows its own command's options and operands.
         """
         from big.stylesheet import style, escape_styles
-        parts = [style('program', escape_styles(self._prog()))]
+        units = [style('program', escape_styles(self._prog()))]
         if self.parent is None:
             plans = self.global_plans()
         else:
             plans = [p for p in (self._help_plan(), self.global_plan)
                      if p is not None]
         for plan in plans:
-            body = plan.usage_body()
-            if body:
-                parts.append(body)
+            units.extend(plan.usage_body_units())
         if self._table():
             # the placeholder keeps the argument DECORATION (<COMMAND>: a
             # hole to fill) but wears the command ROLE--the words that can
             # fill it are printed in that same style in the listing below,
             # so the paint cross-references them (Larry's ruling, 2026-09-07)
             from .presentation import decorate_argument
-            parts.append(style('command',
+            units.append(style('command',
                                decorate_argument('command',
                                                  self._decoration_entry())))
-        return ' '.join(parts)
+        return units
 
     def _precommand_plan(self):
         """
@@ -3153,7 +3155,7 @@ class Appeal:
                     # the user--Larry, 2026-09-08)
                     err = UsageError(f"unexpected argument {tok!r}")
                     err.usage = _line_trailer(self,
-                                              deepest._head_usage_markup())
+                                              deepest._head_usage_units())
                 raise err
 
         if not dispatched:

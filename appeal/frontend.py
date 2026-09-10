@@ -962,10 +962,16 @@ class Plan:
                 f'arity=({self.minimum}, {self.maximum})>')
 
     def usage(self):
+        "A one-line usage string: the units, space-joined."
+        return ' '.join(self.usage_units())
+
+    def usage_units(self):
         """
-        A one-line usage string, read straight off the tree: the
-        program span (the plan's argv0 and command word, else the
-        plan's name), then usage_body().
+        The usage line as its unbreakable UNITS, read straight off the
+        tree (Larry, 2026-09-10: the plan hands the renderer the
+        structure it has, never a string to re-scan): the program span
+        (the plan's argv0 and command word, else the plan's name), then
+        the body's units.  Wrapping never breaks inside a unit.
         """
         from big.stylesheet import style, escape_styles
         if self.argv0:
@@ -973,17 +979,19 @@ class Plan:
                     + style('command', escape_styles(self.name)))
         else:
             head = style('program', escape_styles(self.name))
-        return f'{head} {self.usage_body()}'.rstrip()
+        return [head] + self.usage_body_units()
 
-    def usage_body(self):
+    def usage_body_units(self):
         """
-        The usage line's body--options and operands, no program span.
-        v1's shape, kept: options first (all strings, pipe-joined,
-        converter names as metavars), then operands; inside a
-        group's brackets, the group's options come first--so every
-        bracket reads left-to-right as something you can type
-        (announce-first, truth in advertising).  A line that spans
-        several eras (the program's, a command's) composes bodies.
+        The usage line's body as units.  v1's shape, kept: options
+        first (all strings, pipe-joined, converter names as metavars),
+        then operands; inside a group's brackets, the group's options
+        come first--so every bracket reads left-to-right as something
+        you can type (announce-first, truth in advertising).  A line
+        that spans several eras (the program's, a command's) composes
+        bodies.  A bracket group is one unit; a required option keeps
+        its strings and operands together, breaking only at the
+        bracket groups inside it (Larry, 2026-09-10).
         """
         from big.stylesheet import style, escape_styles
         from .presentation import decorate_argument
@@ -1015,16 +1023,28 @@ class Plan:
                 return None
             return name_text(slot)
 
-        def option_text(o):
-            # optional: one bracket group, one unit; required: no
-            # brackets, so the 'unit' span keeps the strings and operands
-            # together on a line (Larry, 2026-09-10)
-            text = _option_body(o)
-            return style('unit', text) if o.required else '[' + text + ']'
+        def at_brackets(units):
+            # merge runs of bracket-less units: what's left breaks only
+            # at the bracket groups
+            merged = []
+            for unit in units:
+                if merged and not unit.startswith('[') and not merged[-1].startswith('['):
+                    merged[-1] += ' ' + unit
+                else:
+                    merged.append(unit)
+            return merged
 
-        def _option_body(o):
-            bits = ['|'.join(style('option', escape_styles(s))
-                             for s in o.strings)]
+        def option_units(o):
+            # optional: one bracket group, one unit; required: no
+            # brackets, breaking only at the groups inside
+            parts = _option_parts(o)
+            if o.required:
+                return at_brackets(parts)
+            return ['[' + ' '.join(parts) + ']']
+
+        def _option_parts(o):
+            parts = ['|'.join(style('option', escape_styles(s))
+                              for s in o.strings)]
             if o.child is not None:
                 if getattr(o.child.callable,
                            'borrows_name', False):
@@ -1033,30 +1053,30 @@ class Plan:
                     # the OPTION's parameter (or its rename)
                     name = (o.usage_name if o.usage_name is not None
                             else o.name)
-                    bits.append(f'[{_arg(name)}]')
+                    parts.append(f'[{_arg(name)}]')
                 else:
-                    bits.append(body_text(o.child))
+                    parts.extend(body_units(o.child))
             elif o.consumes_operands:
                 if o.usage_name is not None:
-                    bits.append(_arg(o.usage_name))
+                    parts.append(_arg(o.usage_name))
                 else:
                     # an option operand shows the NAME (the
                     # parameter's, or the converter parameters' for a
                     # multi-operand option), through the 'argument' role
                     for name in o.oparg_names():
-                        bits.append(_arg(name))
-            return ' '.join(bits)
+                        parts.append(_arg(name))
+            return parts
 
-        def slot_text(slot, rename=None):
+        def slot_units(slot, rename=None):
             child = slot.child
             if isinstance(child, Terminal):
                 # rename, when present, is already final display text
                 name = rename if rename is not None else name_text(slot)
                 if slot.repeat:
-                    return f'[{name}]...'
+                    return [f'[{name}]...']
                 if slot.required:
-                    return name
-                return f'[{name}]'
+                    return [name]
+                return [f'[{name}]']
             # the transparency rule: a converter that consumes
             # exactly one operand is transparent to naming--the
             # annotated parameter's name flows through to its
@@ -1065,14 +1085,14 @@ class Plan:
             # plans are memoized and shared, so `flavor` used
             # under two different outer names must render
             # differently per use.
-            body = body_text(child, rename=transparent_name(slot))
+            units = body_units(child, rename=transparent_name(slot))
             if slot.repeat:
-                return f'[{body}]...'
+                return [f'[{" ".join(units)}]...']
             if slot.required:
-                return body
-            return f'[{body}]'
+                return units                    # a required group's own units
+            return [f'[{" ".join(units)}]']
 
-        def body_text(plan, rename=None):
+        def body_units(plan, rename=None):
             # options that feed one parameter are alternatives: the
             # last given wins, so they read as a choice, [--json | --yaml]
             # (Larry, 2026-09-09: exclusivity is one parameter, one value)
@@ -1081,18 +1101,18 @@ class Plan:
                 if o.restriction == 'hidden':
                     continue                    # recognized, shown nowhere
                 groups.setdefault(o.name, []).append(o)
-            bits = []
+            units = []
             for rules in groups.values():
                 if len(rules) == 1:
-                    bits.append(option_text(rules[0]))
+                    units.extend(option_units(rules[0]))
                     continue
-                text = ' | '.join(_option_body(o) for o in rules)
-                bits.append(style('unit', text) if rules[0].required
-                            else '[' + text + ']')
-            bits.extend(slot_text(s, rename) for s in plan.slots)
-            return ' '.join(bits)
+                text = ' | '.join(' '.join(_option_parts(o)) for o in rules)
+                units.append(text if rules[0].required else '[' + text + ']')
+            for slot in plan.slots:
+                units.extend(slot_units(slot, rename))
+            return units
 
-        return body_text(self)
+        return body_units(self)
 
     def sole_terminal_slot(self):
         """
