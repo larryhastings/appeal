@@ -1959,7 +1959,11 @@ own--but only the blocks the converter's docstring asked for,
 by writing the heading (empty or not).  A converter that
 writes neither clips its subtree: none of its parameters
 appear in the tables at all, on the assumption that its author
-documented them some other way.  So this:
+documented them some other way.  That gate exists only where a
+converter is used as an option.  A converter used as an argument
+always merges, and so does everything beneath it: `rgb`'s
+documented components reach the command's table through a
+`color` converter that wrote no sections at all.  So this:
 
 ```Python
 def color(hue, *, saturation=1, value=1):

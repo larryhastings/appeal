@@ -1042,8 +1042,11 @@ def merge_docs(plan, command_names=None):
     converter's docstring asked for, by writing the section (empty
     or not).  A converter that asked for nothing clips its subtree:
     nothing of it reaches the parent's tables; its author documented
-    it some other way.  (The parent may still document a nested
-    name: nearest scope wins on the text.)
+    it some other way.  The gate is checked only where an option's
+    row is assembled--an argument edge always merges, so entries
+    climb through undocumented positional converters.  (The parent
+    may still document a nested name: nearest scope wins on the
+    text.)
 
     Each docstring's entries are validated against the subtree of
     the callable that wrote them: an entry must name a visible

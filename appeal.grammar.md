@@ -412,7 +412,10 @@ reached through an *option* nests--the option's row is the
 converter's whole docstring, then its own Arguments and Options
 blocks, auto-filled, but only the blocks its docstring wrote (empty
 or not); a converter that wrote neither clips its subtree from the
-tables entirely.  A group option's row shows a mini-usage of its
+tables entirely.  The gate is checked exactly once, where the option's
+row is assembled, never on the way through a positional converter: an
+argument edge always merges, so entries climb through undocumented
+converters (`rgb` through `color` into `render`).  A group option's row shows a mini-usage of its
 operands (`-c|--color <HUE>`), never its nested options.  Nested
 blocks render one heading level below the section's, dressed with
 the template's words.  Entries render as the Arguments and

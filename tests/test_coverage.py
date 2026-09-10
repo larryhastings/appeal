@@ -6622,3 +6622,39 @@ def test_nested_documentation_across_option_edges():
     def draw3(*, k: knobs = None): pass
     (row,) = merge_docs(app.plan_for('draw3'))['options']
     assert strip_styles(row[0]) == '-k', row
+
+
+def test_argument_edges_always_merge():
+    # Larry, 2026-09-10, the dark corner: the "asked for it" gate is
+    # only at option edges.  An argument edge always merges, so rgb's
+    # entries climb through color (no sections at all) into render.
+    from big.stylesheet import strip_styles
+    from appeal.presentation import merge_docs
+    app = Appeal(name='tool')
+    def rgb(r: float, g: float, b: float):
+        """
+        A trio.
+
+        # Arguments
+        r
+        : Red.
+        g
+        : Green.
+        b
+        : Blue.
+        """
+    def color(hue: rgb, *, saturation: float = 1):
+        "An RGB color, further influenced."
+    @app.command()
+    def render(text, color: color):
+        "Render text with a color."
+    corpus = merge_docs(app.plan_for('render'))
+    assert [(strip_styles(d), l) for d, l, _ in corpus['arguments']] == \
+        [('<TEXT>', []), ('<R>', ['Red.']), ('<G>', ['Green.']), ('<B>', ['Blue.'])]
+    assert [strip_styles(d) for d, _, _ in corpus['options']] == \
+        ['-s|--saturation <SATURATION>']
+    # ...but the same color as an OPTION clips rgb, sections unasked
+    @app.command()
+    def render2(text, *, color: color = None): pass
+    (row,) = merge_docs(app.plan_for('render2'))['options']
+    assert row[1] == ['An RGB color, further influenced.'] and row[2] == ()
