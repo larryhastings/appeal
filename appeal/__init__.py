@@ -2967,9 +2967,11 @@ class Appeal:
         mappings; everything else is this level's own (options, and
         whatever _config_vet will refuse).  Returns (own, sections).
         """
+        own, sections = {}, {}
+        if not mapping:
+            return own, sections            # the common case: no import
         from collections.abc import Mapping
         table = self._table()
-        own, sections = {}, {}
         for key, value in mapping.items():
             if key in table:
                 if not isinstance(value, Mapping):
