@@ -75,7 +75,10 @@ def _option_schema(o, docs):
         entry['group'] = _plan_schema(o.child)
     elif o.consumes_operands:
         entry['operands'] = [_converter_name(c) for c in o.operand_converters]
-    entry['default'] = _default(o.default)
+    if o.required:
+        entry['required'] = True
+    else:
+        entry['default'] = _default(o.default)
     if o.usage_name and o.usage_name != o.name:
         entry['usage'] = o.usage_name
     if o.name in docs:
@@ -268,6 +271,8 @@ def _mcp_object_schema(described):
         if option.get('doc'):
             entry['description'] = option['doc']
         properties[option['name']] = entry
+        if option.get('required'):
+            required.append(option['name'])
     return {'type': 'object', 'properties': properties,
             'required': required}
 

@@ -249,6 +249,8 @@ def _read_group_args(plan, mapping, path, strict):
         if o.name in mapping:
             kwargs[o.name] = _option_value(o, mapping[o.name],
                                            _sub(path, o.name), strict)
+        elif o.required:
+            _fail(f"missing option {o.name!r}", path)
         elif not o.kwargs_delivered:
             option_defaults.setdefault(o.name, o.default)
     for name, default in option_defaults.items():
@@ -307,6 +309,8 @@ def _read_sequence(plan, items, path, strict, call=True):
         kwargs[slot.name] = _convert(slot.child.converter, value,
                                      _sub(path, slot.name))
     for o in plan.options:
+        if o.required:
+            _fail(f"missing option {o.name!r}", path)
         if not o.kwargs_delivered:
             kwargs[o.name] = o.default
 

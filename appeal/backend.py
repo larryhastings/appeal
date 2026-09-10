@@ -17,8 +17,9 @@ from .frontend import Terminal, NO_DEFAULT
 class ArgumentInstruction:
     """
     A positional operand.  A leading-dash token here is an OPTION.  A
-    trailing Argument (keyword-only-no-default parameter) instead draws
-    from its owner's end-pocket and is delivered as a keyword argument.
+    trailing Argument (a required leaf after an absorbing group) instead
+    draws from its owner's end-pocket and is delivered as a keyword
+    argument.
     """
     __slots__ = ('owner', 'name', 'converter', 'required', 'slot', 'trailing',
                  'default')
@@ -729,6 +730,8 @@ class Engine:
         self.root = root
         self.commands = commands        # command words: the saturation boundary
         self.pending = []               # the records to resolve, in token order
+        self.entered = []               # every converter entered, in order:
+                                        # each owes its required options
 
     def seed(self, bled):
         """
@@ -863,6 +866,7 @@ class Engine:
         and delivered to the trailing Arguments by keyword.
         """
         converter.register(self)
+        self.entered.append(converter)
         if not converter.trailing:
             return
         operand_indices = []
@@ -904,6 +908,27 @@ class Engine:
         "Parcel the era's tokens onto the root (structural errors raise)."
         self.enter(self.root)
         self._loop()
+        self.check_required()
+
+    def check_required(self, supplied=frozenset()):
+        """
+        Every converter entered in this era owes its required options
+        (Larry, 2026-09-10): a keyword-only parameter with no default.
+        Structural--pass 1, before anything runs--like a missing
+        argument.  `supplied`: names a bound config supplies to the
+        root converter, which satisfy it too.
+        """
+        for converter in self.entered:
+            missing = {}
+            for rule in type(converter).plan.options:
+                if (rule.required and rule.name not in converter.kwargs
+                        and not (converter is self.root
+                                 and rule.name in supplied)):
+                    missing.setdefault(rule.name, []).append(rule.key)
+            for keys in missing.values():
+                # several strings feeding one parameter: name them all
+                raise UsageError(
+                    f"missing option {' or '.join(map(repr, keys))}")
 
     def execute(self):
         "Convert in token order, then call the root."

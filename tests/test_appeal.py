@@ -2276,13 +2276,8 @@ def test_plan_promotion_unshares_shared_converter():
     assert run_both(f, ['1', '2', '3', '4']) == ('ok', ((1, 2), 3, (4, 0)))
 
 def test_plan_configuration_errors():
-    def bad_order(*, opt='x', z):
-        pass
-    try:
-        build_plan(bad_order)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'z' in str(e)
+    # (a keyword-only parameter with no default was refused here until
+    # 2026-09-10; it's a required option now--see test_required_options)
 
     # a default-True flag is LEGAL (v1, restored 2026-07-18--
     # Larry's break #1: v2's first cut refused it): presence
@@ -4293,17 +4288,17 @@ def test_converter_depth_grammar():
     got = run_both(cmd, ['a', 'zz'])
     assert got == ('ok', (('a', ()), 'zz')), got
 
-    # refusals that remain, by name: a keyword-only parameter with no
-    # default (it maps to an option, and options are always optional)
+    # a keyword-only parameter with no default is a REQUIRED option
+    # (Larry, 2026-09-10, reversing v1's "options are always optional"),
+    # inside a converter group too: owed whenever the group is entered
     def opt_group(width: float = 1.0, *, tail):
         return (width, tail)
-    def bad(x='X', *, g: opt_group = None):
+    def req(x='X', *, g: opt_group = None):
         return (x, g)
-    try:
-        build_plan(bad)
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'must have a default' in str(e), e
+    assert run_both(req, ['a', '-g', '2', '--tail', 't']) == \
+        ('ok', ('a', (2.0, 't')))
+    assert run_both(req, ['a']) == ('ok', ('a', None))
+    assert run_both(req, ['a', '-g', '2']) == ('usage', "missing option '--tail'")
 
     def wide(p: int, q: int):
         return (p, q)

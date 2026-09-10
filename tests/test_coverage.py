@@ -6034,3 +6034,124 @@ def test_path_classes_are_leaves():
                           stderr=subprocess.PIPE, universal_newlines=True)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == 'False', proc.stdout
+
+
+def test_required_options():
+    # Larry, 2026-09-10 (parity review item 4), reversing v1's "options
+    # are always optional": a keyword-only parameter with no default is
+    # a REQUIRED option.  The check is structural--pass 1, at the era's
+    # end, before anything runs, like a missing argument--and -h still
+    # wins.  Usage shows it unbracketed; the schema lists it as
+    # required; the readers refuse a mapping without it.
+    import contextlib, io
+    from big.stylesheet import strip_styles
+    from appeal import read_mapping
+    from appeal.schema import mcp_input_schema, describe
+    ran = []
+    app = Appeal(name='t')
+    @app.global_command()
+    def main(*, verbose=False): ran.append(('main', verbose))
+    @app.command()
+    def deploy(target, *, region, dry_run=False):
+        ran.append('deploy'); return (target, region, dry_run)
+    def pair(a, *, unit): return (a, unit)
+    @app.command()
+    def measure(p: pair, *, scale: int = 1): return (p, scale)
+    @app.command()
+    @app.option('token', '-T', '--token')
+    def login(*, token): return token
+    def json_format(*, indent: int = 0): return ('json', indent)
+    def yaml_format(): return ('yaml',)
+    @app.command()
+    @app.option('format', '--json', annotation=json_format)
+    @app.option('format', '--yaml', annotation=yaml_format)
+    def export(*, format): return format
+    got = lambda argv: app.process(argv).result
+    def refused(argv):
+        ran.clear()
+        try:
+            app.process(argv)
+            assert False, argv
+        except UsageError as e:
+            return str(e)
+    # usage: unbracketed, alternatives too
+    assert strip_styles(app.plan_for('deploy').usage()) == \
+        't deploy -r|--region <REGION> [-d|--dry-run] <TARGET>'
+    assert strip_styles(app.plan_for('measure').usage()) == \
+        't measure [-s|--scale <SCALE>] -u|--unit <UNIT> <P>'
+    assert strip_styles(app.plan_for('login').usage()) == 't login -T|--token <TOKEN>'
+    assert strip_styles(app.plan_for('export').usage()) == \
+        't export --yaml | --json [-i|--indent <INDENT>]'
+    # given, in any order relative to the operands
+    assert got(['deploy', 'prod', '--region', 'eu']) == ('prod', 'eu', False)
+    assert got(['deploy', '--region', 'eu', 'prod', '-d']) == ('prod', 'eu', True)
+    assert got(['measure', '3', '--unit', 'cm']) == (('3', 'cm'), 1)
+    assert got(['login', '-T', 'x']) == 'x'
+    assert got(['export', '--yaml']) == ('yaml',)
+    # missing: refused before the global command runs (structural)
+    assert refused(['deploy', 'prod']) == "missing option '--region'"
+    assert ran == [], ran
+    assert refused(['-v', 'deploy', 'prod']) == "missing option '--region'"
+    assert ran == [], ran
+    assert refused(['measure', '3']) == "missing option '--unit'"
+    assert refused(['login']) == "missing option '--token'"
+    assert refused(['export']) == "missing option '--yaml' or '--json'"
+    # ...wearing the command's usage
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        try:
+            app.main(['deploy', 'prod'])
+        except SystemExit as e:
+            assert e.code == 2
+    assert err.getvalue().startswith(
+        "error: missing option '--region'\n\nusage: t deploy [-h|--help] -r|--region"), err.getvalue()
+    # -h still wins
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app.main(['deploy', 'prod', '-h'])
+        except SystemExit as e:
+            assert e.code == 0
+    assert out.getvalue().startswith('usage: t deploy [-h|--help] -r|--region'), out.getvalue()
+    # a group never entered owes nothing
+    def opt_group(width: float = 1.0, *, tail): return (width, tail)
+    @app.command()
+    def maybe(x='X', *, g: opt_group = None): return (x, g)
+    assert got(['maybe', 'a']) == ('a', None)
+    assert refused(['maybe', 'a', '-g', '2']) == "missing option '--tail'"
+    # a precommand's config supplies it
+    cfg = Appeal(name='c')
+    settings = {}
+    @cfg.precommand(config=settings)
+    def head(*, token): ran.append(('head', token))
+    @cfg.command()
+    def go(): ran.append('go')
+    ran.clear()
+    try:
+        cfg.process(['go']); assert False
+    except UsageError as e:
+        assert str(e) == "missing option '--token'", e
+    settings['token'] = 'from-file'
+    ran.clear()
+    cfg.process(['go'])
+    assert ran == [('head', 'from-file'), 'go'], ran
+    ran.clear()
+    cfg.process(['--token', 'typed', 'go'])
+    assert ran == [('head', 'typed'), 'go'], ran
+    # schema: required, no default
+    d = describe(app.plan_for('deploy'))
+    (region,) = [o for o in d['options'] if o['name'] == 'region']
+    assert region['required'] is True and 'default' not in region
+    assert mcp_input_schema(app.plan_for('deploy'))['required'] == ['target', 'region']
+    # the readers: a mapping without it is refused, by path
+    assert read_mapping(deploy, {'target': 'p', 'region': 'eu'}) == ('p', 'eu', False)
+    try:
+        read_mapping(deploy, {'target': 'p'})
+        assert False
+    except AppealDataError as e:
+        assert "missing option 'region'" in str(e), e
+    try:
+        read_mapping(measure, {'p': ['3']})
+        assert False
+    except AppealDataError as e:
+        assert "missing option 'unit'" in str(e), e

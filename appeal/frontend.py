@@ -413,11 +413,16 @@ class OptionRule:
                   a fold; (fn,) for a Nullary; (annotation,) for a
                   GroupOption, whose Plan is .child
     default       the value when the option never appears
+    required      the option must appear (a keyword-only parameter
+                  with no default; Larry, 2026-09-10): the engine
+                  refuses the line without it, usage shows it
+                  unbracketed
     kind          the shape's name, as the schema and the option
                   tables spell it
     """
     __slots__ = ('strings', 'name', 'converters', 'default', 'explicit',
-                 'usage_name', 'kwargs_delivered', 'annotation', 'auto_shorts')
+                 'usage_name', 'kwargs_delivered', 'annotation', 'auto_shorts',
+                 'required')
     kind = None
     child = None                # a GroupOption's Plan; None elsewhere
     is_flag = False
@@ -437,6 +442,7 @@ class OptionRule:
                                  # policy) can see it at finalize time
         self.auto_shorts = ()    # short strings the policy proposes;
                                  # the finalize pass claims each if free
+        self.required = False
 
     @property
     def key(self):
@@ -988,6 +994,10 @@ class Plan:
             return name_text(slot)
 
         def option_text(o):
+            text = _option_body(o)
+            return text if o.required else '[' + text + ']'
+
+        def _option_body(o):
             bits = ['|'.join(style('option', escape_styles(s))
                              for s in o.strings)]
             if o.child is not None:
@@ -1010,7 +1020,7 @@ class Plan:
                     # multi-operand option), through the 'argument' role
                     for name in o.oparg_names():
                         bits.append(_arg(name))
-            return '[' + ' '.join(bits) + ']'
+            return ' '.join(bits)
 
         def slot_text(slot, rename=None):
             child = slot.child
@@ -1043,10 +1053,14 @@ class Plan:
             # (Larry, 2026-09-09: exclusivity is one parameter, one value)
             groups = {}
             for o in plan.options:
-                groups.setdefault(o.name, []).append(option_text(o))
-            bits = [' | '.join(texts) if len(texts) == 1
-                    else '[' + ' | '.join(t[1:-1] for t in texts) + ']'
-                    for texts in groups.values()]
+                groups.setdefault(o.name, []).append(o)
+            bits = []
+            for rules in groups.values():
+                if len(rules) == 1:
+                    bits.append(option_text(rules[0]))
+                    continue
+                text = ' | '.join(_option_body(o) for o in rules)
+                bits.append(text if rules[0].required else '[' + text + ']')
             bits.extend(slot_text(s, rename) for s in plan.slots)
             return ' '.join(bits)
 
@@ -2243,18 +2257,12 @@ class SignaturePlan(Plan):
                 continue
 
             if kind is inspect.Parameter.KEYWORD_ONLY:
-                if not has_default:
-                    # keyword-only parameters map to options, and options are
-                    # always optional--so they must have a default.  (For a
-                    # required trailing operand, take it as a positional
-                    # through a converter.)
-                    raise AppealConfigurationError(
-                        f"keyword-only parameter {parameter.name!r} must have a "
-                        f"default: it maps to an option, and options are always "
-                        f"optional")
                 # `default` is the value the parameter gets when the
                 # option isn't given: ALWAYS the parameter's own default
-                # (v1: ungiven kwargs simply aren't passed).
+                # (v1: ungiven kwargs simply aren't passed).  No default
+                # (Larry, 2026-09-10, reversing v1's "options are always
+                # optional"): the option is REQUIRED--the engine refuses a
+                # line without it, before anything runs.
                 default = parameter.default
                 # the *grammar* pair--what kind of option is this, what
                 # converter--normally also comes from the parameter...
@@ -2263,10 +2271,12 @@ class SignaturePlan(Plan):
                 declarations = overrides.pop(parameter.name, None)
                 metavar = usage_names.pop(parameter.name, None)
                 if declarations is None:
-                    options.append(OptionRule.build(
+                    rule = OptionRule.build(
                         parameter.name, _option_strings(parameter.name),
                         False, annotation, grammar_default, default, metavar,
-                        build))
+                        build)
+                    rule.required = not has_default
+                    options.append(rule)
                     continue
                 # @app.option maps STRINGS (ruled 2026-07-25, the
                 # arglet style, superseding the July fresh-declaration
@@ -2289,10 +2299,12 @@ class SignaturePlan(Plan):
                     decl_default = declaration['default']
                     if decl_default is inspect.Parameter.empty:
                         decl_default = grammar_default
-                    options.append(OptionRule.build(
+                    rule = OptionRule.build(
                         parameter.name, declaration['strings'], True,
                         decl_annotation, decl_default,
-                        default, metavar, build))
+                        default, metavar, build)
+                    rule.required = not has_default
+                    options.append(rule)
                 continue
 
             # every other parameter kind was consumed above, so this one IS

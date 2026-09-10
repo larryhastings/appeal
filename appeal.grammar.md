@@ -32,7 +32,7 @@ one command-line string.
 | positional param, with default | optional operand (may promote--see grouping) |
 | `*args` | zero-or-more repetition of `slot(args)`.  A converter with several parameters and/or its own options makes each instance a **group**: a fixed-size chunk of operands, with the group's options bound to instances by **window** (see Options).  Staged: group parameters must be required terminals (fixed instance size). |
 | keyword-only, with default | an **option** (`--name`), not an operand |
-| keyword-only, **no** default | **rejected** (`ConfigurationError`): keyword-only params map to options, and options are always optional, so they must have a default (the 0.6.4 rule).  For the `cp SRC... DST` shape--a required operand after an absorbing group--use a converter group: the group's `*args` absorbs, a plain positional after it is reserved from the end |
+| keyword-only, **no** default | a **required option** (Larry, 2026-09-10, reversing 0.6.4's "options are always optional"): owed by every converter entered, checked at the era's end in pass 1 (`error: missing option '--region'`, the command's usage, before anything runs; `-h` still wins); usage shows it unbracketed; a precommand's config may supply it; the schema lists it as required.  For the `cp SRC... DST` shape--a required operand after an absorbing group--use a converter group: the group's `*args` absorbs, a plain positional after it is reserved from the end |
 | `**kwargs` | legal: it receives `@app.option` declarations for parameters not in the signature.  Absent ones simply aren't passed (v1, probed: `F a {}`)--a deliberate asymmetry with real parameters, whose defaults DO fill: `'verbose' in kwargs` is the only place "given at all?" is observable.  Repeatable kinds (`list[T]`, `dict[K, V]`, `MultiOption`) route too.  NOT an arbitrary-option sink: undeclared options stay unknown.  Bare `**kwargs` gets nothing. |
 | positional-only marker `/` | no grammatical meaning (deliberately, ask the author of PEP 570) |
 | no annotation | `str`--the identity terminal |
@@ -830,8 +830,8 @@ errors that 1.0 accepts are the two documented supersets below.
 * **Trailing operands come from converter groups**: a required leaf
   after an absorbing group reserves from the end.  (The
   keyword-only-no-default spelling once meant this too, but that
-  left the grammar 2026-08-29--back to the 0.6.4 rule that
-  keyword-only params are options and must have a default.)
+  left the grammar 2026-08-29; since 2026-09-10 it means a required
+  option.)
 * **Converter-depth grammar** (July 2026, task #10): a `*args`
   converter is an *absorbing* nonterminal--it takes the most the
   slots after it can spare (v1, probed: `pair(a, *rest)` fed the

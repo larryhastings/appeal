@@ -2869,6 +2869,8 @@ class Appeal:
                 # in the scan (the value merge is at execute)
                 _config_vet(step.plan, frozenset(table), step.config[0],
                             self.plan_for, step.config[1])
+            proc.check_required(
+                frozenset(step.config[0]) if step.config else frozenset())
         except AppealDataError as e:
             if era.kind == 'head':
                 # an era-level error (a bad program-wide option, a config

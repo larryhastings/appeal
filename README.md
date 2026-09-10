@@ -433,8 +433,8 @@ One more shape worth knowing: a command like `cp`, which takes
 one or more sources and then a required destination at the
 *end*.  Python won't let you write `def cp(*src, dest)` with
 `dest` as a positional, and a keyword-only parameter maps to an
-*option*--always optional (we'll get to that)--so that's no
-help either.  The Appeal way is a *converter group*: a
+*option* (we'll get to that)--so that's no help either.  The
+Appeal way is a *converter group*: a
 converter whose `*args` absorbs the sources, with `dest` an
 ordinary positional after it.  Appeal reserves `dest` from the
 *end* of the command-line, so the group leaves room for it:
@@ -536,13 +536,20 @@ And a parameter whose name is a single character gets *only*
 the short option: a parameter named `n` maps to `-n`, never
 `--n`--a one-letter long option would just be confusing.)
 
-Third, options are *always optional.*
-(As a pedantic wag might put it--"the clue's right there in the name.")
-Therefore, in Appeal, keyword-only parameters that map to
-options must have a default value.  (A keyword-only parameter
-*without* a default becomes a required trailing argument, as
-we saw with `cp` above--precisely *because* it can't be an
-option.)
+Third, options should *usually* be optional.
+(As a pedantic wag might put it--"the clue's right there in the
+name.")  A value the user must supply is usually an *argument*.
+But Appeal doesn't insist: a keyword-only parameter *without* a
+default is a *required option*.  `def deploy(target, *, region)`
+gives
+
+    deploy -r|--region <REGION> <TARGET>
+
+with `--region` shown outside brackets, and `deploy prod` alone
+is refused with `error: missing option '--region'` before
+anything runs, exactly like a missing argument.  Use it when
+several required values have no natural order and names read
+better than positions.
 
 Fourth, notice that `--color` takes an argument, or *oparg.*
 Appeal noticed that the `color` parameter had a default
