@@ -27,8 +27,11 @@ _SPECIAL_HEADINGS = {'Options': 'options',
 _ATX_RE = re.compile(r'^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$')
 _SETEXT_RE = re.compile(r'^ {0,3}(=+|-+)\s*$')
 # a code fence: three or more backticks or tildes, indented at most
-# three; closed by the same character, at least as many
+# three; closed by the same character, at least as many, and NOTHING
+# but whitespace after (CommonMark: a would-be closer with trailing
+# text is code--Astra D07, 2026-09-10)
 _FENCE_RE = re.compile(r'^ {0,3}(`{3,}|~{3,})')
+_FENCE_CLOSE_RE = re.compile(r'^ {0,3}(`{3,}|~{3,})[ \t]*$')
 # a definition marker: ':' indented at most three (big's rule), then
 # the gap that sets the content column
 _DEFMARK_RE = re.compile(r'^( {0,3}):( *)(.*)$')
@@ -62,9 +65,10 @@ def _fence_step(line, fence):
     `line`--(char, length) inside a fence, None outside--given the
     state before it.
     """
-    m = _FENCE_RE.match(line)
     if fence is None:
+        m = _FENCE_RE.match(line)
         return (m.group(1)[0], len(m.group(1))) if m else None
+    m = _FENCE_CLOSE_RE.match(line)
     if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
         return None
     return fence
@@ -225,11 +229,14 @@ _ALERT_RE = re.compile(
     r'^(\s*> )\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$',
     re.MULTILINE)
 # code, which the textual transforms must leave alone: a fenced
-# block (opened and closed by the same fence), or a code span (a
-# backtick run closed by a run of the same length)
+# block (opened by a run of backticks or tildes, closed by a run of
+# the same character at least as long, whitespace only after it--
+# CommonMark's rule, Astra D07), or a code span (a backtick run
+# closed by a run of the same length)
 _CODE_RE = re.compile(
-    r'(?:^ {0,3}(`{3,}|~{3,}).*?^ {0,3}\1[ \t]*$)'
-    r'|(?:(`+)(?!`).+?(?<!`)\2(?!`))',
+    r'(?:^ {0,3}(`{3,})[^\n]*\n.*?^ {0,3}\1`*[ \t]*$)'
+    r'|(?:^ {0,3}(~{3,})[^\n]*\n.*?^ {0,3}\2~*[ \t]*$)'
+    r'|(?:(`+)(?!`).+?(?<!`)\3(?!`))',
     re.MULTILINE | re.DOTALL)
 
 

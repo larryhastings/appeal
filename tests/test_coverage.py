@@ -7174,3 +7174,25 @@ def test_boolean_literal_reads_its_own_spellings():
         except UsageError as e:
             assert needle in str(e), (argv, str(e))
     assert appeal.validate(True, False).completions('') == ('True', 'False')
+
+
+def test_code_fences_close_by_commonmark_rules():
+    # Astra's delta review, D07 (2026-09-10): Appeal's own fence
+    # tracking disagreed with big's parser--a longer closing fence
+    # wasn't recognized by the text transforms (so strikethrough
+    # stripping corrupted code), and a would-be closer with trailing
+    # text ended a block it shouldn't have (so '# Options' inside code
+    # opened a section).  Both now follow CommonMark: the closer is
+    # the same character, at least as long, whitespace only after.
+    from appeal.presentation import to_commonmark, scan_docstring
+    from big.markdown import parse, CodeBlock
+    source = '~~~\n~~literal~~\n~~~~\n'
+    assert to_commonmark(source) == source
+    assert parse(to_commonmark(source)) == parse(source)
+    source = '```\n```not-a-close\n# Options\nnot metadata\n```\n'
+    assert isinstance(parse(source).blocks[0], CodeBlock)
+    assert scan_docstring(source)['options'] is None
+    # a backtick fence whose info string is followed by code; a
+    # strikethrough outside the fence still strips
+    source = '```python\n~~x~~\n```\n~~gone~~\n'
+    assert to_commonmark(source) == '```python\n~~x~~\n```\ngone\n'
