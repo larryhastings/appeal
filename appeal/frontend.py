@@ -417,12 +417,16 @@ class OptionRule:
                   with no default; Larry, 2026-09-10): the engine
                   refuses the line without it, usage shows it
                   unbracketed
+    config_key    the key config looks this option up under: the
+                  parameter name, unless @app.option(config=) says
+                  otherwise (Larry, 2026-09-10: a command word wins a
+                  collision, so the option gets another key)
     kind          the shape's name, as the schema and the option
                   tables spell it
     """
     __slots__ = ('strings', 'name', 'converters', 'default', 'explicit',
                  'usage_name', 'kwargs_delivered', 'annotation', 'auto_shorts',
-                 'required')
+                 'required', 'config_key')
     kind = None
     child = None                # a GroupOption's Plan; None elsewhere
     is_flag = False
@@ -443,6 +447,7 @@ class OptionRule:
         self.auto_shorts = ()    # short strings the policy proposes;
                                  # the finalize pass claims each if free
         self.required = False
+        self.config_key = name
 
     @property
     def key(self):
@@ -2078,7 +2083,7 @@ class Decorations:
 
     def add_option(self, callable, parameter_name, strings,
                    annotation=inspect.Parameter.empty,
-                   default=inspect.Parameter.empty):
+                   default=inspect.Parameter.empty, config=None):
         # zero strings is legal (ruled 2026-07-25): "I'm speaking
         # for this parameter: nothing"--the explicit per-parameter
         # unmap, symmetric with a policy declining.  The parameter
@@ -2086,7 +2091,8 @@ class Decorations:
         for s in strings:
             validate_option_string(s)
         declaration = {'strings': tuple(strings),
-                       'annotation': annotation, 'default': default}
+                       'annotation': annotation, 'default': default,
+                       'config': config}
         overrides = self.option_overrides.setdefault(callable, {})
         declarations = overrides.setdefault(parameter_name, [])
         if declaration not in declarations:
@@ -2304,6 +2310,8 @@ class SignaturePlan(Plan):
                         decl_annotation, decl_default,
                         default, metavar, build)
                     rule.required = not has_default
+                    if declaration['config'] is not None:
+                        rule.config_key = declaration['config']
                     options.append(rule)
                 continue
 
@@ -2332,6 +2340,8 @@ class SignaturePlan(Plan):
                         declaration['annotation'], declaration['default'],
                         None, metavar, build)
                     rule.kwargs_delivered = True
+                    if declaration['config'] is not None:
+                        rule.config_key = declaration['config']
                     options.append(rule)
 
         if usage_names:

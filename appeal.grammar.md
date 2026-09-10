@@ -699,34 +699,43 @@ the era and is retried.
 
 ## Config layering
 
-A dict **bound to a precommand** with `@app.precommand(config=...)`
-supplies that precommand's options: config holds program-wide
-settings; the command line names the work.  You bind the dict at
-registration and fill it before `main()` (Appeal holds the same
-object), and each precommand that wants config binds its own--there is
-no single global slot, and no `config=` on `process`/`main`.  Merge
-your layers into the one dict yourself.  Precedence is fixed and unknobbed:
-defaults < config < args, **atomic per option** (an option the
-args mention wins whole; repeatable kinds REPLACE, never append--the
-command line can always subtract).  Keys are **full strict**
-("either this is ours, or it isn't"): every key must name one of
-that precommand's options; a command name, a positional argument
-(anyone's), or an unknown key is a loud `AppealDataError` saying
-which it is (a config file is data of unknown provenance--not the
-command line, so not "usage").  Values convert in **stage 2 through the ordinary argv
-pipeline** with `config:` provenance on failures; flags use the
-strict boolean spellings (never truthiness), and a false flag
-means *absent*--the default fills, and a `**kwargs` option stays
-an absent key.  Repeatables take a sequence (one entry per
-occurrence), mappings a mapping, group options a sequence of
-their arguments or a by-name sub-mapping.  The mapping is read
-live (mutating it mid-run is the caller's problem, per-run per
-Processor--the app-server case).  Config for *scoped* options
-is refused **by design** (ruled 2026-07-09): position is the
-essence of a scoped option, and a mapping has no position--the
-two transports don't compose.  The refusal names the workaround
-(set it on the command line, or give the uses distinct parameter
-names via `@app.option`).
+**One mapping for the tree** (Larry, 2026-09-10, replacing the
+per-precommand `config=` of 2026-08-25): `Appeal(config=mapping,
+strict=True)`.  You bind the dict at construction and fill it before
+`main()` (Appeal holds the same object); there is no `config=` on
+`process`/`main`, and no `precommand(config=)`.  Merge your layers
+into the one dict yourself.  The mapping's shape mirrors the command
+tree: at each level a **scalar** names an option by parameter name (at
+the root, whichever head era owns it--two owning it is a
+`ConfigurationError`), and a **mapping under a command word** is that
+command's section, nesting all the way down.  A command word **wins a
+collision** with an option name, always (never decided by the value's
+type); `@app.option(..., config=<key>)` gives the option another key.
+Options only, never positionals.  Precedence is fixed and unknobbed:
+defaults < config < args, **atomic per option** (an option the args
+mention wins whole; repeatable kinds REPLACE, never append--the
+command line can always subtract); a required option is satisfied by
+config.  Keys are **strict** ("either this is ours, or it isn't"):
+every key must name an option at its level or a command's section; a
+positional argument (anyone's), an option that belongs in another
+section, a section that isn't a mapping, or an unknown key is a loud
+`AppealDataError` saying which it is (a config file is data of unknown
+provenance--not the command line, so not "usage").  `strict=False`,
+one knob for the tree, takes what layers and ignores the rest.  A
+section for a command the line never names is never vetted.  Values
+convert in **stage 2 through the ordinary argv pipeline** with
+`config:` provenance on failures; flags use the strict boolean
+spellings (never truthiness), and a false flag means *absent*--the
+default fills, and a `**kwargs` option stays an absent key.
+Repeatables take a sequence (one entry per occurrence), mappings a
+mapping, group options a sequence of their arguments or a by-name
+sub-mapping.  The mapping is read live (mutating it mid-run is the
+caller's problem, per-run per Processor--the app-server case).
+Config for *scoped* options is refused **by design** (ruled
+2026-07-09): position is the essence of a scoped option, and a mapping
+has no position--the two transports don't compose.  The refusal names
+the workaround (set it on the command line, or give the uses distinct
+parameter names via `@app.option`).
 
 **Deferred feature -- scoped-option config addressing (post-1.0).**
 If you need to set a *scoped* option (one string declared by

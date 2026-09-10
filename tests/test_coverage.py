@@ -943,7 +943,8 @@ def test_config_vet_refusals():
         return (b, deep)
     app = Appeal(name='cfg')
     cfg = {}
-    @app.global_command(config=cfg)
+    app.config = cfg
+    @app.global_command()
     def top(src=None, *, verbose=False, x: g1 = None, y: g2 = None):
         return (src, verbose)
     @app.command()
@@ -984,7 +985,8 @@ def test_config_inject_shapes():
     seen = []
     def make_app(cfg=None):
         app = Appeal(name='cfi')
-        @app.global_command(config=cfg)
+        app.config = cfg
+        @app.global_command()
         def top(*, tags: appeal.accumulator[str] = (), adds: Add = 0,
                 spot: pt = None, corner: box = None, flag=False):
             seen.append((tuple(tags), adds, spot, corner, flag))
@@ -2093,7 +2095,8 @@ def test_dispatch_more_shapes():
     # config replay: the synth carries no operands, so the required
     # positional's "missing argument" is the benign, swallowed case
     appc = Appeal(name='c7')
-    @appc.global_command(config={'verbose': True})
+    appc.config = {'verbose': True}
+    @appc.global_command()
     def top(src, *, verbose=False):
         return (src, verbose)
     assert appc.process(['hello']).result == ('hello', True)
@@ -2633,7 +2636,8 @@ def test_parse_once_edges():
     def pair(x: int, y: int):
         return (x, y)
     app3 = Appeal(name='cfg', default_mappings=None)
-    @app3.precommand(config={'where': [1]})
+    app3.config = {'where': [1]}
+    @app3.precommand()
     def top(*, where: pair = None):
         return where
     try:
@@ -2925,7 +2929,8 @@ def test_astra_r02_config_reaches_its_owner():
     def logging(*, level='warn'):
         return level
     app = Appeal(name='probe', default_mappings=None)
-    @app.precommand(config={'level': 'info'})
+    app.config = {'level': 'info'}
+    @app.precommand()
     def command(log: logging = None):
         return log
     assert app.process([]).result == 'info'
@@ -2933,7 +2938,8 @@ def test_astra_r02_config_reaches_its_owner():
     def group(first='A', second='B', *, flag=False):
         return first, second, flag
     app2 = Appeal(name='probe', default_mappings=None)
-    @app2.precommand(config={'group': {'second': 'CONFIGURED'}})
+    app2.config = {'group': {'second': 'CONFIGURED'}}
+    @app2.precommand()
     def command2(*, group: group = None):
         return group
     assert app2.process([]).result == ('A', 'CONFIGURED', False)
@@ -2942,13 +2948,15 @@ def test_astra_r02_config_reaches_its_owner():
     def logging3(*, level='warn', color=False):
         return (level, color)
     app3 = Appeal(name='probe', default_mappings=None)
-    @app3.precommand(config={'level': 'info', 'color': True})
+    app3.config = {'level': 'info', 'color': True}
+    @app3.precommand()
     def command3(log: logging3 = None):
         return log
     assert app3.process(['--level', 'debug']).result == ('debug', True)
     # a false flag is ABSENT (documented): the default stays
     app4 = Appeal(name='probe', default_mappings=None)
-    @app4.precommand(config={'color': False, 'level': 'x'})
+    app4.config = {'color': False, 'level': 'x'}
+    @app4.precommand()
     def command4(log: logging3 = None):
         return log
     assert app4.process([]).result == ('x', False)
@@ -2956,7 +2964,8 @@ def test_astra_r02_config_reaches_its_owner():
     # argv didn't name the group, assigned to the argv-built instance
     # when it did
     app6 = Appeal(name='probe', default_mappings=None)
-    @app6.precommand(config={'flag': True})
+    app6.config = {'flag': True}
+    @app6.precommand()
     def command6(*, group: group = None):
         return group
     assert app6.process([]).result == ('A', 'B', True)
@@ -2967,7 +2976,8 @@ def test_astra_r02_config_reaches_its_owner():
     def stamp():
         return 'stamped'
     app7 = Appeal(name='probe', default_mappings=None)
-    @app7.precommand(config={'level': 'info', 'mark': True})
+    app7.config = {'level': 'info', 'mark': True}
+    @app7.precommand()
     def command7(count: int = 0, o: other = None, log: logging = None,
                  *, mark: stamp = None):
         return (count, o, log, mark)
@@ -2975,7 +2985,8 @@ def test_astra_r02_config_reaches_its_owner():
     assert app7.process(['3']).result == (3, None, 'info', 'stamped')
     # a false nullary is absent, like a false flag
     app7b = Appeal(name='probe', default_mappings=None)
-    @app7b.precommand(config={'mark': False})
+    app7b.config = {'mark': False}
+    @app7b.precommand()
     def command7b(*, mark: stamp = None):
         return mark
     assert app7b.process([]).result is None
@@ -2983,7 +2994,8 @@ def test_astra_r02_config_reaches_its_owner():
     def outer(*, inner: logging = None):
         return inner
     app8 = Appeal(name='probe', default_mappings=None)
-    @app8.precommand(config={'level': 'info'})
+    app8.config = {'level': 'info'}
+    @app8.precommand()
     def command8(*, a: other = None, o: outer = None):
         return o
     assert app8.process([]).result == 'info'
@@ -2991,7 +3003,8 @@ def test_astra_r02_config_reaches_its_owner():
     def each(x, *, tag=''):
         return (x, tag)
     app5 = Appeal(name='probe', default_mappings=None)
-    @app5.precommand(config={'tag': 'T'})
+    app5.config = {'tag': 'T'}
+    @app5.precommand()
     def command5(*items: each):
         return items
     try:
@@ -4555,7 +4568,8 @@ def test_reachable_grind_config_doc_version():
     from appeal import default_global_mappings
     # a config value that fails conversion is reported as config: ...
     app = appeal.Appeal('a', default_mappings=None)
-    @app.global_command(config={'jobs': 'notanint'})
+    app.config = {'jobs': 'notanint'}
+    @app.global_command()
     def g(*, jobs: int = 1):
         return jobs
     try:
@@ -4680,7 +4694,8 @@ def test_error_usage_rendered_clean():
     import appeal, io, contextlib, builtins
     cfg = {'jobs': 'notanint'}
     app = appeal.Appeal('r')
-    @app.precommand(config=cfg)
+    app.config = cfg
+    @app.precommand()
     def top(*, jobs: int = 1):
         pass
     @app.command()
@@ -4799,7 +4814,8 @@ def test_init_config_layering_edges():
         return (x, y)
     app = appeal.Appeal('cfg')
     at_cfg = {}
-    @app.global_command(config=at_cfg)
+    app.config = at_cfg
+    @app.global_command()
     class Config:
         def __init__(self, src='.', *, at: grp = None):
             self.src = src
@@ -4817,7 +4833,8 @@ def test_init_config_layering_edges():
     # command whose plan fails to BUILD (here two indistinguishable zero-operand
     # groups) is skipped, and the search still reports the key isn't an option
     lazy = appeal.Appeal('cfg2', lazy=True)
-    @lazy.global_command(config={'unknownkey': 1})
+    lazy.config = {'unknownkey': 1}
+    @lazy.global_command()
     class C2:
         def __init__(self, *, verbose=False):
             self.verbose = verbose
@@ -4842,7 +4859,8 @@ def test_init_config_layering_edges():
             raise ValueError("must be non-negative")
         return (x, flag)
     app2 = appeal.Appeal('cfg3')
-    @app2.global_command(config={'at': {'x': -5}})
+    app2.config = {'at': {'x': -5}}
+    @app2.global_command()
     class Config2:
         def __init__(self, *, at: grp2 = None):
             self.at = at
@@ -6122,7 +6140,8 @@ def test_required_options():
     # a precommand's config supplies it
     cfg = Appeal(name='c')
     settings = {}
-    @cfg.precommand(config=settings)
+    cfg.config = settings
+    @cfg.precommand()
     def head(*, token): ran.append(('head', token))
     @cfg.command()
     def go(): ran.append('go')
@@ -6155,3 +6174,108 @@ def test_required_options():
         assert False
     except AppealDataError as e:
         assert "missing option 'unit'" in str(e), e
+
+
+def test_config_tree():
+    # Larry, 2026-09-10 (parity review item 12): ONE mapping for the
+    # whole program, Appeal(config=), whose shape mirrors the command
+    # tree.  At each level a scalar feeds an option by parameter name;
+    # a mapping under a command word is that command's section, all
+    # the way down.  Options only.  A command word wins a collision;
+    # @app.option(config=) gives the option another key.  One strict
+    # knob for the tree.  Precedence unchanged: defaults < config <
+    # line, atomic per option.
+    seen = []
+    cfg = {'verbose': True, 'jobs': 4,
+           'deploy': {'region': 'eu', 'db': {'port': 5433}}}
+    app = Appeal(name='t', config=cfg)
+    @app.global_command()
+    def main(*, verbose=False, jobs: int = 1): seen.append(('main', verbose, jobs))
+    @app.command()
+    def deploy(target, *, region='us'): seen.append(('deploy', target, region))
+    @app.command('deploy').command()
+    def db(*, port: int = 5432): seen.append(('db', port))
+    @app.command()
+    def status(): seen.append('status')
+    def run(argv):
+        seen.clear()
+        app.process(argv)
+        return list(seen)
+    assert run(['deploy', 'prod']) == [('main', True, 4), ('deploy', 'prod', 'eu')]
+    assert run(['deploy', 'prod', 'db']) == \
+        [('main', True, 4), ('deploy', 'prod', 'eu'), ('db', 5433)]
+    assert run(['--jobs', '2', 'deploy', '--region', 'ap', 'prod', 'db', '--port', '1']) == \
+        [('main', True, 2), ('deploy', 'prod', 'ap'), ('db', 1)]
+    assert run(['status']) == [('main', True, 4), 'status']
+    # the same object: fill it later
+    cfg['deploy']['region'] = 'apac'
+    assert run(['deploy', 'prod'])[1] == ('deploy', 'prod', 'apac')
+    # refusals, each saying what the key is
+    def refused(mapping, argv=('deploy', 'prod', 'db')):
+        app.config = mapping
+        try:
+            app.process(list(argv))
+            assert False, mapping
+        except AppealDataError as e:
+            assert not isinstance(e, UsageError)
+            return str(e)
+    assert refused({'nope': 1}) == "config: 'nope' isn't an option here"
+    assert refused({'deploy': 5}) == \
+        "config: 'deploy' is a command; its section must be a mapping, not 5"
+    assert refused({'target': 'x'}) == \
+        "config: 'target' is a positional argument of 'deploy'; config supplies only options"
+    assert refused({'region': 'eu'}) == \
+        "config: 'region' is an option of 'deploy'; put it in the 'deploy' section"
+    assert refused({'deploy': {'port': 1}}) == \
+        "config: 'port' is an option of 'db'; put it in the 'db' section"
+    assert refused({'deploy': {'target': 'x'}}) == \
+        "config: 'target' is a positional argument; config supplies only options"
+    assert refused({'deploy': {'db': 'x'}}) == \
+        "config: 'db' is a command; its section must be a mapping, not 'x'"
+    # a section for a command the line never names is never vetted
+    app.config = {'deploy': {'nope': 1}}
+    assert run(['status']) == [('main', False, 1), 'status']
+    # lenient: one knob for the tree
+    app.config = {'lru': [1], 'jobs': 3, 'deploy': {'junk': 1, 'region': 'x'}}
+    app.strict = False
+    assert run(['deploy', 'prod']) == [('main', False, 3), ('deploy', 'prod', 'x')]
+    app.strict = True
+    # a command word wins a collision with an option; @app.option(config=)
+    # gives the option its own key
+    tree = Appeal(name='c', config={'status': {'color': True}, 'status_flag': 'on',
+                                    'extra_key': 'E'})
+    @tree.global_command()
+    @tree.option('status', '--status', config='status_flag')
+    @tree.option('extra', '--extra', config='extra_key')      # into **kwargs
+    def top(*, status=False, **kwargs): seen.append(('top', status, kwargs))
+    @tree.command()
+    def status2(*, color=False): seen.append(('status', color))
+    tree.command('status')(status2)
+    seen.clear()
+    tree.process(['status'])
+    assert seen == [('top', True, {'extra': 'E'}), ('status', True)], seen
+    # a program with no head at all (no global command, no automatic
+    # help): a root scalar has no owner
+    bare = Appeal(name='b', config={'x': 1}, default_mappings=None)
+    @bare.command()
+    def only(): pass
+    try:
+        bare.process(['only'])
+        assert False
+    except AppealDataError as e:
+        assert str(e) == "config: 'x' isn't an option here", e
+    bare.strict = False
+    bare.process(['only'])
+    # a required option satisfied from its command's section
+    req = Appeal(name='r', config={'push': {'remote': 'origin'}})
+    @req.command()
+    def push(*, remote): seen.append(('push', remote))
+    seen.clear()
+    req.process(['push'])
+    assert seen == [('push', 'origin')], seen
+    req.config = {}
+    try:
+        req.process(['push'])
+        assert False
+    except UsageError as e:
+        assert str(e) == "missing option '--remote'", e

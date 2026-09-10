@@ -4460,7 +4460,8 @@ def test_config_layering():
     cfg = {}
 
     if GENERIC_SPELLINGS:
-        @app.global_command(config=cfg)
+        app.config = cfg
+        @app.global_command()
         class Config:
             def __init__(self, source='.', *, verbose=False,
                          jobs: int = 1, include: list[str] = (),
@@ -4474,7 +4475,8 @@ def test_config_layering():
         # same layering coverage minus the 3.9 spellings: the
         # repeatable rides accumulator, the dict kind is counted
         needs_39('dict[K,V] config layering')
-        @app.global_command(config=cfg)
+        app.config = cfg
+        @app.global_command()
         class Config:
             def __init__(self, source='.', *, verbose=False,
                          jobs: int = 1,
@@ -4516,7 +4518,7 @@ def test_config_layering():
         pass
     for bad, fragment in (
             ({'target': 'x'}, 'positional argument'),
-            ({'build': {}}, 'is a command'),
+            ({'build': 5}, 'is a command; its section must be a mapping'),
             ({'colour': 1}, "isn't an option")):
         cfg.clear(); cfg.update(bad)
         try:
@@ -4530,7 +4532,8 @@ def test_config_layering():
     # with config provenance; bools use the strict spellings
     app2 = _appeal.Appeal(name='one')
     cfg2 = {}
-    @app2.global_command(config=cfg2)
+    app2.config = cfg2
+    @app2.global_command()
     def solo(*, jobs: int = 1, verbose=False):
         return (jobs, verbose)
     cfg2.update({'jobs': 4})
@@ -5071,7 +5074,8 @@ def test_flag_explicit_boolean():
     # THE POINT: the command line can turn OFF what config turned on
     app2 = _appeal.Appeal(name='layer')
     vcfg = {}
-    @app2.global_command(config=vcfg)
+    app2.config = vcfg
+    @app2.global_command()
     def top(*, verbose=False):
         print('verbose', verbose)
     @app2.command()
@@ -5703,7 +5707,8 @@ def test_appeal_error_umbrella():
 
     # a bad config boolean carries the usage it always meant to
     app3 = _appeal.Appeal(name='t3')
-    @app3.global_command(config={'verbose': 'maybe'})
+    app3.config = {'verbose': 'maybe'}
+    @app3.global_command()
     def top(*, verbose=False):
         pass
     @app3.command()
@@ -5730,7 +5735,8 @@ def test_config_group_options_and_empty_config():
     def make(cfg=None):
         app = Appeal(name='cfg')
         seen.clear()
-        @app.global_command(config=cfg)
+        app.config = cfg
+        @app.global_command()
         def top(*, where: wh = None):
             seen.append(where)
         @app.command()
@@ -5755,7 +5761,8 @@ def test_config_group_options_and_empty_config():
     # a mapping has no position
     def top2_factory(cfg=None):
         app = Appeal(name='sc')
-        @app.global_command(config=cfg)
+        app.config = cfg
+        @app.global_command()
         def top2(*, w1: wh = None, w2: wh = None):
             pass
         @app.command()
@@ -5779,7 +5786,8 @@ def test_config_error_provenance_is_structural():
     # appears in the message.
     def make(cfg=None):
         app = Appeal(name='m')
-        @app.global_command(config=cfg)
+        app.config = cfg
+        @app.global_command()
         def top(count: int, *, a='', level: int = 0):
             pass
         @app.command()
@@ -5809,7 +5817,8 @@ def test_config_error_provenance_is_structural():
         return (x, deep)
     app = Appeal(name='m3')
     cfg3 = {'where': {'x': 'nope'}}
-    @app.global_command(config=cfg3)
+    app.config = cfg3
+    @app.global_command()
     def top3(*, where: wh = None):
         pass
     @app.command()
@@ -5832,7 +5841,8 @@ def test_config_scoped_refusal():
     def child(p, *, flavor=''):
         return (p, flavor)
     app = _appeal.Appeal(name='t')
-    @app.global_command(config={'flavor': 'sour'})
+    app.config = {'flavor': 'sour'}
+    @app.global_command()
     def mg(a, b: child = None, c: child = None):
         pass
     @app.command()
@@ -6973,17 +6983,18 @@ def test_precommands_parse_as_one_merged_era():
 
 def test_precommand_config_strict_knob():
     # ruled 2026-08-29: config key vetting is strict by default (a
-    # typo'd key raises); strict=False takes the keys that are this
-    # era's options and IGNORES the rest--adapting an existing rc
-    # file that also carries non-CLI junk (an LRU list, geometry...)
+    # typo'd key raises); strict=False takes the keys that are options
+    # and IGNORES the rest--adapting an existing rc file that also
+    # carries non-CLI junk (an LRU list, geometry...).  One knob for
+    # the tree, Appeal(strict=) (Larry, 2026-09-10).
     import appeal as _appeal
 
     def build(strict):
-        app = _appeal.Appeal(name='rc')
         cfg = {}
         kwargs = {'config': cfg} if strict is None else \
                  {'config': cfg, 'strict': strict}
-        @app.precommand(**kwargs)
+        app = _appeal.Appeal(name='rc', **kwargs)
+        @app.precommand()
         def top(*, verbose=False):
             print('verbose', verbose)
         @app.command()
@@ -7035,26 +7046,19 @@ def test_precommand_config_strict_knob():
     assert _config_vet(plan, frozenset(), {'flag': True}, None,
                        strict=False) == {}
 
-    # strict= without config= is meaningless, refused by name
-    app3 = _appeal.Appeal(name='x')
-    try:
-        app3.precommand(strict=False)
-        assert False, 'expected AppealConfigurationError'
-    except _appeal.AppealConfigurationError as e:
-        assert 'config=' in str(e), e
-
 
 def test_precommand_config_bound_dicts():
-    # config binds to a precommand via @precommand(config=<dict>) (Larry,
-    # 2026-08-25): you bind the dict at decoration and fill it before dispatch
-    # (Appeal holds the SAME object), and its values layer onto THAT
-    # precommand's options (defaults < config < argv).  No global slot, no
-    # process(config=): each precommand routes to its own dict.
+    # ONE config mapping for the program, Appeal(config=<dict>) (Larry,
+    # 2026-09-10, replacing the per-precommand dicts of 2026-08-25):
+    # bound at construction, filled before dispatch (Appeal holds the
+    # SAME object); root scalars layer onto the head eras' options
+    # (defaults < config < argv), each key to the precommand that owns
+    # it.  No process(config=).
     import appeal as _appeal
     # (1) bind empty, fill late
     cfg = {}
-    app = _appeal.Appeal('one')
-    @app.precommand(config=cfg)
+    app = _appeal.Appeal('one', config=cfg)
+    @app.precommand()
     class App:
         def __init__(self, *, jobs: int = 1, verbose=False):
             self.jobs = jobs
@@ -7068,29 +7072,41 @@ def test_precommand_config_bound_dicts():
     c = app.process(['--jobs', '9', 'build', 'x']).instances[1][1]
     assert c.jobs == 9                                # argv wins, whole
 
-    # (2) two precommands, each its own dict -- "config into two of them"
-    a_cfg, b_cfg = {}, {}
+    # (2) two precommands: one dict, each key to its owner
+    cfg2 = {}
     seen = []
-    app2 = _appeal.Appeal('two')
-    @app2.precommand(config=a_cfg)
+    app2 = _appeal.Appeal('two', config=cfg2)
+    @app2.precommand()
     def alpha(*, host='localhost'):
         seen.append(('alpha', host))
-    @app2.precommand(config=b_cfg)
+    @app2.precommand()
     def beta(*, size: int = 0):
         seen.append(('beta', size))
     @app2.command()
     def go():
         seen.append('go')
-    a_cfg.update({'host': 'h'})
-    b_cfg.update({'size': '5'})
+    cfg2.update({'host': 'h', 'size': '5'})
     app2.process(['go'])
     assert seen == [('alpha', 'h'), ('beta', 5), 'go'], seen
+    # ...a key both own is refused (a mapping can't say which)
+    app2b = _appeal.Appeal('twob', config={'size': 1})
+    @app2b.precommand()
+    @app2b.option('size', '--asize')
+    def alpha2(*, size: int = 0): pass
+    @app2b.precommand()
+    @app2b.option('size', '--bsize')
+    def beta2(*, size: int = 0): pass
+    @app2b.command()
+    def go2(): pass
+    try:
+        app2b.process(['go2'])
+        assert False, 'expected AppealConfigurationError'
+    except AppealConfigurationError as e:
+        assert "'size' is an option of two precommands" in str(e), e
 
-    # (3) strict keys are per-precommand: a key that isn't this precommand's
-    # option is a loud error
-    bad = {'nope': 1}
-    app3 = _appeal.Appeal('three')
-    @app3.precommand(config=bad)
+    # (3) strict keys: a key that isn't anyone's option is a loud error
+    app3 = _appeal.Appeal('three', config={'nope': 1})
+    @app3.precommand()
     def only(*, real=False):
         pass
     @app3.command()
@@ -8104,10 +8120,11 @@ README_DRIVES = {
         (['status'], None, 'status verbose=False'),
     ],
     ('Config layering', 0): [
-        (['work', 'notes.txt'], {'editor': 'emacs'},
-         'editor=emacs verbose=False\nediting notes.txt'),
-        (['--editor', 'nano', 'work', 'notes.txt'], {'editor': 'emacs'},
-         'editor=nano verbose=False\nediting notes.txt'),
+        (['work', 'notes.txt'], {'editor': 'emacs', 'work': {'backup': True}},
+         'editor=emacs verbose=False\nediting notes.txt backup=True'),
+        (['--editor', 'nano', 'work', 'notes.txt', '--backup=false'],
+         {'editor': 'emacs', 'work': {'backup': True}},
+         'editor=nano verbose=False\nediting notes.txt backup=False'),
     ],
 }
 
@@ -8139,8 +8156,8 @@ def test_readme_examples():
             try:
                 with contextlib.redirect_stdout(out):
                     if config is not None:
-                        # config now binds to a precommand: fill the example's
-                        # bound dict (which it registered via config=...)
+                        # config binds to the app: fill the example's
+                        # bound dict (Appeal(config=...))
                         bound = namespace['config']
                         bound.clear(); bound.update(config)
                     app.process(list(argv)).result

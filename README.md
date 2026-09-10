@@ -119,9 +119,9 @@ APIs--it runs all the old tests--but adds a bounty of new marquee powers:
 * **A class as your whole program**: `__init__` handles the
   global options, decorated methods are the commands.  The
   old "preparers" are gone, it *just works.*
-* **Config layering**: bind a dict of settings to a precommand
-  (`@app.precommand(config=...)`), fill it from your config
-  file; the command line still wins.
+* **Config layering**: hand Appeal one dict of settings
+  (`Appeal(config=...)`), shaped like your command tree, filled
+  from your config file; the command line still wins.
 * An interactive **REPL**, turning your command-line interface
   into a mini-shell.
 * **MCP support.**  Writing tools for AI robots?  Appeal will
@@ -2146,55 +2146,69 @@ row's values to parameters *by name*, read_mapping-style.
 
 ### Config layering
 
-New in 1.0, and better than calling `read_mapping`
-yourself for the common case: **bind a config dict to a
-precommand** and its option values layer from it.  You bind the
-dict when you register the precommand and fill it later--Appeal
-holds the same object, so an empty dict you `.update()` before
-`main()` is seen:
+New in 1.0, and better than calling `read_mapping` yourself for
+the common case: **hand Appeal one dict of settings** and option
+values layer from it.  You bind the dict when you construct the
+app and fill it later--Appeal holds the same object, so an empty
+dict you `.update()` before `main()` is seen:
 
 ```Python
 import appeal
-app = appeal.Appeal(name='edit')
 
 config = {}                       # bind it now, fill it before main()
+app = appeal.Appeal(name='edit', config=config)
 
-@app.global_command(config=config)
+@app.global_command()
 def global_command(*, editor='vi', verbose=False):
     print(f"editor={editor} verbose={verbose}")
 
 @app.command()
-def work(file):
-    print(f"editing {file}")
+def work(file, *, backup=False):
+    print(f"editing {file} backup={backup}")
 
-config.update({'editor': 'emacs'})   # you read this from your rc file
+config.update({'editor': 'emacs',           # you read this from your rc file
+               'work': {'backup': True}})
 app.main()
 ```
 
+The dict's shape mirrors your command tree:
+
+* At each level, a **scalar** names an *option* by its parameter
+  name.  At the top that's a global option (whichever precommand
+  owns it); inside a command's section it's that command's.
+* A **mapping** under a command word is that command's
+  **section**, and so on down through subcommands:
+  `{'db': {'migrate': {'dry_run': True}}}`.
+* Config supplies **options only**, never positional arguments:
+  config holds settings; the command line names the work.
+* A command word wins a collision: `{'status': {...}}` is the
+  `status` command's section even if some option is also named
+  `status`.  Give such an option another key with
+  `@app.option('status', '--status', config='status_flag')`.
+
 The layering rules are fixed and unknobbed:
 
-* Config supplies **that precommand's options only**.  Config
-  holds program-wide settings; the command line names the work.
-  Bind a different dict to each precommand that wants one--no
-  single global slot, no guessing which precommand a mapping is
-  for.  If you have several layers (system, user, project),
-  merge them into the one dict yourself first.
 * Precedence is **defaults < config < args**, atomic per
   option: an option the command-line mentions wins *whole*
   (repeatable options replace, never append--the command line
   can always subtract).  That includes flags: config turned
-  `verbose` on?  `--verbose=false` turns it back off.
-* Keys are **strict**: every key must name a global-command
-  option.  A command name, a positional argument, or an
-  unknown key is a loud error saying exactly which it is.
-  Either this dict is yours, or it isn't.  (One key can never
-  work: a *scoped* option--the same string declared by several
-  argument groups--is addressed by position, and a mapping has
-  no position.  The refusal says so, and points at the
-  workaround.)
+  `verbose` on?  `--verbose=false` turns it back off.  A
+  required option is satisfied by config.
+* Keys are **strict**: every key must name an option at its
+  level, or a command's section.  A positional argument, an
+  option that belongs in another section, or an unknown key is
+  a loud error saying exactly which it is.  Either this dict is
+  yours, or it isn't.  `Appeal(strict=False)` takes the keys that
+  layer and ignores the rest, for an rc file that also holds
+  things Appeal doesn't own.  (One key can never work: a
+  *scoped* option--the same string declared by several argument
+  groups--is addressed by position, and a mapping has no
+  position.  The refusal says so, and points at the workaround.)
 * Values convert through the ordinary pipeline, with `config:`
   provenance on failures.  Flags use the strict boolean
   spellings; repeatable options take a sequence.
+* If you have several layers (system, user, project), merge
+  them into the one dict yourself first.
 
 With a class-as-app, this is the whole argparse-replacement
 story in three lines: the config file helps construct your
@@ -2234,7 +2248,7 @@ winner.)
 `app.instances` is a convenience alias for the latest run's.
 `app.main(args)` is `process()` plus polite error printing
 plus the exit-code protocol.  Config isn't passed here--bind it
-per precommand via `@app.precommand(config=...)`.
+to the app via `Appeal(config=...)`.
 
 
 ## Standalone Scripts: Removed
@@ -2496,7 +2510,7 @@ Like `main()`, but catches nothing and returns the last
 command's return value.  The automation entry point.  `args`
 defaults to `sys.argv[1:]`.
 
-`Appeal.parse(args=None, config=None)` / `Appeal.processor()`
+`Appeal.parse(args=None)` / `Appeal.processor()`
 
 Stage 1 only: returns a `Processor` holding the fully-parsed
 run.  `processor.execute()` runs it; `processor.instances` is

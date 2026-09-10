@@ -263,8 +263,8 @@ def test_config_mapping_option():
     # mapping) shapes into KEY=VALUE occurrences
     seen = []
     def make_app(cfg=None):
-        app = Appeal(name='cfgm')
-        @app.global_command(config=cfg)
+        app = Appeal(name='cfgm', config=cfg)
+        @app.global_command()
         def top(*, env: dict[str, str] = None):
             seen.append(env)
         @app.command()

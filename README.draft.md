@@ -126,8 +126,8 @@ compiles once into a small internal plan, and a streaming scanner runs
 that plan. It's dramatically faster and the semantics are finally nailed
 down (there's a whole section at the end for the fussy rules). Also new:
 Markdown help, the `stylesheet=` coloring model, the MCP server,
-`process()` returning an inspectable `Processor`, per-precommand config
-layering (`@app.precommand(config=...)`), and eager validation of your
+`process()` returning an inspectable `Processor`, config layering
+(`Appeal(config=...)`, one dict shaped like your command tree), and eager validation of your
 whole command tree at startup. See the *Changelog* at the end for the
 full list.
 
@@ -578,8 +578,8 @@ inner classes can themselves be precommands that bind to the instance. When
 they are, Appeal runs the class's precommand before any of its members'--it
 has to, since they need the instance the class builds.
 
-To feed a config file into a precommand's options, bind a dict to it with
-`@app.precommand(config=...)`--see *Reading config files*.
+To feed a config file into your options, bind a dict to the app with
+`Appeal(config=...)`--see *Reading config files*.
 
 
 ## Make a whole program out of a class
@@ -745,34 +745,42 @@ with history. Handy for exploratory tools.
 
 ## Reading config files
 
-Bind a configuration dict to a precommand with `@app.precommand(config=...)`,
-and its option values layer under the command line: defaults, then config,
-then argv--argv always wins, whole values at a time. You bind the dict when
-you register the precommand and fill it later (Appeal holds the *same*
-object), so an empty dict you `.update()` before `main()` is seen:
+Bind one configuration dict to the app with `Appeal(config=...)`, and
+option values layer under the command line: defaults, then config, then
+argv--argv always wins, whole values at a time. You bind the dict when you
+construct the app and fill it later (Appeal holds the *same* object), so an
+empty dict you `.update()` before `main()` is seen:
 
 ```Python
 settings = {}                       # bind now, fill before main()
+app = appeal.Appeal(config=settings)
 
-@app.precommand(config=settings)
+@app.global_command()
 def main(*, editor='vi', jobs: int = 1):
     ...
 
+@app.command()
+def build(target, *, verbose=False):
+    ...
+
 def read_my_rc_file():              # e.g. TOML/JSON/environ--your choice
-    return {'editor': 'emacs', 'jobs': 4}
+    return {'editor': 'emacs', 'jobs': 4, 'build': {'verbose': True}}
 
 settings.update(read_my_rc_file())
 app.main()
 ```
 
-Config only ever supplies *option* values; it never changes structure, and a
-key that isn't one of that precommand's options is an error, by name--unless
-you pass `@app.precommand(config=settings, strict=False)`, which takes the
-keys that are and ignores the rest (kind to an existing rc file that also
-holds non-CLI junk, an LRU list, window geometry...). Each
-precommand that wants config binds its own dict--there's no single global
-slot and nothing to guess about which precommand a mapping is for. (Appeal
-reads no file formats itself--you hand it a dict, from wherever you like.)
+The dict is shaped like your command tree: a scalar names an option by its
+parameter name (at the top, a global option), and a mapping under a command
+word is that command's section, subcommands nesting inside. Config only ever
+supplies *option* values, never positional arguments, and a key that isn't an
+option at its level (or a command's section) is an error, by name--unless
+you pass `Appeal(config=settings, strict=False)`, which takes the keys that
+are and ignores the rest (kind to an existing rc file that also holds non-CLI
+junk, an LRU list, window geometry...). A command word wins a collision with
+an option name; `@app.option(..., config='other_key')` gives the option
+another key. (Appeal reads no file formats itself--you hand it a dict, from
+wherever you like.)
 
 
 ## Running a command from a dict, a list, or a CSV
@@ -1324,7 +1332,7 @@ child `Appeal` (or the function) so you can nest.
   return code. Does not return.
 * `app.process(args=None)` → `Processor` — runs and returns the `Processor`
   for that run (below) instead of exiting. (Config isn't passed here--bind
-  it per precommand with `@app.precommand(config=...)`.)
+  it to the app with `Appeal(config=...)`.)
 * `app.repl(*, prompt=None, banner=None)` — an interactive prompt that runs
   commands line by line.
 
@@ -1511,12 +1519,11 @@ completion, and a REPL. The full itemized list:
 * A **REPL** (`app.repl()`).
 * Run a command from structured data: `read_mapping` / `read_iterable` /
   `read_csv`, through the same converters.
-* **Config layering binds per precommand**: `@app.precommand(config=<dict>)`
-  layers that dict's values under the command line (defaults < config <
-  argv). You bind the dict at registration and fill it before `main()`
-  (Appeal holds the same object). Each precommand routes to its own dict:
-  there's no `process(config=)` and no single "global command" slot, so
-  config can split across several precommands with nothing to guess.
+* **Config layering**: `Appeal(config=<dict>)` layers one dict's values
+  under the command line (defaults < config < argv). You bind the dict at
+  construction and fill it before `main()` (Appeal holds the same object).
+  Its shape mirrors the command tree: scalars are options, mappings under
+  command words are sections. There's no `process(config=)`.
 
 **API**
 

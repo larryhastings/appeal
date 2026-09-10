@@ -437,11 +437,18 @@ class's name; a method command's step reads it back as `self`.
 
 ## 7: Config layering
 
-`@app.precommand(config=some_dict)` binds a mapping to a precommand.
-At execute time, before the era's Converter is called, `_config_apply`
-layers the mapping in: **defaults < config < argv**, per option.  Each
-key is vetted against the era's options (strictly, unless `strict=False`
-says to take what matches and ignore the rest).  Each vetted value is
+`Appeal(config=some_dict)` binds one mapping to the program.  The
+dispatcher splits it as it goes: at the root, `_split_config` peels
+off the keys that are command words (their sections) and
+`_head_config` deals the rest to the head era that owns each key; at
+every command word, the child node splits its section the same way,
+and the command's arguments-options-opargs era gets what's left.  At
+execute time, before an era's or a command's Converter is called,
+`_config_apply` layers its mapping in: **defaults < config < argv**,
+per option.  Each key is vetted against that plan's options, by
+`config_key` (strictly, unless `Appeal(strict=False)` says to take what
+matches and ignore the rest)--structurally, in pass 1, so a bad key
+fails before anything runs.  Each vetted value is
 read with the same by-name readers `load.py` uses for `read_mapping`,
 then **assigned to its owner**: the era's Converter for its own
 options; the argv-built nested instance when a nested converter's

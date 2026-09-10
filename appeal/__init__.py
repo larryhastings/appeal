@@ -591,9 +591,9 @@ def _config_vet(plan, table_words, config, command_plan_for,
     options = {}
     scoped = set()
     for owner, o in plan.all_options():
-        if o.name in options and options[o.name] is not o:
+        if o.config_key in options and options[o.config_key] is not o:
             scoped.add(o.name)
-        options.setdefault(o.name, o)
+        options.setdefault(o.config_key, o)
     positionals = set()
     def gather(p):
         for s in p.slots:
@@ -636,10 +636,6 @@ def _config_vet(plan, table_words, config, command_plan_for,
             continue
         if not strict:
             continue
-        if key in table_words:
-            raise AppealDataError(
-                f"config: {key!r} is a command; config supplies "
-                f"only global-command options")
         if key in positionals:
             raise AppealDataError(
                 f"config: {key!r} is a positional argument; config "
@@ -653,16 +649,14 @@ def _config_vet(plan, table_words, config, command_plan_for,
             if any(s.name == key for s in p.slots):
                 raise AppealDataError(
                     f"config: {key!r} is a positional argument "
-                    f"of {word!r}; config supplies only "
-                    f"global-command options")
-            if any(o.name == key
+                    f"of {word!r}; config supplies only options")
+            if any(o.config_key == key
                    for owner, o in p.all_options()):
                 raise AppealDataError(
                     f"config: {key!r} is an option of {word!r}; "
-                    f"config supplies only global-command "
-                    f"options (no per-command sections)")
+                    f"put it in the {word!r} section")
         raise AppealDataError(
-            f"config: {key!r} isn't an option of this program")
+            f"config: {key!r} isn't an option here")
     return vetted
 
 
@@ -685,8 +679,9 @@ def _config_apply(conv, table, plan, config, plan_for, strict=True):
     from .load import _option_value, _read_group, _read_bool
     vetted = _config_vet(plan, frozenset(table), config, plan_for, strict)
     owners = {id(rule): owner for owner, rule in plan.all_options()}
-    for name, rule in vetted.items():
-        raw = config[name]
+    for key, rule in vetted.items():
+        raw = config[key]
+        name = rule.name
         try:
             if rule.is_flag:
                 if not _read_bool(raw, name):
@@ -917,6 +912,12 @@ class _Step:
             # command's page and exits; absent, nothing--and nothing logged
             return self.proc.execute()
         try:
+            if self.config:
+                # the command's config section (Larry, 2026-09-10): argv
+                # parsed already; merge for options argv didn't set
+                child = node._children[self.word]
+                _config_apply(conv, child._table(), plan,
+                              self.config[0], child.plan_for, self.config[1])
             result = self.proc.execute()
         except AppealDataError as e:
             self.attach_usage(e)
@@ -1143,6 +1144,7 @@ class Appeal:
     first use (see "Laziness and late binding" in the grammar doc).
     """
     def __init__(self, name=None, *,
+                 config=None,
                  default_mappings=default_global_mappings(),
                  default_options=_DEFAULT_OPTIONS,
                  default_subcommand=None,
@@ -1152,10 +1154,22 @@ class Appeal:
                  margin=None,
                  repeat=False,
                  script=_sys.argv[0],
+                 strict=True,
                  stylesheet=None,
                  version=None):
         from .frontend import Decorations
         self.name = name
+        # config (Larry, 2026-09-10): ONE mapping for the whole tree,
+        # bound here and filled before main() (Appeal holds the same
+        # object).  Its shape mirrors the command tree: at each level a
+        # scalar feeds an option by parameter name (at the root,
+        # whichever head era owns it), and a mapping under a command
+        # word is that command's section, nesting all the way down.
+        # Options only, never positionals.  strict: an unknown key is
+        # a loud error; False takes what layers and ignores the rest
+        # (an rc file that also holds keys for a newer version).
+        self.config = config
+        self.strict = strict
         # the command tree (v1's model, restored 2026-07-18 by
         # Larry's ruling): a tree of Appeal instances, one per
         # command word, linked by .parent.  A node's _impl is its
@@ -1169,7 +1183,6 @@ class Appeal:
         self._precommands = []    # ordered precommand eras (the head; _impl
                                   # tracks the primary until dispatch runs them all)
         self._precommand_explicit = set()  # ids given an explicit index=
-        self._precommand_config = {}       # id(callable) -> the bound config
         self._precommand_flags = {}        # id(callable) -> (share,
                                            #   immediate), the era flags
                                            # given to subcommand(), applied
@@ -1761,26 +1774,16 @@ class Appeal:
         return decorator
     default_command = default           # the old spelling (deprecated)
 
-    def precommand(self, *, index=-1, config=None, strict=None,
-                   share=False, immediate=False):
+    def precommand(self, *, index=-1, share=False, immediate=False):
         """
         Register a precommand era.  A class here is class-as-app (its __init__
         is the era's grammar; its methods/inner classes bind to the instance).
         REPEATABLE (Larry, 2026-08-21): each call inserts an era; index -1
         appends, 0 heads, they run front-to-back before the commands.
 
-        config= (Larry, 2026-08-25): BIND a mapping to this precommand and its
-        option values layer from it (defaults < config < argv) at dispatch.
-        You bind the dict at decoration and fill it before main() -- Appeal
-        holds the SAME object, so an empty dict you .update() later is seen.
-        None (the default) means this era takes no config -- the -h/--help/
-        --version precommand simply leaves it None and opts out for free.
-
-        strict= (Larry, 2026-08-29) governs the bound mapping's key vetting:
-        True (the default) raises on any key that isn't one of this era's
-        options; strict=False takes the keys that are and ignores the rest
-        (adapting an existing rc file that also holds non-CLI junk).  It
-        only means something with config=, and is refused without it.
+        Config is the program's one mapping, Appeal(config=): its root
+        scalars feed the head eras' options (Larry, 2026-09-10,
+        replacing the per-precommand config= of 2026-08-25).
 
         The era flags (Larry's design, 2026-09-08).  Each precommand is
         an era of its own, and the precommand eras share their options
@@ -1802,9 +1805,6 @@ class Appeal:
             raise AppealConfigurationError(
                 f"precommand(): only the program has precommands, not the "
                 f"command {self._prog()!r}")
-        if strict is not None and config is None:
-            raise AppealConfigurationError(
-                "precommand(): strict= only means something with config=")
         if not isinstance(share, bool):
             raise AppealConfigurationError(
                 f"precommand(): share= is True or False, not {share!r}")
@@ -1814,9 +1814,6 @@ class Appeal:
             else:
                 self._precommands.insert(index, callable)
                 self._precommand_explicit.add(id(callable))
-            if config is not None:
-                self._precommand_config[id(callable)] = (
-                    config, True if strict is None else strict)
             self._precommand_flags[id(callable)] = (
                 True if share else PRECOMMAND, immediate)
             self._impl = self._precommands[-1]
@@ -1910,7 +1907,7 @@ class Appeal:
             claim(self)
 
     def option(self, name, *options, annotation=None,
-               default=_UNSET):
+               default=_UNSET, config=None):
         """
         Additional decorator for @command functions: maps only the
         strings you specify for one keyword-only parameter,
@@ -1965,12 +1962,12 @@ class Appeal:
                 root = callable.__self__.root
                 root._decorations.add_option(
                     callable, name, options,
-                    annotation=annotation, default=default)
+                    annotation=annotation, default=default, config=config)
                 root._invalidate()
                 return callable
             self.root._decorations.add_option(
                 callable, name, options,
-                annotation=annotation, default=default)
+                annotation=annotation, default=default, config=config)
             self._invalidate()
             return callable
         return decorator
@@ -2826,7 +2823,7 @@ class Appeal:
         return [era.resolve(False, False) for era in eras]
 
     def _parcel_era(self, era, line, pos, table, conv=None, conjured=None,
-                    ahead=None):
+                    ahead=None, config=None):
         """
         Parcel one era's tokens (from pos) onto its converter, list its
         step, relay what it shares FORWARDS (its options, and the `--`
@@ -2849,15 +2846,14 @@ class Appeal:
                               dashdash=line.dashdash, conjured=conjured)
         if era.kind == 'head':
             step = _Step('era', self, cls, conv, proc, plan=era.plan,
-                         config=self._precommand_config.get(
-                             id(era.plan.callable)),
-                         immediate=era.immediate)
+                         config=config, immediate=era.immediate)
         elif era.kind == 'help':
             step = _Step('help', self, cls, conv, proc, immediate=True,
                          word=era.word)
         else:
-            step = _Step('command', self, cls, conv, proc,
-                         word=era.word, callable=era.callable)
+            step = _Step('command', self, cls, conv, proc, plan=era.plan,
+                         word=era.word, callable=era.callable,
+                         config=config)
         try:
             proc.enter(conv)
             proc.seed(line.bled)                # shared forwards into here
@@ -2867,8 +2863,9 @@ class Appeal:
             if step.config:
                 # config KEY vetting is structural -- fire its refusals
                 # in the scan (the value merge is at execute)
-                _config_vet(step.plan, frozenset(table), step.config[0],
-                            self.plan_for, step.config[1])
+                owner = self if era.kind == 'head' else self._children[era.word]
+                _config_vet(step.plan, frozenset(owner._table()),
+                            step.config[0], owner.plan_for, step.config[1])
             proc.check_required(
                 frozenset(step.config[0]) if step.config else frozenset())
         except AppealDataError as e:
@@ -2891,7 +2888,60 @@ class Appeal:
         line.steps.append(step)
         return pos
 
-    def _run_node(self, line, pos, top):
+    def _split_config(self, mapping):
+        """
+        One level of the config tree (Larry, 2026-09-10): the keys that
+        name this node's command words are those commands' sections--a
+        command wins a collision with an option, always--and must be
+        mappings; everything else is this level's own (options, and
+        whatever _config_vet will refuse).  Returns (own, sections).
+        """
+        from collections.abc import Mapping
+        table = self._table()
+        own, sections = {}, {}
+        for key, value in mapping.items():
+            if key in table:
+                if not isinstance(value, Mapping):
+                    raise AppealDataError(
+                        f"config: {key!r} is a command; its section must "
+                        f"be a mapping, not {value!r}")
+                sections[key] = value
+            else:
+                own[key] = value
+        return own, sections
+
+    def _head_config(self, own):
+        """
+        Parcel the root's own config keys onto the head eras' plans:
+        each key to the one plan owning that option (two owning it is
+        a configuration error); a key nobody owns goes to the last
+        plan, whose vetting names what it is (or ignores it, lenient).
+        Returns {id(plan): mapping}, only for plans given something.
+        """
+        plans = self.global_plans()
+        owners = {}
+        for plan in plans:
+            for _, o in plan.all_options():
+                if o.config_key in own:
+                    other = owners.setdefault(o.config_key, plan)
+                    if other is not plan:
+                        raise AppealConfigurationError(
+                            f"config: {o.config_key!r} is an option of two "
+                            f"precommands, {other.name!r} and {plan.name!r}")
+        per_plan = {}
+        for key, value in own.items():
+            plan = owners.get(key)
+            if plan is None:
+                if not plans:
+                    if self.strict:
+                        raise AppealDataError(
+                            f"config: {key!r} isn't an option here")
+                    continue
+                plan = plans[-1]
+            per_plan.setdefault(id(plan), {})[key] = value
+        return per_plan
+
+    def _run_node(self, line, pos, top, sections=None):
         """
         Parcel and scan one set node's eras--its head eras, then the
         eras each command word opens--appending the steps to execute;
@@ -2900,25 +2950,33 @@ class Appeal:
         them as records.  Returns (dispatched, pos): whether a command
         word of THIS node was parceled, and where the node's tokens end.
         A structural error raises (the caller notes it: pass 2 raises it
-        after the immediate eras run).
+        after the immediate eras run).  sections: this node's command
+        words' config sections (the root splits its own).
         """
         self._finalize()
         argv = line.argv
         steps = line.steps
         table = self._table()
+        strict = self.root.strict
 
         # the head: converters and conjure stashes built ahead, so an era
         # whose successor shares BACKWARDS can register the successor's
         # handlers before it parses
         eras = self._head_eras()
+        per_plan = {}
+        if top:
+            own, sections = self._split_config(self.root.config or {})
+            per_plan = self._head_config(own)
         convs = [converter_for(era.plan)() for era in eras]
         stashes = [{} for era in eras]
         for i, era in enumerate(eras):
             ahead = None
             if i + 1 < len(eras) and eras[i + 1].backwards:
                 ahead = (convs[i + 1], stashes[i + 1])
+            mapping = per_plan.get(id(era.plan))
             pos = self._parcel_era(era, line, pos, table, convs[i],
-                                   stashes[i], ahead)
+                                   stashes[i], ahead,
+                                   (mapping, strict) if mapping else None)
 
         dispatched = False              # did a command word of THIS node run?
         while pos < len(argv):
@@ -2957,8 +3015,13 @@ class Appeal:
             line.path[depth:] = [word]                # this set's word, replacing
                                                       # a cycling set's previous
             pos += 1                                  # the word itself
+            child = self._children[word]
+            own, subsections = child._split_config(sections.get(word, {}))
             for era in self._command_eras(word):
-                pos = self._parcel_era(era, line, pos, table)
+                pos = self._parcel_era(
+                    era, line, pos, table,
+                    config=(own, strict) if own and era.plan is not None
+                    else None)
             dispatched = True
 
             # recurse into the command's subcommand node: it may dispatch a
@@ -2966,10 +3029,9 @@ class Appeal:
             # default command -- so recurse even at end-of-line when a default
             # is waiting.  Every command has a child node (lazy registration);
             # only enter one that actually has subcommands or a default.
-            child = self._children.get(word)
-            if child is not None and (child._has_commands
-                                      or child._default is not None):
-                _, pos = child._run_node(line, pos, top=False)
+            if child._has_commands or child._default is not None:
+                _, pos = child._run_node(line, pos, top=False,
+                                         sections=subsections)
             if not self._node_repeat and pos < len(argv):
                 # this set doesn't cycle: pop the leftover word up to an
                 # ancestor whose set does (the parent's loop re-dispatches it);
