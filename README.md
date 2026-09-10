@@ -1933,10 +1933,14 @@ it should talk about options by name (`--version`), not
 about keyword-only parameters (`version`).
 
 `Arguments`, `Options`, and `Commands` headings are special
-markers parsed by Appeal.  The heading can be any level and
+markers parsed by Appeal (`Subcommands` means the same as
+`Commands`, in any docstring).  The heading can be any level and
 either Markdown spelling (`# Options`, `### Options`, `Options`
 underlined with dashes), but the word needs that exact case, at
-the left column, and not inside a code fence.  Any other
+the left column, and not inside a code fence.  On the page, the
+program's overview says *Commands* and a command's own page says
+*Subcommands*; every page shows the Arguments and Options of the
+command it describes, and its commands, whenever there are any.  Any other
 spelling (`# options`, `OPTIONS`) is ordinary prose; Appeal
 leaves it in your documentation and says nothing.  These start
 the "arguments", "options", and "commands" sections; a section

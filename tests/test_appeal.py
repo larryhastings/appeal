@@ -1789,8 +1789,8 @@ def test_command_listings_are_definition_order():
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.process(['help', 'zebra']).result
-    tail = out.getvalue().split('Commands')[-1]
-    words = [l.split()[0] for l in tail.splitlines()
+    tail = out.getvalue().split('Subcommands')[-1]     # a command's page
+    words = [l.split()[0] for l in tail.splitlines()      # says Subcommands
              if l and not l.startswith(' ') and set(l) != {'-'}]
     # a nested set lists only its real commands--no synthesized `help`
     # (default_mappings registers the real help command at the root)
@@ -7437,11 +7437,10 @@ def test_parse_docstring():
     assert c['commands'] == {'serve': ['Serves.']}
     c = parse_docstring("Sum.\n\n###### COMMANDS\nserve\n: Serves.", "f")
     assert c['commands'] == {} and '###### COMMANDS' in c['documentation']
-    # 'Subcommands' is not on the menu (the Markdown spec names
-    # exactly three sections); it stays a body heading
+    # 'Subcommands' opens the same section as 'Commands', in any
+    # context (Larry, 2026-09-10); the page emits the context's word
     c = parse_docstring("Sum.\n\n# Subcommands\nserve\n: Serves.", "f")
-    assert c['commands'] == {}
-    assert '# Subcommands' in '\n'.join(c['documentation'])
+    assert c['commands'] == {'serve': ['Serves.']}
 
     # the template dresses the page: nothing to present
     c = parse_docstring("Sum.\n\n# Options\nv\n: doc", "f")

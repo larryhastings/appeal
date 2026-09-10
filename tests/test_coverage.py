@@ -6685,7 +6685,7 @@ def test_argument_edges_always_merge():
         return out.getvalue()
     assert page('render') == """\
 usage: tool render [-h|--help] <TEXT> [-s|--saturation <SATURATION>]
-       [-v|--value <VALUE>] <R> <G> <B>
+                   [-v|--value <VALUE>] <R> <G> <B>
 
 Render text with a color.
 
@@ -6704,8 +6704,9 @@ Options
 -v|--value <VALUE>
 """
     assert page('render2') == """\
-usage: tool render2 [-h|--help] -c|--color
-       [-s|--saturation <SATURATION>] [-v|--value <VALUE>] <R> <G> <B> <TEXT>
+usage: tool render2 [-h|--help]
+                    -c|--color [-s|--saturation <SATURATION>] [-v|--value <VALUE>] <R> <G> <B>
+                    <TEXT>
 
 Render text with a color, given as an option.
 
@@ -6856,3 +6857,92 @@ def test_default_long_and_short_option():
     assert strip_styles(stock.plan_for('sync2').usage()) == 's sync2 [-D|--dry-run] [-x]'
     assert [o.strings for o in stock.plan_for('sync2').options] == \
         [('-D', '--dry-run'), ('-x',)]
+
+
+def test_subcommands_heading_and_hanging_indent():
+    # Larry, 2026-09-10: a command's page says Subcommands where the
+    # overview says Commands--the template's heading reworded, ATX or
+    # setext, a heading worded otherwise left alone; every page shows
+    # its tables; a wrapped usage line hangs under the first thing
+    # after the program span (span + 1, or 8 for a span of 16+).
+    import contextlib, io
+    from appeal.presentation import _reword_heading
+    assert _reword_heading('\n## Commands\n', 'Commands', 'Subcommands') == '\n## Subcommands\n'
+    assert _reword_heading('\nCommands\n--------\n', 'Commands', 'Subcommands') == \
+        '\nSubcommands\n-----------\n'
+    assert _reword_heading('\n## Cmds\n', 'Commands', 'Subcommands') == '\n## Cmds\n'
+    app = Appeal(name='t', stylesheet=False)
+    app.templates = ('usage: {usage}\n\n{summary}\n\n{doc}\n\n'
+                     'Arguments\n---------\n{arguments}\n\nOptions\n-------\n{options}\n\n'
+                     'Commands\n--------\n{commands}\n')
+    @app.global_command()
+    def main(*, verbose=False):
+        """
+        The program.
+
+        # Options
+        verbose
+        : Say more.
+        """
+    db_app = app.command('db')
+    @app.command()
+    def db(*, url=''):
+        "Database things."
+    @db_app.command()
+    def start(): "Start it."
+    def page(*topic):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            app.help(*topic)
+        return out.getvalue()
+    assert page() == """\
+usage: t [-h|--help [<TOPIC>]] [-v|--verbose] <COMMAND>
+
+The program.
+
+Options
+-------
+
+-v|--verbose  Say more.
+
+Commands
+--------
+
+db    Database things.
+help  Print usage documentation on a specific command.
+"""
+    assert page('db') == """\
+usage: t db [-h|--help] [-u|--url <URL>] <COMMAND>
+
+Database things.
+
+Options
+-------
+
+-u|--url <URL>
+
+Subcommands
+-----------
+
+start  Start it.
+"""
+    # the hanging indent: a short program span hangs at its width + 1;
+    # a long one at 8
+    short = Appeal(name='ab', stylesheet=False)
+    @short.global_command()
+    def s(alpha_one, alpha_two, alpha_three, alpha_four, alpha_five, alpha_six): pass
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        short.help()
+    assert out.getvalue().startswith(
+        'usage: ab [-h|--help] <ALPHA_ONE> <ALPHA_TWO> <ALPHA_THREE> <ALPHA_FOUR>\n'
+        '          <ALPHA_FIVE> <ALPHA_SIX>\n'), out.getvalue()
+    long = Appeal(name='a-very-long-program-name', stylesheet=False)
+    @long.global_command()
+    def l(alpha_one, alpha_two, alpha_three, alpha_four, alpha_five, alpha_six): pass
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        long.help()
+    assert out.getvalue().startswith(
+        'usage: a-very-long-program-name [-h|--help] <ALPHA_ONE> <ALPHA_TWO>\n'
+        '               <ALPHA_THREE> <ALPHA_FOUR> <ALPHA_FIVE> <ALPHA_SIX>\n'), out.getvalue()

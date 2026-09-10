@@ -1620,12 +1620,14 @@ class Appeal:
             # add the auto `help` row unless the set already registers one
             corpus = command_set_corpus(
                 node.global_plan, entries,
-                doc=node._program_doc_override())
+                doc=node._program_doc_override(),
+                tables_wanted=node._global is not None)
             text = render_help_page(
                 node._head_usage_markup(),
                 corpus, node.templates, margin=help_margin(node.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=node.stylesheet,
-                suppress=suppress).rstrip('\n')
+                suppress=suppress,
+                subcommands=node.parent is not None).rstrip('\n')
         else:
             from .presentation import merge_docs
             plan = root._plan_for_node(node, topic)
@@ -2092,13 +2094,15 @@ class Appeal:
             entries = self._listing_entries()
             corpus = command_set_corpus(
                 self.global_plan, entries,
-                doc=self._program_doc_override())
+                doc=self._program_doc_override(),
+                tables_wanted=self._global is not None)
             return render_help_page(
                 self._head_usage_markup(),
                 corpus, self.templates,
                 margin=help_margin(self.margin, file),
                 file=file, stylesheet=self.stylesheet,
-                suppress=suppress).rstrip('\n')
+                suppress=suppress,
+                subcommands=self.parent is not None).rstrip('\n')
         from .presentation import merge_docs, parse_docstring
         plan = self.plan
         corpus = merge_docs(plan)

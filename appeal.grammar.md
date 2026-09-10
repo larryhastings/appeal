@@ -396,6 +396,20 @@ the strings: claim `-h` and help keeps only `--help`; claim
 with commands) no automatic `help` command--the program answers
 only what it declares itself.
 
+**Pages** (Larry, 2026-09-10): every help page--the program's overview,
+a command's page whether it has subcommands or not--shows the usage
+line, the summary and prose, and the Arguments, Options, and Commands
+tables of the command it describes, each only when there is
+something to list (a head that is only Appeal's own -h/--version
+precommand has no tables).  The commands table is headed *Commands*
+on the program's overview and *Subcommands* on a command's page (a
+template heading worded otherwise is left alone); docstrings may
+write either word.  A usage line that wraps hangs its continuation
+under the first thing after the program span--at the span's width
+plus one, or at 8 when the span is 16 or longer--and never breaks
+inside a unit: the program span, a bracket group, or a required
+option with its operands.
+
 **Parameter documentation**: the docstring is Markdown.  A heading
 of any level, ATX or setext, reading exactly `Arguments`, `Options`,
 or `Commands` (that case, at the left margin, outside any code fence;

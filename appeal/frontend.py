@@ -1016,8 +1016,11 @@ class Plan:
             return name_text(slot)
 
         def option_text(o):
+            # optional: one bracket group, one unit; required: no
+            # brackets, so the 'unit' span keeps the strings and operands
+            # together on a line (Larry, 2026-09-10)
             text = _option_body(o)
-            return text if o.required else '[' + text + ']'
+            return style('unit', text) if o.required else '[' + text + ']'
 
         def _option_body(o):
             bits = ['|'.join(style('option', escape_styles(s))
@@ -1084,7 +1087,8 @@ class Plan:
                     bits.append(option_text(rules[0]))
                     continue
                 text = ' | '.join(_option_body(o) for o in rules)
-                bits.append(text if rules[0].required else '[' + text + ']')
+                bits.append(style('unit', text) if rules[0].required
+                            else '[' + text + ']')
             bits.extend(slot_text(s, rename) for s in plan.slots)
             return ' '.join(bits)
 

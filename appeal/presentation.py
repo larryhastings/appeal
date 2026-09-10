@@ -21,7 +21,9 @@ SPECIAL_SECTIONS = ('options', 'arguments', 'commands')
 # its sections sit a level down).  Anything else is prose.
 _SPECIAL_HEADINGS = {'Options': 'options',
                      'Arguments': 'arguments',
-                     'Commands': 'commands'}
+                     'Commands': 'commands',
+                     'Subcommands': 'commands'}   # either word, any context
+                                                 # (Larry, 2026-09-10)
 _ATX_RE = re.compile(r'^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$')
 _SETEXT_RE = re.compile(r'^ {0,3}(=+|-+)\s*$')
 # a code fence: three or more backticks or tildes, indented at most
@@ -501,6 +503,9 @@ uncolored_theme = {
     'marker':     ('T', 'T'),
     'blockquote': ('T', 'T'),
     'term':       ('T', '⦃bold⦙T⦄'),        # deflist terms
+    'unit':       ('T', 'T'),               # a usage unit that never wraps
+                                            # apart (a required option and
+                                            # its operands)
     # GitHub alerts: bodies wear their kind's color too
     'note':              ('T', '⦃blue⦙T⦄'),
     'heading_note':      ('T', '⦃bold⦙⦃blue⦙T⦄⦄'),
@@ -633,8 +638,9 @@ def resolve_stylesheet(spec, file=None):
 def usage_units(usage):
     """
     Split a usage line into its unbreakable top-level units: the
-    program name, bare operands, and complete bracket groups like
-    '[-t|--times <int>]'.  Wrapping never splits a unit.
+    program span (`tool db stop`, spaces and all), bare operands, and
+    complete bracket groups like '[-t|--times <int>]'.  Wrapping
+    never splits a unit.
     """
     units = []
     unit = []
@@ -645,9 +651,9 @@ def usage_units(usage):
                 units.append(''.join(unit))
                 unit = []
             continue
-        if ch == '[':
+        if ch in '[⦃':               # a bracket group, or a style span
             depth += 1
-        elif ch == ']':
+        elif ch in ']⦄':
             depth -= 1
         unit.append(ch)
     if unit:
@@ -746,9 +752,14 @@ def render_baked_help(pieces, margin=79, file=None,
             # the usage line already carries its role spans (built by
             # Plan.usage) with operands decorated inline; split into
             # units and wrap
-            body = wrap_words(usage_units(usage),
-                              margin, raw=measure,
-                              indent=(prefix, ' ' * len(prefix)))
+            units = usage_units(usage)
+            # a continuation line hangs under the first thing after the
+            # program span--unless that span is long, when it hangs at 8
+            # (Larry, 2026-09-10)
+            span = len(measure(units[0])) if units else 0
+            hang = span + 1 if span < 16 else 8
+            body = wrap_words(units, margin, raw=measure,
+                              indent=(prefix, ' ' * (len(prefix) + hang)))
             out.append(sheet.render(body))
         else:
             layout = piece[1]
@@ -802,6 +813,24 @@ def parse_help_template(template):
     return sections
 
 
+def _reword_heading(header, old, new):
+    "The template header with a heading reading exactly `old` reworded."
+    lines = header.split('\n')
+    i = 0
+    while i < len(lines):
+        heading = _heading_at(lines, i)
+        if heading is not None and heading[0] == old:
+            if heading[2] == 1:                 # ATX: the text after the #s
+                lines[i] = lines[i].replace(old, new, 1)
+            else:                               # setext: text, then its rule
+                lines[i] = new
+                lines[i + 1] = lines[i + 1][0] * len(new)
+            i += heading[2]
+            continue
+        i += 1
+    return '\n'.join(lines)
+
+
 def rows_document(rows, header, role=None, titles=None, level=2):
     """
     A table section as a big document: the template's header
@@ -844,7 +873,8 @@ def rows_document(rows, header, role=None, titles=None, level=2):
 
 
 def render_help_page(usage, corpus, templates, margin=79,
-                     file=None, stylesheet=None, suppress=()):
+                     file=None, stylesheet=None, suppress=(),
+                     subcommands=False):
     """
     The --help page, the Markdown pivot's engine (ruled
     2026-08-05): the template establishes the page's ORDER and
@@ -864,7 +894,7 @@ def render_help_page(usage, corpus, templates, margin=79,
     machine).
     """
     return render_baked_help(
-        help_page_pieces(usage, corpus, templates, suppress),
+        help_page_pieces(usage, corpus, templates, suppress, subcommands),
         margin, file=file, stylesheet=stylesheet)
 
 
@@ -881,7 +911,8 @@ def role_layout(layout):
                  for item in layout)
 
 
-def help_page_pieces(usage, corpus, templates, suppress=()):
+def help_page_pieces(usage, corpus, templates, suppress=(),
+                     subcommands=False):
     """
     The bake half of a help page: assemble the template-ordered
     Markdown, parse/style/lay it out via big, dress the flense's
@@ -911,6 +942,13 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
             bake(parse(text), section)
 
     sections = parse_help_template(templates)
+    if subcommands:
+        # a command's own page lists its SUBcommands (Larry, 2026-09-10):
+        # the template's 'Commands' heading reads 'Subcommands' there, a
+        # heading worded otherwise is left alone
+        sections = [(name, _reword_heading(header, 'Commands', 'Subcommands')
+                     if name == 'commands' else header, indent)
+                    for name, header, indent in sections]
     titles, levels = {}, {}
     for name, header, indent in sections:
         if name in ('arguments', 'options', 'commands'):
@@ -1315,12 +1353,16 @@ def merge_docs(plan, command_names=None):
     }
 
 
-def command_set_corpus(global_plan, entries, doc=None, listing=True):
+def command_set_corpus(global_plan, entries, doc=None, listing=True,
+                       tables_wanted=True):
     """
     The corpus for a multi-command program's listing.  entries is
     a sequence of (word, summary) pairs in declaration order.  The
     command rows' documentation comes from the global command's
     Commands: entries, falling back to each command's own summary.
+    The listing shows the head's own Arguments and Options tables
+    too (Larry, 2026-09-10: every page shows its tables), unless
+    tables_wanted says the head has none of its own.
     """
     words = [word for word, _ in entries]
     if doc is not None:
@@ -1336,10 +1378,13 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True):
                 raise AppealConfigurationError(
                     f"program documentation: 'Commands:' entry "
                     f"{name!r} isn't a command word")
+        tables = (merge_docs(global_plan) if global_plan is not None
+                  else {'arguments': [], 'options': []})
         corpus = {'summary': parsed['summary'],
                   'documentation': parsed['documentation'],
                   'presentation': parsed.get('presentation'),
-                  'arguments': [], 'options': [],
+                  'arguments': tables['arguments'],
+                  'options': tables['options'],
                   'commands': [(w, parsed['commands'].get(w, []), 0)
                                for w in words]}
     elif global_plan is not None:
@@ -1348,11 +1393,9 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True):
         corpus = {'summary': [], 'documentation': [],
                   'arguments': [], 'options': [],
                   'commands': [(word, [], 0) for word in words]}
-    if listing:
-        # the LISTING never shows the global command's own
-        # arguments/options tables (v1's shape; the single
-        # template would otherwise render them)--only usage,
-        # prose, commands
+    if not tables_wanted:
+        # a program whose head is only Appeal's own -h/--version
+        # precommand has no tables of its own to show
         corpus['arguments'] = []
         corpus['options'] = []
     fallback = dict(entries)

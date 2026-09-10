@@ -222,11 +222,17 @@ TRON = [
     ([], 1,
      """\
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-       <COMMAND>
+            <COMMAND>
 
 Manage containers.
 
 Every command respects --verbose.
+
+Options
+-------
+
+-v|--verbose      Say what's happening.
+-j|--jobs <JOBS>  How many things to do at once.
 
 Commands
 --------
@@ -244,11 +250,17 @@ help      Print usage documentation on a specific command.
     (['-h'], 0,
      """\
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-       <COMMAND>
+            <COMMAND>
 
 Manage containers.
 
 Every command respects --verbose.
+
+Options
+-------
+
+-v|--verbose      Say what's happening.
+-j|--jobs <JOBS>  How many things to do at once.
 
 Commands
 --------
@@ -269,8 +281,13 @@ usage: tron db [-h|--help] [-u|--url <URL>] <COMMAND>
 
 Database things.
 
-Commands
---------
+Options
+-------
+
+-u|--url <URL>  Where the database lives.
+
+Subcommands
+-----------
 
 start  Start the database.
 stop   Stop the database.
@@ -354,8 +371,13 @@ usage: tron db [-h|--help] [-u|--url <URL>] <COMMAND>
 
 Database things.
 
-Commands
---------
+Options
+-------
+
+-u|--url <URL>  Where the database lives.
+
+Subcommands
+-----------
 
 start  Start the database.
 stop   Stop the database.
@@ -367,11 +389,17 @@ stop   Stop the database.
 error: unknown command 'bogus'
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-       <COMMAND>
+            <COMMAND>
 
 Manage containers.
 
 Every command respects --verbose.
+
+Options
+-------
+
+-v|--verbose      Say what's happening.
+-j|--jobs <JOBS>  How many things to do at once.
 
 Commands
 --------
@@ -391,11 +419,17 @@ help      Print usage documentation on a specific command.
 error: unknown command 'stauts' (did you mean 'status'?)
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-       <COMMAND>
+            <COMMAND>
 
 Manage containers.
 
 Every command respects --verbose.
+
+Options
+-------
+
+-v|--verbose      Say what's happening.
+-j|--jobs <JOBS>  How many things to do at once.
 
 Commands
 --------
@@ -425,11 +459,17 @@ warning: command 'sync-all' is deprecated
 error: invalid value for 'jobs': 'many' (invalid literal for int() with base 10: 'many')
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-       <COMMAND>
+            <COMMAND>
 
 Manage containers.
 
 Every command respects --verbose.
+
+Options
+-------
+
+-v|--verbose      Say what's happening.
+-j|--jobs <JOBS>  How many things to do at once.
 
 Commands
 --------
@@ -457,11 +497,17 @@ usage: tron status [-h|--help]
 error: unknown option '--loud'
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-       <COMMAND>
+            <COMMAND>
 
 Manage containers.
 
 Every command respects --verbose.
+
+Options
+-------
+
+-v|--verbose      Say what's happening.
+-j|--jobs <JOBS>  How many things to do at once.
 
 Commands
 --------
@@ -477,8 +523,7 @@ help      Print usage documentation on a specific command.
      []),
     (['help', 'deploy'], 0,
      """\
-usage: tron deploy [-h|--help] -r|--region <REGION> [-d|--dry-run]
-       <TARGET>
+usage: tron deploy [-h|--help] -r|--region <REGION> [-d|--dry-run] <TARGET>
 
 Deploy to a target.
 
@@ -501,11 +546,17 @@ Options
 error: option '-v' can't be used here; it goes before the command
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-       <COMMAND>
+            <COMMAND>
 
 Manage containers.
 
 Every command respects --verbose.
+
+Options
+-------
+
+-v|--verbose      Say what's happening.
+-j|--jobs <JOBS>  How many things to do at once.
 
 Commands
 --------
@@ -525,7 +576,7 @@ DL = [
     (['-h'], 0,
      """\
 usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
-       [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
+          [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
 
 Download videos.
 
@@ -561,7 +612,7 @@ Options
 error: missing argument 'url'
 
 usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
-       [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
+          [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
 """,
      []),
     (['http://a/1', '--quality', 'medium'], 2,
@@ -570,7 +621,7 @@ usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
 error: invalid value for 'quality': 'medium' (must be one of 'best', 'worst')
 
 usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
-       [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
+          [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
 """,
      []),
     (['http://a/1', '--retries', 'x'], 2,
@@ -579,7 +630,7 @@ usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
 error: invalid value for 'retries': 'x' (invalid literal for int() with base 10: 'x')
 
 usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
-       [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
+          [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
 """,
      []),
     (['--', '-weird-url'], 0,
@@ -592,7 +643,7 @@ usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
 error: unknown option '--bogus' (did you mean '--out'?)
 
 usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
-       [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
+          [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
 """,
      []),
     (['--version'], 0,
@@ -607,7 +658,7 @@ usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
 error: option '-q' requires a value
 
 usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
-       [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
+          [-r|--retries <RETRIES>] [--quiet] <URL> [<MORE>]...
 """,
      []),
 ]
@@ -618,6 +669,11 @@ TOOL = [
 usage: tool [-h|--help [<TOPIC>]] [-v|--verbose] <COMMAND>
 
 A tool built from a class.
+
+Options
+-------
+
+-v|--verbose  Say more.
 
 Commands
 --------
@@ -633,6 +689,11 @@ help  Print usage documentation on a specific command.
 usage: tool [-h|--help [<TOPIC>]] [-v|--verbose] <COMMAND>
 
 A tool built from a class.
+
+Options
+-------
+
+-v|--verbose  Say more.
 
 Commands
 --------
@@ -665,8 +726,13 @@ usage: tool Db [-h|--help] <NAME> <COMMAND>
 
 A database, named.
 
-Commands
---------
+Arguments
+---------
+
+<NAME>  Which database.
+
+Subcommands
+-----------
 
 wipe  Wipe it.
 """,
