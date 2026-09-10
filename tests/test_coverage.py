@@ -6458,22 +6458,26 @@ def test_restriction_hidden_and_deprecated():
         assert False
     except UsageError as e:
         assert 'did you mean' not in str(e), e
-    # inside a positional converter group: the group's own options,
-    # restricted (a group OPTION's plan is built bare, undecorated, so
-    # restrictions don't reach its inner options--nor do any other
-    # @app.option declarations)
+    # inside a converter group, used positionally AND as a group option:
+    # a converter's @app.option declarations apply wherever it's used
+    # (the README's promise; group options were built undecorated until
+    # 2026-09-10, by accident), restrictions included
     @app.option('quiet', '--quiet', restriction='hidden')
     @app.option('legacy', '--legacy', restriction='deprecated')
     def tune(level: int = 0, *, quiet=False, legacy=False): return (level, quiet, legacy)
     @app.command()
-    def play(t: tune): return t
-    assert app.process(['play', '3', '--quiet', '--legacy']).result == (3, True, True)
+    def play(t: tune, *, alt: tune = None): return (t, alt)
+    assert app.process(['play', '3', '--quiet', '--legacy']).result == \
+        ((3, True, True), None)
+    assert app.process(['play', '3', '--alt', '4', '--quiet', '--legacy']).result == \
+        ((3, False, False), (4, True, True))
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.help('play')
     page = out.getvalue()
-    assert '--quiet' not in page and '--legacy (deprecated)' in page, page
-    assert strip_styles(app.plan_for('play').usage()) == 't play [--legacy] [<T>]'
+    assert '--quiet' not in page and page.count('--legacy (deprecated)') == 2, page
+    assert strip_styles(app.plan_for('play').usage()) == \
+        't play [-a|--alt [--legacy] [<LEVEL>]] [--legacy] [<T>]'
     # hidden subcommands stay out of completion too
     tree = Appeal(name='s')
     db_app = tree.command('db')

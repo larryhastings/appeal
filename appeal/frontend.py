@@ -586,7 +586,11 @@ class OptionRule:
             # and/or options: the option consumes the group's MINIMUM
             # operands inline; inner optional groups enter only when
             # their own options force them (v1's -g gloopy ... -i 1 3.0)
-            child = build.bare().plan(annotation)   # its own memo, undecorated
+            # its own memo (optionality promotion is context-specific), the
+            # app's decorations (a converter's @app.option/@app.parameter
+            # apply wherever it's used--the README's promise; group options
+            # were built undecorated until 2026-09-10, by accident)
+            child = build.fresh().plan(annotation)
             return finish(GroupOption(strings, name, (annotation,), default,
                                       child))
         elif _is_multiparam_converter(annotation):
@@ -2176,11 +2180,6 @@ class Build:
         "The same context with an empty memo: a plan that mustn't be shared."
         return Build(self.decorations, self.default_options, self.app,
                      self.extra_overrides, None, self.stack)
-
-    def bare(self):
-        "A fresh memo and no decorations: a group option's own grammar."
-        return Build(None, self.default_options, self.app, None, None,
-                     self.stack)
 
     def plan(self, callable):
         "The plan for a converter reached from a slot: memoized, not top."

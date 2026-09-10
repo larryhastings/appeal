@@ -1095,12 +1095,9 @@ def merge_docs(plan, command_names=None):
             rowkey = path + (id(inner),)
             display = _option_display(inner, plan.decoration)
             ns.setdefault(inner.name, ('option', display, rowkey, child.name))
-            # (a group option's plan is built bare--undecorated--so its
-            # inner options carry no restriction today; the rows are
-            # ready for the day they do)
-            if inner.restriction == 'hidden':       # pragma: no cover
+            if inner.restriction == 'hidden':
                 continue                # documentable, never shown
-            if inner.restriction == 'deprecated':   # pragma: no cover
+            if inner.restriction == 'deprecated':
                 deprecated.add(rowkey)
             option_rows.append((rowkey, display, (None, None), depth))
             if inner.child is not None:
