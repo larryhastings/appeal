@@ -203,6 +203,18 @@ def validate(*values, type=None):
                 f"{values!r}; pass type= to disambiguate")
         type = values[0].__class__
 
+    if type is bool:
+        # a boolean choice reads its own spellings--'true'/'false', any
+        # case (what its completions offer)--never Python truthiness,
+        # under which bool('false') is True (Astra D09, 2026-09-10)
+        def type(text):
+            lowered = text.lower()
+            if lowered == 'true':
+                return True
+            if lowered == 'false':
+                return False
+            raise ValueError("expected 'true' or 'false'")
+
     def validate_converter(value):
         value = type(value)
         if value not in values:

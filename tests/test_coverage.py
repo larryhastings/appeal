@@ -7147,3 +7147,30 @@ def test_hidden_options_are_recognized_by_completion():
     assert app.complete(['go'], '--') == ['--loud']
     assert app.complete(['go', '--secret', 'value'], '') == ['blue', 'red']
     assert app.complete(['go', '--secret', 'value', '--loud'], '') == ['blue', 'red']
+
+
+def test_boolean_literal_reads_its_own_spellings():
+    # Astra's delta review, D09 (2026-09-10): Literal[True, False]
+    # lowered to validate(True, False), whose conversion was bool(text)--
+    # so 'false' meant True and 'garbage' was accepted, while Literal[False]
+    # rejected the very 'False' its completions offered.  A boolean
+    # choice now reads 'true'/'false' in any case, and nothing else.
+    import typing
+    app = Appeal(name='probe', doc='', default_mappings=None, stylesheet=False)
+    @app.command()
+    def go(value: typing.Literal[False]): return value
+    @app.command()
+    def either(value: typing.Literal[True, False]): return value
+    assert app.complete(['go'], '') == ['False']
+    assert app.process(['go', 'False']).result is False
+    assert app.process(['go', 'false']).result is False
+    assert app.process(['either', 'True']).result is True
+    assert app.process(['either', 'FALSE']).result is False
+    for argv, needle in ((['either', 'garbage'], "expected 'true' or 'false'"),
+                         (['go', 'True'], "must be one of False")):
+        try:
+            app.process(argv)
+            assert False, argv
+        except UsageError as e:
+            assert needle in str(e), (argv, str(e))
+    assert appeal.validate(True, False).completions('') == ('True', 'False')
