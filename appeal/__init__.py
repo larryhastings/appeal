@@ -265,15 +265,14 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
     try:
         result = parse(list(args))
     except SystemExit as e:
-        # the precommand exits (program metadata: -V, ...);
-        # main()'s contract is to RETURN the exit code.  A non-int,
-        # non-None code is a message -- Python prints it to stderr
+        # the precommand exits (program metadata: --version, help);
+        # main()'s contract is to RETURN the exit code.  Appeal's own
+        # exits carry an int (0, explicitly--Astra D04); a user's
+        # sys.exit(message) is a message -- Python prints it to stderr
         # and exits 1; reproduce that half of the contract too.
         code = e.code
         if isinstance(code, int):
             return code
-        if code is None:
-            return 0
         print(code, file=error_stream())
         return 1
     except KeyboardInterrupt:
@@ -1669,9 +1668,11 @@ class Appeal:
         app.map_help_options('-h', '--help').
         """
         if version:
-            _sys.exit(self.print_version())
+            self.print_version()
+            _sys.exit(0)                    # explicitly: a success, not None
         if help is not None:                # '' is the bare page; a word
-            _sys.exit(self.help(*([help] if help else [])))   # is one topic
+            self.help(*([help] if help else []))              # is one topic
+            _sys.exit(0)
 
     def _command_callable(self):
         """
@@ -2574,6 +2575,19 @@ class Appeal:
             return f'{self.parent._prog()} {self.name}'
         return self.name or _os.path.basename(self.script) or 'program'
 
+    def _words(self):
+        """
+        The command words from the root down to this node, as a tuple:
+        () for the root, ('db', 'stop') for tool's db's stop.  The
+        structure the tree already has--never recovered by splitting
+        _prog()'s display text, which is not a reversible encoding (a
+        program named 'python -m demo', a word with a space; Astra
+        D04, 2026-09-10).
+        """
+        if self.parent is None:
+            return ()
+        return self.parent._words() + (self.name,)
+
     def _option_placements(self, path):
         """
         Every option string in the program -> where it goes, in words,
@@ -2585,26 +2599,29 @@ class Appeal:
         option went too far: "after 'db', but before any subcommand"
         (Larry, 2026-09-08).  Built on demand--only an error asks.
         """
-        places = {}                     # string -> {where: True}, in order
+        places = {}                     # string -> {where: True}, in order:
+                                        # where is None (a program option)
+                                        # or the command's word tuple
         def claim(plan, where):
             for owner, o in plan.all_options():
                 for s in o.strings:
                     places.setdefault(s, {})[where] = True
         for plan in self.global_plans():
             claim(plan, None)                       # None: a program option
-        def walk(node, path):
+        def walk(node):
             for word, child in node._children.items():
                 if child._command_callable() is None:
                     continue
-                claim(self._plan_for_node(child, word), path + word)
-                walk(child, path + word + ' ')
-        walk(self, '')
+                claim(self._plan_for_node(child, word), child._words())
+                walk(child)
+        walk(self)
+        path = tuple(path)
         owners = {}
         for s, where in places.items():
             phrases = []
             if None in where:
                 phrases.append('before the command')
-            commands = [w.split() for w in where if w is not None]
+            commands = [w for w in where if w is not None]
             # the option's command was dispatched and the line went on into
             # one of its subcommands: the option went too far
             deep = [w for w in commands
@@ -2896,10 +2913,11 @@ class Appeal:
             if not strings:
                 return None
             node = self
-            path = self._prog().split()[1:]
+            path = self._words()
             def help(*, help=False):
                 if help:
-                    _sys.exit(root.help(*path))
+                    root.help(*path)
+                    _sys.exit(0)
             help.__qualname__ = f'help({" ".join(path)})'
             root._decorations.add_option(help, 'help', strings)
             plan = self._build(help, name=self._prog())
@@ -3134,7 +3152,7 @@ class Appeal:
                     # when there aren't)
                     err.usage = _global_trailer(self)
                     raise err
-            depth = len(self._prog().split()) - 1     # root: 0
+            depth = len(self._words())                # root: 0
             line.path[depth:] = [word]                # this set's word, replacing
                                                       # a cycling set's previous
             pos += 1                                  # the word itself

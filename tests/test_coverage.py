@@ -5289,7 +5289,7 @@ def test_commandless_help_takes_no_topic():
     @app.global_command()
     def grep(pattern, *files, ignore_case=False):
         return (pattern, files, ignore_case)
-    page = ('exit', None,
+    page = ('exit', 0,
             'usage: grep [-h|--help] [-i|--ignore-case] <PATTERN> [<FILES>]...')
     assert run(app, ['-h']) == page
     assert run(app, ['-h', 'foo']) == page             # foo isn't a topic
@@ -7031,3 +7031,68 @@ def test_config_locates_before_converting():
         assert False
     except AppealDataError as e:
         assert str(e).startswith("config: ") and str(e).endswith("(at o.deep.a)"), e
+
+
+def test_command_paths_come_from_the_tree():
+    # Astra's delta review, D04 (2026-09-10): a command's help era, the
+    # dispatcher's depth, and the misplaced-option placements used to
+    # recover the command path by splitting _prog()'s display text--
+    # which isn't a reversible encoding.  A program named 'python -m
+    # demo', or a command word with a space, broke `go --help` with
+    # "unknown command '-m'".  Paths now come from the tree (_words).
+    import contextlib, io
+    app = Appeal(name='python -m demo', doc='', stylesheet=False)
+    @app.command()
+    def go(): return 'ok'
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app.process(['go', '--help'])
+            assert False
+        except SystemExit as e:
+            assert e.code == 0, e.code                  # explicitly 0, not None
+    assert out.getvalue().startswith('usage: python -m demo go [-h|--help]'), out.getvalue()
+    app2 = Appeal(name='probe', doc='', stylesheet=False)
+    @app2.command('two words')
+    def go2(): return 'ok'
+    assert app2.process(['two words']).result == 'ok'
+    with contextlib.redirect_stdout(io.StringIO()):
+        try:
+            app2.process(['two words', '--help'])
+            assert False
+        except SystemExit as e:
+            assert e.code == 0
+    assert app2.command('two words')._words() == ('two words',)
+    db_app = app2.command('db')
+    assert db_app.command('stop')._words() == ('db', 'stop')
+    # the misplaced-option placement still names the path in words
+    @app2.command()
+    def db(): pass
+    @db_app.command()
+    def stop(*, force=False): pass
+    try:
+        app2.process(['db', 'stop', 'x', '--force'])
+    except UsageError as e:
+        pass
+    try:
+        app2.process(['--force', 'db', 'stop'])
+        assert False
+    except UsageError as e:
+        assert str(e) == "option '--force' can't be used here; it goes after 'db stop'", e
+    # -h / --version exit 0 explicitly, through process() too
+    with contextlib.redirect_stdout(io.StringIO()):
+        for argv in (['-h'], ['go', '-h']):
+            try:
+                app.process(argv)
+                assert False
+            except SystemExit as e:
+                assert e.code == 0, (argv, e.code)
+    v = Appeal(name='v', version='1', stylesheet=False)
+    @v.command()
+    def c(): pass
+    with contextlib.redirect_stdout(io.StringIO()):
+        try:
+            v.process(['--version'])
+            assert False
+        except SystemExit as e:
+            assert e.code == 0
