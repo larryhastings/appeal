@@ -15,12 +15,13 @@ from . import ConfigurationError
 SPECIAL_SECTIONS = ('options', 'arguments', 'commands')
 
 # the special section openers, LITERALLY (Larry's ruling, 2026-09-07):
-# one octothorpe, one space, this case, at the left margin, outside
-# any fence.  Anything else--'## Options', 'OPTIONS' underlined, an
-# indented '# Options'--is prose, and stays in the documentation.
-_SPECIAL_HEADINGS = {'# Options': 'options',
-                     '# Arguments': 'arguments',
-                     '# Commands': 'commands'}
+# a heading of any level, ATX or setext, whose text is exactly one of
+# these (this case), outside any fence (Larry, 2026-09-10: any number
+# of octothorpes--a converter's docstring nests under a command's, so
+# its sections sit a level down).  Anything else is prose.
+_SPECIAL_HEADINGS = {'Options': 'options',
+                     'Arguments': 'arguments',
+                     'Commands': 'commands'}
 _ATX_RE = re.compile(r'^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$')
 _SETEXT_RE = re.compile(r'^ {0,3}(=+|-+)\s*$')
 # a code fence: three or more backticks or tildes, indented at most
@@ -144,9 +145,8 @@ def _parse_definition_list(lines, where):
                 block.extend(c[pad:] if c.strip() else '' for c in cont)
             parts.append('\n'.join(block).rstrip())
         entries.append((term, '\n\n'.join(parts)))
-    if not entries:
-        refuse("empty (a special section must contain a "
-               "definition list)")
+    # an empty section is legal (Larry, 2026-09-10): it ASKS for the
+    # section, filled in from the signature
     return entries
 
 
@@ -160,11 +160,12 @@ def scan_docstring(text, where=None):
       options, arguments, commands
                  [(term, definition_markdown), ...] or None when
                  the section wasn't written
-    EXACTLY the line '# Options' / '# Arguments' / '# Commands'
-    (one octothorpe, one space, this case, at the left margin,
-    outside any code fence) opens the special section; it runs
-    to the next heading of any kind (outside a fence) or EOF.
-    Any other spelling is prose: ignored, kept in the body.
+    A heading of any level, ATX or setext, reading exactly
+    'Options' / 'Arguments' / 'Commands' (this case, outside any
+    code fence) opens the special section; it runs to the next
+    heading of any kind (outside a fence) or EOF.  Any other
+    spelling is prose: ignored, kept in the body.  An empty
+    section is legal: it asks for the section, auto-filled.
     `where` names the docstring's owner in error messages.
     """
     prefix = f"{where}: docstring " if where else "docstring "
@@ -175,13 +176,13 @@ def scan_docstring(text, where=None):
     i, n = 0, len(lines)
     while i < n:
         line = lines[i]
-        name = (_SPECIAL_HEADINGS.get(line.rstrip())
-                if fence is None else None)
+        heading = _heading_at(lines, i) if fence is None else None
+        name = _SPECIAL_HEADINGS.get(heading[0]) if heading else None
         if name is not None:
             if sections[name] is not None:
                 raise ConfigurationError(
                     f"{prefix}has two {line.rstrip()!r} sections")
-            i += 1
+            i += heading[2]
             content = []
             while i < n and (fence is not None
                              or _heading_at(lines, i) is None):
@@ -801,7 +802,7 @@ def parse_help_template(template):
     return sections
 
 
-def rows_document(rows, header, role=None):
+def rows_document(rows, header, role=None, titles=None, level=2):
     """
     A table section as a big document: the template's header
     (Markdown) followed by the corpus rows as a DefinitionList,
@@ -809,36 +810,36 @@ def rows_document(rows, header, role=None):
     re-deriving the hierarchy from indentation).  Each row's
     display--a role-tagged span--is the entry's term, carried as
     StyledText so big styles it verbatim; its doc lines are
-    Markdown, parsed into the definition's blocks.  A nested row
-    (depth > 0) becomes a definition list inside its parent's
-    definition, so sub-options indent beneath the option that
-    declares them (ruled 2026-08-06).  `role` (e.g. 'command')
-    dresses rows whose display is plain text--the command
-    listing's words wear 'command'.
+    Markdown, parsed into the definition's blocks.  A row's nested
+    sections (Larry, 2026-09-10: a converter's own Arguments and
+    Options, under the option that declares it) follow its prose
+    inside the definition, each a heading one level deeper than
+    this section's and a definition list of its own.  `titles`
+    dresses those headings (the template's words); `role` (e.g.
+    'command') dresses rows whose display is plain text--the
+    command listing's words wear 'command'.
     """
     from big.markdown import (parse, DefinitionList, DefinitionEntry,
                               Term, Definition, StyledText)
+    titles = titles or {}
+
+    def entries_for(rows, level):
+        entries = []
+        for display, lines, nested in rows:
+            if role is not None:
+                display = style(role, escape_styles(display))
+            text = '\n'.join(lines)
+            blocks = parse(text).blocks if text.strip() else []
+            for kind, subrows in nested:
+                title = titles.get(kind, kind.capitalize())
+                blocks.extend(parse('#' * (level + 1) + ' ' + title).blocks)
+                blocks.append(DefinitionList(entries_for(subrows, level + 1)))
+            entries.append(DefinitionEntry(Term([StyledText(display)]),
+                                           [Definition(blocks)]))
+        return entries
+
     document = parse(header)
-    entries = []
-    stack = []                  # (depth, Definition) path to the tip
-    for display, lines, depth in rows:
-        if role is not None:
-            display = style(role, escape_styles(display))
-        text = '\n'.join(lines)
-        blocks = parse(text).blocks if text.strip() else []
-        definition = Definition(blocks)
-        entry = DefinitionEntry(Term([StyledText(display)]), [definition])
-        while stack and stack[-1][0] >= depth:
-            stack.pop()
-        if stack:
-            parent = stack[-1][1].blocks
-            if not parent or not isinstance(parent[-1], DefinitionList):
-                parent.append(DefinitionList([]))
-            parent[-1].entries.append(entry)
-        else:
-            entries.append(entry)
-        stack.append((depth, definition))
-    document.blocks.append(DefinitionList(entries))
+    document.blocks.append(DefinitionList(entries_for(rows, level)))
     return document
 
 
@@ -909,7 +910,17 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
         if text.strip():
             bake(parse(text), section)
 
-    for name, header, indent in parse_help_template(templates):
+    sections = parse_help_template(templates)
+    titles, levels = {}, {}
+    for name, header, indent in sections:
+        if name in ('arguments', 'options', 'commands'):
+            # the template's own heading dresses the nested ones too
+            lines = header.split('\n')
+            for i in range(len(lines)):
+                heading = _heading_at(lines, i)
+                if heading is not None:
+                    titles[name], levels[name] = heading[0], heading[1]
+    for name, header, indent in sections:
         if name in suppress:
             continue
         if name == 'usage':
@@ -935,7 +946,8 @@ def help_page_pieces(usage, corpus, templates, suppress=()):
         # a table section is built as nodes, on its own
         flush()
         bake(rows_document(corpus[name], header,
-                           'command' if name == 'commands' else None))
+                           'command' if name == 'commands' else None,
+                           titles, levels.get(name, 2)))
     flush()
     return tuple(pieces)
 
@@ -1003,6 +1015,10 @@ def parse_docstring(doc, where):
         'arguments': entry_dict(scanned['arguments'], 'Arguments'),
         'options': entry_dict(scanned['options'], 'Options'),
         'commands': entry_dict(scanned['commands'], 'Commands'),
+        # the sections the docstring wrote (empty or not): a converter
+        # nests under an option only where its docstring asked
+        'requested': frozenset(k for k in SPECIAL_SECTIONS
+                               if scanned[k] is not None),
         # the template establishes the page's order and dresses
         # the headings (ruled 2026-08-05): nothing to present
         'presentation': {'order': (), 'headers': {}, 'indents': {}},
@@ -1017,43 +1033,58 @@ def merge_docs(plan, command_names=None):
     enclosing scope winning, so a command overrides what it
     inherits from its converters.
 
+    The edge decides (Larry, 2026-09-10).  An ARGUMENT edge merges:
+    a positional converter's arguments and options become rows of
+    the parent's own tables.  An OPTION edge nests: the option's row
+    is the converter's whole docstring--summary and prose, then an
+    Arguments and an Options block of its own, auto-filled from its
+    signature, entries overriding--but only the blocks the
+    converter's docstring asked for, by writing the section (empty
+    or not).  A converter that asked for nothing clips its subtree:
+    nothing of it reaches the parent's tables; its author documented
+    it some other way.  (The parent may still document a nested
+    name: nearest scope wins on the text.)
+
     Each docstring's entries are validated against the subtree of
     the callable that wrote them: an entry must name a visible
-    argument (a terminal--including a keyword-only-no-default
-    parameter, which is a trailing operand), an option, or (for
-    'Commands:' entries, only when command_names is given) a
-    command word.  Violations raise AppealConfigurationError.
+    argument, an option, or (for 'Commands:' entries, only when
+    command_names is given) a command word.  Violations raise
+    AppealConfigurationError.
 
     Returns the corpus, predigested and ready to format:
 
         summary        the command's own summary, as lines
         documentation  the command's own prose blob, as lines
-        arguments      [(display, lines, depth), ...] in plan order
-        options        [(display, lines, depth), ...] in plan order
-        commands       [(word, lines, depth), ...] if command_names,
+        arguments      [(display, lines, nested), ...] in plan order
+        options        [(display, lines, nested), ...] in plan order
+        commands       [(word, lines, ()), ...] if command_names,
                        else []
 
     A row's display is a role-tagged span; its lines are Markdown;
-    depth nests it beneath the previous shallower row (a converter's
-    options under the option that declares it--arguments and
-    commands are depth 0).
+    nested is a tuple of ('arguments'|'options', rows) blocks the
+    row carries, in that order, each rows a list of the same shape.
 
     Every visible surface gets a row; undocumented rows carry
     empty lines.  command_names, if given, is an iterable of the
     command words this plan can dispatch to.
     """
-    # Per node, gather: its own surfaces, and its subtree's
-    # namespaces (name -> ('argument'|'option'|'internal', display)),
-    # deepest first so shallower scopes override.
-    argument_rows = []     # (rowkey, display) in plan order
-    option_rows = []       # (rowkey, display, anchors, depth) in
-                           # plan order: the flanking-argument
-                           # anchors qualify a duplicated display;
-                           # depth nests a converter's options
-                           # beneath the option that declares it
     docs = {}              # rowkey -> lines, post-merge
     deprecated = set()     # rowkeys of deprecated options: noted in the row
+    requested = {}         # path -> the sections that docstring asked for
+    prose = {}             # path -> (summary lines, documentation lines)
     command_names = tuple(command_names) if command_names else ()
+
+    class Level:
+        # one table pair: a command's, or a nested converter's
+        __slots__ = ('arguments', 'options')
+        def __init__(self):
+            self.arguments = []     # (rowkey, display) in plan order
+            self.options = []       # (rowkey, display, anchors, sub) in
+                                    # plan order: the flanking-argument
+                                    # anchors qualify a duplicated
+                                    # display; sub is a group option's
+                                    # own Level
+
     def arg_name(s):
         # an operand's display: the name (or @app.parameter rename)
         # decorated into its placeholder (host -> <HOST>) and tagged
@@ -1079,47 +1110,7 @@ def merge_docs(plan, command_names=None):
     # visible uses of the same converter apart; a path can.
     namespaces = {}    # path -> that occurrence's subtree namespace
 
-    def option_subtree(child, depth, path):
-        # An option's converter subtree: its inner options become
-        # rows indented beneath the declaring option's row (full
-        # depth), and its operands are named--so the converter may
-        # document them--though they show inline in the option
-        # display, not as rows of their own.  Builds
-        # namespaces[id(child)] so apply() can resolve the
-        # converter's own docstring against its own window (a
-        # converter documents its own options even when the name
-        # is ambiguous a level up), and returns the names to merge
-        # into the declaring plan's namespace.
-        ns = {}
-        for inner in child.options:
-            rowkey = path + (id(inner),)
-            display = _option_display(inner, plan.decoration)
-            ns.setdefault(inner.name, ('option', display, rowkey, child.name))
-            if inner.restriction == 'hidden':
-                continue                # documentable, never shown
-            if inner.restriction == 'deprecated':
-                deprecated.add(rowkey)
-            option_rows.append((rowkey, display, (None, None), depth))
-            if inner.child is not None:
-                for name, value in option_subtree(inner.child, depth + 1,
-                                                  rowkey).items():
-                    ns.setdefault(name, value)
-        for s in child.slots:
-            # an operand of the option: shown inline in the option
-            # display, so no row--but named, so the converter may
-            # document it (with nowhere to show, the text is
-            # dropped) rather than erroring
-            here = path + (id(s),)
-            ns.setdefault(s.name, ('argument', s.usage_name, here, child.name))
-            if not isinstance(s.child, Terminal):
-                for name, value in option_subtree(s.child, depth,
-                                                  here).items():
-                    ns.setdefault(name, value)
-        assert path not in namespaces
-        namespaces[path] = ns
-        return ns
-
-    def walk(p, override=None, anchors=(None, None), path=()):
+    def walk(p, level, override=None, anchors=(None, None), path=()):
         # returns the subtree namespace for p: name -> (kind,
         # display, rowkey, owner) where owner is the declaring
         # plan's name (an 'ambiguous' entry carries the owners'
@@ -1134,20 +1125,21 @@ def merge_docs(plan, command_names=None):
             # the namespace entry is first-wins, but every rule gets its
             # own listing row--usage advertises them all, so must Options
             rowkey = path + (id(o),)
+            display = _option_display(o, plan.decoration)
             if o.name not in namespace:
-                namespace[o.name] = ('option',
-                                     _option_display(o, plan.decoration),
-                                     rowkey, p.name)
+                namespace[o.name] = ('option', display, rowkey, p.name)
+            sub = None
+            if o.child is not None:
+                # an option edge: the converter's own tables, nested
+                sub = Level()
+                for name, value in walk(o.child, sub, None, (None, None),
+                                        rowkey).items():
+                    namespace.setdefault(name, value)
             if o.restriction == 'hidden':
                 continue                # documentable, never shown
             if o.restriction == 'deprecated':
                 deprecated.add(rowkey)
-            option_rows.append((rowkey,
-                                _option_display(o, plan.decoration),
-                                anchors, 0))
-            if o.child is not None:
-                for name, value in option_subtree(o.child, 1, rowkey).items():
-                    namespace.setdefault(name, value)
+            level.options.append((rowkey, display, anchors, sub))
         for index, s in enumerate(p.slots):
             here = path + (id(s),)
             if isinstance(s.child, Terminal):
@@ -1159,7 +1151,7 @@ def merge_docs(plan, command_names=None):
                     rowkey, display = here, arg_name(s)
                 namespace.setdefault(s.name, ('argument', display, rowkey,
                                               p.name))
-                argument_rows.append((rowkey, display))
+                level.arguments.append((rowkey, display))
             else:
                 inner = s.child.sole_terminal_slot()
                 child_override = None
@@ -1175,7 +1167,10 @@ def merge_docs(plan, command_names=None):
                                if inner.usage_name != inner.name
                                else arg_name(s))
                     child_override = (here, display)
-                child_namespace = walk(s.child, child_override or override,
+                # an argument edge: the converter's rows merge into
+                # this level
+                child_namespace = walk(s.child, level,
+                                       child_override or override,
                                        flanks(p, index), here)
                 for name, value in child_namespace.items():
                     if (name in namespace
@@ -1220,6 +1215,8 @@ def merge_docs(plan, command_names=None):
                 apply(o.child, path + (id(o),))
         where = getattr(p.callable, '__name__', repr(p.callable))
         parsed = parse_docstring(_inspect.getdoc(p.callable), where)
+        requested[path] = parsed['requested']
+        prose[path] = (parsed['summary'], parsed['documentation'])
         for kind, heading in (('arguments', 'Arguments:'),
                               ('options', 'Options:')):
             for name, lines in parsed[kind].items():
@@ -1259,38 +1256,58 @@ def merge_docs(plan, command_names=None):
                 docs[word] = lines
         return parsed
 
-    walk(plan)
-    parsed = apply(plan)
+    def assemble(level):
+        # the output rows of one Level: position qualifiers where a
+        # display is duplicated (the flanking arguments' names say
+        # which window each row is), the deprecation note, and--for a
+        # group option--the converter's prose and the blocks it asked for
+        arguments = [(display, docs.get(rowkey, []), ())
+                     for rowkey, display in level.arguments]
+        seen = {}
+        for rowkey, display, anchors, sub in level.options:
+            key = strip_styles(display).strip()
+            seen[key] = seen.get(key, 0) + 1
+        options = []
+        for rowkey, display, anchors, sub in level.options:
+            if seen[strip_styles(display).strip()] > 1 and anchors != (None, None):
+                before, after = anchors
+                if before and after:
+                    display += f' (after {before}, before {after})'
+                elif before:
+                    display += f' (after {before})'
+                else:               # the != (None, None) guard: one anchor
+                    display += f' (before {after})'     # exists, and it's after
+            if rowkey in deprecated:
+                display += ' (deprecated)'
+            lines = docs.get(rowkey)
+            nested = ()
+            if sub is not None:
+                summary, documentation = prose[rowkey]
+                if lines is None:
+                    # the converter's whole docstring is the row's text
+                    lines = summary + ([''] + documentation
+                                       if documentation else [])
+                sub_arguments, sub_options = assemble(sub)
+                wants = requested[rowkey]
+                nested = tuple(
+                    (kind, rows) for kind, rows in (('arguments', sub_arguments),
+                                                    ('options', sub_options))
+                    if kind in wants and rows)
+            options.append((display, lines or [], nested))
+        return arguments, options
 
-    # position qualifiers, only where a display is duplicated:
-    # the flanking arguments' names say which window each row is
-    seen = {}
-    for rowkey, display, anchors, depth in option_rows:
-        key = strip_styles(display).strip()
-        seen[key] = seen.get(key, 0) + 1
-    rows = []
-    for rowkey, display, anchors, depth in option_rows:
-        if seen[strip_styles(display).strip()] > 1 and anchors != (None, None):
-            before, after = anchors
-            if before and after:
-                display += f' (after {before}, before {after})'
-            elif before:
-                display += f' (after {before})'
-            else:               # the != (None, None) guard: one anchor
-                display += f' (before {after})'     # exists, and it's after
-        if rowkey in deprecated:
-            display += ' (deprecated)'
-        rows.append((rowkey, display, depth))
+    top = Level()
+    walk(plan, top)
+    parsed = apply(plan)
+    arguments, options = assemble(top)
 
     return {
         'summary': parsed['summary'],
         'documentation': parsed['documentation'],
         'presentation': parsed.get('presentation'),
-        'arguments': [(display, docs.get(name, []), 0)
-                      for name, display in argument_rows],
-        'options': [(display, docs.get(name, []), depth)
-                    for name, display, depth in rows],
-        'commands': [(word, docs.get(word, []), 0)
+        'arguments': arguments,
+        'options': options,
+        'commands': [(word, docs.get(word, []), ())
                      for word in command_names],
     }
 
@@ -1337,8 +1354,8 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True):
         corpus['options'] = []
     fallback = dict(entries)
     corpus['commands'] = [
-        (word, lines or ([fallback[word]] if fallback.get(word) else []), 0)
-        for word, lines, depth in corpus['commands']]
+        (word, lines or ([fallback[word]] if fallback.get(word) else []), ())
+        for word, lines, nested in corpus['commands']]
     return corpus
 
 
@@ -1360,6 +1377,26 @@ def summary(callable):
     return ' '.join(lines)
 
 
+def _operand_markup(plan, decoration=None):
+    """
+    A plan's operands as a usage fragment, role-tagged: `<HUE>`,
+    `[<LEVEL>]`, `[<FILE>]...`; a nested converter's operands are
+    spelled out (or its outer name, when it takes exactly one).
+    """
+    bits = []
+    for s in plan.slots:
+        if isinstance(s.child, Terminal) or s.child.sole_terminal_slot():
+            text = style('oparg', decorate_argument(s.usage_name, decoration))
+        else:
+            text = _operand_markup(s.child, decoration)
+        if s.repeat:
+            text = f'[{text}]...'
+        elif not s.required:
+            text = f'[{text}]'
+        bits.append(text)
+    return ' '.join(bits)
+
+
 def _option_display(o, decoration=None):
     """
     The option as shown in help tables, role-tagged:
@@ -1369,7 +1406,11 @@ def _option_display(o, decoration=None):
     """
     bits = ['|'.join(style('option', escape_styles(s)) for s in o.strings)]
     if o.child is not None:
-        bits.append('...')                       # structural, stays bare
+        # a mini-usage of the group's operands (Larry, 2026-09-10)--never
+        # its nested options: those are the row's own Options block
+        text = _operand_markup(o.child, decoration)
+        if text:
+            bits.append(text)
     elif o.consumes_operands:
         names = ([o.usage_name] if o.usage_name is not None
                  else o.oparg_names())
@@ -1417,15 +1458,24 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
             for row in text.split('\n'):
                 line(esc(row))
 
-    def rows(section, pairs):
-        if not pairs:
-            return
-        line(f'.SH {section}')
-        for display, lines, depth in pairs:
+    def entries(pairs):
+        for display, lines, nested in pairs:
             line('.TP')
             line(f'.B {opt(display)}')
             if lines:
                 paragraphs(lines)
+            for kind, subrows in nested:
+                # a converter's own block, indented under its row
+                line('.RS')
+                line(f'.B {kind.capitalize()}:')
+                entries(subrows)
+                line('.RE')
+
+    def rows(section, pairs):
+        if not pairs:
+            return
+        line(f'.SH {section}')
+        entries(pairs)
 
     source = f'{prog} {version}' if version else prog
     line(f'.TH {prog.upper()} 1 "" "{esc(source)}" ""')
@@ -1445,7 +1495,7 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
     rows('OPTIONS', corpus['options'])
     if command_pages:
         line('.SH COMMANDS')
-        for word, lines, depth in corpus['commands']:
+        for word, lines, nested in corpus['commands']:
             line('.TP')
             line(f'.B {esc(word)}')
             if lines:
@@ -1462,9 +1512,5 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
                     continue
                 line('.PP')
                 line(f'.B {label}')
-                for display, lines, depth in pairs:
-                    line('.TP')
-                    line(f'.B {opt(display)}')
-                    if lines:
-                        paragraphs(lines)
+                entries(pairs)
     return '\n'.join(out) + '\n'

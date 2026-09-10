@@ -1383,18 +1383,26 @@ def test_markdown_scanner():
         ('color', 'Hue.')]
     assert r['arguments'] == [('name', 'The item.')]
     assert r['commands'] is None
-    # any other spelling is prose, ignored: other levels, other
-    # cases, setext, indented, or inside a code fence (Astra R08)
+    # any level and either spelling opens a section (Larry, 2026-09-10:
+    # a converter's docstring nests under a command's); other cases,
+    # indented, or inside a code fence stay prose (Astra R08)
+    for special in ("## Options\nv\n: Doc.\n",
+                    "###### Options\nv\n: Doc.\n",
+                    "Options\n-------\nv\n: Doc.\n"):
+        r = scan_docstring("Sum.\n\n" + special)
+        assert r['options'] == [('v', 'Doc.')], special
+    assert scan_docstring("Sum.\n\nCommands\n========\ngo\n: Runs.\n")['commands'] == \
+        [('go', 'Runs.')]
     for prose in ("###### OPTIONS\nv\n: Doc.\n",
-                  "## Options\nv\n: Doc.\n",
                   "# options\nv\n: Doc.\n",
                   " # Options\nv\n: Doc.\n",
-                  "Commands\n========\ngo\n: Runs.\n",
                   "```python\n# Options\nprint('hi')\n```\n",
                   "~~~\n# Commands\n~~~\n"):
         r = scan_docstring("Sum.\n\n" + prose)
         assert r['options'] is None and r['commands'] is None, prose
         assert prose.split('\n')[1] in r['body'], (prose, r['body'])
+    # an empty section is legal: it asks for the auto-filled section
+    assert scan_docstring("Sum.\n\n# Options\n")['options'] == []
     # a fence inside a section's details doesn't end the section,
     # and a heading inside the fence is code
     r = scan_docstring("Sum.\n\n# Options\nv\n: Doc.\n\n"
@@ -2762,7 +2770,11 @@ def test_help_composes_through_option_converters():
         """
         return v
     def mid(a, *, nested: inner = None):
-        "A middle."
+        """
+        A middle.
+
+        # Options
+        """
         return a
     def outer(shape, *, deep: mid = None):
         "Outer."
@@ -4438,17 +4450,27 @@ def test_scoped_help_presentation():
         assert "converter's docstring" in str(e), e
 
     # sub-options: an option whose converter declares options gets
-    # them indented beneath its row
+    # them nested beneath its row--when the converter's docstring asks
+    # (Larry, 2026-09-10); one that asks nothing clips its subtree
     def fancy(width: float = 1.0, *, dotted=False):
+        """
+        Fancy strokes.
+
+        # Options
+        """
         return (width, dotted)
-    def draw(shape, *, stroke: fancy = None):
-        return (shape, stroke)
+    def plain(width: float = 1.0, *, dotted=False):
+        return (width, dotted)
+    def draw(shape, *, stroke: fancy = None, other: plain = None):
+        return (shape, stroke, other)
     corpus = merge_docs(build_plan(draw))
-    rows = [(strip_styles(display), depth)
-            for display, lines, depth in corpus['options']]
-    assert rows[0][0].startswith('-s|--stroke') and rows[0][1] == 0, rows
-    # the sub-option nests one level beneath its declaring option
-    assert any('-d|--dotted' in d and depth == 1 for d, depth in rows), rows
+    rows = [(strip_styles(display), lines, nested)
+            for display, lines, nested in corpus['options']]
+    assert [d for d, _, _ in rows] == ['-s|--stroke [<WIDTH>]', '-o|--other [<WIDTH>]'], rows
+    assert rows[0][1] == ['Fancy strokes.']
+    ((kind, sub),) = rows[0][2]
+    assert kind == 'options' and [strip_styles(d) for d, _, _ in sub] == ['-d|--dotted'], sub
+    assert rows[1][1] == [] and rows[1][2] == ()
 
 
 def test_config_layering():
@@ -7525,8 +7547,8 @@ def test_merge_docs():
         : Serves the thing.
         """
     c = merge_docs(build_plan(dispatcher), command_names=('serve', 'help'))
-    assert c['commands'] == [('serve', ['Serves the thing.'], 0),
-                             ('help', [], 0)]
+    assert c['commands'] == [('serve', ['Serves the thing.'], ()),
+                             ('help', [], ())]
 
 
 def test_merge_docs_errors():

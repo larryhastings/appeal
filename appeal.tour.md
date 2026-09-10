@@ -476,7 +476,13 @@ rule so a nested definition list inside a description keeps its colon.
 **The merge.**  `merge_docs(plan)` walks the Plan tree and layers every
 callable's entries: a converter documents its own parameters once, every
 command using it inherits that, and the nearest enclosing scope wins on
-a clash.  Rows are identified by their **occurrence path**, the chain
+a clash.  The edge decides (Larry, 2026-09-10): an argument edge
+merges the converter's rows into the parent's `Level` (its table
+pair); an option edge opens a `Level` of the converter's own, whose
+rows become the option row's nested `('arguments' | 'options', rows)`
+blocks--only those the converter's docstring asked for (its
+`requested` set), and a converter that asked for nothing clips its
+subtree.  Rows are identified by their **occurrence path**, the chain
 of slot and option ids from the root, not by parameter name and not by
 Plan object, because the same Plan appears at two paths when a
 converter is used twice.  A bare name that two sibling groups both
@@ -487,7 +493,8 @@ declare is refused at the command with the candidates named.
 the corpus.  The Arguments/Options/Commands tables are built directly
 as big `DefinitionList` nodes: each row's display is a role-tagged
 `StyledText` term, its description parsed into the definition's blocks,
-nested option rows as a nested list.  Nothing is written back out as
+a row's nested blocks as a heading one level deeper plus a nested list.
+Nothing is written back out as
 Markdown and re-parsed.  `render_baked_help` wraps the pieces at the
 real margin and paints them through the stylesheet: a theme is a dict
 of role to style, plain and uncolored are one structure over two

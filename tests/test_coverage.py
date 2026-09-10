@@ -3508,8 +3508,8 @@ def test_section_template_more_fails():
                 '{summary}\n\n{doc}\n\nArgs:\n  {arguments}\n\n'
                 'Cmds:\n  {commands}')
     corpus = {'summary': ['Sum.'], 'documentation': ['Prose.'],
-              'arguments': [('a', ['doc a'], 0)],
-              'options': [('-x', [], 0)], 'commands': []}
+              'arguments': [('a', ['doc a'], ())],
+              'options': [('-x', [], ())], 'commands': []}
     page = render_help_page('t [-x] a', corpus, template,
                             stylesheet=False)
     assert page.index('Opts:') < page.index('Sum.') < \
@@ -5028,9 +5028,11 @@ def test_default_mappings_refusals():
 def test_docstring_section_refusals():
     import appeal
     from appeal.presentation import parse_docstring
+    # (an empty section is legal since 2026-09-10: it asks for the
+    # auto-filled section)
+    assert parse_docstring("S.\n\n# Arguments\n", 'x')['requested'] == {'arguments'}
     for doc, needle in [
         ("S.\n\n# Arguments\n   stray indented line\n", "stray indented"),
-        ("S.\n\n# Arguments\n", "empty"),
     ]:
         try:
             parse_docstring(doc, 'x')
@@ -5157,7 +5159,9 @@ def test_astra_r08_tables_are_nodes_and_the_scanner_knows_code():
     text = out.getvalue()
     assert text.index('--dotted') < text.index('--dashed'), text
     rows = merge_docs(build_plan(draw))['options']
-    assert [depth for display, lines, depth in rows] == [0, 1, 1], rows
+    (row,) = rows
+    ((kind, sub),) = row[2]
+    assert kind == 'options' and [lines for _, lines, _ in sub] == [['Dots.'], ['Dashes.']], rows
     # a fenced '# Options' is code, not a section
     scanned = scan_docstring(
         'Summary.\n\n```python\n# Options\nprint("hello")\n```')
@@ -6464,7 +6468,13 @@ def test_restriction_hidden_and_deprecated():
     # 2026-09-10, by accident), restrictions included
     @app.option('quiet', '--quiet', restriction='hidden')
     @app.option('legacy', '--legacy', restriction='deprecated')
-    def tune(level: int = 0, *, quiet=False, legacy=False): return (level, quiet, legacy)
+    def tune(level: int = 0, *, quiet=False, legacy=False):
+        """
+        Tune it.
+
+        # Options
+        """
+        return (level, quiet, legacy)
     @app.command()
     def play(t: tune, *, alt: tune = None): return (t, alt)
     assert app.process(['play', '3', '--quiet', '--legacy']).result == \
@@ -6496,3 +6506,119 @@ def test_restriction_hidden_and_deprecated():
             assert False
         except AppealConfigurationError as e:
             assert "restriction= is None, 'hidden' or 'deprecated'" in str(e), e
+
+
+def test_nested_documentation_across_option_edges():
+    # Larry, 2026-09-10: the edge decides.  A converter reached through
+    # an ARGUMENT merges its rows into the parent's tables; one reached
+    # through an OPTION nests: the option's row is the converter's
+    # whole docstring, then its own Arguments and Options blocks--only
+    # the ones its docstring asked for (a heading, empty or not); a
+    # converter that asked for nothing clips its subtree.  Headings of
+    # any level open a section; an empty section is legal.
+    import contextlib, io
+    from big.stylesheet import strip_styles
+    from appeal.presentation import merge_docs, _operand_markup
+    app = Appeal(name='tool', stylesheet=False)
+    def color(hue, *, saturation=1, value=1):
+        """
+        Defines a color.
+
+        More about colors.
+
+        # Arguments
+        hue
+        : The hue, in degrees.
+
+        # Options
+        """
+    def text(s, color: color):
+        """
+        Some text in a color.
+
+        ## Arguments
+
+        ## Options
+        value
+        : Overridden at text.
+        """
+    def quiet(q, *, loud=False):
+        "Asks for nothing: clipped."
+    @app.command()
+    def render(renderer, *, text: text = None, q: quiet = None, bold=False):
+        """
+        Renders some text.
+
+        # Options
+        bold
+        : Make it bold.
+        """
+    corpus = merge_docs(app.plan_for('render'))
+    plain = lambda rows: [(strip_styles(d), l, [(k, plain(r)) for k, r in n])
+                          for d, l, n in rows]
+    assert plain(corpus['arguments']) == [('<RENDERER>', [], [])]
+    rows = plain(corpus['options'])
+    assert [r[0] for r in rows] == ['-t|--text <S> <COLOR>', '-q <Q>', '-b|--bold'], rows
+    # the option row: the converter's whole docstring, then its blocks
+    assert rows[0][1] == ['Some text in a color.']
+    (args_kind, args), (opts_kind, opts) = rows[0][2]
+    assert args_kind == 'arguments' and opts_kind == 'options'
+    # color merged into text across the argument edge (transparent: <COLOR>)
+    assert args == [('<S>', [], []), ('<COLOR>', ['The hue, in degrees.'], [])]
+    assert opts == [('-s|--saturation <SATURATION>', [], []),
+                    ('-v|--value <VALUE>', ['Overridden at text.'], [])]
+    # quiet asked for nothing: its summary is the row, its subtree clipped
+    assert rows[1] == ('-q <Q>', ['Asks for nothing: clipped.'], [])
+    assert rows[2] == ('-b|--bold', ['Make it bold.'], [])
+    # a group with prose after the summary carries it, and blocks only
+    # where asked (color's Arguments, nothing for Options... asked empty)
+    @app.command()
+    def paint(*, c: color = None): pass
+    (row,) = plain(merge_docs(app.plan_for('paint'))['options'])
+    assert row[1] == ['Defines a color.', '', 'More about colors.'], row
+    assert [k for k, _ in row[2]] == ['arguments', 'options']
+    # the parent documenting the option replaces the converter's prose;
+    # its blocks stay
+    @app.command()
+    def paint2(*, c: color = None):
+        """
+        Paints.
+
+        # Options
+        c
+        : My own words.
+        """
+    (row,) = plain(merge_docs(app.plan_for('paint2'))['options'])
+    assert row[1] == ['My own words.'] and [k for k, _ in row[2]] == ['arguments', 'options']
+    # the page: nested headings beneath the row (big lays them out)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        app.help('render')
+    page = out.getvalue()
+    assert '-t|--text <S> <COLOR>' in page and 'The hue, in degrees.' in page, page
+    assert page.index('Some text in a color.') < page.index('The hue, in degrees.')
+    # clipped from the tables (the usage line still shows it)
+    assert '--loud' not in page[page.index('Options\n-------'):], page
+    # the man page carries the blocks too
+    troff = app.documentation('troff')
+    assert '.RS' in troff and '.B Arguments:' in troff and '.RE' in troff, troff
+    # the mini-usage: operands only, optional and repeat shapes, a
+    # non-transparent nested converter spelled out
+    def pair(a, b): pass
+    def shapes(first, p: pair, *rest, count: int = 1): pass
+    assert strip_styles(_operand_markup(app.plan_for('render').options[0].child)) == '<S> <COLOR>'
+    @app.command()
+    def draw(*, s: shapes = None): pass
+    (row,) = merge_docs(app.plan_for('draw'))['options']
+    assert strip_styles(row[0]) == '-s <FIRST> <A> <B> [<REST>]...', row
+    def opt(x=1): pass
+    @app.command()
+    def draw2(*, o: opt = None): pass
+    (row,) = merge_docs(app.plan_for('draw2'))['options']
+    assert strip_styles(row[0]) == '-o [<X>]', row
+    # a group with no operands at all: just its strings
+    def knobs(*, fast=False): pass
+    @app.command()
+    def draw3(*, k: knobs = None): pass
+    (row,) = merge_docs(app.plan_for('draw3'))['options']
+    assert strip_styles(row[0]) == '-k', row

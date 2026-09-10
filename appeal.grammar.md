@@ -392,17 +392,30 @@ the strings: claim `-h` and help keeps only `--help`; claim
 with commands) no automatic `help` command--the program answers
 only what it declares itself.
 
-**Parameter documentation**: the docstring is Markdown.  A line
-that is exactly `# Arguments`, `# Options`, or `# Commands` (one
-octothorpe, one space, that case, at the left margin, outside any
-code fence) opens a special section, which must contain one
-definition list: a parameter name (or command word) on a line by
-itself, then `: description` (Markdown; continuation lines indent to
-the column after `: `).  Any other spelling is prose.  An entry
-documents the parameter of that name anywhere in the command's tree,
-converter parameters included; a converter's own docstring documents
-its parameters once, for every command that uses it, and the nearest
-enclosing scope wins on a clash.  Entries render as the Arguments and
+**Parameter documentation**: the docstring is Markdown.  A heading
+of any level, ATX or setext, reading exactly `Arguments`, `Options`,
+or `Commands` (that case, at the left margin, outside any code fence;
+Larry, 2026-09-10, relaxing the one-octothorpe rule) opens a special
+section, which contains one definition list: a parameter name (or
+command word) on a line by itself, then `: description` (Markdown;
+continuation lines indent to the column after `: `)--or nothing,
+which asks for the section auto-filled.  Any other spelling is prose.
+The sections are always optional; a command's tables generate whether
+or not they're written, entries overriding the rows they name.  An
+entry documents the parameter of that name anywhere in the command's
+tree, converter parameters included; a converter's own docstring
+documents its parameters once, for every command that uses it, and
+the nearest enclosing scope wins on a clash.  **The edge decides**
+(Larry, 2026-09-10): a converter reached through an *argument* merges
+its Arguments and Options entries into the parent's tables; one
+reached through an *option* nests--the option's row is the
+converter's whole docstring, then its own Arguments and Options
+blocks, auto-filled, but only the blocks its docstring wrote (empty
+or not); a converter that wrote neither clips its subtree from the
+tables entirely.  A group option's row shows a mini-usage of its
+operands (`-c|--color <HUE>`), never its nested options.  Nested
+blocks render one heading level below the section's, dressed with
+the template's words.  Entries render as the Arguments and
 Options tables (labels from the plan: `-t|--times <TIMES>`, usage
 names for operands), the template dressing the headings.  A name
 that matches no parameter is a build-time error; a name two sibling

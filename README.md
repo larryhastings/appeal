@@ -1930,15 +1930,57 @@ It should be written as it should be presented to the user;
 it should talk about options by name (`--version`), not
 about keyword-only parameters (`version`).
 
-`# Arguments`, `# Options`, and `# Commands` are special
-markers parsed by Appeal.  They need that exact spelling: one
-octothorpe, one space, the leading capital letter, at the left
-column, and not inside a code fence.  Any other spelling
-(`## Options`, `# options`, `Options` underlined with dashes)
-is ordinary prose; Appeal leaves it in your documentation and
-says nothing.  These start the "arguments", "options", and
-"commands" sections; a section runs to the next heading (of
-any kind) or the end of the docstring.
+`Arguments`, `Options`, and `Commands` headings are special
+markers parsed by Appeal.  The heading can be any level and
+either Markdown spelling (`# Options`, `### Options`, `Options`
+underlined with dashes), but the word needs that exact case, at
+the left column, and not inside a code fence.  Any other
+spelling (`# options`, `OPTIONS`) is ordinary prose; Appeal
+leaves it in your documentation and says nothing.  These start
+the "arguments", "options", and "commands" sections; a section
+runs to the next heading (of any kind) or the end of the
+docstring.
+
+These sections are always optional.  For a *command*, Appeal
+generates each table from the signature whether you write the
+section or not; if you write it, your entries override the
+rows you name and Appeal fills in the rest.  An empty section
+is fine, and means "generate it".  A section may not name
+anything that isn't a parameter (or command word): that's an
+error, by name, when the documentation is rendered.
+
+For a *converter*, the sections do something more.  A converter
+used as an *argument* merges: its `Arguments` and `Options`
+entries land in the tables of the command (or converter) that
+uses it.  A converter used as an *option* nests: the option's
+row shows the converter's whole docstring, and beneath it an
+`Arguments` block and an `Options` block of the converter's
+own--but only the blocks the converter's docstring asked for,
+by writing the heading (empty or not).  A converter that
+writes neither clips its subtree: none of its parameters
+appear in the tables at all, on the assumption that its author
+documented them some other way.  So this:
+
+```Python
+def color(hue, *, saturation=1, value=1):
+    """
+    Defines a color.
+
+    # Arguments
+    hue
+    : The hue, in degrees.
+
+    # Options
+    """
+
+@app.command()
+def render(text, *, color: color = None):
+    "Renders some text, optionally in a color."
+```
+
+documents `--color` with color's summary, an Arguments block
+holding `<HUE>` and its text, and an Options block listing
+`--saturation` and `--value`, nested under the `--color` row.
 
 The format of these sections is a Markdown definition list.
 Every entry starts with the name of a parameter on a line by
