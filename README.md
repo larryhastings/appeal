@@ -2419,7 +2419,7 @@ spellings are the same classes--catch whichever you like.)
 
 ## API Reference
 
-`Appeal(name=None, *, default_mappings=default_global_mappings(), default_options=default_options, doc=None, errors=None, lazy=False, margin=None, repeat=False, script=sys.argv[0], stylesheet=None, version=None)`
+`Appeal(name=None, *, default_mappings=default_global_mappings, default_options=default_options, doc=None, errors=None, lazy=False, margin=None, repeat=False, script=sys.argv[0], stylesheet=None, version=None)`
 
 Creates a new Appeal instance.
 
@@ -2471,14 +2471,33 @@ Creates a new Appeal instance.
   your own.  It runs at build time.  All three ship on the
   `appeal` namespace.
 * `default_mappings` is the policy for Appeal's automatic help and
-  version: the stock `default_global_mappings()` maps `-h`/`--help`
-  and `-V`/`--version` before any command word and, for a program
-  with commands, the `help` and `version` commands; a subset
-  (`default_global_mappings('-h', '--help')`) maps fewer; `None`
-  maps nothing, and is the blanket off switch--per-command
-  `-h`/`--help` goes with it.  Strings you claim yourself always
-  win.  Each command's own help is the same shape one level down:
-  `@app.command(default_mappings=default_command_mappings())`.
+  version: a function of the app.  The stock one is four lines,
+  and is the whole story:
+
+  ```Python
+  def default_global_mappings(app):
+      app.map_help_options()          # -h, --help
+      app.map_version_options()       # --version
+      app.map_version_command()       # version
+      app.map_help_command()          # help
+  ```
+
+  Each applies only where it fits (the version pieces only when
+  the app has a version string, the two commands only when the
+  program has commands) and only where nothing of yours is
+  already there: an option parameter you mapped yourself, a
+  string one of your options holds, or a command word you
+  registered stays yours.  Want most of it?  Write your own
+  function calling the methods you want, or pass `None` and
+  call them yourself before `main()`.  The methods take exactly
+  the strings or word you give: `app.map_help_options('--help')`,
+  `app.map_version_options('-V', '--version')`,
+  `app.map_help_command('assist')`.  `None` maps nothing, and is
+  the blanket off switch--per-command `-h`/`--help` goes with it.
+  Each command's own help is the same shape one level down:
+  `@app.command(default_mappings=...)` takes a function of the
+  node, the stock `default_command_mappings` calling
+  `node.map_help_options()`.
 
 Help is on by default: the program answers `-h`/`--help`, every
 command answers `-h`/`--help` after its word (`mytool db stop -h`
@@ -2488,8 +2507,8 @@ gets a `help` command, unless you define your own or pass
 `mytool help db stop` reaches a subcommand's page (and `mytool
 help db` lists db's subcommands).  A command keeps any of those
 strings it claims itself; `@app.command(default_mappings=None)`
-turns one command's help off, and
-`default_command_mappings('--help')` maps a subset.  Version works
+turns one command's help off, and a function calling
+`node.map_help_options('--help')` maps a subset.  Version works
 the same way, when you supply one: `Appeal(version='1.2.3')` gives
 you `--version` and a `version` command for free.
 

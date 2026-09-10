@@ -1048,118 +1048,37 @@ class Processor:
             return fn
         return None
 
-# the default_global_mappings menu, importable (spell your subset with
-# these: default_global_mappings(*default_global_mappings_help))
-default_global_mappings_help = ('-h', '--help', 'help')
-default_global_mappings_version = ('-V', '--version', 'version')
-# the default_command_mappings menu
-default_command_mappings_help = ('-h', '--help')
-
-
-def default_command_mappings(*options):
+def default_command_mappings(node):
     """
-    The FACTORY for the stock per-command defaults policy (Larry's
-    design, 2026-09-08): the option strings a command's help era maps
-    when the command hasn't claimed them--'-h', '--help'; empty means
-    both.  Returns the policy callable--@app.command()'s default is
-    default_mappings=default_command_mappings().  Pass
-    default_mappings=None for no per-command help.  `tool build -h`
-    prints build's page and exits; a command with subcommands lists
-    them (`tool db -h`), and `tool db stop -h` is stop's page--the
-    path is the topic, so the option takes no oparg.
+    The stock per-command mappings (Larry's design, 2026-09-10): a
+    command's help era maps -h and --help, minus what the command
+    claims itself.  @app.command(default_mappings=) takes a function
+    of the node like this one--yours may call node.map_help_options
+    with other strings--or None for no per-command help.  `tool build
+    -h` prints build's page and exits; a command with subcommands
+    lists them (`tool db -h`), and `tool db stop -h` is stop's page--
+    the path is the topic, so the option takes no oparg.
     """
-    if not options:
-        options = default_command_mappings_help
-    for o in options:
-        if o not in default_command_mappings_help:
-            raise AppealConfigurationError(
-                f"default_command_mappings: unknown mapping {o!r}; the "
-                f"menu is {sorted(default_command_mappings_help)}")
-    requested = frozenset(options)
-
-    def default_command_mappings_policy(node, claimed):
-        "The strings to map, given what the command already claims."
-        return [s for s in default_command_mappings_help
-                if s in requested and s not in claimed]
-    default_command_mappings_policy.requested = requested
-    return default_command_mappings_policy
+    node.map_help_options()
 
 
-_STOCK_COMMAND_MAPPINGS = default_command_mappings()
-
-
-def default_global_mappings(*options):
+def default_global_mappings(app):
     """
-    The FACTORY for the stock program-level defaults policy
-    (Larry's design, 2026-07-25).  List the mappings you want:
-    '-h', '--help', '-V', '--version' (precommand options),
-    'help', 'version' (commands); empty means all of them.
-    Returns the policy callable--the constructor default is
-    default_mappings=default_global_mappings().  Pass
-    default_mappings=None for no default mappings at all.
-
-    Order is insignificant (the listing keeps v1's order, version
-    before help).  Version mappings apply only when the app has a
-    version string.  Each mapping lands only if not already
-    mapped--user declarations always win.
+    The stock program-level mappings (Larry's design, 2026-09-10,
+    replacing the factory-and-menu of 2026-07-25): -h/--help and
+    --version before any command word, and the help and version
+    commands--each applied at finalize only where it fits (version
+    only when the app has a version string, the commands only when
+    the program has commands) and only where nothing of yours is
+    already there.  Appeal(default_mappings=) takes a function of the
+    app like this one: write your own calling the map_* methods you
+    want, or pass None for no default mappings at all.  This is the
+    whole body; copy and edit.
     """
-    if not options:
-        options = default_global_mappings_help + default_global_mappings_version
-    valid = set(default_global_mappings_help + default_global_mappings_version)
-    for o in options:
-        if o in valid:
-            continue
-        if isinstance(o, str):
-            near = {'-v': '-V', '--h': '--help', '-help': '--help',
-                    '-version': '--version'}.get(o)
-            hint = f" (did you mean {near!r}?)" if near else ''
-            raise AppealConfigurationError(
-                f"default_global_mappings: unknown mapping {o!r}{hint}; "
-                f"the menu is {sorted(valid)}")
-        raise AppealConfigurationError(
-            f"default_global_mappings: {o!r} isn't a mapping name.  "
-            f"default_global_mappings is a factory--pass the constructor "
-            f"default_mappings=default_global_mappings(), not the "
-            f"factory itself")
-    requested = frozenset(options)
-
-    def default_mappings_policy(app):
-        # snapshot FIRST: the version/help COMMANDS only make
-        # sense for a program that has commands (v1's rule; an
-        # ls-style global-only program gets the options, never
-        # command words)
-        has_commands = bool(app.commands)
-        if app.version is not None:
-            if ('version' in requested and has_commands
-                    and 'version' not in app.commands):
-                app.command('version')(app.print_version)
-            free = [s for s in ('-V', '--version')
-                    if s in requested and s not in app.options]
-            if free:
-                app.option('version', *free)(app.help_and_version_precommand)
-        if has_commands:
-            if 'help' in requested and 'help' not in app.commands:
-                app.command('help')(app.help)
-                # help()'s usage=/summary=/doc= knobs are API,
-                # not command-line surface: the zero-string
-                # option() is the explicit unmap (ruled
-                # 2026-08-05)
-                app.option('usage')(app.help)
-                app.option('summary')(app.help)
-                app.option('doc')(app.help)
-        # the -h/--help OPTION rides for EVERY app, global-only included
-        # (like --version above): a program with no commands still answers
-        # -h/--help through its precommand.
-        free = [s for s in ('-h', '--help')
-                if s in requested and s not in app.options]
-        if free:
-            app.option('help', *free)(app.help_and_version_precommand)
-
-    # _finalize reads this to drive the legacy help machinery
-    # (per-command --help, bare-app -h) until the era unification
-    # retires it: the requested tokens are the truth
-    default_mappings_policy.requested = requested
-    return default_mappings_policy
+    app.map_help_options()          # -h, --help
+    app.map_version_options()       # --version
+    app.map_version_command()       # version   (v1's listing order:
+    app.map_help_command()          # help       version before help)
 
 
 class Appeal:
@@ -1179,7 +1098,7 @@ class Appeal:
     """
     def __init__(self, name=None, *,
                  config=None,
-                 default_mappings=default_global_mappings(),
+                 default_mappings=default_global_mappings,
                  default_options=_DEFAULT_OPTIONS,
                  default_subcommand=None,
                  doc=None,
@@ -1226,8 +1145,15 @@ class Appeal:
         self._node_repeat = False # this node's set cycles
         self._node_restriction = None   # 'hidden' / 'deprecated' (Larry,
                                         # 2026-09-10): command(restriction=)
+        self._help_strings = None       # a command node's help-era strings,
+                                        # once map_help_options ran on it
+        self._mapping_requests = []     # the root's map_* calls, applied at
+                                        # finalize in order, where they fit
+        self._requested_params = set()  # precommand parameters a request
+                                        # mapped (a later request may remap
+                                        # them; the user's are untouchable)
         self._node_share = False  # this command's options are shared FORWARDS
-        self._command_mappings = _STOCK_COMMAND_MAPPINGS   # the help era's policy
+        self._command_mappings = default_command_mappings  # the help era's policy
         # whether Appeal supplies automatic help (v1's knob): the
         # per-command -h/--help option AND, for a program with
         # commands, the `help` command.  help=False suppresses all
@@ -1514,19 +1440,98 @@ class Appeal:
                                     # must not recurse
         if root.default_mappings is not None:
             root.default_mappings(root)
-            requested = getattr(root.default_mappings,
-                                'requested', None)
-            if requested is not None:
-                # the stock factory says what was asked for
-                root._help_enabled = bool(
-                    requested & {'-h', '--help', 'help'})
-            else:
-                # a custom policy: judge by what it actually mapped
-                root._help_enabled = bool(
-                    root._precommand_options.get('help')
-                    or 'help' in root._children)
+        root._apply_mapping_requests()
+        # help is on iff something actually mapped it (an option on the
+        # precommand, or a help command)
+        root._help_enabled = bool(root._precommand_options.get('help')
+                                  or 'help' in root._children)
         root._derive_method_owners()
         root._refuse_bodyless_parents()
+
+    def _apply_mapping_requests(self):
+        """
+        Apply the root's map_* requests in call order, each only where
+        it fits and only where nothing of the user's is already there
+        (Larry, 2026-09-10): an option parameter the user declared on
+        the precommand is theirs entirely; a string one of their own
+        options took stays theirs; a command word already registered
+        stays theirs.  Version mappings need a version string; the two
+        commands need a program with commands.
+        """
+        for kind, value in self._mapping_requests:
+            if kind in ('help_options', 'version_options'):
+                name = kind[:-len('_options')]
+                if name == 'version' and self.version is None:
+                    continue
+                if (name in self._precommand_options
+                        and name not in self._requested_params):
+                    continue                    # the user's parameter
+                # strings the user's options hold, or another precommand
+                # parameter does, stay theirs; a later request for the same
+                # parameter replaces an earlier one's strings
+                taken = {s for s, rule in self.options.items()
+                         if rule is not None}
+                taken.update(s for p, strings in self._precommand_options.items()
+                             if p != name for s in strings)
+                free = [o for o in value if o not in taken]
+                if free:
+                    self.option(name, *free)(self._metadata_precommand)
+                    self._requested_params.add(name)
+                continue
+            if not self.commands or value in self.commands:
+                continue
+            if kind == 'help_command':
+                self.command(value)(self.help)
+                # help()'s usage=/summary=/doc= knobs are API, not
+                # command-line surface: the zero-string option() is the
+                # explicit unmap (ruled 2026-08-05)
+                self.option('usage')(self.help)
+                self.option('summary')(self.help)
+                self.option('doc')(self.help)
+            elif self.version is not None:      # 'version_command'
+                self.command(value)(self.print_version)
+
+    def _request_mapping(self, kind, value):
+        if self.parent is not None:
+            raise AppealConfigurationError(
+                f"{kind[:-len('_options')] if kind.endswith('_options') else kind}"
+                f": only the program maps these, not the command "
+                f"{self._prog()!r}")
+        self._mapping_requests.append((kind, value))
+        self._invalidate()
+
+    def map_help_options(self, *options):
+        """
+        Map the help option: -h and --help by default, or exactly the
+        strings given.  On the program (the root), applied at finalize
+        where it fits; on a command node, the strings its help era maps
+        (minus what the command claims), in place of the node's
+        default_mappings policy.
+        """
+        from .frontend import validate_option_string
+        for o in options:
+            validate_option_string(o)
+        options = options or ('-h', '--help')
+        if self.parent is not None:
+            self._help_strings = options
+            self._invalidate()
+            return
+        self._request_mapping('help_options', options)
+
+    def map_version_options(self, *options):
+        "Map the version option: --version by default, or exactly these."
+        from .frontend import validate_option_string
+        for o in options:
+            validate_option_string(o)
+        self._request_mapping('version_options', options or ('--version',))
+
+    def map_help_command(self, command='help'):
+        "Map the help command, for a program with commands."
+        self._request_mapping('help_command', self._command_word(command))
+
+    def map_version_command(self, command='version'):
+        "Map the version command, for a program with commands and a version."
+        self._request_mapping('version_command', self._command_word(command))
 
     def _refuse_bodyless_parents(self):
         """
@@ -1627,7 +1632,7 @@ class Appeal:
                 suppress=suppress).rstrip('\n')
         print(text)
 
-    def help_and_version_precommand(self, *, help: optional[str] = None,
+    def _metadata_precommand(self, *, help: optional[str] = None,
                    version=False):
         """
         The stage ahead of the global command: program metadata.
@@ -1635,7 +1640,7 @@ class Appeal:
         the first command word.  Absent from the grammar entirely
         when default_mappings mapped nothing to it.  Map options
         onto it the ordinary way:
-        app.option('help', '-h', '--help')(app.help_and_version_precommand).
+        app.map_help_options('-h', '--help').
         """
         if version:
             _sys.exit(self.print_version())
@@ -1761,11 +1766,10 @@ class Appeal:
         because the child IS an Appeal.  repeat=True makes the
         node's set cycle: after a subcommand's arguments, the
         next token may name another one.  default_mappings= is the
-        command's help-era
-        policy (Larry, 2026-09-08): the stock
-        default_command_mappings() maps -h/--help onto the command
-        when it hasn't claimed them; None turns the command's help
-        off.
+        command's help-era policy (Larry, 2026-09-08; a function of
+        the node since 2026-09-10): the stock default_command_mappings
+        maps -h/--help onto the command when it hasn't claimed them;
+        None turns the command's help off.
         """
         _vet_restriction(restriction, 'command()')
         if name is not None:
@@ -1997,7 +2001,7 @@ class Appeal:
             if (isinstance(callable, _MethodType)
                     and isinstance(callable.__self__, Appeal)
                     and callable.__func__
-                        is type(callable.__self__).help_and_version_precommand):
+                        is type(callable.__self__)._metadata_precommand):
                 # the bound precommand: Python mints a fresh bound
                 # object per attribute access, so attribute-marking
                 # can't stick--record in the app's own table
@@ -2654,13 +2658,13 @@ class Appeal:
         if want_v and want_h:
             def precommand(*, topic: optional[str] = None,
                            version=False):
-                app.help_and_version_precommand(help=topic, version=version)
+                app._metadata_precommand(help=topic, version=version)
         elif want_v:
             def precommand(*, version=False):
-                app.help_and_version_precommand(version=version)
+                app._metadata_precommand(version=version)
         else:
             def precommand(*, topic: optional[str] = None):
-                app.help_and_version_precommand(help=topic)
+                app._metadata_precommand(help=topic)
         from .frontend import empty
         overrides = app.root._precommand_overrides
         if want_v:
@@ -2850,8 +2854,10 @@ class Appeal:
                 return None
             own = root._plan_for_node(self, self.name)
             claimed = {s for owner, o in own.all_options() for s in o.strings}
-            policy = self._command_mappings
-            strings = policy(self, claimed) if policy is not None else []
+            if self._help_strings is None and self._command_mappings is not None:
+                self._command_mappings(self)     # the node's policy: it calls
+                                                 # map_help_options, or doesn't
+            strings = [s for s in (self._help_strings or ()) if s not in claimed]
             if not strings:
                 return None
             node = self

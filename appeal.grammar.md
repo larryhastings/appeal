@@ -382,7 +382,7 @@ oparg is never split into a path: `tool -h 'db stop'` is an unknown
 command named `db stop`.  Help wins
 even when required operands are missing and exits successfully.
 `-h`/`--help` and `--version` ride in the program's usage line like
-any other option--`tool [-h|--help [<TOPIC>]] [-V|--version]
+any other option--`tool [-h|--help [<TOPIC>]] [--version]
 <COMMAND>`--they aren't special enough to break the rules (Larry,
 2026-09-08, reversing v1, which hid them).  The user's options always win
 the strings: claim `-h` and help keeps only `--help`; claim
@@ -677,9 +677,18 @@ stop's page and runs neither `quiet` nor `db`.  The path is the
 topic, so the option takes no oparg: `tool db -h` is db's page with
 its subcommands listed.  The command's own strings win (claim `-h`
 and the era maps only `--help`); `@app.command(default_mappings=...)`
-is the policy--the stock `default_command_mappings()`, a subset of
-it, or `None` for no help era; the constructor's
-`default_mappings=None` turns every one off.  Relay: a command era
+is the policy--a function of the node, the stock
+`default_command_mappings` (which calls `node.map_help_options()`),
+one calling it with other strings, or `None` for no help era; the
+constructor's `default_mappings=None` turns every one off.  The
+program's policy is the same shape (Larry, 2026-09-10, replacing the
+factory and its menu): `default_global_mappings(app)` calls
+`map_help_options`, `map_version_options`, `map_version_command`,
+`map_help_command`--requests applied at finalize, in order, each only
+where it fits and only where nothing of the user's is already there
+(a parameter the user mapped, a string their option holds, a word
+they registered); a later request may remap an earlier request's
+parameter.  No `-V` by default.  Relay: a command era
 that takes nothing relays shared options iff the command's `share`
 says so; one that takes something always relays into its help and
 arguments-options-opargs eras, and that last era shares onward iff

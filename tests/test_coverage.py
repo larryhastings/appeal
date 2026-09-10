@@ -4584,9 +4584,10 @@ def test_reachable_grind_config_doc_version():
         "Doc prose."
     assert 'Doc prose' in app2.documentation('commonmark')
     # a version-only default_mappings: the version precommand branch
-    app3 = appeal.Appeal('c', version='1.0',
-                         default_mappings=default_global_mappings('-V', '--version',
-                                                           'version'))
+    def version_only(app):
+        app.map_version_options()
+        app.map_version_command()
+    app3 = appeal.Appeal('c', version='1.0', default_mappings=version_only)
     @app3.command()
     def cmd():
         "C."
@@ -4785,7 +4786,7 @@ def test_init_more_reachable_edges():
         assert "no parameter 'nope'" in str(e)
     # option() on the bound help/version precommand allows only help/version
     try:
-        knobs.option('bogus', '-b')(knobs.help_and_version_precommand)
+        knobs.option('bogus', '-b')(knobs._metadata_precommand)
         assert False
     except Cfg as e:
         assert 'precommand has no parameter' in str(e)
@@ -5010,19 +5011,30 @@ def test_init_misconfig_and_edges():
 
 
 def test_default_mappings_refusals():
-    from appeal import default_global_mappings, AppealConfigurationError
-    # an unknown mapping gets a did-you-mean hint
+    from appeal import AppealConfigurationError
+    app = Appeal(name='r')
+    # an option string is validated like any other
     try:
-        default_global_mappings('-v')
+        app.map_help_options('h')
         assert False, 'expected refusal'
     except AppealConfigurationError as e:
-        assert "did you mean '-V'" in str(e)
-    # a non-string isn't a mapping name at all
+        assert "'h'" in str(e), e
+    # only the program maps version options and the two commands
+    node = app.command('db')
+    for call in (lambda: node.map_version_options(),
+                 lambda: node.map_help_command(),
+                 lambda: node.map_version_command()):
+        try:
+            call()
+            assert False, 'expected refusal'
+        except AppealConfigurationError as e:
+            assert "only the program maps these, not the command 'r db'" in str(e), e
+    # default_mappings= is a function or None
     try:
-        default_global_mappings(5)
+        Appeal(name='r2', default_mappings='help')
         assert False, 'expected refusal'
     except AppealConfigurationError as e:
-        assert "isn't a mapping name" in str(e)
+        assert 'default_mappings' in str(e), e
 
 
 def test_docstring_section_refusals():
@@ -5295,7 +5307,7 @@ def test_commandless_help_takes_no_topic():
     def build2(target):
         return target
     tool2.option('help', '-h', '--help', annotation=whole)(
-        tool2.help_and_version_precommand)
+        tool2._metadata_precommand)
     assert run(tool2, ['-h', 'build2'])[2] == 'usage: tool2 [-h|--help] <COMMAND>'
 
 
@@ -5617,7 +5629,8 @@ def test_per_command_help_era():
     assert 'help' not in tool3._children['silent']._plans
     # a subset, on the fetch and on a node's command()
     tool4 = Appeal(name='t4')
-    only_long = appeal.default_command_mappings('--help')
+    def only_long(node):
+        node.map_help_options('--help')
     @tool4.command(default_mappings=only_long)
     def alpha(): pass
     tool4.command('beta', default_mappings=only_long)(lambda: None)
@@ -5629,10 +5642,10 @@ def test_per_command_help_era():
         assert refused(tool4, argv) == \
             "option '-h' can't be used here; it goes before the command", argv
     try:
-        appeal.default_command_mappings('-x')
+        tool4.command('gamma').map_help_options('x')
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert "unknown mapping '-x'" in str(e), e
+        assert "'x'" in str(e), e
     # the app-level blanket switch turns per-command help off too
     tool5 = make(default_mappings=None)       # the blanket switch
     assert refused(tool5, ['build', 'lib', '-h']) == "unknown option '-h'"
@@ -6736,3 +6749,77 @@ def test_default_long_option_is_lowercased():
     @app2.command()
     def go(*, Dry_Run=False): pass
     assert strip_styles(app2.plan_for('go').usage()) == 't2 go [--dry-run]'
+
+
+def test_map_methods():
+    # Larry's design (2026-09-10): the four map_* methods are the
+    # building blocks; default_global_mappings calls all four; a
+    # custom function calls the ones you want; or pass None and call
+    # them yourself.  Each applies at finalize only where it fits and
+    # only where nothing of yours is already there--per PARAMETER and
+    # per WORD, so declaring --help yourself gets no -h added.
+    import contextlib, io
+    from big.stylesheet import strip_styles
+    def usage(app):
+        app._finalize()
+        return strip_styles(app._head_usage_markup())
+    # the stock set, no -V
+    app = Appeal(name='t', version='1')
+    @app.command()
+    def go(): pass
+    assert usage(app) == 't [-h|--help [<TOPIC>]] [--version] <COMMAND>'
+    assert list(app.commands) == ['go', 'version', 'help']       # v1's order
+    # None plus direct calls, at module level, before any command exists
+    app2 = Appeal(name='t2', version='1', default_mappings=None)
+    app2.map_version_options('-V', '--version')
+    app2.map_version_command('about')
+    app2.map_help_options('--help')
+    @app2.command()
+    def go2(): pass
+    assert usage(app2) == 't2 [--help [<TOPIC>]] [-V|--version] <COMMAND>'   # help first, always
+    assert list(app2.commands) == ['go2', 'about']
+    # the user's --help declaration owns the parameter: no -h sneaks in
+    app3 = Appeal(name='t3')
+    @app3.command()
+    def go3(): pass
+    app3.option('help', '--help')(app3._metadata_precommand)
+    assert usage(app3) == 't3 [--help [<TOPIC>]] <COMMAND>'
+    # a user option holding -h keeps it; the policy maps the rest
+    app4 = Appeal(name='t4')
+    @app4.global_command()
+    def main4(*, hosts=''): pass
+    @app4.command()
+    def go4(): pass
+    assert usage(app4) == 't4 [--help [<TOPIC>]] [-h|--hosts <HOSTS>] <COMMAND>'
+    # a taken command word stays the user's
+    app5 = Appeal(name='t5', version='1')
+    @app5.command()
+    def version():
+        "Mine."
+        return 'mine'
+    @app5.command()
+    def go5(): pass
+    assert app5.process(['version']).result == 'mine'
+    # no version string: no version mappings; no commands: no help
+    # command, but the option rides for a global-only program
+    app6 = Appeal(name='t6')
+    @app6.global_command()
+    def main6(x): pass
+    assert usage(app6) == 't6 [-h|--help] <X>'
+    assert 'help' not in app6.commands
+    # per-command policy: a function of the node, or None; a node's own
+    # map_help_options call wins over the policy
+    def only_long(node):
+        node.map_help_options('--help')
+    app7 = Appeal(name='t7')
+    @app7.command(default_mappings=only_long)
+    def alpha(): pass
+    @app7.command(default_mappings=None)
+    def beta(): pass
+    @app7.command()
+    def gamma(): pass
+    app7.command('gamma').map_help_options('-H')
+    assert strip_styles(app7.plan_for('alpha').usage()) == 't7 alpha'
+    assert strip_styles(app7._children['alpha']._help_plan().usage()) == 't7 alpha [--help]'
+    assert app7._children['beta']._help_plan() is None
+    assert strip_styles(app7._children['gamma']._help_plan().usage()) == 't7 gamma [-H]'

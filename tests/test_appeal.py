@@ -1038,12 +1038,13 @@ def test_flag_presence_stores_not_default():
 
 
 def test_default_mappings_design():
-    # Larry's design (2026-07-19): default_mappings(app) runs once
-    # at first compile; the stock policy maps the version/help
-    # commands and the precommand's -V/--version, each only if
-    # free; None banishes all default semantics; the precommand's
-    # options live in the pre-command-word era and yield to user
-    # declarations; overriding Appeal.default_version customizes.
+    # Larry's design (2026-07-19; plain functions and the map_*
+    # methods 2026-09-10): default_mappings(app) runs once at first
+    # compile; the stock policy maps the version/help commands and
+    # the precommand's --version (no -V since 2026-09-10), each only
+    # where free; None banishes all default semantics; the
+    # precommand's options live in the pre-command-word era and yield
+    # to user declarations; overriding Appeal.print_version customizes.
     import appeal as _appeal
     import contextlib, io
 
@@ -1061,15 +1062,16 @@ def test_default_mappings_design():
     app = _appeal.Appeal(name='tool', version='3.5')
     @app.command()
     def work(*, verbose=False): return 0
-    # both spellings, and mid-segment (a real option, not a
-    # first-token special case): metadata outranks the rest
-    assert main(app, ['-V']) == (0, '3.5\n')
+    # mid-segment too (a real option, not a first-token special
+    # case): metadata outranks the rest
     assert main(app, ['--version']) == (0, '3.5\n')
     assert main(app, ['--version', 'garbage']) == (0, '3.5\n')
+    with contextlib.redirect_stderr(io.StringIO()):
+        assert main(app, ['-V'])[0] == 2               # not mapped by default
     # the introspection API
     assert list(app.commands) == ['work', 'version', 'help']
     assert app.commands['work'].callable is work
-    assert set(app.options) == {'-V', '--version', '-h', '--help'}
+    assert set(app.options) == {'--version', '-h', '--help'}
 
     # yielding: a user -V (from Verbose) keeps -V; only --version
     # gets mapped
@@ -1100,7 +1102,7 @@ def test_default_mappings_design():
     app4 = Deluxe(name='t4', version='7')
     @app4.command()
     def go4(): return 0
-    assert main(app4, ['-V']) == (0, 'deluxe v7\n')
+    assert main(app4, ['--version']) == (0, 'deluxe v7\n')
     assert main(app4, ['version']) == (0, 'deluxe v7\n')
 
     # default_options=None: only explicit @app.option maps
@@ -1115,16 +1117,18 @@ def test_default_mappings_design():
     except _appeal.AppealUsageError:
         pass
 
-    # a custom default_mappings policy composes with the stock one
-    # (the factory returns the policy; call it, then adjust)
+    # a custom default_mappings policy composes with the stock one:
+    # call it, then adjust--or call the map_* methods yourself
     def custom(app_):
-        _appeal.default_global_mappings()(app_)
+        _appeal.default_global_mappings(app_)
         app_.command('about')(app_.print_version)
+        app_.map_version_options('-V', '--version')     # -V, for whoever wants it
     app6 = _appeal.Appeal(name='t6', version='2', default_mappings=custom)
     @app6.command()
     def go6(): return 0
     assert main(app6, ['about']) == (0, '2\n')
     assert main(app6, ['-V']) == (0, '2\n')
+    assert main(app6, ['--version']) == (0, '2\n')
 
 
 def test_underscore_parameters_are_private():
@@ -3370,9 +3374,10 @@ def test_help_disabled():
     assert 'Do g.' in out.getvalue()
 
     # a command set: no `help` command, no per-command --help
-    app3 = Appeal(name='tool',
-                  default_mappings=appeal.default_global_mappings(
-                      *appeal.default_global_mappings_version))
+    def version_only(app):
+        app.map_version_options()
+        app.map_version_command()
+    app3 = Appeal(name='tool', default_mappings=version_only)
     @app3.command()
     def add(x: int, y: int):
         "Add."
@@ -4906,7 +4911,7 @@ def test_repl():
             'calc> hello, world\n'                        # bare, no quotes
             # an unknown command earns the base help page (decision A)
             "calc> error: unknown command 'bogus'\n"
-            'usage: calc [-h|--help [<TOPIC>]] [-V|--version] <COMMAND>\n'
+            'usage: calc [-h|--help [<TOPIC>]] [--version] <COMMAND>\n'
             '\n'
             'Commands\n'
             '--------\n'
@@ -5654,7 +5659,7 @@ def test_documentation_man():
     text = app.documentation('troff')
     assert text.startswith('.TH MYTOOL 1 "" "mytool 2.0" ""\n')
     assert '.SH NAME\nmytool \\- A demonstration tool.' in text
-    assert ('.B mytool [\\-h|\\-\\-help [<TOPIC>]] [\\-V|\\-\\-version] '
+    assert ('.B mytool [\\-h|\\-\\-help [<TOPIC>]] [\\-\\-version] '
             '[\\-t|\\-\\-trace] <COMMAND>') in text, text
     assert '.B mytool greet [\\-h|\\-\\-help] [\\-s|\\-\\-shout] <NAME>' in text, text
     assert '.SH OPTIONS' in text and 'Print a trace' in text
