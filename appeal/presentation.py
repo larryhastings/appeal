@@ -269,6 +269,11 @@ uncolored_theme = {
     'heading1':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
     'heading2':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
     'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
+    # the rule hooks paint through heading_color, so a rule matches its
+    # heading's color (big >= 0.15; the glyph stays a bare character)
+    'heading1_rule_ink': ('T', '⦃heading_color⦙T⦄'),
+    'heading2_rule_ink': ('T', '⦃heading_color⦙T⦄'),
+    'heading3_rule_ink': ('T', '⦃heading_color⦙T⦄'),
     'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
     'heading5':   ('T', '⦃heading_color⦙T⦄'),
     'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
