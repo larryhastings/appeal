@@ -618,8 +618,10 @@ Some option syntax worth knowing, all demonstrated on `--color`:
   means `True`; the explicit form exists so the command line can
   turn *off* what a config file turned on (see
   [Config layering](#config-layering)).  The same language reads
-  every boolean Appeal gets as text: a `bool` argument, a config
-  value, a boolean choice.  A keyword-only `bool` parameter
+  every boolean Appeal gets as *text*: a `bool` argument, a
+  boolean choice, a CSV cell.  A mapping--a config file,
+  `read_mapping`--holds a boolean as a bool constant, `True` or
+  `False`, and nothing else.  A keyword-only `bool` parameter
   *without* a default is a required option, and a required
   boolean can't be a flag--presence would say nothing--so it
   takes that language as its oparg: `--flag yes`.

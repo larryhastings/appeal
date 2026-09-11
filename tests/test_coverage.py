@@ -569,16 +569,17 @@ def test_read_bool_flag_nullary():
         return 'LOUD'
     def cmd(*, flag=False, mode: loud = 'quiet'):
         return (flag, mode)
-    # config files hold booleans many ways: real bools, 0/1, the
-    # usual spellings; a nullary option reads a boolean too (True
+    # a mapping holds a boolean as a bool constant, nothing else
+    # (Larry, 2026-09-11); a nullary option reads a boolean too (True
     # calls the converter, False keeps the default)
-    assert read_mapping(cmd, {'flag': 1, 'mode': True}) == (True, 'LOUD')
-    assert read_mapping(cmd, {'flag': 'off', 'mode': False}) == (False, 'quiet')
-    try:
-        read_mapping(cmd, {'flag': 'maybe'})
-        assert False, 'expected AppealDataError'
-    except AppealDataError as e:
-        assert 'boolean' in str(e) and 'flag' in str(e), e
+    assert read_mapping(cmd, {'flag': True, 'mode': True}) == (True, 'LOUD')
+    assert read_mapping(cmd, {'flag': False, 'mode': False}) == (False, 'quiet')
+    for bad in (1, 'off', 'maybe'):
+        try:
+            read_mapping(cmd, {'flag': bad})
+            assert False, 'expected AppealDataError'
+        except AppealDataError as e:
+            assert str(e) == f"expected True or False, not {bad!r} (at flag)", e
 
 
 def test_read_option_kinds():
@@ -6269,7 +6270,7 @@ def test_config_tree():
     app.strict = True
     # a command word wins a collision with an option; @app.option(config=)
     # gives the option its own key
-    tree = Appeal(name='c', config={'status': {'color': True}, 'status_flag': 'on',
+    tree = Appeal(name='c', config={'status': {'color': True}, 'status_flag': True,
                                     'extra_key': 'E'})
     @tree.global_command()
     @tree.option('status', '--status', config='status_flag')
@@ -7239,8 +7240,24 @@ def test_the_boolean_language():
         except UsageError as e:
             assert needle in str(e), (argv, str(e))
     # the readers and the schema agree
-    assert read_mapping(need, {'force': 'off'}) is False
-    assert read_mapping(pos, {'x': 'YES'}) is True
+    # a mapping takes a bool constant only; a text row speaks the language
+    from appeal import read_iterable, read_csv
+    assert read_mapping(need, {'force': False}) is False
+    assert read_mapping(pos, {'x': True}) is True
+    for source in ({'force': 'off'}, {'force': 1}):
+        try:
+            read_mapping(need, source)
+            assert False, source
+        except AppealDataError as e:
+            assert 'expected True or False' in str(e), e
+    assert read_iterable(pos, [['yes'], ['0'], ['Off']]) == [True, False, False]
+    assert read_csv(pos, iter([['x'], ['no'], ['ON']])) == [False, True]
+    assert read_csv(pos, iter([['x'], ['no']]), first_row_map={'x': 'x'}) == [False]
+    try:
+        read_iterable(pos, [['goforit']])
+        assert False
+    except AppealDataError as e:
+        assert "not a valid boolean" in str(e), e
     from appeal.schema import mcp_input_schema
     assert mcp_input_schema(app.plan_for('need'))['properties']['force'] == {'type': 'boolean'}
     assert mcp_input_schema(app.plan_for('pos'))['properties']['x'] == {'type': 'boolean'}

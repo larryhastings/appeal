@@ -3597,13 +3597,20 @@ def test_read_mapping():
         assert "'host'" in str(e) and 's' in str(e)
 
     # v2 fixes: bools parse strictly (v1 crashed on flags entirely)
-    assert read_mapping(config, {'name': 'n', 'debug': 'true'})[3] is True
-    assert read_mapping(config, {'name': 'n', 'debug': 'off'})[3] is False
+    # a boolean from a mapping is a bool CONSTANT, never a spelling
+    # (Larry, 2026-09-11; the boolean language is for text rows)
+    assert read_mapping(config, {'name': 'n', 'debug': True})[3] is True
+    assert read_mapping(config, {'name': 'n', 'debug': False})[3] is False
+    try:
+        read_mapping(config, {'name': 'n', 'debug': 'true'})
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert "expected True or False, not 'true'" in str(e), e
     try:
         read_mapping(config, {'name': 'n', 'debug': 'maybe'})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
-        assert 'boolean' in str(e)
+        assert "expected True or False, not 'maybe'" in str(e), e
 
     # v2: *args (v1 refused), collectors, tuples
     def lots(first, *rest: int):
@@ -3629,7 +3636,7 @@ def test_read_mapping_dataclass():
         editor: str = ''
         threads: int = 4
         debug: bool = False
-    got = read_mapping(ConfigFile, {'editor': 'vi', 'threads': '8', 'debug': 'yes'})
+    got = read_mapping(ConfigFile, {'editor': 'vi', 'threads': '8', 'debug': True})
     assert got == ConfigFile('vi', 8, True), got
     assert read_mapping(ConfigFile, {}) == ConfigFile()
 
@@ -4516,7 +4523,7 @@ def test_config_layering():
                 self.include = include
                 self.define = define
 
-    layer = {'verbose': 'yes', 'jobs': '4', 'include': ['a', 'b']}
+    layer = {'verbose': True, 'jobs': '4', 'include': ['a', 'b']}
     if GENERIC_SPELLINGS:
         layer['define'] = {'x': 1}
     # instances[0] is the help/version precommand era; the global
@@ -4577,9 +4584,9 @@ def test_config_layering():
         app2.process([]).result
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
-        assert 'boolean' in str(e), e
-    # verbose: false means absent: the default fills
-    cfg2.clear(); cfg2.update({'verbose': 'off'})
+        assert "expected True or False, not 'maybe'" in str(e), e
+    # verbose: False means absent: the default fills
+    cfg2.clear(); cfg2.update({'verbose': False})
     assert app2.process([]).result == (1, False)
 
 
@@ -5750,7 +5757,7 @@ def test_appeal_error_umbrella():
         app3.process(['work']).result
         assert False, 'expected AppealDataError'
     except _appeal.AppealDataError as e:
-        assert "can't read 'maybe'" in str(e)
+        assert "expected True or False, not 'maybe'" in str(e), e
         assert e.usage
 
 
@@ -7098,7 +7105,7 @@ def test_precommand_config_bound_dicts():
     @app.command()
     def build(t):
         return t
-    cfg.update({'jobs': '4', 'verbose': 'yes'})       # e.g. read from disk
+    cfg.update({'jobs': '4', 'verbose': True})        # e.g. read from disk
     c = app.process(['build', 'x']).instances[1][1]
     assert (c.jobs, c.verbose) == (4, True)
     c = app.process(['--jobs', '9', 'build', 'x']).instances[1][1]

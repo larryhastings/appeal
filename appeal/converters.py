@@ -257,20 +257,17 @@ def boolean(text):
     """
     The boolean language (Larry, 2026-09-11, click's): true/yes/on/1
     and false/no/off/0, any case; nothing else--never truthiness,
-    under which bool('false') is True.  Every boolean read from text
+    under which bool('false') is True.  Every boolean read from TEXT
     goes through here: a `bool` operand, a required boolean option's
-    oparg, `--flag=VALUE`, a boolean Literal/validate, a config value.
+    oparg, `--flag=VALUE`, a boolean Literal/validate, a row of
+    read_iterable/read_csv.  (A mapping--config, read_mapping--holds a
+    boolean as a bool constant instead, and nothing else.)
     """
-    if isinstance(text, bool):          # already a boolean (a config value)
-        return text
-    if isinstance(text, int) and text in (0, 1):
-        return bool(text)
-    if isinstance(text, str):
-        lowered = text.strip().lower()
-        if lowered in _TRUTHY:
-            return True
-        if lowered in _FALSY:
-            return False
+    lowered = text.strip().lower()
+    if lowered in _TRUTHY:
+        return True
+    if lowered in _FALSY:
+        return False
     raise ValueError("expected true or false (yes/no, on/off, 1/0)")
 
 
