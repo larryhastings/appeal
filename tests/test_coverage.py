@@ -1034,6 +1034,25 @@ def test_config_vet_refusals():
     assert app2.process([]).result == ((1, 2), 3)
 
 
+def test_required_shared_forward_checked_in_its_own_era():
+    # Astra D03's open question, ruled (Larry, 2026-09-11): a required
+    # option is owed at the end of ITS era, shared forward or not--a
+    # later occurrence in the line doesn't rescue the head
+    app = Appeal(name='prog', default_mappings=None, stylesheet=False)
+    @app.precommand(share=True)
+    def head(*, token):
+        return token
+    @app.command()
+    def build():
+        return 'built'
+    assert app.process(['--token', 'abc', 'build']).result == 'built'
+    try:
+        app.process(['build', '--token', 'abc'])
+        assert False
+    except UsageError as e:
+        assert "missing option '--token'" in str(e), e
+
+
 def test_load_without_pathlib():
     # the pathlib leaves are recognized by identity via sys.modules;
     # a process that never imported pathlib has none to recognize
