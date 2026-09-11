@@ -463,15 +463,19 @@ Nothing is turned back into command-line text.  An owner behind a
 `presentation.py` is imported only when help, usage, or an error
 renders.  It has three parts.
 
-**The docstring dialect.**  `scan_docstring` is a hand-written line
-scanner, no Markdown parser.  A docstring is Markdown; the first
-paragraph is the summary.  Exactly the line `# Arguments`, `# Options`,
-or `# Commands`, one octothorpe, one space, that case, at the left
-margin, outside a code fence, opens a special section that must hold
-one definition list: a parameter name on a line, `: description`
-under it.  Any other spelling is prose.  The scanner tracks fences so a
-`# Options` inside a code block is code, and uses big's content-column
-rule so a nested definition list inside a description keeps its colon.
+**The docstring dialect.**  `scan_docstring` parses the docstring once
+with big and walks the tree (Larry, 2026-09-11: one recognizer of
+Markdown, big's--the hand-written line scanner, definition-list parser
+and code-shielding regexes are gone).  The first `Paragraph` is the
+summary.  A `Heading` whose text is exactly one plain word from the
+menu (`Options`, `Arguments`, `Commands`, `Subcommands`) opens a
+special section, running to the next heading; its content must be
+exactly one `DefinitionList` node with plain-text terms.  A `# Options`
+inside a fence is a `CodeBlock`'s text, by big's parse.  Everything
+travels on as big's nodes: rows carry a definition's blocks, the page
+builder appends prose blocks to the template's parsed header, the man
+page writes blocks through big's troff writer, and the exports are
+big's gfm and commonmark writers.
 
 **The merge.**  `merge_docs(plan)` walks the Plan tree and layers every
 callable's entries: a converter documents its own parameters once, every

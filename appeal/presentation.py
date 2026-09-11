@@ -192,7 +192,6 @@ def render_markdown_help(text, width=None, stylesheet=None):
     return stylesheet.render(joined)
 
 
-import re
 import shutil
 
 from big.builtin import can_colorize
@@ -210,7 +209,7 @@ from big.text import (OverflowStrategy, _iterate_over_bytes,
 
 from . import AppealConfigurationError
 
-_re = re
+import re as _re
 
 style_delimiters = '⦃⦙⦄'
 
