@@ -247,13 +247,13 @@ def decorate_argument(name, entry=None):
 
 
 appeal_markdown_defaults = {
-    'heading1': ('T',
-        '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄\n'
-        '⦃strip⦙T⦄\n'
-        '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
-    'heading2': ('T',
-        '⦃strip⦙T⦄\n'
-        '⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
+    'heading1': ('T', '⦃strip⦙T⦄'),
+    'heading2': ('T', '⦃strip⦙T⦄'),
+    # the rule hooks: H1 over-and-under '=', H2/H3 under '-' (big's
+    # markdown_defaults already gives heading1_rule='=' and
+    # heading2_rule='-'; add the H1 above-rule and the H3 under-rule)
+    'heading1_rule_next': ('=',),
+    'heading3_rule':      ('-',),
     'rule': ('T', '⦃fill⦙T⦙⦃line⦄⦄'),
     'heading_note':      ('T', '⦃blue⦙T⦄'),
     'heading_tip':       ('T', '⦃green⦙T⦄'),
@@ -266,15 +266,9 @@ appeal_markdown_defaults = {
 uncolored_theme = {
     **appeal_markdown_defaults,
     'heading_color': ('T', 'T'),
-    'heading1':   ('T',
-        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄\n'
-        '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
-        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading1_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄'),
-    'heading2':   ('T',
-        '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
-        '⦃heading_color⦙⦃clip⦙⦃line⦄⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄⦄'),
-    'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄\n'
-                       '⦃heading_color⦙⦃fill⦙⦃heading2_rule⦄⦙⦃strip⦙T⦄⦄⦄'),
+    'heading1':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
+    'heading2':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
+    'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
     'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
     'heading5':   ('T', '⦃heading_color⦙T⦄'),
     'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
