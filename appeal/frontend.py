@@ -518,9 +518,14 @@ class OptionRule:
             return finish(variety(strings, name, converters, default,
                                   fold_minimum))
 
-        if (annotation is bool) or (
+        if (annotation is bool
+                and grammar_default is not inspect.Parameter.empty) or (
                 annotation is inspect.Parameter.empty
                 and isinstance(grammar_default, bool)):
+            # (a bool with NO default is a REQUIRED option, and a required
+            # boolean can't be a flag--presence says nothing; it takes an
+            # oparg in the boolean language: --flag yes.  Larry, 2026-09-11.
+            # It falls through to the Value path below.)
             # presence stores `not default` (v1, restored 2026-07-18--
             # Larry's break #1: v2's first cut refused any default but
             # False, wrongly assuming a flag must store True.  v1's
@@ -1744,7 +1749,7 @@ class Plan:
             raise AppealConfigurationError(
                 f"parameter {parameter.name!r}: annotation {annotation!r} isn't callable")
         if _is_leaf(annotation):
-            return Terminal(annotation)
+            return Terminal(_leaf_converter(annotation))
         # a real converter: introspect it.  uninspectable callables
         # (some builtins, C functions) are treated as terminals.
         try:
@@ -1761,7 +1766,7 @@ class Plan:
 
 from . import (
     AppealConfigurationError, Option, accumulator, is_multioption,
-    is_option, mapping, verbatim,
+    is_option, mapping, verbatim, boolean,
     )
 
 
@@ -1776,6 +1781,15 @@ _blessed_leaves = {str, int, float, bool, complex, verbatim}
 
 _PATHLIB_LEAVES = ('PurePath', 'PurePosixPath', 'PureWindowsPath',
                    'Path', 'PosixPath', 'WindowsPath')
+
+
+def _leaf_converter(annotation):
+    """
+    The callable a leaf converts through: itself, except `bool`, whose
+    constructor is truthiness--a boolean operand reads the boolean
+    language instead (Larry, 2026-09-11).
+    """
+    return boolean if annotation is bool else annotation
 
 
 def _is_leaf(annotation):
@@ -1950,7 +1964,7 @@ def _leaf_callable(annotation, context):
         raise AppealConfigurationError(
             f"{context}: {annotation!r} isn't callable")
     if _is_leaf(annotation):
-        return annotation
+        return _leaf_converter(annotation)
     try:
         signature = inspect.signature(annotation)
     except (ValueError, TypeError):

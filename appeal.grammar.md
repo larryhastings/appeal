@@ -615,9 +615,13 @@ unrecognized keys raise by name, judged against the whole tree
 ignored extras, which survives as strict=False); missing required
 keys and bad values are `AppealDataError`s carrying the path
 (`at s.port`).  Booleans
-parse strictly: real bools, `true/false/yes/no/on/off/1/0`--never
-truthiness (`'false'` must not mean True; v1 crashed on flags
-outright).  `*args` reads a sequence (v1 refused); `list[T]`,
+parse strictly: real bools, and the boolean language--`appeal.boolean`:
+`true/yes/on/1`, `false/no/off/0`, any case (Larry, 2026-09-11, click's),
+nothing else--never truthiness (`'false'` must not mean True; v1
+crashed on flags outright).  The same language reads a `bool`
+operand, `--flag=VALUE`, a boolean `Literal`/`validate`, and the oparg
+of a required boolean option--a keyword-only `bool` with no default,
+which can't be a flag (presence says nothing) and so takes one.  `*args` reads a sequence (v1 refused); `list[T]`,
 `dict[K, V]`, tuple slots, and multi-operand converters read the
 obvious shapes.  `Option`/`MultiOption` classes read naturally: arity-1
 occurrences are scalars, arity-k are k-sequences, arity-0 reads a

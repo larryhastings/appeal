@@ -182,7 +182,7 @@ AppealBaseException = AppealError
 from .converters import (
     Option, MultiOption, is_option, is_multioption,
     split, validate, validate_range, counter, file, optional,
-    accumulator, mapping, verbatim,
+    accumulator, mapping, verbatim, boolean,
     )
 
 
@@ -662,12 +662,6 @@ def _config_vet(plan, table_words, config, command_plan_for,
         raise AppealDataError(
             f"config: {key!r} isn't an option here")
     return vetted
-
-
-def _read_bool(value, path):
-    "load's strict boolean reader, for the scan (no user code runs)."
-    from .load import _read_bool
-    return _read_bool(value, path)
 
 
 def _config_apply(conv, table, plan, config, plan_for, strict=True):
@@ -2995,16 +2989,14 @@ class Appeal:
                 # config KEY vetting is structural -- fire its refusals
                 # in the scan (the value merge is at execute).  What it
                 # resolved feeds the required check: the RULES the mapping
-                # supplies an occurrence of (a false flag supplies none)--
-                # never the raw key names (Astra D03, 2026-09-10)
+                # supplies--never the raw key names (Astra D03, 2026-09-10).
+                # (A required option is never a flag--a required bool takes
+                # an oparg--so a false flag's absence can't be in question.)
                 owner = self if era.kind == 'head' else self._children[era.word]
                 vetted = _config_vet(step.plan, frozenset(owner._table()),
                                      step.config[0], owner.plan_for,
                                      step.config[1])
-                supplied = frozenset(
-                    id(rule) for key, rule in vetted.items()
-                    if not (rule.is_flag and not _read_bool(step.config[0][key],
-                                                            key)))
+                supplied = frozenset(id(rule) for rule in vetted.values())
             proc.check_required(supplied)
         except AppealDataError as e:
             if era.kind == 'head':

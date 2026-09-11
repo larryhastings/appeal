@@ -803,25 +803,28 @@ class SmokeTests(AppealTestsBase):
             )
 
 
+    # 0.6.4 read a bool operand by truthiness ('x' and '0' True, ''
+    # False); 1.0 reads the boolean language--true/yes/on/1,
+    # false/no/off/0--and nothing else (Larry, 2026-09-11)
     def test_boolpos_1(self):
         command(boolpos)
-        self.assert_process(
+        self.assert_process_raises(
             'boolpos x',
-            (boolpos, True),
+            appeal.AppealUsageError,
             )
 
     def test_boolpos_2(self):
         command(boolpos)
         self.assert_process(
             'boolpos 0',
-            (boolpos, True),
+            (boolpos, False),
             )
 
     def test_boolpos_3(self):
         command(boolpos)
         self.assert_process(
-            'boolpos ""',
-            (boolpos, False),
+            'boolpos Yes',
+            (boolpos, True),
             )
 
 

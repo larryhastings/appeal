@@ -474,7 +474,8 @@ def test_option_errors_name_the_typed_spelling():
     def flag(name, *, verbose: bool = False):
         return (name, verbose)
     assert run_both(flag, ['x', '--verbose=maybe']) == (
-        'usage', "option '--verbose' expected 'true' or 'false'")
+        'usage', "option '--verbose': 'maybe' isn't a boolean "
+                 "(expected true or false (yes/no, on/off, 1/0))")
     # ('-v=maybe' no longer reaches the bool converter: getopt-pure,
     # '-v' is a flag and '=maybe' parses as more short options.)
     def value(*, color: str = None):
@@ -2378,7 +2379,7 @@ PARITY_CASES = [
     (serve, ['localhost', '--config', '-'], ('ok', ('localhost', 8080, False, 1, '-'))),
     (serve, ['--bogus', 'localhost'],       None),
     (serve, ['localhost', '--retries'],     None),
-    (serve, ['localhost', '--verbose=yes'], None),
+    (serve, ['localhost', '--verbose=yes'], ('ok', ('localhost', 8080, True, 1, ''))),
     (cp,    ['a', 'b', 'dest'],             ('ok', (('a', 'b'), 'dest'))),
     (cp,    ['dest'],                       ('ok', ((), 'dest'))),
     (cp,    [],                             None),
@@ -5060,10 +5061,14 @@ def test_flag_explicit_boolean():
     assert got[0] == 'usage' and "'-='" in got[1], got
     assert run_both(f, ['-v']) == ('ok', True)
     assert run_both(f, []) == ('ok', False)
-    # only those two spellings, loudly
-    for bad in ('maybe', 'True', '1', 'yes'):
+    # the boolean language (Larry, 2026-09-11: click's), any case;
+    # anything else, loudly
+    for good, value in (('True', True), ('1', True), ('yes', True),
+                        ('ON', True), ('no', False), ('Off', False), ('0', False)):
+        assert run_both(f, [f'--verbose={good}']) == ('ok', value), good
+    for bad in ('maybe', 'si', 'naturally'):
         got = run_both(f, [f'--verbose={bad}'])
-        assert got[0] == 'usage' and "'true' or" in got[1], got
+        assert got[0] == 'usage' and "isn't a boolean" in got[1], got
     # explicit spellings are absolute (set); bare presence
     # idempotently stores not-default; last spoken wins (Larry's
     # ruling, 2026-07-18)

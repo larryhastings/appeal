@@ -2908,8 +2908,9 @@ def test_astra_r09_conjured_options_are_ordinary_options():
         _probe(command).process(['--flag=nonsense'])
         assert False, 'expected AppealUsageError'
     except appeal.AppealUsageError as e:
-        assert "expected 'true' or 'false'" in str(e), e
+        assert "'nonsense' isn't a boolean" in str(e), e
     assert _probe(command).process(['--flag=true']).result == ('', True)
+    assert _probe(command).process(['--flag=YES']).result == ('', True)
     def mixin(*, verbose: appeal.counter() = 0):
         return verbose
     def counted(m: mixin = None):
@@ -5615,7 +5616,7 @@ def test_per_command_help_era():
         'usage: tool db [-h|--help] [-u|--url <URL>] <COMMAND>'
     assert page(tool, ['bare', '-h']) == 'usage: tool bare [-h|--help]'
     assert refused(tool, ['build', '--help=x']) == \
-        "option '--help' expected 'true' or 'false'"      # a flag's spelling
+        "option '--help': 'x' isn't a boolean (expected true or false (yes/no, on/off, 1/0))"
     # a structural problem BEFORE the help era wins: the parcel stopped
     assert refused(tool, ['bulid', '-h']) == \
         "unknown command 'bulid' (did you mean 'build'?)"
@@ -7006,15 +7007,12 @@ def test_config_locates_before_converting():
     @app.precommand()
     def main6(g: group3): return g
     assert app.process(['label']).result == ('label', 'secret')
-    # D03: a false flag supplies nothing: required is reported
+    # a required bool is a VALUE option (Larry, 2026-09-11), so config
+    # False is a value, not an absence: it satisfies the option
     app = app_for({'flag': False})
     @app.precommand()
     def main7(*, flag: bool): return flag
-    try:
-        app.process([])
-        assert False
-    except UsageError as e:
-        assert 'missing option' in str(e), e
+    assert app.process([]).result is False
     # an unbuilt owner two levels down: keys merge into one nested
     # mapping; a bad value in it fails with config: provenance
     def inner(*, a: int = 0, b: int = 0): return (a, b)
@@ -7166,7 +7164,7 @@ def test_boolean_literal_reads_its_own_spellings():
     assert app.process(['go', 'false']).result is False
     assert app.process(['either', 'True']).result is True
     assert app.process(['either', 'FALSE']).result is False
-    for argv, needle in ((['either', 'garbage'], "expected 'true' or 'false'"),
+    for argv, needle in ((['either', 'garbage'], "expected true or false (yes/no, on/off, 1/0)"),
                          (['go', 'True'], "must be one of False")):
         try:
             app.process(argv)
@@ -7196,3 +7194,53 @@ def test_code_fences_close_by_commonmark_rules():
     # strikethrough outside the fence still strips
     source = '```python\n~~x~~\n```\n~~gone~~\n'
     assert to_commonmark(source) == '```python\n~~x~~\n```\ngone\n'
+
+
+def test_the_boolean_language():
+    # Larry, 2026-09-11: one boolean language, click's--true/yes/on/1,
+    # false/no/off/0, any case, nothing else--everywhere Appeal reads
+    # a boolean from text: a bool operand (truthiness made 'false'
+    # True), --flag=VALUE (only 'true'/'false' before), a boolean
+    # choice, config.  And a required boolean option--a keyword-only
+    # bool with no default--can't be a flag: it takes an oparg.
+    from big.stylesheet import strip_styles
+    from appeal import boolean, read_mapping
+    for text, value in (('true', True), ('Yes', True), ('ON', True), ('1', True),
+                        ('false', False), ('No', False), ('off', False), ('0', False)):
+        assert boolean(text) is value, text
+    try:
+        boolean('goforit')
+        assert False
+    except ValueError as e:
+        assert str(e) == "expected true or false (yes/no, on/off, 1/0)"
+    app = Appeal(name='t', stylesheet=False)
+    @app.command()
+    def pos(x: bool): return x
+    @app.command()
+    def flag(*, quiet=False): return quiet
+    @app.command()
+    def need(*, force: bool): return force
+    got = lambda argv: app.process(argv).result
+    assert got(['pos', 'false']) is False and got(['pos', 'On']) is True
+    assert got(['flag', '--quiet=off']) is False and got(['flag', '--quiet=1']) is True
+    assert got(['flag', '--quiet']) is True
+    # the required boolean: an option with an oparg, unbracketed in usage
+    assert strip_styles(app.plan_for('need').usage()) == 't need -f|--force <FORCE>'
+    assert got(['need', '--force', 'yes']) is True
+    assert got(['need', '-f', 'no']) is False
+    assert got(['need', '--force=0']) is False
+    for argv, needle in ((['pos', 'yeahmaniwannadoit'], "invalid value for 'x'"),
+                         (['flag', '--quiet=goforit'], "'goforit' isn't a boolean"),
+                         (['need', '--force', 'maybe'], "invalid value for 'force'"),
+                         (['need'], "missing option '--force'")):
+        try:
+            got(argv)
+            assert False, argv
+        except UsageError as e:
+            assert needle in str(e), (argv, str(e))
+    # the readers and the schema agree
+    assert read_mapping(need, {'force': 'off'}) is False
+    assert read_mapping(pos, {'x': 'YES'}) is True
+    from appeal.schema import mcp_input_schema
+    assert mcp_input_schema(app.plan_for('need'))['properties']['force'] == {'type': 'boolean'}
+    assert mcp_input_schema(app.plan_for('pos'))['properties']['x'] == {'type': 'boolean'}

@@ -204,16 +204,8 @@ def validate(*values, type=None):
         type = values[0].__class__
 
     if type is bool:
-        # a boolean choice reads its own spellings--'true'/'false', any
-        # case (what its completions offer)--never Python truthiness,
-        # under which bool('false') is True (Astra D09, 2026-09-10)
-        def type(text):
-            lowered = text.lower()
-            if lowered == 'true':
-                return True
-            if lowered == 'false':
-                return False
-            raise ValueError("expected 'true' or 'false'")
+        type = boolean          # the boolean language, never truthiness
+                                # (Astra D09, 2026-09-10)
 
     def validate_converter(value):
         value = type(value)
@@ -255,6 +247,31 @@ def validate_range(start, stop=None, *, type=None, clamp=False):
     validate_range_converter.__name__ = 'validate_range'
     validate_range_converter.recipe = True
     return validate_range_converter
+
+
+_TRUTHY = frozenset(('true', 'yes', 'on', '1'))
+_FALSY = frozenset(('false', 'no', 'off', '0'))
+
+
+def boolean(text):
+    """
+    The boolean language (Larry, 2026-09-11, click's): true/yes/on/1
+    and false/no/off/0, any case; nothing else--never truthiness,
+    under which bool('false') is True.  Every boolean read from text
+    goes through here: a `bool` operand, a required boolean option's
+    oparg, `--flag=VALUE`, a boolean Literal/validate, a config value.
+    """
+    if isinstance(text, bool):          # already a boolean (a config value)
+        return text
+    if isinstance(text, int) and text in (0, 1):
+        return bool(text)
+    if isinstance(text, str):
+        lowered = text.strip().lower()
+        if lowered in _TRUTHY:
+            return True
+        if lowered in _FALSY:
+            return False
+    raise ValueError("expected true or false (yes/no, on/off, 1/0)")
 
 
 def verbatim(text):

@@ -166,7 +166,7 @@ def describe_set(commands, global_plan=None, prog=None):
 
 
 _JSON_TYPES = {'str': 'string', 'int': 'integer', 'float': 'number',
-               'bool': 'boolean'}
+               'bool': 'boolean', 'boolean': 'boolean'}
 
 
 def _degenerate_leaf_type(group):

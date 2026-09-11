@@ -29,8 +29,6 @@ from . import (
 
 
 
-_TRUTHY = frozenset(('true', 'yes', 'on', '1'))
-_FALSY = frozenset(('false', 'no', 'off', '0'))
 
 
 def _fail(message, path):
@@ -57,16 +55,11 @@ def _read_bool(value, path):
     parse; anything else is an error, never a truthiness guess
     ('false' must not mean True).
     """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in _TRUTHY:
-            return True
-        if lowered in _FALSY:
-            return False
+    from .converters import boolean
+    try:
+        return boolean(value)
+    except ValueError:
+        pass
     _fail(f"can't read {value!r} as a boolean", path)
 
 

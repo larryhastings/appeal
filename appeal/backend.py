@@ -10,7 +10,7 @@
 
 from . import (AppealConfigurationError, ConfigurationError,
                DataError, UsageError, did_you_mean)
-from .converters import convert, Option, MultiOption, verbatim
+from .converters import convert, Option, MultiOption, verbatim, boolean
 from .frontend import Terminal, NO_DEFAULT
 
 
@@ -470,10 +470,12 @@ class LiveBinding:
         if value is None:
             owner.kwargs[self.name] = self.present
             return
-        if value not in ('true', 'false'):          # ruled: only these two
+        try:                                        # the boolean language
+            owner.kwargs[self.name] = boolean(value)    # (Larry, 2026-09-11)
+        except ValueError as e:
             raise UsageError(
-                f"option {(spelling or self.name)!r} expected 'true' or 'false'")
-        owner.kwargs[self.name] = (value == 'true')
+                f"option {(spelling or self.name)!r}: {value!r} isn't a "
+                f"boolean ({e})") from None
 
 
 class ValueBinding:

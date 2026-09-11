@@ -611,12 +611,18 @@ Some option syntax worth knowing, all demonstrated on `--color`:
   spelling it's `-c blue` or `-cblue`--the `=` form is a
   *long*-option convention only, exactly as in getopt.
 * A flag takes an explicit boolean with `=`, on the long
-  spelling only: `--ignore-case=false` and `--ignore-case=true`
-  (exactly those two spellings--this is not the place for
-  `yes`, `si`, or `naturally`).  A bare flag still means
-  `True`; the explicit form exists so the command line can turn
-  *off* what a config file turned on (see
-  [Config layering](#config-layering)).
+  spelling only: `--ignore-case=false`, `--ignore-case=true`.
+  The boolean language is click's: `true`, `yes`, `on`, `1` and
+  `false`, `no`, `off`, `0`, any case, and nothing else (this is
+  not the place for `si` or `naturally`).  A bare flag still
+  means `True`; the explicit form exists so the command line can
+  turn *off* what a config file turned on (see
+  [Config layering](#config-layering)).  The same language reads
+  every boolean Appeal gets as text: a `bool` argument, a config
+  value, a boolean choice.  A keyword-only `bool` parameter
+  *without* a default is a required option, and a required
+  boolean can't be a flag--presence would say nothing--so it
+  takes that language as its oparg: `--flag yes`.
 * Short options bundle: `-vxz` means `-v -x -z`.  A short
   option that takes one oparg ends its bundle, and binds
   either the next string (`-ic blue`) or the rest of its own
