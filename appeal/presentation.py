@@ -7,375 +7,151 @@
 # help-page assembly, usage + error rendering, themes and stylesheets.
 # Lazy -- imported only when help, usage, or an error actually renders.
 
-import re
-
 from . import ConfigurationError
 
 
-SPECIAL_SECTIONS = ('options', 'arguments', 'commands')
+##
+## The docstring dialect (proposal §8.7, as ruled in §8.7.1).
+##
+## A docstring is Markdown, parsed ONCE by big (Larry, 2026-09-11:
+## one recognizer of Markdown syntax, big's--Appeal's own line
+## scanner, definition-list parser, and code-shielding regexes are
+## gone).  Appeal owns only its dialect: a heading reading exactly
+## Options / Arguments / Commands / Subcommands opens a special
+## section, whose content must be exactly one definition list with
+## plain-text terms; everything else is the prose.  The pieces are
+## carried as big's NODES from here to the page (never written back
+## out as text and re-parsed); text comes out only through big's
+## writers (gfm, commonmark, troff).
+##
 
-# the special section openers, LITERALLY (Larry's ruling, 2026-09-07):
-# a heading of any level, ATX or setext, whose text is exactly one of
-# these (this case), outside any fence (Larry, 2026-09-10: any number
-# of octothorpes--a converter's docstring nests under a command's, so
-# its sections sit a level down).  Anything else is prose.
+SPECIAL_SECTIONS = ('options', 'arguments', 'commands')
 _SPECIAL_HEADINGS = {'Options': 'options',
                      'Arguments': 'arguments',
                      'Commands': 'commands',
                      'Subcommands': 'commands'}   # either word, any context
                                                  # (Larry, 2026-09-10)
-_ATX_RE = re.compile(r'^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$')
-_SETEXT_RE = re.compile(r'^ {0,3}(=+|-+)\s*$')
-# a code fence: three or more backticks or tildes, indented at most
-# three; closed by the same character, at least as many, and NOTHING
-# but whitespace after (CommonMark: a would-be closer with trailing
-# text is code--Astra D07, 2026-09-10)
-_FENCE_RE = re.compile(r'^ {0,3}(`{3,}|~{3,})')
-_FENCE_CLOSE_RE = re.compile(r'^ {0,3}(`{3,}|~{3,})[ \t]*$')
-# a definition marker: ':' indented at most three (big's rule), then
-# the gap that sets the content column
-_DEFMARK_RE = re.compile(r'^( {0,3}):( *)(.*)$')
-# characters that read as Markdown formatting in a term.  '_' is
-# deliberately absent: parameter names carry underscores, and
-# mid-word underscores aren't emphasis anyway.
-_TERM_FORMATTING = set('*`~[]<>')
 
 
-def _heading_at(lines, i):
-    """
-    If lines[i] starts a heading, return (text, level, consumed);
-    else None.  Both spellings (Larry: the hand-written scanner
-    must support both): ATX (`## Text`, optional trailing #s) and
-    setext (`Text` underlined with = for level 1 or - for 2).
-    """
-    line = lines[i]
-    m = _ATX_RE.match(line)
-    if m:
-        return (m.group(2).strip(), len(m.group(1)), 1)
-    if line.strip() and not line[:1].isspace() and i + 1 < len(lines):
-        u = _SETEXT_RE.match(lines[i + 1])
-        if u:
-            return (line.strip(), 1 if u.group(1)[0] == '=' else 2, 2)
+def _heading_text(heading):
+    "A heading's text if it is exactly one plain Text child, else None."
+    from big.markdown import Text
+    children = heading.children
+    if len(children) == 1 and isinstance(children[0], Text):
+        return children[0].text.strip()
     return None
 
 
-def _fence_step(line, fence):
+def markdown(blocks, format='commonmark'):
+    "Blocks written out as Markdown text (big's writer); '' for none."
+    from big.markdown import MarkdownDocument, render_document
+    if not blocks:
+        return ''
+    return render_document(MarkdownDocument(list(blocks)), format)
+
+
+def _refuse(where, heading, what):
+    label = f"{where}: {heading}" if where else heading
+    raise ConfigurationError(f"docstring section {label}: {what}")
+
+
+def _definition_entries(blocks, where, heading):
     """
-    Track code fences line by line: returns the fence state after
-    `line`--(char, length) inside a fence, None outside--given the
-    state before it.
+    The special section's content as [(term, definition blocks), ...]:
+    exactly one definition list, each term one plain Text (no
+    formatting), each entry's definitions' blocks concatenated.
+    Empty content is legal: it asks for the section, auto-filled.
     """
-    if fence is None:
-        m = _FENCE_RE.match(line)
-        return (m.group(1)[0], len(m.group(1))) if m else None
-    m = _FENCE_CLOSE_RE.match(line)
-    if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
-        return None
-    return fence
-
-
-def _indent(line):
-    return len(line) - len(line.lstrip(' '))
-
-
-def _parse_definition_list(lines, where):
-    """
-    Parse section content that must be exactly one definition
-    list: term lines at the margin, `: ` definitions beneath,
-    continuations indented to the definition's content column,
-    blank-line paragraph breaks inside a definition.  The content
-    column is big's (the parser that renders the details): the
-    ':' plus its gap sets it, and every line indented at least
-    that far belongs to the definition--including a NESTED
-    'term / : definition' pair, colon and all.  Returns
-    [(term, definition_markdown), ...]; anything that isn't a
-    definition list refuses by name.
-    """
-    def refuse(what):
-        raise ConfigurationError(f"docstring section {where}: {what}")
-
+    from big.markdown import DefinitionList, Text
+    if not blocks:
+        return []
+    if len(blocks) != 1 or not isinstance(blocks[0], DefinitionList):
+        found = ', '.join(type(b).__name__ for b in blocks
+                          if not isinstance(b, DefinitionList))
+        _refuse(where, heading,
+                f"must contain only a definition list (found {found})")
     entries = []
-    i, n = 0, len(lines)
-    while i < n:
-        if not lines[i].strip():
-            i += 1
-            continue
-        line = lines[i]
-        if _DEFMARK_RE.match(line):
-            refuse(f"definition with no term: {line.strip()!r}")
-        if line[:1].isspace():
-            refuse(f"stray indented text {line.strip()!r} (the section "
-                   f"must contain only a definition list)")
-        term = line.strip()
-        bad = _TERM_FORMATTING & set(term)
-        if bad:
-            refuse(f"term {term!r} must be unformatted "
-                   f"(contains {''.join(sorted(bad))!r})")
-        i += 1
-        j = i
-        while j < n and not lines[j].strip():
-            j += 1
-        if j >= n or not _DEFMARK_RE.match(lines[j]):
-            refuse(f"term {term!r} has no ': definition'")
-        i = j
-        parts = []
-        while i < n and _DEFMARK_RE.match(lines[i]):
-            m = _DEFMARK_RE.match(lines[i])
-            margin, gap, first = m.groups()
-            if len(gap) > 4:                # big: a wide gap is one
-                first = gap[1:] + first     # space plus indented text
-                gap = ' '
-            column = len(margin) + 1 + len(gap)
-            block = [first]
-            i += 1
-            cont = []
-            while i < n:
-                s = lines[i]
-                if not s.strip():
-                    j = i
-                    while j < n and not lines[j].strip():
-                        j += 1
-                    if j < n and _indent(lines[j]) >= column:
-                        cont.append('')
-                        i = j
-                        continue
-                    break
-                if _indent(s) >= column:
-                    cont.append(s)
-                    i += 1
-                    continue
-                break
-            if cont:
-                pad = min(len(c) - len(c.lstrip())
-                          for c in cont if c.strip())
-                block.extend(c[pad:] if c.strip() else '' for c in cont)
-            parts.append('\n'.join(block).rstrip())
-        entries.append((term, '\n\n'.join(parts)))
-    # an empty section is legal (Larry, 2026-09-10): it ASKS for the
-    # section, filled in from the signature
+    for entry in blocks[0].entries:
+        children = entry.term.children
+        if len(children) != 1 or not isinstance(children[0], Text):
+            _refuse(where, heading,
+                    f"term {markdown([entry.term]).strip()!r} must be "
+                    f"unformatted")
+        definition = []
+        for d in entry.definitions:
+            definition.extend(d.blocks)
+        entries.append((children[0].text.strip(), definition))
     return entries
 
 
 def scan_docstring(text, where=None):
     """
-    Appeal's textual docstring scanner (no Markdown parser
-    involved).  Returns a dict:
-      summary    the first paragraph, newlines intact
-      body       everything else EXCEPT the special sections
-                 (their headings included), stripped
+    The docstring, parsed by big and split by Appeal's dialect.
+    Returns a dict of NODES:
+      summary    the first paragraph's blocks ([] or [Paragraph])
+      body       every other block EXCEPT the special sections
+                 (their headings included), in source order
       options, arguments, commands
-                 [(term, definition_markdown), ...] or None when
-                 the section wasn't written
-    A heading of any level, ATX or setext, reading exactly
-    'Options' / 'Arguments' / 'Commands' (this case, outside any
-    code fence) opens the special section; it runs to the next
-    heading of any kind (outside a fence) or EOF.  Any other
-    spelling is prose: ignored, kept in the body.  An empty
-    section is legal: it asks for the section, auto-filled.
+                 [(term, definition blocks), ...] or None when the
+                 section wasn't written
+    A heading of any level, ATX or setext, reading exactly 'Options' /
+    'Arguments' / 'Commands' / 'Subcommands' (this case) opens the
+    special section; it runs to the next heading of any kind or the
+    end.  Anything inside a code fence is code, by big's parse.  An
+    empty section is legal: it asks for the section, auto-filled.
     `where` names the docstring's owner in error messages.
     """
+    from big.markdown import parse, Heading, Paragraph
     prefix = f"{where}: docstring " if where else "docstring "
-    lines = (text or '').split('\n')
+    blocks = parse(text or '').blocks
     sections = {name: None for name in SPECIAL_SECTIONS}
-    body_lines = []
-    fence = None
-    i, n = 0, len(lines)
+    body = []
+    i, n = 0, len(blocks)
     while i < n:
-        line = lines[i]
-        heading = _heading_at(lines, i) if fence is None else None
-        name = _SPECIAL_HEADINGS.get(heading[0]) if heading else None
-        if name is not None:
-            if sections[name] is not None:
-                raise ConfigurationError(
-                    f"{prefix}has two {line.rstrip()!r} sections")
-            i += heading[2]
-            content = []
-            while i < n and (fence is not None
-                             or _heading_at(lines, i) is None):
-                fence = _fence_step(lines[i], fence)
-                content.append(lines[i])
-                i += 1
-            sections[name] = _parse_definition_list(
-                content, (f"{where}: {line.rstrip()}" if where
-                          else line.rstrip()) + ':')
+        block = blocks[i]
+        name = (_SPECIAL_HEADINGS.get(_heading_text(block))
+                if isinstance(block, Heading) else None)
+        if name is None:
+            body.append(block)
+            i += 1
             continue
-        fence = _fence_step(line, fence)
-        body_lines.append(line)
+        heading = '#' * block.level + ' ' + _heading_text(block)
+        if sections[name] is not None:
+            raise ConfigurationError(
+                f"{prefix}has two {heading!r} sections")
         i += 1
-
-    body = '\n'.join(body_lines).strip('\n')
+        content = []
+        while i < n and not isinstance(blocks[i], Heading):
+            content.append(blocks[i])
+            i += 1
+        sections[name] = _definition_entries(content, where, heading + ':')
     summary = []
-    rest = ''
-    if body:
-        chopped = body.split('\n')
-        for k, line in enumerate(chopped):
-            if not line.strip():
-                rest = '\n'.join(chopped[k:]).strip('\n')
-                break
-            summary.append(line)
-        else:
-            rest = ''
-    result = {'summary': '\n'.join(summary), 'body': rest}
+    if body and isinstance(body[0], Paragraph):
+        summary = [body.pop(0)]
+    result = {'summary': summary, 'body': body}
     result.update(sections)
     return result
 
 
-##
-## the README-grade textual transformations
-##
-
-_STRIKETHROUGH_RE = re.compile(r'~~(?=\S)(.+?)(?<=\S)~~', re.DOTALL)
-_ALERT_RE = re.compile(
-    r'^(\s*> )\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$',
-    re.MULTILINE)
-# code, which the textual transforms must leave alone: a fenced
-# block (opened by a run of backticks or tildes, closed by a run of
-# the same character at least as long, whitespace only after it--
-# CommonMark's rule, Astra D07), or a code span (a backtick run
-# closed by a run of the same length)
-_CODE_RE = re.compile(
-    r'(?:^ {0,3}(`{3,})[^\n]*\n.*?^ {0,3}\1`*[ \t]*$)'
-    r'|(?:^ {0,3}(~{3,})[^\n]*\n.*?^ {0,3}\2~*[ \t]*$)'
-    r'|(?:(`+)(?!`).+?(?<!`)\3(?!`))',
-    re.MULTILINE | re.DOTALL)
-
-
-def _outside_code(text, transform):
-    "transform(text) applied to the stretches that aren't code."
-    out = []
-    pos = 0
-    for m in _CODE_RE.finditer(text):
-        out.append(transform(text[pos:m.start()]))
-        out.append(m.group(0))
-        pos = m.end()
-    out.append(transform(text[pos:]))
-    return ''.join(out)
-
-
-def _strip_strikethrough(text):
-    return _outside_code(text, lambda t: _STRIKETHROUGH_RE.sub(r'\1', t))
-
-
-def _alerts_to_commonmark(text):
-    def label(m):
-        return f"{m.group(1)}**{m.group(2).title()}:**"
-    return _outside_code(text, lambda t: _ALERT_RE.sub(label, t))
-
-
-def _transform_definition_lists(text, render_block):
-    """
-    Find every definition list in `text` textually (a margin term
-    line whose next non-blank line starts with ':') and replace
-    it with render_block(entries).  Lenient: anything that isn't
-    a definition list passes through untouched.
-    """
-    lines = text.split('\n')
-    out = []
-    fence = None
-    i, n = 0, len(lines)
-    while i < n:
-        line = lines[i]
-        fence = _fence_step(line, fence)
-        starts = (fence is None and line.strip() and not line[:1].isspace()
-                  and not line.lstrip().startswith(':'))
-        if starts:
-            j = i + 1
-            while j < n and not lines[j].strip():
-                j += 1
-            if j < n and lines[j].lstrip().startswith(':'):
-                # a definition-list run: consume greedily
-                block = []
-                k = i
-                while k < n:
-                    if not lines[k].strip():
-                        j2 = k
-                        while j2 < n and not lines[j2].strip():
-                            j2 += 1
-                        if j2 < n and (lines[j2][:1].isspace()
-                                       or lines[j2].lstrip()
-                                          .startswith(':')
-                                       or _run_has_term(lines, j2, n)):
-                            block.extend(lines[k:j2])
-                            k = j2
-                            continue
-                        break
-                    block.append(lines[k])
-                    k += 1
-                try:
-                    entries = _parse_definition_list(
-                        block, '<definition list>')
-                except ConfigurationError:
-                    out.append(line)
-                    i += 1
-                    continue
-                out.append(render_block(entries))
-                i = k
-                continue
-        out.append(line)
-        i += 1
-    return '\n'.join(out)
-
-
-def _run_has_term(lines, i, n):
-    "After a blank gap: does another term/':' pair start here?"
-    line = lines[i]
-    if not line.strip() or line[:1].isspace() \
-            or line.lstrip().startswith(':'):
-        return False
-    j = i + 1
-    while j < n and not lines[j].strip():
-        j += 1
-    return j < n and lines[j].lstrip().startswith(':')
-
-
-def _dl_html(entries):
-    """
-    A definition list as inline HTML <dl> (GitHub / PyPI).  The
-    blank lines around each term and definition matter: they end
-    the HTML block, so GitHub renders the Markdown INSIDE the
-    <dt>/<dd> (both may carry formatting, per Larry).
-    """
-    parts = ['<dl>']
-    for term, definition in entries:
-        parts.append(f'<dt>\n\n{term}\n\n</dt>')
-        parts.append(f'<dd>\n\n{definition}\n\n</dd>')
-    parts.append('</dl>')
-    return '\n'.join(parts)
-
-
-def _dl_blockquote(entries):
-    """
-    A definition list as bold term + blockquoted definition
-    (pure CommonMark).
-    """
-    parts = []
-    for term, definition in entries:
-        quoted = '\n'.join(('> ' + line).rstrip()
-                           for line in definition.split('\n'))
-        parts.append(f'**{term}**\n\n{quoted}')
-    return '\n\n'.join(parts)
-
-
 def to_github(text):
     """
-    A docstring's Markdown re-spelled for GitHub flavor:
-    definition lists become inline-HTML <dl>; everything else
-    GitHub renders natively, so strikethrough and alerts pass
-    through untouched (Larry's ruling, 2026-08-05: target
-    GitHub flavor, let PyPI catch up in its own time).
+    A docstring's Markdown re-spelled for GitHub flavor: big's gfm
+    writer (definition lists become inline-HTML <dl>; strikethrough
+    and alerts GitHub renders natively--Larry's ruling, 2026-08-05).
     """
-    return _transform_definition_lists(text, _dl_html)
+    from big.markdown import parse, render_document
+    return render_document(parse(text), 'gfm')
 
 
 def to_commonmark(text):
     """
-    A docstring's Markdown re-spelled for plain CommonMark:
-    definition lists become bold term + blockquote, strikethrough
-    is stripped, alerts become bold-labelled blockquotes.
+    A docstring's Markdown re-spelled for plain CommonMark: big's
+    commonmark writer (definition lists become bold term +
+    blockquote, strikethrough is dropped, alerts become bold-labelled
+    blockquotes).
     """
-    text = _transform_definition_lists(text, _dl_blockquote)
-    text = _strip_strikethrough(text)
-    return _alerts_to_commonmark(text)
+    from big.markdown import parse, render_document
+    return render_document(parse(text), 'commonmark')
 
 
 ##
@@ -790,22 +566,29 @@ def parse_help_template(template):
     return sections
 
 
+def _template_headings(header):
+    "The (text, level) of every heading in a template section header."
+    from big.markdown import parse, Heading
+    return [(_heading_text(b), b.level) for b in parse(header).blocks
+            if isinstance(b, Heading) and _heading_text(b) is not None]
+
+
 def _reword_heading(header, old, new):
-    "The template header with a heading reading exactly `old` reworded."
-    lines = header.split('\n')
-    i = 0
-    while i < len(lines):
-        heading = _heading_at(lines, i)
-        if heading is not None and heading[0] == old:
-            if heading[2] == 1:                 # ATX: the text after the #s
-                lines[i] = lines[i].replace(old, new, 1)
-            else:                               # setext: text, then its rule
-                lines[i] = new
-                lines[i + 1] = lines[i + 1][0] * len(new)
-            i += heading[2]
-            continue
-        i += 1
-    return '\n'.join(lines)
+    """
+    The template header with a heading reading exactly `old` reworded:
+    parsed by big, the heading's text replaced, written back as gfm
+    (whitespace normalized; the page renders it through big anyway).
+    """
+    from big.markdown import parse, render_document, Heading, Text
+    document = parse(header)
+    hit = False
+    for block in document.blocks:
+        if isinstance(block, Heading) and _heading_text(block) == old:
+            block.children[:] = [Text(new)]
+            hit = True
+    if not hit:
+        return header
+    return '\n' + render_document(document, 'gfm') + '\n'
 
 
 def rows_document(rows, header, role=None, titles=None, level=2):
@@ -816,7 +599,7 @@ def rows_document(rows, header, role=None, titles=None, level=2):
     re-deriving the hierarchy from indentation).  Each row's
     display--a role-tagged span--is the entry's term, carried as
     StyledText so big styles it verbatim; its doc lines are
-    Markdown, parsed into the definition's blocks.  A row's nested
+    NODES already (the merge carries big's blocks).  A row's nested
     sections (Larry, 2026-09-10: a converter's own Arguments and
     Options, under the option that declares it) follow its prose
     inside the definition, each a heading one level deeper than
@@ -834,8 +617,7 @@ def rows_document(rows, header, role=None, titles=None, level=2):
         for display, lines, nested in rows:
             if role is not None:
                 display = style(role, escape_styles(display))
-            text = '\n'.join(lines)
-            blocks = parse(text).blocks if text.strip() else []
+            blocks = list(lines)                # big's nodes, as merged
             for kind, subrows in nested:
                 title = titles.get(kind, kind.capitalize())
                 blocks.extend(parse('#' * (level + 1) + ' ' + title).blocks)
@@ -903,7 +685,6 @@ def help_page_pieces(usage_units, corpus, templates, suppress=(),
     from big.markdown import (layout_document, parse,
                               split_styles_document, style_document)
     pieces = []
-    md = []            # pending markdown, flushed per role change
 
     def bake(document, section=None):
         layout = layout_document(
@@ -911,12 +692,6 @@ def help_page_pieces(usage_units, corpus, templates, suppress=(),
         if section == 'summary':
             layout = role_layout(layout)
         pieces.append(('markdown', layout))
-
-    def flush(section=None):
-        text = ''.join(md)
-        md.clear()
-        if text.strip():
-            bake(parse(text), section)
 
     sections = parse_help_template(templates)
     if subcommands:
@@ -930,40 +705,32 @@ def help_page_pieces(usage_units, corpus, templates, suppress=(),
     for name, header, indent in sections:
         if name in ('arguments', 'options', 'commands'):
             # the template's own heading dresses the nested ones too
-            lines = header.split('\n')
-            for i in range(len(lines)):
-                heading = _heading_at(lines, i)
-                if heading is not None:
-                    titles[name], levels[name] = heading[0], heading[1]
+            for text, level in _template_headings(header):
+                titles[name], levels[name] = text, level
     for name, header, indent in sections:
         if name in suppress:
             continue
         if name == 'usage':
-            flush()
             nl = header.rfind('\n')
             prefix = header[nl + 1:] if nl >= 0 else header
             pieces.append(('usage', prefix, tuple(usage_units)))
             continue
         if name in ('summary', 'doc'):
-            content = '\n'.join(corpus[name if name == 'summary'
-                                        else 'documentation'])
-            if not content.strip():
+            blocks = corpus[name if name == 'summary' else 'documentation']
+            if not blocks:
                 continue
-            if name == 'doc':
-                md.append(header + content)
-                continue
-            flush()
-            md.append(header + content)
-            flush(name)
+            # the template's header is Markdown text; the prose is big's
+            # nodes--append them to the parsed header, never re-parse
+            document = parse(header)
+            document.blocks.extend(blocks)
+            bake(document, name)
             continue
         if not corpus[name]:
             continue
         # a table section is built as nodes, on its own
-        flush()
         bake(rows_document(corpus[name], header,
                            'command' if name == 'commands' else None,
                            titles, levels.get(name, 2)))
-    flush()
     return tuple(pieces)
 
 
@@ -985,25 +752,24 @@ from . import AppealConfigurationError
 
 def parse_docstring(doc, where):
     """
-    Parses one docstring into corpus pieces.  Returns a dict:
+    Parses one docstring into corpus pieces, as big's NODES:
 
-        summary        the first paragraph of the prose, as lines
-        documentation  the rest of the prose, as lines--the
-                       coalesced Markdown, in source order, with
+        summary        the first paragraph of the prose: [] or [Paragraph]
+        documentation  the rest of the prose, in source order, with
                        the special sections slurped out
-        arguments      dict of name -> documentation lines
-        options        dict of name -> documentation lines
-        commands       dict of name -> documentation lines
+        arguments      dict of name -> documentation blocks
+        options        dict of name -> documentation blocks
+        commands       dict of name -> documentation blocks
+        requested      the sections the docstring wrote (empty or not)
 
     THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05;
     Markdown ONLY--the 'Arguments:' + 'name: desc' grammar died
-    unshipped).  The first paragraph is the summary; ANY heading
-    (ATX or setext, any level, case-insensitive) named Options,
-    Arguments, or Commands opens a special section, which must
-    contain exactly one definition list with unformatted terms;
-    everything else is the doc, other headings included.  The
-    user's heading decoration is input spelling only--the help
-    template dresses the page.
+    unshipped), parsed by big.  The first paragraph is the summary; a
+    heading of any level reading exactly Options, Arguments, Commands
+    or Subcommands opens a special section, which must contain exactly
+    one definition list with plain-text terms; everything else is the
+    doc, other headings included.  The user's heading decoration is
+    input spelling only--the help template dresses the page.
 
     'where' names the docstring's owner, for error messages.
     Grammar violations raise AppealConfigurationError; validation
@@ -1014,19 +780,17 @@ def parse_docstring(doc, where):
 
     def entry_dict(pairs, section):
         entries = {}
-        for name, text in (pairs or ()):
+        for name, blocks in (pairs or ()):
             if name in entries:
                 raise AppealConfigurationError(
                     f"{where}: in the {section} section: "
                     f"{name!r} is documented twice")
-            entries[name] = text.split('\n') if text else []
+            entries[name] = blocks
         return entries
 
     return {
-        'summary': (scanned['summary'].split('\n')
-                    if scanned['summary'] else []),
-        'documentation': (scanned['body'].split('\n')
-                          if scanned['body'] else []),
+        'summary': scanned['summary'],
+        'documentation': scanned['body'],
         'arguments': entry_dict(scanned['arguments'], 'Arguments'),
         'options': entry_dict(scanned['options'], 'Options'),
         'commands': entry_dict(scanned['commands'], 'Commands'),
@@ -1078,7 +842,8 @@ def merge_docs(plan, command_names=None):
         commands       [(word, lines, ()), ...] if command_names,
                        else []
 
-    A row's display is a role-tagged span; its lines are Markdown;
+    A row's display is a role-tagged span; its `lines` are big's
+    block NODES (the name is historical: they were Markdown lines);
     nested is a tuple of ('arguments'|'options', rows) blocks the
     row carries, in that order, each rows a list of the same shape.
 
@@ -1303,8 +1068,7 @@ def merge_docs(plan, command_names=None):
                 summary, documentation = prose[rowkey]
                 if lines is None:
                     # the converter's whole docstring is the row's text
-                    lines = summary + ([''] + documentation
-                                       if documentation else [])
+                    lines = summary + documentation
                 sub_arguments, sub_options = assemble(sub)
                 wants = requested[rowkey]
                 nested = tuple(
@@ -1375,9 +1139,11 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True,
         # precommand has no tables of its own to show
         corpus['arguments'] = []
         corpus['options'] = []
+    from big.markdown import parse
     fallback = dict(entries)
     corpus['commands'] = [
-        (word, lines or ([fallback[word]] if fallback.get(word) else []), ())
+        (word, lines or (parse(fallback[word]).blocks if fallback.get(word)
+                         else []), ())
         for word, lines, nested in corpus['commands']]
     return corpus
 
@@ -1392,12 +1158,7 @@ def summary(callable):
     doc = _inspect.getdoc(callable)
     if not doc:
         return ''
-    lines = []
-    for line in doc.splitlines():
-        if not line.strip():
-            break
-        lines.append(line.strip())
-    return ' '.join(lines)
+    return ' '.join(markdown(scan_docstring(doc)['summary']).split())
 
 
 def _operand_markup(plan, decoration=None):
@@ -1470,16 +1231,13 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
     out = []
     line = out.append
 
-    def paragraphs(lines):
-        first = True
-        for text in '\n'.join(lines).split('\n\n'):
-            if not text.strip():
-                continue
-            if not first:
-                line('.PP')
-            first = False
-            for row in text.split('\n'):
-                line(esc(row))
+    def paragraphs(blocks):
+        # the row's blocks through big's troff writer (a leading .PP
+        # would double .TP's own paragraph: drop it)
+        text = markdown(blocks, 'troff')
+        if text.startswith('.PP\n'):
+            text = text[4:]
+        line(text)
 
     def entries(pairs):
         for display, lines, nested in pairs:
@@ -1503,7 +1261,7 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
     source = f'{prog} {version}' if version else prog
     line(f'.TH {prog.upper()} 1 "" "{esc(source)}" ""')
     line('.SH NAME')
-    summary_line = ' '.join(corpus['summary']).strip()
+    summary_line = ' '.join(markdown(corpus['summary']).split())
     line(f'{esc(prog)} \\- {esc(summary_line)}' if summary_line
          else esc(prog))
     line('.SH SYNOPSIS')

@@ -52,12 +52,13 @@ def _default(value):
 def _docs_for(plan):
     doc = _inspect.getdoc(plan.callable) if callable(plan.callable) else None
     where = getattr(plan.callable, '__name__', repr(plan.callable))
+    from .presentation import markdown
     parsed = parse_docstring(doc, where)
-    summary = parsed['summary'][0] if parsed['summary'] else ''
+    summary = ' '.join(markdown(parsed['summary']).split())
     docs = {}
     for kind in ('arguments', 'options', 'commands'):
-        for name, lines in parsed[kind].items():
-            docs[name] = ' '.join(lines)
+        for name, blocks in parsed[kind].items():
+            docs[name] = ' '.join(markdown(blocks).split())
     return summary, docs
 
 

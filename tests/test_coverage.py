@@ -26,6 +26,19 @@ from appeal import (
 import appeal
 
 
+
+def _lines(blocks):
+    "A corpus entry's blocks as Markdown lines (the pins predate nodes)."
+    from appeal.presentation import markdown
+    text = markdown(blocks)
+    return text.split('\n') if text else []
+
+
+def _blocks(text):
+    "Markdown text as big's blocks, for a hand-built corpus."
+    from big.markdown import parse
+    return parse(text).blocks
+
 def both(fn, argv, decorations=None):
     "One engine: build the Converter in memory and run it; errors as text."
     import appeal
@@ -1234,7 +1247,7 @@ def test_man_page_trailing_blank():
     # prose whose lines end with blanks: the empty chunk is
     # skipped, not rendered as an empty paragraph
     from appeal.presentation import man_page
-    corpus = {'summary': ['S.'], 'documentation': ['First.', '', ''],
+    corpus = {'summary': _blocks('S.'), 'documentation': _blocks('First.\n\n\n'),
               'arguments': [], 'options': [], 'commands': []}
     text = man_page('prog', corpus, 'prog [x]')
     assert 'First.' in text
@@ -2354,11 +2367,15 @@ def test_chain_options_deep_shapes():
 
 
 def test_definition_no_space_after_colon():
-    # branch audit: ':definition' with no space after the colon is
-    # legal--the space is cosmetic, stripped when present
-    from appeal.presentation import _parse_definition_list
-    got = _parse_definition_list(['term', ':definition text'], 'here')
-    assert got == [('term', 'definition text')], got
+    # ':definition' with no space after the colon: to big's parser (the
+    # one recognizer, Larry 2026-09-11) that's a paragraph, not a
+    # definition, so the section refuses--the marker is ': '
+    from appeal.presentation import scan_docstring
+    try:
+        scan_docstring('S.\n\n# Options\nterm\n:definition text\n')
+        assert False
+    except AppealConfigurationError as e:
+        assert 'must contain only a definition list (found Paragraph)' in str(e), e
 
 
 def test_schema_more_shapes():
@@ -3509,8 +3526,8 @@ def test_section_template_more_fails():
     template = ('usage: {usage}\n\nOpts:\n  {options}\n\n'
                 '{summary}\n\n{doc}\n\nArgs:\n  {arguments}\n\n'
                 'Cmds:\n  {commands}')
-    corpus = {'summary': ['Sum.'], 'documentation': ['Prose.'],
-              'arguments': [('a', ['doc a'], ())],
+    corpus = {'summary': _blocks('Sum.'), 'documentation': _blocks('Prose.'),
+              'arguments': [('a', _blocks('doc a'), ())],
               'options': [('-x', [], ())], 'commands': []}
     page = render_help_page(['t', '[-x]', 'a'], corpus, template,
                             stylesheet=False)
@@ -4937,14 +4954,10 @@ def test_presentation_fiddly_reachable():
         'usage: {usage}\n\n{summary}\n\n{doc}\n\n'
         '## Arguments\n{arguments}\n\n## Options\n{options}\n\n'
         '## Commands\nX{commands}\n')
-    # a malformed def-list in prose (formatted term) passes through as text
+    # a def-list with a formatted term in PROSE is big's business: it
+    # renders (only a special section insists on plain terms)
     from appeal.presentation import render_markdown_help
     assert 'term' in render_markdown_help("term *x*\n: def\n")
-    # _transform_definition_lists: a def-list-shaped run whose term is
-    # formatted refuses to parse -> the run passes through verbatim
-    from appeal.presentation import _transform_definition_lists
-    src = "*bold*\n: a def\n"
-    assert _transform_definition_lists(src, lambda e: "RENDERED") == src
     # a shared converter option at slot 0 (nothing before it, an
     # argument after) qualifies with '(before <ARG>)' -- the after-only
     # branch of the position qualifier
@@ -4981,13 +4994,6 @@ def test_internal_helpers_direct():
     assert _count_list({1}) == '1'
     assert _count_list({1, 3}) == '1 or 3'
     assert _count_list({1, 2, 4}) == '1, 2, or 4'
-    # _run_has_term: is there a term/':' pair here (after a blank gap)?
-    from appeal.presentation import _run_has_term
-    assert _run_has_term(['term', ': def'], 0, 2) is True
-    assert _run_has_term(['term', '', '', ': def'], 0, 4) is True   # gap
-    assert _run_has_term(['term', 'not a def'], 0, 2) is False      # no ':'
-    assert _run_has_term(['  indented'], 0, 1) is False
-    assert _run_has_term([': nodef'], 0, 1) is False
     # render_markdown_help(width=None) measures the terminal
     from appeal.presentation import render_markdown_help
     assert 'hi' in render_markdown_help("**hi**", width=None)
@@ -5055,7 +5061,7 @@ def test_docstring_section_refusals():
     # auto-filled section)
     assert parse_docstring("S.\n\n# Arguments\n", 'x')['requested'] == {'arguments'}
     for doc, needle in [
-        ("S.\n\n# Arguments\n   stray indented line\n", "stray indented"),
+        ("S.\n\n# Arguments\n   stray indented line\n", "definition list"),
     ]:
         try:
             parse_docstring(doc, 'x')
@@ -5109,12 +5115,12 @@ def test_astra_r07_documentation_has_occurrence_identity():
     def command(a: left, b: right):
         return a, b
     rows = merge_docs(build_plan(command))['arguments']
-    assert [lines for display, lines, depth in rows] == \
+    assert [_lines(lines) for display, lines, depth in rows] == \
         [['LEFT X'], [], ['RIGHT X'], []]
     def twice(a: left, b: left):
         return a, b
     rows = merge_docs(build_plan(twice))['arguments']
-    assert [lines for display, lines, depth in rows] == \
+    assert [_lines(lines) for display, lines, depth in rows] == \
         [['LEFT X'], [], ['LEFT X'], []]
     # the refusal of an ambiguous bare name names the candidates
     def both(a: left, b: right):
@@ -5156,7 +5162,8 @@ def test_astra_r08_tables_are_nodes_and_the_scanner_knows_code():
     # CommonMark transforms leave code alone
     import contextlib, io
     from appeal.presentation import (default_template, scan_docstring,
-                                     to_commonmark, merge_docs)
+                                     to_commonmark, merge_docs, markdown)
+    from big.markdown import parse, DefinitionList
     app = Appeal(name='probe')
     @app.precommand()
     def command(x):
@@ -5184,28 +5191,30 @@ def test_astra_r08_tables_are_nodes_and_the_scanner_knows_code():
     rows = merge_docs(build_plan(draw))['options']
     (row,) = rows
     ((kind, sub),) = row[2]
-    assert kind == 'options' and [lines for _, lines, _ in sub] == [['Dots.'], ['Dashes.']], rows
+    assert kind == 'options' and [_lines(lines) for _, lines, _ in sub] == [['Dots.'], ['Dashes.']], rows
     # a fenced '# Options' is code, not a section
     scanned = scan_docstring(
         'Summary.\n\n```python\n# Options\nprint("hello")\n```')
-    assert scanned['options'] is None and '# Options' in scanned['body']
-    # a nested definition keeps its colon
+    assert scanned['options'] is None and '# Options' in markdown(scanned['body'])
+    # a nested definition list inside a definition is a node of its own
     scanned = scan_docstring('Summary.\n\n# Arguments\nx\n: Description.\n\n'
                              '  term\n  : Nested definition.\n')
-    assert 'term\n: Nested definition.' in scanned['arguments'][0][1]
+    ((term, blocks),) = scanned['arguments']
+    assert term == 'x' and isinstance(blocks[1], DefinitionList), blocks
     # a section ends at the next heading, setext included
     scanned = scan_docstring('Summary.\n\n# Options\nv\n: Doc.\n\n'
                              'Notes\n-----\nProse.\n')
-    assert scanned['options'] == [('v', 'Doc.')]
-    assert 'Notes' in scanned['body'] and 'Prose.' in scanned['body']
+    assert [(t, markdown(b)) for t, b in scanned['options']] == [('v', 'Doc.')]
+    body = markdown(scanned['body'])
+    assert 'Notes' in body and 'Prose.' in body
     # a wide gap after the ':' is big's indented code
     scanned = scan_docstring('Summary.\n\n# Options\nv\n:      code\n')
-    assert scanned['options'] == [('v', '     code')], scanned['options']
-    # inline code and fenced code pass through the transforms verbatim
+    assert [(t, markdown(b)) for t, b in scanned['options']] == [('v', '```\n code\n```')], scanned['options']
+    # inline code and fenced code pass through the CommonMark writer verbatim
     assert to_commonmark('Use `~~literal~~`.') == 'Use `~~literal~~`.'
     doc = 'Gone ~~here~~.\n\n```\n~~kept~~\nterm\n: not a list\n```\n'
     assert to_commonmark(doc) == \
-        'Gone here.\n\n```\n~~kept~~\nterm\n: not a list\n```\n', \
+        'Gone here.\n\n```\n~~kept~~\nterm\n: not a list\n```', \
         to_commonmark(doc)
 
 
@@ -6582,7 +6591,7 @@ def test_nested_documentation_across_option_edges():
         : Make it bold.
         """
     corpus = merge_docs(app.plan_for('render'))
-    plain = lambda rows: [(strip_styles(d), l, [(k, plain(r)) for k, r in n])
+    plain = lambda rows: [(strip_styles(d), _lines(l), [(k, plain(r)) for k, r in n])
                           for d, l, n in rows]
     assert plain(corpus['arguments']) == [('<RENDERER>', [], [])]
     rows = plain(corpus['options'])
@@ -6877,9 +6886,10 @@ def test_subcommands_heading_and_hanging_indent():
     # after the program span (span + 1, or 8 for a span of 16+).
     import contextlib, io
     from appeal.presentation import _reword_heading
+    from big.markdown import parse
     assert _reword_heading('\n## Commands\n', 'Commands', 'Subcommands') == '\n## Subcommands\n'
-    assert _reword_heading('\nCommands\n--------\n', 'Commands', 'Subcommands') == \
-        '\nSubcommands\n-----------\n'
+    assert parse(_reword_heading('\nCommands\n--------\n', 'Commands', 'Subcommands')) == \
+        parse('## Subcommands')
     assert _reword_heading('\n## Cmds\n', 'Commands', 'Subcommands') == '\n## Cmds\n'
     app = Appeal(name='t', stylesheet=False)
     app.templates = ('usage: {usage}\n\n{summary}\n\n{doc}\n\n'
@@ -7186,7 +7196,6 @@ def test_code_fences_close_by_commonmark_rules():
     from appeal.presentation import to_commonmark, scan_docstring
     from big.markdown import parse, CodeBlock
     source = '~~~\n~~literal~~\n~~~~\n'
-    assert to_commonmark(source) == source
     assert parse(to_commonmark(source)) == parse(source)
     source = '```\n```not-a-close\n# Options\nnot metadata\n```\n'
     assert isinstance(parse(source).blocks[0], CodeBlock)
@@ -7194,7 +7203,7 @@ def test_code_fences_close_by_commonmark_rules():
     # a backtick fence whose info string is followed by code; a
     # strikethrough outside the fence still strips
     source = '```python\n~~x~~\n```\n~~gone~~\n'
-    assert to_commonmark(source) == '```python\n~~x~~\n```\ngone\n'
+    assert to_commonmark(source) == '```python\n~~x~~\n```\n\ngone'
 
 
 def test_the_boolean_language():
@@ -7263,3 +7272,23 @@ def test_the_boolean_language():
     from appeal.schema import mcp_input_schema
     assert mcp_input_schema(app.plan_for('need'))['properties']['force'] == {'type': 'boolean'}
     assert mcp_input_schema(app.plan_for('pos'))['properties']['x'] == {'type': 'boolean'}
+
+
+def test_docstrings_are_parsed_by_big():
+    # Larry, 2026-09-11 (Astra D07): one recognizer of Markdown, big's.
+    # A heading opens a section only when its text is exactly one
+    # plain word from the menu: formatting or extra words make it
+    # prose.  A man page row whose docs start with a code block keeps
+    # the block (no .PP to trim).
+    from appeal.presentation import scan_docstring, markdown, man_page
+    for prose in ('# *Options*\n', '# Options *now*\n', '# Options and more\n',
+                  '#\n'):
+        r = scan_docstring('Sum.\n\n' + prose + 'v\n: Doc.\n')
+        assert r['options'] is None, prose
+    r = scan_docstring('Sum.\n\n# Options\nv\n: Doc.\n')
+    assert [(t, markdown(b)) for t, b in r['options']] == [('v', 'Doc.')]
+    corpus = {'summary': _blocks('S.'), 'documentation': [],
+              'arguments': [('<X>', _blocks('    code first\n\nThen prose.'), ())],
+              'options': [], 'commands': []}
+    text = man_page('prog', corpus, 'prog x')
+    assert '.EX\ncode first\n.EE' in text and 'Then prose.' in text, text
