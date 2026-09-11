@@ -230,7 +230,7 @@ def test_generic_kind_reads_and_schema():
     from appeal.schema import mcp_input_schema
     def cmd(*, env: dict[str, int] = None, tags: list[str] = ()):
         return (env, tuple(tags))
-    got = read_mapping(cmd, {'env': {'k': '1'}, 'tags': ['a', 'b']})
+    got = read_mapping(cmd, {'env': {'k': 1}, 'tags': ['a', 'b']})
     assert got == ({'k': 1}, ('a', 'b')), got
     for bad, complaint in (({'env': 5}, 'mapping'),
                            ({'tags': 5}, 'sequence')):

@@ -2169,9 +2169,12 @@ result = appeal.read_mapping(callable, mapping)
 
 `read_mapping` points the command-line metaphor at a mapping:
 it reads the names of the callable's parameters, pulls values
-out of the mapping using those names, converts them per the
-annotations--converters always apply, already-typed values
-included--and calls the callable.  Parameters with defaults
+out of the mapping using those names, and calls the callable.
+A mapping is **typed data**, not text: an `int` parameter wants
+an int (not `'5'`, and not `True`), a `float` takes an int or a
+float, a `bool` takes exactly `True` or `False`, a `str` takes
+whatever it finds, a `pathlib.Path` takes a string or a Path,
+and a converter of your own is called on the value as it is.  Parameters with defaults
 are optional; parameters without are required; a key that
 names nothing in the callable's tree raises, by name--pass
 `strict=False` to ignore such keys instead (for reading a
@@ -2244,6 +2247,14 @@ The dict's shape mirrors your command tree:
 * A **mapping** under a command word is that command's
   **section**, and so on down through subcommands:
   `{'db': {'migrate': {'dry_run': True}}}`.
+* A **mapping** under the name of a parameter whose converter is
+  a group is that group's section, holding *its* options:
+  for `def deploy(target: Target)` with `Target(host, *,
+  port=80)`, `{'deploy': {'target': {'port': 8080}}}`.  The
+  shape mirrors the converter tree exactly; an option is
+  never addressed from outside its group.  (A key that names
+  a group's option one level up is an error that names the
+  section to put it in.)
 * Config supplies **options only**, never positional arguments:
   config holds settings; the command line names the work.
 * A command word wins a collision: `{'status': {...}}` is the
@@ -2265,13 +2276,12 @@ The layering rules are fixed and unknobbed:
   a loud error saying exactly which it is.  Either this dict is
   yours, or it isn't.  `Appeal(strict=False)` takes the keys that
   layer and ignores the rest, for an rc file that also holds
-  things Appeal doesn't own.  (One key can never work: a
-  *scoped* option--the same string declared by several argument
-  groups--is addressed by position, and a mapping has no
-  position.  The refusal says so, and points at the workaround.)
-* Values convert through the ordinary pipeline, with `config:`
-  provenance on failures.  Flags use the strict boolean
-  spellings; repeatable options take a sequence.
+  things Appeal doesn't own.
+* Values are **typed**, as for `read_mapping`: an int is an
+  int, never `'4'`; a flag is `True` or `False`, never `'yes'`;
+  repeatable options take a sequence.  A wrong type fails with
+  `config:` provenance and the dotted path: `config:
+  'deploy.target.port' expected an int, not '8080'`.
 * If you have several layers (system, user, project), merge
   them into the one dict yourself first.
 

@@ -3490,7 +3490,7 @@ def test_mcp_schema_agrees_with_read_mapping():
     assert where['anyOf'][0] == {'type': 'integer'}
     assert set(where['anyOf'][1]['properties']) == {'x', 'deep'}
     # and every advertised shape round-trips through the reader
-    assert read_mapping(plan, {'count': '5', 'spot': {'x': 1, 'y': 2},
+    assert read_mapping(plan, {'count': 5, 'spot': {'x': 1, 'y': 2},
                                'where': 7}) == (5, (1, 2), (7, 0))
     assert read_mapping(plan, {'count': 5, 'spot': [3, 4],
                                'where': {'x': 1, 'deep': 9}}) == \
@@ -3571,7 +3571,7 @@ def test_read_mapping():
     from appeal import read_mapping
     def basic(host, port: int = 8080, *, retries: int = 1):
         return (host, port, retries)
-    got = read_mapping(basic, {'host': 'h', 'port': '99', 'retries': '5'})
+    got = read_mapping(basic, {'host': 'h', 'port': 99, 'retries': 5})
     assert got == ('h', 99, 5), got                       # v1
     got = read_mapping(basic, {'host': 'h', 'port': 99, 'retries': 5})
     assert got == ('h', 99, 5), got                       # v1: converters always apply
@@ -3609,14 +3609,14 @@ def test_read_mapping():
     def config(name, s: server = None, *, debug=False):
         return ('config', name, s, debug)
     # both spellings, v1: a sub-mapping under the group's name...
-    got = read_mapping(config, {'name': 'n', 's': {'host': 'h', 'port': '1'}})
+    got = read_mapping(config, {'name': 'n', 's': {'host': 'h', 'port': 1}})
     assert got == ('config', 'n', ('server', 'h', 1), False), got
     # ...or flat keys at the same level
-    got = read_mapping(config, {'name': 'n', 'host': 'h', 'port': '1'})
+    got = read_mapping(config, {'name': 'n', 'host': 'h', 'port': 1})
     assert got == ('config', 'n', ('server', 'h', 1), False), got
     # errors carry the path
     try:
-        read_mapping(config, {'name': 'n', 's': {'port': '1'}})
+        read_mapping(config, {'name': 'n', 's': {'port': 1}})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert "'host'" in str(e) and 's' in str(e)
@@ -3640,13 +3640,13 @@ def test_read_mapping():
     # v2: *args (v1 refused), collectors, tuples
     def lots(first, *rest: int):
         return (first, rest)
-    assert read_mapping(lots, {'first': 'a', 'rest': ['1', '2']}) == ('a', (1, 2))
+    assert read_mapping(lots, {'first': 'a', 'rest': [1, 2]}) == ('a', (1, 2))
     if not needs_39('generic-spelling read_mapping'):
         def tagged(point: tuple[int, int], *, tags: list[str] = (),
                    env: dict[str, int] = None):
             return (point, tags, env)
-        got = read_mapping(tagged, {'point': ['3', '4'], 'tags': ['a', 'b'],
-                                    'env': {'x': '1'}})
+        got = read_mapping(tagged, {'point': [3, 4], 'tags': ['a', 'b'],
+                                    'env': {'x': 1}})
         assert got == ((3, 4), ['a', 'b'], {'x': 1}), got
 
 def test_read_mapping_dataclass():
@@ -3661,7 +3661,7 @@ def test_read_mapping_dataclass():
         editor: str = ''
         threads: int = 4
         debug: bool = False
-    got = read_mapping(ConfigFile, {'editor': 'vi', 'threads': '8', 'debug': True})
+    got = read_mapping(ConfigFile, {'editor': 'vi', 'threads': 8, 'debug': True})
     assert got == ConfigFile('vi', 8, True), got
     assert read_mapping(ConfigFile, {}) == ConfigFile()
 
@@ -3703,7 +3703,7 @@ def test_read_mapping_facade():
     app = Appeal()
     def f(x: int):
         return x
-    assert app.read_mapping(f, {'x': '5'}) == 5
+    assert app.read_mapping(f, {'x': 5}) == 5
     assert app.read_iterable(f, [['5']]) == [5]
 
 def test_fuzz_dispatch_runs_the_right_command():
@@ -4548,7 +4548,7 @@ def test_config_layering():
                 self.include = include
                 self.define = define
 
-    layer = {'verbose': True, 'jobs': '4', 'include': ['a', 'b']}
+    layer = {'verbose': True, 'jobs': 4, 'include': ['a', 'b']}
     if GENERIC_SPELLINGS:
         layer['define'] = {'x': 1}
     # instances[0] is the help/version precommand era; the global
@@ -5833,11 +5833,14 @@ def test_config_group_options_and_empty_config():
         def go2():
             pass
         return app
+    # a scoped INNER option is addressed through its window's section
+    # (Larry, 2026-09-11: nested only); the flat key names the section
+    top2_factory({'w1': {'x': 1, 'deep': 3}}).process(['go2']).result
     try:
-        top2_factory({'w1': {'x': 1, 'deep': 3}}).process(['go2']).result
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'scoped' in str(e) and 'deep' in str(e)
+        top2_factory({'deep': 3}).process(['go2']).result
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert str(e) == "config: 'deep' is an option of 'w1'; put it in the 'w1' section", e
 
 
 
@@ -5896,28 +5899,31 @@ def test_config_error_provenance_is_structural():
 
 
 def test_config_scoped_refusal():
-    # refused BY DESIGN (ruled 2026-07-09, the last named
-    # refusal): position is the essence of a scoped option, and
-    # a mapping has no position.  The refusal names the
-    # workaround.
+    # a scoped option (one converter in two sibling windows) was
+    # refused from config by design (2026-07-09: a mapping has no
+    # position).  The nested-only config (Larry, 2026-09-11) HAS a
+    # position: the window's section names it.  The flat key refuses,
+    # naming the first window's section.
     import appeal as _appeal
-
-    def child(p, *, flavor=''):
+    seen = []
+    def child(p='', *, flavor=''):
         return (p, flavor)
     app = _appeal.Appeal(name='t')
-    app.config = {'flavor': 'sour'}
+    app.config = {'c': {'flavor': 'sour'}}
     @app.global_command()
-    def mg(a, b: child = None, c: child = None):
-        pass
+    def mg(a='', b: child = None, c: child = None):
+        seen.append((b, c))
     @app.command()
     def work():
         pass
+    app.process(['work'])
+    assert seen == [(None, ('', 'sour'))], seen
+    app.config = {'flavor': 'sour'}
     try:
         app.process(['work']).result
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'position decides' in str(e)
-        assert '@app.option' in str(e)
+        assert False, 'expected AppealDataError'
+    except AppealDataError as e:
+        assert str(e) == "config: 'flavor' is an option of 'b'; put it in the 'b' section", e
 
 
 def test_concurrent_first_parse():
@@ -7092,9 +7098,9 @@ def test_precommand_config_strict_knob():
     assert out.getvalue().strip() == 'verbose False'
 
     # a SCOPED option name (declared by several windows--a converter
-    # reused across sibling slots) can't layer from config at all:
-    # strict raises by design; lenient skips it like any other
-    # unlayerable key.  Vetted directly--the branch is the point.
+    # reused across sibling slots) is addressed through its window's
+    # section (Larry, 2026-09-11, nested only); a flat key refuses
+    # under strict, and is skipped under lenient
     from appeal import build_plan
     from appeal import _config_vet
     def child(p=0, *, flag=False):
@@ -7102,13 +7108,17 @@ def test_precommand_config_strict_knob():
     def scoped_top(a: child = None, b: child = None):
         return (a, b)
     plan = build_plan(scoped_top)
+    placed = _config_vet(plan, frozenset(), {'b': {'flag': True}}, None)
+    assert [(rule.name, raw, [step[1].name for step in steps], where)
+            for rule, raw, steps, where in placed] == \
+        [('flag', True, ['b'], 'b.flag')]
     try:
         _config_vet(plan, frozenset(), {'flag': True}, None)
         assert False, 'expected refusal'
-    except _appeal.AppealConfigurationError as e:
-        assert 'scoped' in str(e), e
+    except _appeal.AppealDataError as e:
+        assert "put it in the 'a' section" in str(e), e
     assert _config_vet(plan, frozenset(), {'flag': True}, None,
-                       strict=False) == {}
+                       strict=False) == []
 
 
 def test_precommand_config_bound_dicts():
@@ -7130,7 +7140,7 @@ def test_precommand_config_bound_dicts():
     @app.command()
     def build(t):
         return t
-    cfg.update({'jobs': '4', 'verbose': True})        # e.g. read from disk
+    cfg.update({'jobs': 4, 'verbose': True})          # e.g. read from disk
     c = app.process(['build', 'x']).instances[1][1]
     assert (c.jobs, c.verbose) == (4, True)
     c = app.process(['--jobs', '9', 'build', 'x']).instances[1][1]
@@ -7149,7 +7159,7 @@ def test_precommand_config_bound_dicts():
     @app2.command()
     def go():
         seen.append('go')
-    cfg2.update({'host': 'h', 'size': '5'})
+    cfg2.update({'host': 'h', 'size': 5})
     app2.process(['go'])
     assert seen == [('alpha', 'h'), ('beta', 5), 'go'], seen
     # ...a key both own is refused (a mapping can't say which)

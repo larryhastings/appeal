@@ -604,11 +604,21 @@ the JSON object the machine sends back.  In-process API.
 
 `read_mapping(callable, mapping)` and `read_iterable(callable,
 iterable)` point the same metaphor at config files: parameters pull
-values by name from a mapping (or by position from a sequence),
-converters always apply (already-typed values included, matching
-v1), groups recurse--a group reads a sub-mapping under its
-parameter's name, or (v1's other spelling) flat keys at the same
-level; a sequence-shaped group reads a nested sequence.  Defaults
+values by name from a mapping (or by position from a sequence).
+A mapping is **typed data** (Larry, 2026-09-11, replacing v1's
+"converters always apply"): a leaf of type `int` takes an int and
+nothing else (not `'5'`, not `True`--bool is not an int here),
+`float` takes an int or a float, `complex` those or a complex,
+`bool` exactly `True`/`False`, `str` keeps the value as it is,
+the six `pathlib` classes take a str or a Path, and a user
+converter is called on the value as it is; a wrong type is an
+`AppealDataError` naming the path and the value (`'s.port'
+expected an int, not '1'`).  Text (`read_iterable`, `read_csv`)
+converts through the argv pipeline, since a cell is a string.
+Groups recurse--a group reads a sub-mapping under its
+parameter's name, or (v1's other spelling, for `read_mapping`
+only--not config) flat keys at the same level; a
+sequence-shaped group reads a nested sequence.  Defaults
 fill absent keys (v1 0.6.4 demanded every key: a bug, fixed);
 unrecognized keys raise by name, judged against the whole tree
 (strict=True, ruled 2026-08-29--a deliberate v1 divergence: v1
@@ -763,10 +773,19 @@ strict=True)`.  You bind the dict at construction and fill it before
 `main()` (Appeal holds the same object); there is no `config=` on
 `process`/`main`, and no `precommand(config=)`.  Merge your layers
 into the one dict yourself.  The mapping's shape mirrors the command
-tree: at each level a **scalar** names an option by parameter name (at
-the root, whichever head era owns it--two owning it is a
-`ConfigurationError`), and a **mapping under a command word** is that
-command's section, nesting all the way down.  A command word **wins a
+tree--and the converter tree (Larry, 2026-09-11: **nested only**):
+at each level a **scalar** names an option of THAT plan by parameter
+name (at the root, whichever head era owns it--two owning it is a
+`ConfigurationError`); a **mapping under a command word** is that
+command's section, nesting all the way down; and a **mapping under
+the name of a positional parameter whose converter is a group** is
+that group's section, holding the group's own options (and its
+groups' sections, recursively).  A group's option is never
+addressed from outside its section: `{'first': 1}` for `main(g:
+group)` with `group(*, first=0)` is refused, naming the section
+(`'first' is an option of 'g'; put it in the 'g' section`); a
+group behind a `*args` slot can't be addressed at all
+(`ConfigurationError`).  A command word **wins a
 collision** with an option name, always (never decided by the value's
 type); `@app.option(..., config=<key>)` gives the option another key.
 Options only, never positionals.  Precedence is fixed and unknobbed:
@@ -781,46 +800,28 @@ section, a section that isn't a mapping, or an unknown key is a loud
 provenance--not the command line, so not "usage").  `strict=False`,
 one knob for the tree, takes what layers and ignores the rest.  A
 section for a command the line never names is never vetted.  Values
-convert in **stage 2 through the ordinary argv pipeline** with
-`config:` provenance on failures; flags use the strict boolean
-spellings (never truthiness), and a false flag means *absent*--the
-default fills, and a `**kwargs` option stays an absent key.
-Repeatables take a sequence (one entry per occurrence), mappings a
-mapping, group options a sequence of their arguments or a by-name
-sub-mapping.  The mapping is read live (mutating it mid-run is the
-caller's problem, per-run per Processor--the app-server case).
-Config for *scoped* options is refused **by design** (ruled
-2026-07-09): position is the essence of a scoped option, and a mapping
-has no position--the two transports don't compose.  The refusal names
-the workaround (set it on the command line, or give the uses distinct
-parameter names via `@app.option`).
+are **typed**, exactly as `read_mapping` reads them (above): an int is
+an int, never `'4'`; a flag is `True` or `False`; a wrong type is an
+`AppealDataError` with `config:` provenance and the dotted path
+(`config: 'g.first' expected an int, not '1'`).  A false flag is a
+value, not an absence (it satisfies a required `bool`).  Repeatables
+take a sequence (one entry per occurrence), mappings a mapping, group
+options a by-name sub-mapping.  The mapping is read live (mutating it
+mid-run is the caller's problem, per-run per Processor--the
+app-server case).
 
-**Deferred feature -- scoped-option config addressing (post-1.0).**
-If you need to set a *scoped* option (one string declared by
-several windows--e.g. a converter reused across sibling slots) from
-config, 1.0 cannot do it; use the workaround above.  The designed
-(ruled) shape for when we build it is nested addressing through the
-window's parameter name: for `mg(a, b: child, c: child)` with
-`child(p, *, flavor='')`, `{'b': {'flavor': ...}}` targets flavor
-in b's window.  This is *not* the same, cheap change as a group
-*option*'s by-name sub-mapping (which Med 5 already delivers,
-because a group option is one rule): a scoped option is one rule
-bound to a window **by position at scan time**, and config injects
-flat, by key, at **execute** time--so delivery must reach into the
-scoped-binding machinery to place the value in the named window's
-own given (or synthesize a positioned occurrence pre-binding).  Two
-semantics settled in advance: (1) the named window must actually be
-*entered* by argv first--config does no structural rescue, same as
-`--deep` without `--where`; (2) inside `{'b': {...}}` only b's
-window's OPTIONS are addressable, never its operands (config
-supplies options, never positionals).  Forward-compatible: 1.0
-keeps `{positional-group-slot: {...}}` refused (rejected as a
-positional), so the shape stays reserved; adding support later only
-turns that error into acceptance--monotonic, breaking no existing
-program and changing nothing for anyone who doesn't write the new
-shape.  (Entry point for a future fix: `_config_vet` /
-`_config_apply` in `appeal/__init__.py`, `plan.scoped_keys`, and the
-backend's scoped-window binding.)
+Delivery: `_config_vet` walks the mapping alongside the plan in pass
+1, resolving every key to `(rule, value, steps, path)`--`steps` is
+the chain of positional slots from the era's Converter to the
+owner--so a bad key fails before anything runs.  At execute time
+`_config_apply` follows the steps: an owner argv already built gets
+the value assigned; an owner argv never built is built ONCE from one
+mapping holding every value aimed at it, with defaults for the rest;
+argv's value for an option always wins whole, and the config value
+it beats is never converted.  A *scoped* option (one converter in two
+sibling windows) is addressed the same way, through its window's
+section: the section IS the position (the 2026-07-09 refusal is
+superseded).
 
 With class-as-app this is the
 argparse-replacement story: the config file helps construct your

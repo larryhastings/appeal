@@ -583,129 +583,141 @@ def _overview_trailer(node):
 def _config_vet(plan, table_words, config, command_plan_for,
                 strict=True):
     """
-    Config layering's stage 1 (strict keys--"either this is ours,
-    or it isn't"): every key must name a global-command option.
-    Returns {key: the OptionRule}, or raises naming the offender--
-    a config file is end-user input, so loudness is UsageError.
+    Config's stage 1: resolve a section's keys against its plan
+    (Larry, 2026-09-11: the config mirrors the CONVERTER tree as it
+    mirrors the command tree--nested only, no flat keys).  At a level,
+    a key names an option of that plan (by its config key), or a
+    positional parameter whose converter is a group, whose value is
+    then a mapping addressing THAT group's options, and so on down.
+    Returns [(rule, raw value, path of steps to its owner, dotted
+    path), ...]--the placements _config_apply makes and the required
+    check consults.  Anything else refuses, naming what the key is (a
+    config file is end-user input, so loudness is AppealDataError);
     strict=False (ruled 2026-08-29, the rc-file-adaptation case)
-    instead SKIPS every key that can't layer: take what's mine,
-    ignore the rest.
+    instead SKIPS every key that can't layer: take what's mine, ignore
+    the rest.
     """
     from .frontend import Terminal
-    options = {}
-    scoped = set()
-    for owner, o in plan.all_options():
-        if o.config_key in options and options[o.config_key] is not o:
-            scoped.add(o.name)
-        options.setdefault(o.config_key, o)
-    positionals = set()
-    def gather(p):
-        for s in p.slots:
-            positionals.add(s.name)
-            if not isinstance(s.child, Terminal):
-                gather(s.child)
-    gather(plan)
     from collections.abc import Mapping
-    def scoped_in(rule, value):
-        "the key--or a nested key of a group's mapping--that is scoped"
-        if rule.name in scoped or rule.key in plan.scoped_keys:
-            return rule.name
-        if rule.child is not None and isinstance(value, Mapping):
-            inner = {o.name: o for o in rule.child.options}
-            for k, v in value.items():
-                if k in inner:
-                    hit = scoped_in(inner[k], v)
-                    if hit:
-                        return hit
-        return None
-    vetted = {}
-    for key, value in config.items():
-        rule = options.get(key)
-        hit = rule and scoped_in(rule, value)
-        if hit:
+    out = []
+
+    def walk(plan, mapping, steps, path):
+        options = {}
+        for o in plan.options:
+            options.setdefault(o.config_key, o)
+        index = 0
+        slots = {}
+        for slot in plan.slots:
+            here = None if (slot.repeat or index is None) else index
+            if not slot.repeat and index is not None:
+                index += 1
+            if slot.repeat:
+                index = None
+            slots[slot.name] = (slot, here)
+        for key, value in mapping.items():
+            where = f'{path}.{key}' if path else key
+            rule = options.get(key)
+            if rule is not None:
+                out.append((rule, value, steps, where))
+                continue
+            slot, here = slots.get(key, (None, None))
+            if slot is not None and not isinstance(slot.child, Terminal):
+                if not isinstance(value, Mapping):
+                    if not strict:
+                        continue
+                    raise AppealDataError(
+                        f"config: {where!r} is a converter group; its "
+                        f"section must be a mapping, not {value!r}",
+                        param=key)
+                if here is None:
+                    raise AppealConfigurationError(
+                        f"config: {where!r} is a converter behind a *args "
+                        f"slot; a mapping can't say which window")
+                walk(slot.child, value, steps + (('slot', slot, here),), where)
+                continue
             if not strict:
                 continue
-            # refused BY DESIGN (ruled 2026-07-09): position is
-            # the essence of a scoped option, and a mapping has no
-            # position--the two transports don't compose.  A scoped
-            # option INSIDE a group's mapping refuses the same way.
-            raise AppealConfigurationError(
-                f"config: {hit!r} names a scoped option (several "
-                f"windows declare it, and position decides which--"
-                f"a mapping has no position).  Set it on the "
-                f"command line, or give the uses distinct "
-                f"parameter names (@app.option)")
-        if rule is not None:
-            vetted[key] = rule
-            continue
-        if not strict:
-            continue
-        if key in positionals:
+            if slot is not None:
+                raise AppealDataError(
+                    f"config: {where!r} is a positional argument; config "
+                    f"supplies only options", param=key)
+            # say where the key actually lives, if anywhere
+            owner = _config_owner_of(plan, key)
+            if owner is not None:
+                raise AppealDataError(
+                    f"config: {key!r} is an option of {owner!r}; put it "
+                    f"in the {owner!r} section", param=key)
+            for word in table_words:
+                try:
+                    p = command_plan_for(word)
+                except Exception:
+                    continue            # a command that can't build is no help
+                if any(s.name == key for s in p.slots):
+                    raise AppealDataError(
+                        f"config: {key!r} is a positional argument "
+                        f"of {word!r}; config supplies only options",
+                        param=key)
+                if any(o.config_key == key
+                       for owner, o in p.all_options()):
+                    raise AppealDataError(
+                        f"config: {key!r} is an option of {word!r}; "
+                        f"put it in the {word!r} section", param=key)
             raise AppealDataError(
-                f"config: {key!r} is a positional argument; config "
-                f"supplies only options")
-        # say where the key actually lives, if anywhere
-        for word in table_words:
-            try:
-                p = command_plan_for(word)
-            except Exception:
-                continue
-            if any(s.name == key for s in p.slots):
-                raise AppealDataError(
-                    f"config: {key!r} is a positional argument "
-                    f"of {word!r}; config supplies only options")
-            if any(o.config_key == key
-                   for owner, o in p.all_options()):
-                raise AppealDataError(
-                    f"config: {key!r} is an option of {word!r}; "
-                    f"put it in the {word!r} section")
-        raise AppealDataError(
-            f"config: {key!r} isn't an option here")
-    return vetted
+                f"config: {key!r} isn't an option here", param=key)
+
+    walk(plan, config, (), '')
+    return out
+
+
+def _config_owner_of(plan, key):
+    """
+    The dotted section a nested converter's option would live in
+    (`g` for main(g: group)'s option), for the refusal of a flat key;
+    None when no converter beneath declares it.
+    """
+    from .frontend import Terminal
+    for slot in plan.slots:
+        if isinstance(slot.child, Terminal):
+            continue
+        if any(o.config_key == key for o in slot.child.options):
+            return slot.name
+        deeper = _config_owner_of(slot.child, key)
+        if deeper is not None:
+            return f'{slot.name}.{deeper}'
+    for o in plan.options:
+        if o.child is not None:
+            if any(i.config_key == key for i in o.child.options):
+                return o.config_key
+            deeper = _config_owner_of(o.child, key)
+            if deeper is not None:
+                return f'{o.config_key}.{deeper}'
+    return None
 
 
 def _config_apply(conv, table, plan, config, plan_for, strict=True):
     """
-    Layer a config mapping onto a parsed converter: defaults < config <
-    argv, atomic per option.  Keys are vetted strictly (_config_vet).
-    Each vetted key is first taken to its DESTINATION--the era's
-    converter for its own options; the argv-built nested instance for
-    a nested converter's option; else the nearest owner argv never
-    built--and only then decided (Astra D01/D02, 2026-09-10: the old
-    order converted first and asked afterward, so argv's win still ran
-    the config value's converter, and a nested owner argv hadn't built
-    was rebuilt per key, each build discarding the last).  A value
-    argv already set is never converted; an unbuilt owner collects
-    every key aimed at it and is built ONCE, from one mapping, by
-    load's by-name reader--the same converters, each run once.
-    Nothing is re-serialized as a command line (Astra R02).  A false
-    flag is ABSENT (the documented policy); conversion failures carry
-    'config:' provenance and name the key.
+    Layer a config section onto a parsed converter: defaults < config <
+    argv, atomic per option.  Keys are vetted (_config_vet), which
+    also says where each value goes: the era's converter for its own
+    options; the argv-built nested instance for a nested group's
+    option; else the nearest owner argv never built--which collects
+    every key aimed at it and is built ONCE, from one by-name mapping,
+    by load's reader (Astra D01: rebuilt per key, each build discarded
+    the last).  A value argv already set is never converted (Astra
+    D02).  Nothing is re-serialized as a command line (Astra R02).  A
+    false flag is ABSENT (the documented policy); conversion failures
+    carry 'config:' provenance and name the key.
     """
     from .frontend import Nullary
     from .load import _option_value, _read_group, _read_bool
-    vetted = _config_vet(plan, frozenset(table), config, plan_for, strict)
-    owners = {id(rule): owner for owner, rule in plan.all_options()}
     pending = {}            # an owner argv never built -> its mapping
-    for key, rule in vetted.items():
-        raw = config[key]
+    for rule, raw, steps, where in _config_vet(plan, frozenset(table), config,
+                                               plan_for, strict):
         name = rule.name
         try:
             holder = conv
-            path = _owner_path(plan, owners[id(rule)])
-            for k, step in enumerate(path):
-                node = step[1]
-                if step[0] == 'option':
-                    instance = holder.kwargs.get(node.name)
-                    slot_key = node.name
-                else:
-                    index = step[2]
-                    if index is None:
-                        raise AppealConfigurationError(
-                            f"config: {name!r} lives on a converter behind a "
-                            f"*args slot; a mapping can't say which window")
-                    instance = holder.args[index]
-                    slot_key = index
+            for k, (kind, node, index) in enumerate(steps):
+                instance = holder.args[index]
                 if isinstance(instance, Converter):
                     holder = instance               # argv built it: descend
                     continue
@@ -713,10 +725,10 @@ def _config_apply(conv, table, plan, config, plan_for, strict=True):
                 # the owner is built from, by name, nested by the rest of
                 # the path; defaults for everything else
                 mapping = {name: raw}
-                for later in reversed(path[k + 1:]):
-                    mapping = {later[1].name: mapping}
+                for _, later, _ in reversed(steps[k + 1:]):
+                    mapping = {later.name: mapping}
                 entry = pending.setdefault(
-                    (id(holder), id(node)), (holder, step, slot_key, {}))
+                    (id(holder), id(node)), (holder, node, index, {}))
                 _merge_mapping(entry[3], mapping)
                 break
             else:
@@ -724,32 +736,28 @@ def _config_apply(conv, table, plan, config, plan_for, strict=True):
                     continue                        # argv wins, whole: the
                                                     # config value never converts
                 if rule.is_flag:
-                    if not _read_bool(raw, name):
+                    if not _read_bool(raw, where):
                         continue                # false: absent, default stays
                     holder.kwargs[name] = rule.present
                 elif isinstance(rule, Nullary):
-                    if not _read_bool(raw, name):
+                    if not _read_bool(raw, where):
                         continue
                     holder.kwargs[name] = rule.converters[0]()
                 else:
-                    holder.kwargs[name] = _option_value(rule, raw, name, strict)
+                    holder.kwargs[name] = _option_value(rule, raw, where, strict)
         except (AppealDataError, ValueError, TypeError) as e:
             # the reader names the innermost parameter it blamed
             param = e.param if isinstance(e, AppealDataError) else None
             raise AppealDataError(f"config: {e}",
                                   param=param or name) from None
-    for holder, step, slot_key, mapping in pending.values():
-        node = step[1]
+    for holder, node, index, mapping in pending.values():
         try:
             built = _read_group(node.child, mapping, node.name, strict)
         except (AppealDataError, ValueError, TypeError) as e:
             param = e.param if isinstance(e, AppealDataError) else None
             raise AppealDataError(f"config: {e}",
                                   param=param or node.name) from None
-        if step[0] == 'option':
-            holder.kwargs[slot_key] = built
-        else:
-            holder.args[slot_key] = built
+        holder.args[index] = built
 
 
 def _merge_mapping(into, mapping):
@@ -759,36 +767,6 @@ def _merge_mapping(into, mapping):
             _merge_mapping(into[key], value)
         else:
             into[key] = value
-
-
-def _owner_path(plan, target):
-    """
-    The steps from `plan` down to the plan `target`: ('slot', slot,
-    index-in-args) through positional groups (index None for a *args
-    window and everything after it), ('option', rule) through group
-    options.  [] when
-    target is plan; None when unreachable.
-    """
-    from .frontend import Terminal
-    if plan is target:
-        return []
-    index = 0
-    for slot in plan.slots:
-        if slot.repeat or index is None:
-            here = None                     # a *args window, or after one
-        else:
-            here = index
-            index += 1
-        if not isinstance(slot.child, Terminal):
-            rest = _owner_path(slot.child, target)
-            if rest is not None:
-                return [('slot', slot, here)] + rest
-    for option in plan.options:
-        if option.child is not None:
-            rest = _owner_path(option.child, target)
-            if rest is not None:
-                return [('option', option)] + rest
-    return None
 
 
 def _whole_program():
@@ -2996,7 +2974,7 @@ class Appeal:
                 vetted = _config_vet(step.plan, frozenset(owner._table()),
                                      step.config[0], owner.plan_for,
                                      step.config[1])
-                supplied = frozenset(id(rule) for rule in vetted.values())
+                supplied = frozenset(id(rule) for rule, *_ in vetted)
             proc.check_required(supplied)
         except AppealDataError as e:
             if era.kind == 'head':

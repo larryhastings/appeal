@@ -965,7 +965,7 @@ def test_config_vet_refusals():
     def go(dest, *, level: int = 0):
         return dest
     cases = (
-        ({'deep': True}, AppealConfigurationError, 'scoped'),
+        ({'deep': True}, AppealDataError, "put it in the 'x' section"),
         ({'go': 1}, AppealDataError, 'is a command'),
         ({'src': 'a'}, AppealDataError, 'positional'),
         ({'dest': 'a'}, AppealDataError, "of 'go'"),
@@ -979,6 +979,72 @@ def test_config_vet_refusals():
             assert False, 'expected %s for %r' % (exc.__name__, config)
         except exc as e:
             assert complaint in str(e), (config, str(e))
+    # a group's section must be a mapping: refused under strict,
+    # skipped under lenient
+    strict = Appeal(name='cfg', config={'x': 5})
+    @strict.precommand()
+    def top1(x: g1 = None):
+        return x
+    try:
+        strict.process([]).result
+        assert False
+    except AppealDataError as e:
+        assert str(e) == ("config: 'x' is a converter group; its section "
+                          "must be a mapping, not 5"), e
+    lenient = Appeal(name='cfg', config={'x': 5}, strict=False)
+    @lenient.precommand()
+    def top2(x: g1 = None):
+        return x
+    assert lenient.process([]).result is None
+    # the refusal names the whole dotted section, however deep, for
+    # a group in a positional slot and for a group option alike
+    def inner(*, a: int = 0):
+        return a
+    def outer(deep: inner = None):
+        return deep
+    def outer_option(*, deep: inner = None):
+        return deep
+    def unrelated(*, z: int = 0):
+        return z
+    positional = Appeal(name='cfg', config={'a': 1})
+    @positional.precommand()
+    def main_p(u: unrelated = None, o: outer = None):
+        return o
+    option = Appeal(name='cfg', config={'a': 1})
+    @option.precommand()
+    def main_o(*, o: outer_option = None):
+        return o
+    for probe in (positional, option):
+        try:
+            probe.process([])
+            assert False
+        except AppealDataError as e:
+            assert str(e) == ("config: 'a' is an option of 'o.deep'; "
+                              "put it in the 'o.deep' section"), e
+    # an owner two positional slots down, argv never entering either:
+    # both keys nest to it and it's built once
+    def inner2(*, a: int = 0, b: int = 0):
+        return (a, b)
+    def outer2(deep: inner2 = None, *, c: int = 0):
+        return (deep, c)
+    app2 = Appeal(name='cfg', config={'o': {'deep': {'a': 1, 'b': 2}, 'c': 3}})
+    @app2.precommand()
+    def main2(o: outer2 = None):
+        return o
+    assert app2.process([]).result == ((1, 2), 3)
+
+
+def test_load_without_pathlib():
+    # the pathlib leaves are recognized by identity via sys.modules;
+    # a process that never imported pathlib has none to recognize
+    import sys
+    from appeal.load import _path_classes, read_mapping
+    saved = sys.modules['pathlib']
+    sys.modules['pathlib'] = None
+    try:
+        assert _path_classes() == ()
+    finally:
+        sys.modules['pathlib'] = saved
 
 
 def test_config_inject_shapes():
@@ -2027,18 +2093,21 @@ def test_every_theme_renders_a_link():
 def test_plain_and_uncolored_are_one_structure():
     # plain and uncolored are ONE theme--the structural base--over two
     # palettes (Larry's ruling, 2026-09-07).  The heading's line art
-    # is TEXT the theme emits, so both keep it; the palettes decide
+    # is drawn by wrap_words from the heading2_rule glyph (big >= 0.15),
+    # which both palettes resolve, so both keep it; the palettes decide
     # what else renders: uncolored expresses bold/italic/underline
     # (no colors), plain expresses nothing at all.
     from appeal.presentation import (plain_theme, uncolored_theme,
                                      render_baked_help,
                                      markdown_defaults, transforms)
+    from big.markdown import (layout_document, parse,
+                             split_styles_document, style_document)
     from big.stylesheet import plain_palette, uncolored_palette, StyleSheet
-    pieces = (('markdown', ('⦃heading2⦙Options⦄',)),)
+    layout = layout_document(split_styles_document(style_document(parse("## Options\n"))))
     def render(theme, palette):
         sheet = (markdown_defaults | transforms | palette
                  | StyleSheet(theme))
-        return render_baked_help(pieces, margin=40, stylesheet=sheet)
+        return render_baked_help((('markdown', layout),), margin=40, stylesheet=sheet)
     plain = render(plain_theme, plain_palette)
     assert plain == 'Options\n-------\n', repr(plain)
     uncolored = render(uncolored_theme, uncolored_palette)
@@ -2478,7 +2547,7 @@ def test_read_fold_mapping_occurrence_lenient():
             self.values.append((a, b))
         def __call__(self):
             return self.values
-    data = [{'a': '1', 'b': '2', 'zzz': 'not a parameter'}]
+    data = [{'a': 1, 'b': 2, 'zzz': 'not a parameter'}]
     app = Appeal(name='fold')
     assert app.read_mapping(acc, data, strict=False) == [(1, 2)]
     try:
@@ -2948,7 +3017,7 @@ def test_astra_r02_config_reaches_its_owner():
     def logging(*, level='warn'):
         return level
     app = Appeal(name='probe', default_mappings=None)
-    app.config = {'level': 'info'}
+    app.config = {'log': {'level': 'info'}}
     @app.precommand()
     def command(log: logging = None):
         return log
@@ -2967,35 +3036,35 @@ def test_astra_r02_config_reaches_its_owner():
     def logging3(*, level='warn', color=False):
         return (level, color)
     app3 = Appeal(name='probe', default_mappings=None)
-    app3.config = {'level': 'info', 'color': True}
+    app3.config = {'log': {'level': 'info', 'color': True}}
     @app3.precommand()
     def command3(log: logging3 = None):
         return log
     assert app3.process(['--level', 'debug']).result == ('debug', True)
     # a false flag is ABSENT (documented): the default stays
     app4 = Appeal(name='probe', default_mappings=None)
-    app4.config = {'color': False, 'level': 'x'}
+    app4.config = {'log': {'color': False, 'level': 'x'}}
     @app4.precommand()
     def command4(log: logging3 = None):
         return log
     assert app4.process([]).result == ('x', False)
     # an inner option of a group OPTION: built from the mapping when
-    # argv didn't name the group, assigned to the argv-built instance
-    # when it did
+    # argv didn't name the group; argv naming the group wins WHOLE
+    # (atomic per option: the section is the option's one value)
     app6 = Appeal(name='probe', default_mappings=None)
-    app6.config = {'flag': True}
+    app6.config = {'group': {'flag': True}}
     @app6.precommand()
     def command6(*, group: group = None):
         return group
     assert app6.process([]).result == ('A', 'B', True)
-    assert app6.process(['--group', 'X']).result == ('X', 'B', True)
+    assert app6.process(['--group', 'X']).result == ('X', 'B', False)
     # the owner is found past a leaf slot and past another group slot
     def other(*, verbose=False):
         return verbose
     def stamp():
         return 'stamped'
     app7 = Appeal(name='probe', default_mappings=None)
-    app7.config = {'level': 'info', 'mark': True}
+    app7.config = {'log': {'level': 'info'}, 'mark': True}
     @app7.precommand()
     def command7(count: int = 0, o: other = None, log: logging = None,
                  *, mark: stamp = None):
@@ -3013,7 +3082,7 @@ def test_astra_r02_config_reaches_its_owner():
     def outer(*, inner: logging = None):
         return inner
     app8 = Appeal(name='probe', default_mappings=None)
-    app8.config = {'level': 'info'}
+    app8.config = {'o': {'inner': {'level': 'info'}}}
     @app8.precommand()
     def command8(*, a: other = None, o: outer = None):
         return o
@@ -3022,7 +3091,7 @@ def test_astra_r02_config_reaches_its_owner():
     def each(x, *, tag=''):
         return (x, tag)
     app5 = Appeal(name='probe', default_mappings=None)
-    app5.config = {'tag': 'T'}
+    app5.config = {'items': {'tag': 'T'}}
     @app5.precommand()
     def command5(*items: each):
         return items
@@ -6969,40 +7038,41 @@ start  Start it.
 
 
 def test_config_locates_before_converting():
-    # Astra's delta review, D01-D03 (2026-09-10): config takes each key
-    # to its destination FIRST.  A value argv already set is never
-    # converted (argv wins, whole, without running the loser's
-    # converter); an owner argv never built is built ONCE from one
-    # mapping holding every key aimed at it; the required check gets
-    # the rules the vet resolved, so a config key mapped under another
-    # name, or aimed at a nested owner, satisfies a required option,
-    # and a false flag supplies nothing.
+    # Astra's delta review, D01-D03 (2026-09-10) under the nested,
+    # typed config (Larry, 2026-09-11): config takes each key to its
+    # destination FIRST.  A value argv already set is never converted
+    # (argv wins, whole, without running the loser's converter); an
+    # owner argv never built is built ONCE from one mapping holding
+    # every key aimed at it; the required check gets the rules the
+    # vet resolved, so a config key mapped under another name, or
+    # aimed at a nested owner, satisfies a required option.
     def app_for(config=None):
         return Appeal(name='probe', config=config, doc='',
                       default_mappings=None, stylesheet=False)
     # D01: both keys reach one unbuilt owner, whichever order
     def group(*, first: int = 0, second: int = 0): return (first, second)
-    for config in ({'first': '1', 'second': '2'}, {'second': '2', 'first': '1'}):
+    for config in ({'g': {'first': 1, 'second': 2}}, {'g': {'second': 2, 'first': 1}}):
         app = app_for(config)
         @app.precommand()
         def main(g: group = None): return g
         assert app.process([]).result == (1, 2), config
-    # D01: the nested value converts once
+    # D01: the nested value converts once (a user converter is called
+    # on the mapping's value as it is)
     calls = []
-    def number(text):
-        calls.append(text); return int(text)
+    def number(value):
+        calls.append(value); return int(value)
     def group2(*, count: number = 0): return count
-    app = app_for({'count': '3'})
+    app = app_for({'g': {'count': 3}})
     @app.precommand()
     def main2(g: group2 = None): return g
-    assert app.process([]).result == 3 and calls == ['3'], calls
-    # D02: argv wins without converting the config value
+    assert app.process([]).result == 3 and calls == [3], calls
+    # D02: argv wins without touching the config value
     app = app_for({'count': 'not-an-integer'})
     @app.precommand()
     def main3(*, count: int = 0): return count
     assert app.process(['--count', '4']).result == 4
     calls.clear()
-    app = app_for({'count': '3'})
+    app = app_for({'count': 3})
     @app.precommand()
     def main4(*, count: number = 0): return count
     assert app.process(['--count', '4']).result == 4 and calls == ['4'], calls
@@ -7012,9 +7082,9 @@ def test_config_locates_before_converting():
     @app.option('token', '--token', config='token_value')
     def main5(*, token): return token
     assert app.process([]).result == 'secret'
-    # D03: an entered nested owner's required option, from config
+    # D03: an entered nested owner's required option, from its section
     def group3(label, *, token): return (label, token)
-    app = app_for({'token': 'secret'})
+    app = app_for({'g': {'token': 'secret'}})
     @app.precommand()
     def main6(g: group3): return g
     assert app.process(['label']).result == ('label', 'secret')
@@ -7024,22 +7094,54 @@ def test_config_locates_before_converting():
     @app.precommand()
     def main7(*, flag: bool): return flag
     assert app.process([]).result is False
-    # an unbuilt owner two levels down: keys merge into one nested
-    # mapping; a bad value in it fails with config: provenance
+    # an unbuilt owner two levels down: the sections nest to it; a bad
+    # value in it fails with config: provenance and the dotted path
     def inner(*, a: int = 0, b: int = 0): return (a, b)
     def outer(*, deep: inner = None, c: int = 0): return (deep, c)
-    app = app_for({'a': '1', 'b': '2', 'c': '3'})
+    app = app_for({'o': {'deep': {'a': 1, 'b': 2}, 'c': 3}})
     @app.precommand()
     def main8(o: outer = None): return o
     assert app.process([]).result == ((1, 2), 3)
-    app = app_for({'a': 'x', 'b': '2'})
+    app = app_for({'o': {'deep': {'a': 'x', 'b': 2}}})
     @app.precommand()
     def main9(o: outer = None): return o
     try:
         app.process([])
         assert False
     except AppealDataError as e:
-        assert str(e).startswith("config: ") and str(e).endswith("(at o.deep.a)"), e
+        assert str(e) == "config: 'o.deep.a' expected an int, not 'x'", e
+    # a mapping is typed: a leaf gets its own type, never a string
+    app = app_for({'count': '3'})
+    @app.precommand()
+    def main10(*, count: int = 0): return count
+    try:
+        app.process([])
+        assert False
+    except AppealDataError as e:
+        assert str(e) == "config: 'count' expected an int, not '3'", e
+    from appeal import read_mapping
+    def leaves(i: int, f: float, s: str, c: complex): return (i, f, s, c)
+    assert read_mapping(leaves, {'i': 1, 'f': 2, 's': 'x', 'c': 3}) == (1, 2.0, 'x', (3+0j))
+    for bad, message in (({'i': True}, "'i' expected an int, not True"),
+                         ({'i': 1.5}, "'i' expected an int, not 1.5"),
+                         ({'f': 'x'}, "'f' expected a float, not 'x'"),
+                         ({'c': 'x'}, "'c' expected a complex, not 'x'")):
+        full = {'i': 1, 'f': 2.0, 's': 'x', 'c': 3}
+        full.update(bad)
+        try:
+            read_mapping(leaves, full)
+            assert False, bad
+        except AppealDataError as e:
+            assert str(e) == message, (bad, str(e))
+    import pathlib
+    def paths(p: pathlib.Path): return p
+    assert read_mapping(paths, {'p': 'x'}) == pathlib.Path('x')
+    assert read_mapping(paths, {'p': pathlib.Path('y')}) == pathlib.Path('y')
+    try:
+        read_mapping(paths, {'p': 5})
+        assert False
+    except AppealDataError as e:
+        assert str(e) == "'p' expected a path, not 5", e
 
 
 def test_command_paths_come_from_the_tree():

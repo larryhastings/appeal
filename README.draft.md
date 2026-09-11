@@ -798,7 +798,7 @@ def deploy(target, *, workers: int = 1):
     return (target, workers)
 
 # by NAME, from a mapping (options welcome):
-assert app.read_mapping(deploy, {'target': 'prod', 'workers': '4'}) \
+assert app.read_mapping(deploy, {'target': 'prod', 'workers': 4}) \
        == ('prod', 4)
 
 def grade(name, score: int):
@@ -1523,8 +1523,10 @@ completion, and a REPL. The full itemized list:
 * **Config layering**: `Appeal(config=<dict>)` layers one dict's values
   under the command line (defaults < config < argv). You bind the dict at
   construction and fill it before `main()` (Appeal holds the same object).
-  Its shape mirrors the command tree: scalars are options, mappings under
-  command words are sections. There's no `process(config=)`.
+  Its shape mirrors the command tree and the converter tree: scalars are
+  options (typed: an int is an int, never `'4'`), mappings under command
+  words are sections, and a mapping under a group-converter parameter
+  is that group's section. There's no `process(config=)`.
 
 **API**
 

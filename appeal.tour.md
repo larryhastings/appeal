@@ -445,17 +445,23 @@ every command word, the child node splits its section the same way,
 and the command's arguments-options-opargs era gets what's left.  At
 execute time, before an era's or a command's Converter is called,
 `_config_apply` layers its mapping in: **defaults < config < argv**,
-per option.  Each key is vetted against that plan's options, by
-`config_key` (strictly, unless `Appeal(strict=False)` says to take what
-matches and ignore the rest)--structurally, in pass 1, so a bad key
-fails before anything runs.  Each vetted value is
-read with the same by-name readers `load.py` uses for `read_mapping`,
-then **assigned to its owner**: the era's Converter for its own
-options; the argv-built nested instance when a nested converter's
-option is named and argv already built that converter; otherwise the
-nested converter is built from the mapping with defaults for the rest.
+per option.  `_config_vet` walks the mapping alongside the plan in
+pass 1: a key names one of that plan's own options, by `config_key`,
+or a positional slot whose converter is a group--whose value must be
+a mapping, that group's section, walked the same way.  The mapping
+mirrors the converter tree exactly (nested only): a key aimed one
+level up is refused, naming the section to put it in.  Each key
+resolves to `(rule, value, steps, path)`, `steps` being the chain of
+slots from the era's Converter to the owner; strictly, unless
+`Appeal(strict=False)` says to take what matches and ignore the rest.
+At execute time each value is read with the typed by-name readers
+`load.py` uses for `read_mapping` (an int is an int, never text),
+then **assigned to its owner** along the steps: the era's Converter
+for its own options; the argv-built instance when argv already built
+that converter; otherwise the converter is built once from one
+mapping holding every value aimed at it, defaults for the rest.
 Nothing is turned back into command-line text.  An owner behind a
-`*args` window can't be addressed by a mapping and says so.
+`*args` slot can't be addressed by a mapping and says so.
 
 
 ## 8: Presentation

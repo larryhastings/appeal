@@ -60,6 +60,31 @@ def _read_bool(value, path):
     _not_a_constant(value, path)
 
 
+_LEAF_TYPES = {int: ('an int', (int,)),
+               float: ('a float', (int, float)),
+               complex: ('a complex', (int, float, complex))}
+
+
+def _is_path_class(converter):
+    return converter in _path_classes()
+
+
+def _path_classes():
+    import sys
+    pathlib = sys.modules.get('pathlib')
+    if pathlib is None:
+        return ()
+    return tuple(getattr(pathlib, name) for name in
+                 ('PurePath', 'PurePosixPath', 'PureWindowsPath',
+                  'Path', 'PosixPath', 'WindowsPath'))
+
+
+def _wrong_type(label, value, path):
+    param = path.rpartition('.')[2] if path else None
+    raise AppealDataError(f"{path!r} expected {label}, not {value!r}",
+                          param=param)
+
+
 def _not_a_constant(value, path):
     # Larry's wording (2026-09-11): the key first, no "(at ...)" suffix
     param = path.rpartition('.')[2] if path else None
@@ -87,6 +112,17 @@ def _convert(converter, value, path, text=False):
         # typed data keeps the type (v1--str() would mangle a TOML
         # float into its repr)
         return value
+    if not text:
+        # a mapping is TYPED data (Larry, 2026-09-11): a leaf gets its
+        # own type, never a string to convert--'1' for an int refuses
+        expected = _LEAF_TYPES.get(converter)
+        if expected is None and _is_path_class(converter):
+            expected = ('a path', (str,) + _path_classes())
+        if expected is not None:
+            label, types = expected
+            if not isinstance(value, types) or isinstance(value, bool):
+                _wrong_type(label, value, path)
+            return converter(value)
     try:
         return converter(value)
     except (ValueError, TypeError) as e:

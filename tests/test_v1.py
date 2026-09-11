@@ -2821,10 +2821,12 @@ class ConfigFileReadingTests(AppealTestsBase):
 
     # ---- read_mapping ----
 
+    # 0.6.4 converted '5' to 5 here; 1.0 reads a mapping as typed
+    # data--an int is an int (Larry, 2026-09-11)
     def test_read_mapping_flat_and_convert(self):
         def cfg(a:int, b:str='x'):
             return (a, b)
-        self.assertEqual(self.app.read_mapping(cfg, {'a': '5', 'b': 'hi'}), (5, 'hi'))
+        self.assertEqual(self.app.read_mapping(cfg, {'a': 5, 'b': 'hi'}), (5, 'hi'))
 
     def test_read_mapping_default_used(self):
         def cfg(a:int, b:str='x'):
