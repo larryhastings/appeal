@@ -579,7 +579,7 @@ def test_read_bool_flag_nullary():
             read_mapping(cmd, {'flag': bad})
             assert False, 'expected AppealDataError'
         except AppealDataError as e:
-            assert str(e) == f"expected True or False, not {bad!r} (at flag)", e
+            assert str(e) == f"'flag' expected True or False, not {bad!r}", e
 
 
 def test_read_option_kinds():
@@ -5617,7 +5617,7 @@ def test_per_command_help_era():
         'usage: tool db [-h|--help] [-u|--url <URL>] <COMMAND>'
     assert page(tool, ['bare', '-h']) == 'usage: tool bare [-h|--help]'
     assert refused(tool, ['build', '--help=x']) == \
-        "option '--help': 'x' isn't a boolean (expected true or false (yes/no, on/off, 1/0))"
+        "option '--help': 'x' isn't a boolean, expected true/false, yes/no, on/off, or 1/0"
     # a structural problem BEFORE the help era wins: the parcel stopped
     assert refused(tool, ['bulid', '-h']) == \
         "unknown command 'bulid' (did you mean 'build'?)"
@@ -7165,7 +7165,7 @@ def test_boolean_literal_reads_its_own_spellings():
     assert app.process(['go', 'false']).result is False
     assert app.process(['either', 'True']).result is True
     assert app.process(['either', 'FALSE']).result is False
-    for argv, needle in ((['either', 'garbage'], "expected true or false (yes/no, on/off, 1/0)"),
+    for argv, needle in ((['either', 'garbage'], "'garbage' expected true/false, yes/no, on/off, or 1/0"),
                          (['go', 'True'], "must be one of False")):
         try:
             app.process(argv)
@@ -7213,7 +7213,7 @@ def test_the_boolean_language():
         boolean('goforit')
         assert False
     except ValueError as e:
-        assert str(e) == "expected true or false (yes/no, on/off, 1/0)"
+        assert str(e) == "expected true/false, yes/no, on/off, or 1/0"
     app = Appeal(name='t', stylesheet=False)
     @app.command()
     def pos(x: bool): return x
@@ -7230,8 +7230,10 @@ def test_the_boolean_language():
     assert got(['need', '--force', 'yes']) is True
     assert got(['need', '-f', 'no']) is False
     assert got(['need', '--force=0']) is False
-    for argv, needle in ((['pos', 'yeahmaniwannadoit'], "invalid value for 'x'"),
-                         (['flag', '--quiet=goforit'], "'goforit' isn't a boolean"),
+    for argv, needle in ((['pos', 'yeahmaniwannadoit'],
+                          "invalid value for 'x': 'yeahmaniwannadoit' expected true/false, yes/no, on/off, or 1/0"),
+                         (['flag', '--quiet=goforit'],
+                          "option '--quiet': 'goforit' isn't a boolean, expected true/false, yes/no, on/off, or 1/0"),
                          (['need', '--force', 'maybe'], "invalid value for 'force'"),
                          (['need'], "missing option '--force'")):
         try:
@@ -7249,7 +7251,7 @@ def test_the_boolean_language():
             read_mapping(need, source)
             assert False, source
         except AppealDataError as e:
-            assert 'expected True or False' in str(e), e
+            assert str(e) == f"'force' expected True or False, not {source['force']!r}", e
     assert read_iterable(pos, [['yes'], ['0'], ['Off']]) == [True, False, False]
     assert read_csv(pos, iter([['x'], ['no'], ['ON']])) == [False, True]
     assert read_csv(pos, iter([['x'], ['no']]), first_row_map={'x': 'x'}) == [False]
@@ -7257,7 +7259,7 @@ def test_the_boolean_language():
         read_iterable(pos, [['goforit']])
         assert False
     except AppealDataError as e:
-        assert "not a valid boolean" in str(e), e
+        assert str(e) == "can't convert 'goforit', expected true/false, yes/no, on/off, or 1/0 (at x)", e
     from appeal.schema import mcp_input_schema
     assert mcp_input_schema(app.plan_for('need'))['properties']['force'] == {'type': 'boolean'}
     assert mcp_input_schema(app.plan_for('pos'))['properties']['x'] == {'type': 'boolean'}

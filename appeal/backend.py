@@ -475,7 +475,7 @@ class LiveBinding:
         except ValueError as e:
             raise UsageError(
                 f"option {(spelling or self.name)!r}: {value!r} isn't a "
-                f"boolean ({e})") from None
+                f"boolean, {e}") from None
 
 
 class ValueBinding:

@@ -24,6 +24,11 @@ def convert(converter, text, name):
     try:
         return converter(text)
     except (ValueError, TypeError) as e:
+        if getattr(converter, 'sentence', False):
+            # a converter whose refusal reads as a sentence on its own
+            # (the boolean language; Larry's wording, 2026-09-11)
+            raise UsageError(f"invalid value for {name!r}: {text!r} {e}",
+                             param=name) from None
         converter_name = getattr(converter, '__name__', 'converter')
         detail = str(e) or f'not a valid {converter_name}'
         raise UsageError(
@@ -219,6 +224,8 @@ def validate(*values, type=None):
     validate_converter.__name__ = 'validate'
     validate_converter.recipe = True
     validate_converter.completions = completions
+    if type is boolean:
+        validate_converter.sentence = True      # the language's refusal
     return validate_converter
 
 
@@ -268,7 +275,8 @@ def boolean(text):
         return True
     if lowered in _FALSY:
         return False
-    raise ValueError("expected true or false (yes/no, on/off, 1/0)")
+    raise ValueError("expected true/false, yes/no, on/off, or 1/0")
+boolean.sentence = True         # its refusal reads without parentheses
 
 
 def verbatim(text):

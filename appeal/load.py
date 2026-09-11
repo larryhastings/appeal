@@ -57,7 +57,14 @@ def _read_bool(value, path):
     """
     if isinstance(value, bool):
         return value
-    _fail(f"expected True or False, not {value!r}", path)
+    _not_a_constant(value, path)
+
+
+def _not_a_constant(value, path):
+    # Larry's wording (2026-09-11): the key first, no "(at ...)" suffix
+    param = path.rpartition('.')[2] if path else None
+    raise AppealDataError(f"{path!r} expected True or False, not {value!r}",
+                          param=param)
 
 
 def _convert(converter, value, path, text=False):
@@ -73,9 +80,8 @@ def _convert(converter, value, path, text=False):
             try:
                 return boolean(value)
             except ValueError as e:
-                _fail(f"can't convert {value!r} (not a valid boolean: {e})",
-                      path)
-        _fail(f"expected True or False, not {value!r}", path)
+                _fail(f"can't convert {value!r}, {e}", path)
+        _not_a_constant(value, path)
     if converter is str and not isinstance(value, str):
         # the identity terminal: an unannotated parameter reading
         # typed data keeps the type (v1--str() would mangle a TOML

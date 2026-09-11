@@ -474,8 +474,8 @@ def test_option_errors_name_the_typed_spelling():
     def flag(name, *, verbose: bool = False):
         return (name, verbose)
     assert run_both(flag, ['x', '--verbose=maybe']) == (
-        'usage', "option '--verbose': 'maybe' isn't a boolean "
-                 "(expected true or false (yes/no, on/off, 1/0))")
+        'usage', "option '--verbose': 'maybe' isn't a boolean, "
+                 "expected true/false, yes/no, on/off, or 1/0")
     # ('-v=maybe' no longer reaches the bool converter: getopt-pure,
     # '-v' is a flag and '=maybe' parses as more short options.)
     def value(*, color: str = None):
@@ -3605,12 +3605,12 @@ def test_read_mapping():
         read_mapping(config, {'name': 'n', 'debug': 'true'})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
-        assert "expected True or False, not 'true'" in str(e), e
+        assert str(e) == "'debug' expected True or False, not 'true'", e
     try:
         read_mapping(config, {'name': 'n', 'debug': 'maybe'})
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
-        assert "expected True or False, not 'maybe'" in str(e), e
+        assert str(e) == "'debug' expected True or False, not 'maybe'", e
 
     # v2: *args (v1 refused), collectors, tuples
     def lots(first, *rest: int):
@@ -4584,7 +4584,7 @@ def test_config_layering():
         app2.process([]).result
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
-        assert "expected True or False, not 'maybe'" in str(e), e
+        assert str(e) == "config: 'verbose' expected True or False, not 'maybe'", e
     # verbose: False means absent: the default fills
     cfg2.clear(); cfg2.update({'verbose': False})
     assert app2.process([]).result == (1, False)
@@ -5757,7 +5757,7 @@ def test_appeal_error_umbrella():
         app3.process(['work']).result
         assert False, 'expected AppealDataError'
     except _appeal.AppealDataError as e:
-        assert "expected True or False, not 'maybe'" in str(e), e
+        assert str(e) == "config: 'verbose' expected True or False, not 'maybe'", e
         assert e.usage
 
 
