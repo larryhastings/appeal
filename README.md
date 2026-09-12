@@ -2577,7 +2577,12 @@ Creates a new Appeal instance.
   Its building blocks are public: `default_long_option(app,
   callable, name)` maps `Dry_Run` to `--dry-run`,
   `default_short_option` maps it to `-D` (a wish: claimed if the
-  letter is free); both skip `_private` names.  The stock
+  letter is free); both skip `_private` names.  (A leading
+  underscore means "ignore me", and only a keyword-only parameter
+  with a default can be ignored: it gets no option and its default
+  fills.  On any other kind of parameter, positional or required,
+  the underscore is a build error, since that parameter has to
+  come from the command line.)  The stock
   `default_options` calls both; either block alone is a policy
   too, "no auto shorts" or "shorts only"; or write your own
   composing them, several calls for one parameter making one

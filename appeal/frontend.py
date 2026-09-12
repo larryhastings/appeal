@@ -2303,6 +2303,21 @@ class SignaturePlan(Plan):
             kind = parameter.kind
             has_default = parameter.default is not inspect.Parameter.empty
 
+            # a leading underscore means "ignore me": no option mapped,
+            # the default fills.  Only an OPTIONAL option can be ignored
+            # (Larry, 2026-09-12, foot down): any other kind of parameter
+            # has to be supplied from the command line, so it can't wear
+            # the underscore
+            if (parameter.name.startswith('_')
+                    and not (kind is inspect.Parameter.KEYWORD_ONLY
+                             and has_default)):
+                raise AppealConfigurationError(
+                    f"{name!r}: parameter {parameter.name!r} has a leading "
+                    f"underscore, which means \"ignore me\"--only a "
+                    f"keyword-only parameter with a default (an optional "
+                    f"option) can be ignored; this one must come from the "
+                    f"command line")
+
             if kind in (inspect.Parameter.POSITIONAL_ONLY,
                         inspect.Parameter.POSITIONAL_OR_KEYWORD):
                 slots.append(Slot(

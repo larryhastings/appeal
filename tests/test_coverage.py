@@ -1440,6 +1440,29 @@ def test_composable_documentation_2026_09_12():
     assert '<THINGY>  A modified version of a base thingy.' in out.getvalue()
 
 
+def test_underscore_only_on_optional_options():
+    # Larry, 2026-09-12 (foot down): a leading underscore means
+    # "ignore me", permitted ONLY on a keyword-only parameter with a
+    # default.  Every other kind has to come from the command line.
+    def fine(x, *, _verbose=False):
+        return (x, _verbose)
+    assert build_plan(fine) is not None
+    def kw_required(x, *, _token): pass
+    def positional(_x, y): pass
+    def positional_default(x, _y=1): pass
+    def var_positional(*_rest): pass
+    def var_keyword(**_extra): pass
+    for f, param in ((kw_required, '_token'), (positional, '_x'),
+                     (positional_default, '_y'), (var_positional, '_rest'),
+                     (var_keyword, '_extra')):
+        try:
+            build_plan(f)
+            assert False, f.__name__
+        except AppealConfigurationError as e:
+            assert f"parameter {param!r} has a leading underscore" in str(e), e
+            assert 'only a keyword-only parameter with a default' in str(e), e
+
+
 def test_load_without_pathlib():
     # the pathlib leaves are recognized by identity via sys.modules;
     # a process that never imported pathlib has none to recognize

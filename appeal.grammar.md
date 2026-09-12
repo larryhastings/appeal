@@ -83,7 +83,14 @@ for them.
   underscores to dashes--`Dry_Run` -> `--dry-run`; 0.6.4's rule,
   restored the same day) and `default_short_option` (`-D`, claimed if
   free), both skipping `_private` names; the stock `default_options`
-  calls both, and either alone is a policy.  A policy's several calls
+  calls both, and either alone is a policy.  A leading underscore
+  means "ignore me" and is permitted ONLY on a keyword-only parameter
+  with a default--an optional option, unmapped, its default filling;
+  on any other kind (positional, with or without a default; keyword-
+  only without one; `*args`/`**kwargs`) it is a build error naming
+  the parameter, since that parameter must come from the command line
+  (Larry, 2026-09-12, "foot down"; relaxing it is a circular-file
+  idea until a sensible design appears).  A policy's several calls
   for one parameter accumulate
   into one rule.  Only the option strings it produces reach the
   parser.
