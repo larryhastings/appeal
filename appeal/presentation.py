@@ -92,8 +92,12 @@ def scan_docstring(text, where=None):
       body       every other block EXCEPT the special sections
                  (their headings included), in source order
       options, arguments, commands
-                 [(term, definition blocks), ...] or None when the
-                 section wasn't written
+                 [(term, entry), ...] or None when the section
+                 wasn't written--each entry the SAME dict, split
+                 the same way from the definition's blocks (Larry,
+                 2026-09-12: a definition is a docstring in
+                 miniature, so an option's entry may carry its
+                 converter's own sections, nested)
     A heading of any level, ATX or setext, reading exactly 'Options' /
     'Arguments' / 'Commands' / 'Subcommands' (this case) opens the
     special section; it runs to the next heading of any kind or the
@@ -101,9 +105,16 @@ def scan_docstring(text, where=None):
     empty section is legal: it asks for the section, auto-filled.
     `where` names the docstring's owner in error messages.
     """
-    from big.markdown import parse, Heading, Paragraph
+    from big.markdown import parse
+    return scan_blocks(parse(text or '').blocks, where)
+
+
+def scan_blocks(blocks, where=None, heading=None):
+    "scan_docstring on blocks already parsed; heading labels an entry's."
+    from big.markdown import Heading, Paragraph
     prefix = f"{where}: docstring " if where else "docstring "
-    blocks = parse(text or '').blocks
+    if heading:
+        prefix = f"{prefix}entry {heading}: "
     sections = {name: None for name in SPECIAL_SECTIONS}
     body = []
     i, n = 0, len(blocks)
@@ -115,16 +126,19 @@ def scan_docstring(text, where=None):
             body.append(block)
             i += 1
             continue
-        heading = '#' * block.level + ' ' + _heading_text(block)
+        label = '#' * block.level + ' ' + _heading_text(block)
         if sections[name] is not None:
             raise ConfigurationError(
-                f"{prefix}has two {heading!r} sections")
+                f"{prefix}has two {label!r} sections")
         i += 1
         content = []
         while i < n and not isinstance(blocks[i], Heading):
             content.append(blocks[i])
             i += 1
-        sections[name] = _definition_entries(content, where, heading + ':')
+        sections[name] = [
+            (term, scan_blocks(definition, where, f"{label}: {term!r}"))
+            for term, definition in _definition_entries(content, where,
+                                                        label + ':')]
     summary = []
     if body and isinstance(body[0], Paragraph):
         summary = [body.pop(0)]
@@ -823,7 +837,7 @@ def help_page_pieces(usage_units, corpus, templates, suppress=(),
 import inspect as _inspect
 import re as _re
 
-from .frontend import Terminal
+from .frontend import Terminal, _is_leaf
 from . import AppealConfigurationError
 
 
@@ -842,9 +856,9 @@ def parse_docstring(doc, where):
         summary        the first paragraph of the prose: [] or [Paragraph]
         documentation  the rest of the prose, in source order, with
                        the special sections slurped out
-        arguments      dict of name -> documentation blocks
-        options        dict of name -> documentation blocks
-        commands       dict of name -> documentation blocks
+        arguments      dict of name -> the entry, parsed the same way
+        options        dict of name -> the entry, parsed the same way
+        commands       dict of name -> the entry, parsed the same way
         requested      the sections the docstring wrote (empty or not)
 
     THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05;
@@ -853,24 +867,30 @@ def parse_docstring(doc, where):
     heading of any level reading exactly Options, Arguments, Commands
     or Subcommands opens a special section, which must contain exactly
     one definition list with plain-text terms; everything else is the
-    doc, other headings included.  The user's heading decoration is
-    input spelling only--the help template dresses the page.
+    doc, other headings included.  An entry's definition is a docstring
+    in miniature (Larry, 2026-09-12): its first paragraph and prose are
+    the row's text, and it may carry the same special sections, which
+    document the converter behind that option.  The user's heading
+    decoration is input spelling only--the help template dresses the
+    page.
 
     'where' names the docstring's owner, for error messages.
     Grammar violations raise AppealConfigurationError; validation
     against the plan (unknown names, kinds, visibility) happens
     later, in the merge.
     """
-    scanned = scan_docstring(doc or '', where)
+    return _doc_from_scan(scan_docstring(doc or '', where), where)
 
+
+def _doc_from_scan(scanned, where):
     def entry_dict(pairs, section):
         entries = {}
-        for name, blocks in (pairs or ()):
+        for name, entry in (pairs or ()):
             if name in entries:
                 raise AppealConfigurationError(
                     f"{where}: in the {section} section: "
                     f"{name!r} is documented twice")
-            entries[name] = blocks
+            entries[name] = _doc_from_scan(entry, where)
         return entries
 
     return {
@@ -889,57 +909,76 @@ def parse_docstring(doc, where):
     }
 
 
+def _prose(doc):
+    "A doc's text: its summary and the rest of its prose, as blocks."
+    return list(doc['summary']) + list(doc['documentation'])
+
+
 def merge_docs(plan, command_names=None):
     """
-    The merge (proposal §8.7.1): walks the plan tree, parses every
-    callable's docstring, and layers the entries--only entries
-    merge; prose and summaries stay home--with the nearest
-    enclosing scope winning, so a command overrides what it
-    inherits from its converters.
+    The merge: walks the plan tree and lays every occurrence's
+    documentation into the rows of the command's tables.
 
-    The edge decides (Larry, 2026-09-10).  An ARGUMENT edge merges:
-    a positional converter's arguments and options become rows of
-    the parent's own tables.  An OPTION edge nests: the option's row
-    is the converter's whole docstring--summary and prose, then an
-    Arguments and an Options block of its own, auto-filled from its
-    signature, entries overriding--but only the blocks the
-    converter's docstring asked for, by writing the section (empty
-    or not).  A converter that asked for nothing clips its subtree:
-    nothing of it reaches the parent's tables; its author documented
-    it some other way.  The gate is checked only where an option's
-    row is assembled--an argument edge always merges, so entries
-    climb through undocumented positional converters.  (The parent
-    may still document a nested name: nearest scope wins on the
-    text.)
+    Each occurrence of a converter has ONE docstring, the one CHOSEN
+    for it (Larry, 2026-09-12, the textual model: a parent documents
+    a child as if the child's docstring were inserted as the entry's
+    definition, so an entry replaces that docstring whole):
 
-    Each docstring's entries are validated against the subtree of
-    the callable that wrote them: an entry must name a visible
-    argument, an option, or (for 'Commands:' entries, only when
-    command_names is given) a command word.  Violations raise
+      * a converter behind an OPTION: the parent's Options entry for
+        that option if the parent wrote one, else the parent's
+        @app.option(doc=) for it, else the converter's own docstring
+        (writing both is a ConfigurationError--two definitions);
+      * a converter behind a positional ARGUMENT: the parent's
+        @app.argument(doc=) for it, else its own docstring;
+      * the command itself: its own docstring.
+
+    The edge decides how the chosen doc lands (Larry, 2026-09-10).
+    An ARGUMENT edge merges: the converter's arguments and options
+    become rows of the parent's own tables, and the parent's
+    entries may document them by name--a name of the parent's own
+    parameter shadows a merged one (nearest wins); the same name
+    from two merged siblings is ambiguous at the parent and is
+    documented from inside.  An OPTION edge nests: the option's row
+    is the chosen doc's prose, and beneath it an Arguments and an
+    Options block of the converter's own, auto-filled from its
+    signature, for exactly the sections the chosen doc wrote.
+
+    Two more rules for arguments.  A converter reached through an
+    argument that consumes exactly ONE operand is transparent: the
+    operand wears the annotated parameter's name (outermost wins
+    through a chain of such converters), and its documentation is
+    the nearest that speaks--the parent's entry, then each
+    converter's entry for its one parameter, or, when a converter
+    wrote no Arguments section at all, its prose (Larry,
+    2026-09-12).  That prose rule is for arguments: an option's row
+    keeps the converter's prose for itself.
+
+    Each doc's entries are validated against the occurrence it
+    documents: an entry must name a visible argument, an option,
+    or (for 'Commands:' entries, only when command_names is given)
+    a command word; an Arguments entry carries no sections of its
+    own (it documents an operand--@app.argument(doc=) replaces the
+    converter's docstring); an Options entry carries sections only
+    for an option with a converter.  Violations raise
     AppealConfigurationError.
 
     Returns the corpus, predigested and ready to format:
 
-        summary        the command's own summary, as lines
-        documentation  the command's own prose blob, as lines
-        arguments      [(display, lines, nested), ...] in plan order
-        options        [(display, lines, nested), ...] in plan order
-        commands       [(word, lines, ()), ...] if command_names,
+        summary        the command's own summary, as blocks
+        documentation  the command's own prose, as blocks
+        arguments      [(display, blocks, nested), ...] in plan order
+        options        [(display, blocks, nested), ...] in plan order
+        commands       [(word, blocks, ()), ...] if command_names,
                        else []
 
-    A row's display is a role-tagged span; its `lines` are big's
-    block NODES (the name is historical: they were Markdown lines);
-    nested is a tuple of ('arguments'|'options', rows) blocks the
-    row carries, in that order, each rows a list of the same shape.
-
-    Every visible surface gets a row; undocumented rows carry
-    empty lines.  command_names, if given, is an iterable of the
-    command words this plan can dispatch to.
+    A row's display is a role-tagged span; nested is a tuple of
+    ('arguments'|'options', rows) blocks the row carries, in that
+    order, each rows a list of the same shape.  Every visible
+    surface gets a row; undocumented rows carry empty blocks.
     """
-    docs = {}              # rowkey -> lines, post-merge
+    docs = {}              # rowkey -> blocks, nearest scope first
     deprecated = set()     # rowkeys of deprecated options: noted in the row
-    requested = {}         # path -> the sections that docstring asked for
-    prose = {}             # path -> (summary lines, documentation lines)
+    requested = {}         # option rowkey -> the sections its chosen doc wrote
     command_names = tuple(command_names) if command_names else ()
 
     class Level:
@@ -977,6 +1016,7 @@ def merge_docs(plan, command_names=None):
     # callable (frontend memoizes), so a node id alone can't tell two
     # visible uses of the same converter apart; a path can.
     namespaces = {}    # path -> that occurrence's subtree namespace
+    sole = {}          # path -> the rowkey of its one operand, if transparent
 
     def walk(p, level, override=None, anchors=(None, None), path=()):
         # returns the subtree namespace for p: name -> (kind,
@@ -987,6 +1027,9 @@ def merge_docs(plan, command_names=None):
         # the subtree's sole terminal--the outer annotated
         # parameter's name flowing through.
         namespace = {}
+        # this plan's OWN parameter names shadow anything merged from
+        # a positional converter (nearest wins, never ambiguous)
+        own = {o.name for o in p.options} | {s.name for s in p.slots}
         for o in p.options:
             # several rules may share one NAME (@app.option's each-call-
             # is-its-own-rule: go2's --north/--south both map direction);
@@ -998,11 +1041,12 @@ def merge_docs(plan, command_names=None):
                 namespace[o.name] = ('option', display, rowkey, p.name)
             sub = None
             if o.child is not None:
-                # an option edge: the converter's own tables, nested
+                # an option edge: the converter's own tables nest under
+                # the row, and its names are addressed through the
+                # row's entry, never flat from here (Larry, 2026-09-12:
+                # "color is not an option of cmd")
                 sub = Level()
-                for name, value in walk(o.child, sub, None, (None, None),
-                                        rowkey).items():
-                    namespace.setdefault(name, value)
+                walk(o.child, sub, None, (None, None), rowkey)
             if o.restriction == 'hidden':
                 continue                # documentable, never shown
             if o.restriction == 'deprecated':
@@ -1020,115 +1064,201 @@ def merge_docs(plan, command_names=None):
                 namespace.setdefault(s.name, ('argument', display, rowkey,
                                               p.name))
                 level.arguments.append((rowkey, display))
+                if p.sole_terminal_slot() is s:
+                    sole[path] = rowkey
+                continue
+            inner = s.child.sole_terminal_slot()
+            child_override = None
+            if inner is not None and override is None:
+                # the transparency rule: this converter consumes
+                # exactly one operand, so the annotated parameter's
+                # name flows through.  (An explicit rename on the
+                # inner parameter still wins the *display*.)
+                display = (style('argument',
+                                 decorate_argument(inner.usage_name,
+                                                   plan.decoration))
+                           if inner.usage_name != inner.name
+                           else arg_name(s))
+                child_override = (here, display)
+            # an argument edge: the converter's rows merge into this
+            # level, in place
+            child_namespace = walk(s.child, level,
+                                   child_override or override,
+                                   flanks(p, index), here)
+            if child_override is not None:
+                namespace.setdefault(
+                    s.name, ('argument', child_override[1], here, p.name))
+            elif inner is not None:
+                # inside a transparent chain: this level's name for
+                # the one operand is the outer row
+                namespace.setdefault(
+                    s.name, ('argument', override[1], override[0], p.name))
             else:
-                inner = s.child.sole_terminal_slot()
-                child_override = None
-                if inner is not None and override is None:
-                    # the transparency rule: this converter
-                    # consumes exactly one operand, so the
-                    # annotated parameter's name flows through.
-                    # (An explicit rename on the inner parameter
-                    # still wins the *display*.)
-                    display = (style('argument',
-                                     decorate_argument(inner.usage_name,
-                                                       plan.decoration))
-                               if inner.usage_name != inner.name
-                               else arg_name(s))
-                    child_override = (here, display)
-                # an argument edge: the converter's rows merge into
-                # this level
-                child_namespace = walk(s.child, level,
-                                       child_override or override,
-                                       flanks(p, index), here)
-                for name, value in child_namespace.items():
-                    if (name in namespace
-                            and namespace[name][0] == 'ambiguous'):
-                        namespace[name][3].append(value[3])
-                        continue
-                    if (name in namespace
-                            and namespace[name][2] != value[2]
-                            and namespace[name][0] == value[0]):
-                        # the same name from two sibling subtrees:
-                        # documenting it HERE can't pick one
-                        namespace[name] = ('ambiguous', value[1], None,
-                                           [namespace[name][3], value[3]])
-                        continue
-                    namespace.setdefault(name, value)
-                if child_override is not None:
-                    namespace.setdefault(
-                        s.name, ('argument', child_override[1], here, p.name))
-                else:
-                    namespace.setdefault(
-                        s.name, ('internal', s.usage_name, here, p.name))
+                namespace.setdefault(
+                    s.name, ('internal', s.usage_name, here, p.name))
+            if here in sole and p.sole_terminal_slot() is not None:
+                # p consumes exactly one operand, and it's under s
+                sole[path] = sole[here]
+            for name, value in child_namespace.items():
+                if name in own:
+                    continue            # this plan's own name shadows it
+                if (name in namespace
+                        and namespace[name][0] == 'ambiguous'):
+                    namespace[name][3].append(value[3])
+                    continue
+                if (name in namespace
+                        and namespace[name][2] != value[2]
+                        and namespace[name][0] == value[0]):
+                    # the same name from two sibling subtrees:
+                    # documenting it HERE can't pick one
+                    namespace[name] = ('ambiguous', value[1], None,
+                                       [namespace[name][3], value[3]])
+                    continue
+                namespace.setdefault(name, value)
         assert path not in namespaces
         namespaces[path] = namespace
         return namespace
 
-    def apply(p, path=()):
-        # deepest first: children's entries land, then ours
-        # overwrite (nearest enclosing scope wins).  Each scope's
-        # entries resolve against ITS OWN subtree namespace--a
-        # converter documents its own window even when the name is
-        # ambiguous a level up.
+    def label(p):
+        return getattr(p.callable, '__name__', repr(p.callable))
+
+    def own_doc(p, where):
+        return parse_docstring(_inspect.getdoc(p.callable), where)
+
+    def own_doc_of(converter):
+        return parse_docstring(_inspect.getdoc(converter),
+                               getattr(converter, '__name__', repr(converter)))
+
+    def replacement(p, name, where):
+        # @app.option(doc=)/@app.argument(doc=) on p's callable: the
+        # docstring the parent supplies for the child behind `name`
+        text = p.doc_overrides.get(name)
+        if text is None:
+            return None
+        # written like a docstring, cleaned like one (indentation)
+        return parse_docstring(_inspect.cleandoc(text),
+                               f"{where}: doc= for {name!r}")
+
+    def apply(p, path, doc, where, argument_edge):
+        # top-down: this occurrence's chosen doc lands its entries
+        # (nearest scope wins: a row already documented from above
+        # keeps that), then chooses each child's doc and recurses
         namespace = namespaces[path]
-        # children (positional converters AND option converters)
-        # land their docstrings first, deepest scope first; this
-        # plan's own docstring then overwrites, so the nearest
-        # enclosing scope wins on a name clash
-        for s in p.slots:
-            if not isinstance(s.child, Terminal):
-                apply(s.child, path + (id(s),))
-        for o in p.options:
-            if o.child is not None:
-                apply(o.child, path + (id(o),))
-        where = getattr(p.callable, '__name__', repr(p.callable))
-        parsed = parse_docstring(_inspect.getdoc(p.callable), where)
-        requested[path] = parsed['requested']
-        prose[path] = (parsed['summary'], parsed['documentation'])
         for kind, heading in (('arguments', 'Arguments:'),
                               ('options', 'Options:')):
-            for name, lines in parsed[kind].items():
-                entry = namespace.get(name)
-                if entry is None:
+            for name, entry in doc[kind].items():
+                found = namespace.get(name)
+                if found is None:
+                    for o in p.options:
+                        if o.child is not None and name in namespaces[path + (id(o),)]:
+                            raise AppealConfigurationError(
+                                f"{where}: {name!r} (in the {heading} "
+                                f"section) belongs to the converter behind "
+                                f"{o.name!r}; document it in a section "
+                                f"nested under the {o.name!r} entry")
                     raise AppealConfigurationError(
                         f"{where}: {name!r} (in the {heading} section) "
-                        f"is not a parameter of {where!r} or its "
+                        f"is not a parameter of {label(p)!r} or its "
                         f"converters")
-                found = entry[0]
-                if found == 'ambiguous':
-                    owners = [repr(owner) for owner in entry[3]]
+                if found[0] == 'ambiguous':
+                    owners = [repr(owner) for owner in found[3]]
                     candidates = ', '.join(owners[:-1]) + ' and ' + owners[-1]
                     raise AppealConfigurationError(
-                        f"{where}: {name!r} is ambiguous in {where!r}--"
+                        f"{where}: {name!r} is ambiguous in {label(p)!r}--"
                         f"{candidates} each have one; document it in "
-                        f"the converter's docstring")
-                if found == 'internal':
+                        f"the converter's docstring, or replace that "
+                        f"docstring with @app.argument(doc=)")
+                if found[0] == 'internal':
                     raise AppealConfigurationError(
                         f"{where}: {name!r} is not one of the visible "
-                        f"command-line arguments of {where!r}")
-                if found != kind[:-1]:
+                        f"command-line arguments of {label(p)!r}")
+                if found[0] != kind[:-1]:
                     raise AppealConfigurationError(
                         f"{where}: {name!r} (in the {heading} section) "
-                        f"is an {found}, not an {kind[:-1]}")
-                docs[entry[2]] = lines
-        if parsed['commands']:
+                        f"is an {found[0]}, not an {kind[:-1]}")
+                if kind == 'arguments' and entry['requested']:
+                    raise AppealConfigurationError(
+                        f"{where}: {name!r} (in the Arguments: section) "
+                        f"has sections of its own; an argument's entry "
+                        f"documents the operand--to replace its "
+                        f"converter's docstring, use "
+                        f"@app.argument({name!r}, doc=...)")
+                docs.setdefault(found[2], _prose(entry))
+        if doc['commands']:
             if p is not plan or not command_names:
                 raise AppealConfigurationError(
-                    f"{where}: a Commands: section, but {where!r} "
+                    f"{where}: a Commands: section, but {label(p)!r} "
                     f"doesn't dispatch to commands")
-            for word, lines in parsed['commands'].items():
+            for word, entry in doc['commands'].items():
                 if word not in command_names:
                     raise AppealConfigurationError(
                         f"{where}: {word!r} (in the Commands: section) "
                         f"is not one of the command words")
-                docs[word] = lines
-        return parsed
+                docs[word] = _prose(entry)
+        # a converter reached through an argument, consuming exactly
+        # one operand, with no Arguments section: its prose documents
+        # that operand (Larry, 2026-09-12)
+        if (argument_edge and 'arguments' not in doc['requested']
+                and path in sole):
+            docs.setdefault(sole[path], _prose(doc))
+        for o in p.options:
+            if o.child is None:
+                if o.name in doc['options'] and doc['options'][o.name]['requested']:
+                    raise AppealConfigurationError(
+                        f"{where}: {o.name!r} (in the Options: section) "
+                        f"has sections of its own, but {o.name!r} takes "
+                        f"no converter to document")
+                # a value option through ONE converter of the user's (a
+                # one-positional function collapses to a value option):
+                # the converter's prose documents the row, the same
+                # single-positional rule an argument gets
+                if (len(o.converters) == 1 and not _is_leaf(o.converters[0])
+                        and _inspect.isfunction(o.converters[0])):
+                    given = own_doc_of(o.converters[0])
+                    if 'arguments' not in given['requested']:
+                        docs.setdefault(path + (id(o),), _prose(given))
+                continue
+            rowkey = path + (id(o),)
+            entry = doc['options'].get(o.name)
+            given = replacement(p, o.name, where)
+            if entry is not None and given is not None:
+                raise AppealConfigurationError(
+                    f"{where}: {o.name!r} is documented twice--in the "
+                    f"Options: section and by @app.option(doc=)")
+            if entry is not None:
+                chosen, child_where = entry, f"{where}: entry {o.name!r}"
+            elif given is not None:
+                chosen, child_where = given, f"{where}: doc= for {o.name!r}"
+            else:
+                chosen, child_where = own_doc(o.child, label(o.child)), label(o.child)
+            requested[rowkey] = chosen['requested']
+            docs.setdefault(rowkey, _prose(chosen))
+            apply(o.child, rowkey, chosen, child_where, False)
+        for s in p.slots:
+            if isinstance(s.child, Terminal):
+                given = replacement(p, s.name, where)
+                if given is not None:
+                    if given['requested']:
+                        raise AppealConfigurationError(
+                            f"{where}: doc= for {s.name!r} has sections, "
+                            f"but {s.name!r} takes no converter to document")
+                    found = namespace[s.name]
+                    docs.setdefault(found[2], _prose(given))
+                continue
+            here = path + (id(s),)
+            given = replacement(p, s.name, where)
+            if given is not None:
+                chosen, child_where = given, f"{where}: doc= for {s.name!r}"
+            else:
+                chosen, child_where = own_doc(s.child, label(s.child)), label(s.child)
+            apply(s.child, here, chosen, child_where, True)
+        return doc
 
     def assemble(level):
         # the output rows of one Level: position qualifiers where a
         # display is duplicated (the flanking arguments' names say
         # which window each row is), the deprecation note, and--for a
-        # group option--the converter's prose and the blocks it asked for
+        # group option--the blocks its chosen doc asked for
         arguments = [(display, docs.get(rowkey, []), ())
                      for rowkey, display in level.arguments]
         seen = {}
@@ -1147,25 +1277,20 @@ def merge_docs(plan, command_names=None):
                     display += f' (before {after})'     # exists, and it's after
             if rowkey in deprecated:
                 display += ' (deprecated)'
-            lines = docs.get(rowkey)
             nested = ()
             if sub is not None:
-                summary, documentation = prose[rowkey]
-                if lines is None:
-                    # the converter's whole docstring is the row's text
-                    lines = summary + documentation
                 sub_arguments, sub_options = assemble(sub)
                 wants = requested[rowkey]
                 nested = tuple(
                     (kind, rows) for kind, rows in (('arguments', sub_arguments),
                                                     ('options', sub_options))
                     if kind in wants and rows)
-            options.append((display, lines or [], nested))
+            options.append((display, docs.get(rowkey, []), nested))
         return arguments, options
 
     top = Level()
     walk(plan, top)
-    parsed = apply(plan)
+    parsed = apply(plan, (), own_doc(plan, label(plan)), label(plan), False)
     arguments, options = assemble(top)
 
     return {
@@ -1211,7 +1336,8 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True,
                   'presentation': parsed.get('presentation'),
                   'arguments': tables['arguments'],
                   'options': tables['options'],
-                  'commands': [(w, parsed['commands'].get(w, []), 0)
+                  'commands': [(w, _prose(parsed['commands'][w])
+                                   if w in parsed['commands'] else [], 0)
                                for w in words]}
     elif global_plan is not None:
         corpus = merge_docs(global_plan, command_names=words)

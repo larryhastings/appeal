@@ -483,20 +483,29 @@ builder appends prose blocks to the template's parsed header, the man
 page writes blocks through big's troff writer, and the exports are
 big's gfm and commonmark writers.
 
-**The merge.**  `merge_docs(plan)` walks the Plan tree and layers every
-callable's entries: a converter documents its own parameters once, every
-command using it inherits that, and the nearest enclosing scope wins on
-a clash.  The edge decides (Larry, 2026-09-10): an argument edge
-merges the converter's rows into the parent's `Level` (its table
-pair); an option edge opens a `Level` of the converter's own, whose
-rows become the option row's nested `('arguments' | 'options', rows)`
-blocks--only those the converter's docstring asked for (its
-`requested` set), and a converter that asked for nothing clips its
-subtree.  Rows are identified by their **occurrence path**, the chain
-of slot and option ids from the root, not by parameter name and not by
-Plan object, because the same Plan appears at two paths when a
-converter is used twice.  A bare name that two sibling groups both
-declare is refused at the command with the candidates named.
+**The merge.**  `merge_docs(plan)` walks the Plan tree twice.  `walk`
+builds each occurrence's namespace (name -> kind, display, row) and
+the `Level`s (table pairs): an argument edge merges the converter's
+rows into the parent's `Level`, in plan order; an option edge opens a
+`Level` of the converter's own, whose rows become the option row's
+nested `('arguments' | 'options', rows)` blocks.  A plan's own names
+shadow merged ones; the same name from two merged siblings is marked
+ambiguous.  Then `apply` runs top-down with each occurrence's CHOSEN
+doc (Larry, 2026-09-12, the textual model): the command's own
+docstring; for an option's converter, the parent's entry for it, else
+the parent's `doc=`, else its own docstring; for a positional
+converter, the parent's `doc=`, else its own.  The chosen doc's
+entries land on rows by `setdefault`, so the nearest scope wins; its
+`requested` set says which nested blocks an option row shows; a
+converter reached through an argument that consumes one operand and
+wrote no Arguments section documents that operand (`sole[path]`) with
+its prose.  A docstring is parsed once by `scan_docstring`, which
+applies the same section split to each definition's blocks
+(`scan_blocks`), so an entry is a docstring in miniature.  Rows are
+identified by their **occurrence path**, the chain of slot and
+option ids from the root, not by parameter name and not by Plan
+object, because the same Plan appears at two paths when a converter
+is used twice.
 
 **The page.**  `help_page_pieces` assembles the page from the template
 (`app.templates`, which sets the order and dresses the headings) and

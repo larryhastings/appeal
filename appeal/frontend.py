@@ -880,7 +880,7 @@ class Plan:
                  'gated', 'certain', 'var_keyword',
                  'tree_trailing', 'scoped_keys', 'auto_help',
                  'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0',
-                 'decoration', 'compiled', 'share', 'immediate')
+                 'decoration', 'doc_overrides', 'compiled', 'share', 'immediate')
 
     # the varieties differ here (Larry's design, 2026-09-08):
     windowed = False        # True: a *args group; options bind by window
@@ -898,6 +898,10 @@ class Plan:
         # argument_decoration entry, stamped by the app at build
         # (None: the stock <NAME>)
         self.decoration = None
+        # doc= replacements this callable supplies for its parameters'
+        # converters (@app.option/@app.argument, recorded in the app's
+        # Decorations; stamped at build)
+        self.doc_overrides = {}
         self.gated = False      # True on the top plan: barriers exist somewhere
         self.certain = True     # False: this group might never be entered
         self.var_keyword = None # the **kwargs parameter's name, if any
@@ -1090,7 +1094,10 @@ class Plan:
             # plans are memoized and shared, so `flavor` used
             # under two different outer names must render
             # differently per use.
-            units = body_units(child, rename=transparent_name(slot))
+            # a rename already in flight (from an outer transparent
+            # slot) wins through the whole chain: the OUTERMOST name
+            units = body_units(child, rename=(rename if rename is not None
+                                              else transparent_name(slot)))
             if slot.repeat:
                 return [f'[{" ".join(units)}]...']
             if slot.required:
@@ -2144,6 +2151,7 @@ class Decorations:
     def __init__(self):
         self.option_overrides = {}   # callable -> {param: [decls]}
         self.parameter_usage = {}    # callable -> {param: usage}
+        self.parameter_doc = {}      # callable -> {param: docstring}
 
     def add_option(self, callable, parameter_name, strings,
                    annotation=inspect.Parameter.empty,
@@ -2172,6 +2180,19 @@ class Decorations:
                 f"a nonempty string")
         names = self.parameter_usage.setdefault(callable, {})
         names[parameter_name] = usage
+
+    def add_doc(self, callable, parameter_name, doc):
+        # doc= (Larry, 2026-09-12): the docstring this callable supplies
+        # for the converter behind one of its parameters, read exactly
+        # as that converter's own would be
+        if not isinstance(doc, str):
+            raise AppealConfigurationError(
+                f"doc= for {parameter_name!r}: must be a string")
+        docs = self.parameter_doc.setdefault(callable, {})
+        docs[parameter_name] = doc
+
+    def doc_for(self, callable):
+        return dict(self.parameter_doc.get(callable) or {})
 
     def overrides_for(self, callable):
         return self.option_overrides.get(callable) or {}
@@ -2268,6 +2289,7 @@ class SignaturePlan(Plan):
                 merged.extend(d for d in decls if d not in merged)
                 overrides[param] = merged
         usage_names = decorations.usage_for(callable)
+        doc_overrides = decorations.doc_for(callable)
 
         slots = []
         options = []
@@ -2445,6 +2467,15 @@ class SignaturePlan(Plan):
                 absorbing = True
         super().__init__(callable, name, slots, options)
         self.var_keyword = has_kwargs or None
+        # doc= names a parameter this callable has (a converter's
+        # docstring to replace, or a leaf operand's documentation)
+        names = {s.name for s in slots} | {o.name for o in options}
+        for param in doc_overrides:
+            if param not in names:
+                raise AppealConfigurationError(
+                    f"{name!r}: doc= names parameter {param!r}, which "
+                    f"{name!r} doesn't have")
+        self.doc_overrides = doc_overrides
         self.analyze()
         if top:
             self.finalize_options(build.default_options, build.app)

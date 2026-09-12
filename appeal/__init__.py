@@ -2027,7 +2027,7 @@ class Appeal:
             claim(self)
 
     def option(self, name, *options, annotation=None,
-               default=_UNSET, config=None, restriction=None):
+               default=_UNSET, config=None, restriction=None, doc=None):
         """
         Additional decorator for @command functions: maps only the
         strings you specify for one keyword-only parameter,
@@ -2091,6 +2091,10 @@ class Appeal:
                 callable, name, options,
                 annotation=annotation, default=default, config=config,
                 restriction=restriction)
+            if doc is not None:
+                # the docstring this callable supplies for the converter
+                # behind the option (Larry, 2026-09-12)
+                self.root._decorations.add_doc(callable, name, doc)
             self._invalidate()
             return callable
         return decorator
@@ -2352,16 +2356,27 @@ class Appeal:
             return callable
         return decorator
 
-    def argument(self, parameter_name, *, usage):
+    def argument(self, parameter_name, *, usage=None, doc=None):
         """
-        Additional decorator for @command functions: renames one
-        parameter in usage lines and help tables.  On an operand,
-        the shown name; on an option, the metavar
-        (`[-t|--times <COUNT>]`).  Reaches both, despite the name.
+        Additional decorator for @command functions (and converters):
+        usage= renames one parameter in usage lines and help tables--
+        on an operand, the shown name; on an option, the metavar
+        (`[-t|--times <COUNT>]`); reaches both, despite the name.
+        doc= supplies the docstring for the converter behind the
+        parameter, read exactly as that converter's own would be
+        (Larry, 2026-09-12)--or, for a plain operand, its
+        documentation.
         """
+        if usage is None and doc is None:
+            raise AppealConfigurationError(
+                f"argument({parameter_name!r}): give usage= or doc=")
         def decorator(callable):
-            self.root._decorations.add_usage(callable,
-                                             parameter_name, usage)
+            if usage is not None:
+                self.root._decorations.add_usage(callable,
+                                                 parameter_name, usage)
+            if doc is not None:
+                self.root._decorations.add_doc(callable,
+                                               parameter_name, doc)
             self._invalidate()
             return callable
         return decorator

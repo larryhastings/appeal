@@ -1966,18 +1966,20 @@ error, by name, when the documentation is rendered.
 For a *converter*, the sections do something more.  A converter
 used as an *argument* merges: its `Arguments` and `Options`
 entries land in the tables of the command (or converter) that
-uses it.  A converter used as an *option* nests: the option's
-row shows the converter's whole docstring, and beneath it an
-`Arguments` block and an `Options` block of the converter's
-own--but only the blocks the converter's docstring asked for,
-by writing the heading (empty or not).  A converter that
-writes neither clips its subtree: none of its parameters
-appear in the tables at all, on the assumption that its author
-documented them some other way.  That gate exists only where a
-converter is used as an option.  A converter used as an argument
-always merges, and so does everything beneath it: `rgb`'s
-documented components reach the command's table through a
-`color` converter that wrote no sections at all.  So this:
+uses it, and the command may document any of those rows by
+name in its own sections.  A converter used as an *option*
+nests: the option's row shows the converter's whole docstring,
+and beneath it an `Arguments` block and an `Options` block of
+the converter's own--but only the blocks the converter's
+docstring asked for, by writing the heading (empty or not).  A
+converter that writes neither clips its subtree: none of its
+parameters appear in the tables at all, on the assumption that
+its author documented them some other way.  That gate exists
+only where a converter is used as an option.  A converter used
+as an argument always merges, and so does everything beneath
+it: `rgb`'s documented components reach the command's table
+through a `color` converter that wrote no sections at all.  So
+this:
 
 ```Python
 def color(hue, *, saturation=1, value=1):
@@ -1999,6 +2001,86 @@ def render(text, *, color: color = None):
 documents `--color` with color's summary, an Arguments block
 holding `<HUE>` and its text, and an Options block listing
 `--saturation` and `--value`, nested under the `--color` row.
+
+**Overriding what you inherit.**  Think of it textually: the
+converter's docstring is inserted as the definition of the
+`color` entry in `render`'s `Options` section.  So if `render`
+writes that entry itself, it *replaces* the converter's
+docstring whole--summary, prose, and nested blocks alike.  And
+because an entry's definition is a docstring in miniature, it
+may carry the same sections, which document the converter in
+the converter's own vocabulary:
+
+```Python
+@app.command()
+def render(text, *, color: color = None):
+    """
+    Renders some text.
+
+    # Options
+    color
+    : The color to render in.
+
+      # Options
+      value
+      : How bright.  Default 1.
+    """
+```
+
+That row reads "The color to render in.", with an Options block
+beneath it listing `--saturation` (undocumented now) and
+`--value` with your words.  What isn't in your entry is gone:
+the converter's `# Arguments` block isn't shown, because your
+entry didn't write one.  The converter's names are addressed
+this way only, nested: `value` is not an option of `render`,
+and a flat `value` entry in `render`'s `Options` section is an
+error that says where to put it.  (An argument-edge converter
+is the other way round: its options *are* rows of the
+command's table, so a flat entry is right.)
+
+The same replacement is available without touching the
+docstring: `@app.option('color', '-c', '--color', doc=...)`
+and `@app.argument('stuff', doc=...)` supply the docstring for
+the converter behind that parameter, read exactly as the
+converter's own would be--its `Arguments` entries name *its*
+parameters, its first paragraph is *its* summary.  Writing both
+the entry and `doc=` for one name is an error.  On a plain
+operand, `@app.argument('src', doc=...)` is simply that
+operand's documentation.
+
+**Names in a converter tree.**  A command's own parameter name
+shadows a merged one: `cmd(a, color, stuff: stuff)` with
+`stuff(x, y, color='red')` has two `<COLOR>` rows, and `color`
+in `cmd`'s `Arguments` section documents `cmd`'s, while
+`stuff`'s docstring documents its own.  Two merged *siblings*
+that share a name are ambiguous at the command: document the
+name in the converter, or replace that converter's docstring
+with `doc=`.
+
+**One-operand converters.**  A converter that consumes exactly
+one operand is transparent to naming: the operand wears the
+annotated parameter's name, outermost first through a chain of
+them (`cmd(thingy: modified_thingy)` over
+`modified_thingy(modified: base_thingy)` over
+`base_thingy(base)` reads `<THINGY>` on the usage line and in
+the table).  Its documentation is the nearest that speaks: the
+command's entry for `thingy`, then each converter's entry for
+its one parameter--and a converter that wrote no `Arguments`
+section at all documents its one operand with its docstring's
+prose.  So a one-line docstring on a one-parameter converter is
+that operand's documentation wherever it's used:
+
+```Python
+def path(path):
+    "A confirmed extant path on the filesystem."
+
+@app.command()
+def copy(src: path, dst: path):
+    "Makes a copy of a file on disk."
+```
+
+documents `<SRC>` and `<DST>` with path's sentence.  The same
+holds for `--src <SRC>` when `path` converts an option's value.
 
 The format of these sections is a Markdown definition list.
 Every entry starts with the name of a parameter on a line by
@@ -2487,7 +2569,7 @@ Creates a new Appeal instance.
   only when it's invoked.
 * Operands' placeholders (`<HOST>`) are the stylesheet's
   `argument_decoration` entry, so their shape follows the theme;
-  an explicit `@app.parameter(usage=...)` rename rides the same
+  an explicit `@app.argument(usage=...)` rename rides the same
   decoration.
 * `default_options` is the policy that turns an automatically-
   mapped keyword-only parameter into option strings: a function
@@ -2581,7 +2663,7 @@ then `@db_app.default()`) it sets what runs when the line stops
 at the parent, replacing `Appeal(default_subcommand=...)`.
 `default_command()` is the older spelling.
 
-`Appeal.option(parameter_name, *options, annotation=..., default=..., config=None, restriction=None)`
+`Appeal.option(parameter_name, *options, annotation=..., default=..., config=None, restriction=None, doc=None)`
 
 Used as a decorator, on the callable that owns
 `parameter_name` (a command function or any converter).  Maps
@@ -2592,7 +2674,9 @@ the parameter.  Option strings are validated (`-X`, or
 `--long-name` of at least four characters).  May be stacked;
 may target `**kwargs`.  `config=` is the key the parameter is
 looked up under in the config mapping (see [Config
-layering](#config-layering)).
+layering](#config-layering)).  `doc=` supplies the docstring
+for the converter behind the parameter, read as that
+converter's own would be (see "Overriding what you inherit").
 
 `restriction=`, on both `command()` and `option()`, is `None`,
 `'hidden'`, or `'deprecated'`.  A hidden command or option still
@@ -2602,11 +2686,16 @@ and old spellings kept alive.  A deprecated one is shown with a
 note, and using it prints `warning: option '--old' is
 deprecated` (or `command 'old'`) to standard error.
 
-`Appeal.parameter(parameter_name, *, usage=None)`
+`Appeal.argument(parameter_name, *, usage=None, doc=None)`
 
-Used as a decorator.  Renames how one positional parameter (or
-option metavar) displays in usage: `@app.parameter('path',
-usage='FILE')`.
+Used as a decorator, on a command function or any converter.
+`usage=` renames how one positional parameter (or option
+metavar) displays in usage: `@app.argument('path',
+usage='FILE')`.  `doc=` supplies the docstring for the converter
+behind the parameter, read as that converter's own would be--or,
+for a plain operand, that operand's documentation (see
+"Overriding what you inherit").  Give one or both.
+`Appeal.parameter` is the older spelling, kept.
 
 `Appeal.main(args=None)`
 

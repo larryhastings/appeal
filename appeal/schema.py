@@ -56,9 +56,10 @@ def _docs_for(plan):
     parsed = parse_docstring(doc, where)
     summary = ' '.join(markdown(parsed['summary']).split())
     docs = {}
+    from .presentation import _prose
     for kind in ('arguments', 'options', 'commands'):
-        for name, blocks in parsed[kind].items():
-            docs[name] = ' '.join(markdown(blocks).split())
+        for name, entry in parsed[kind].items():
+            docs[name] = ' '.join(markdown(_prose(entry)).split())
     return summary, docs
 
 

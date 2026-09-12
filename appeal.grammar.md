@@ -199,7 +199,8 @@ for them.
   arguments--`-f|--flag (after a, before c)`--and an option
   whose converter declares options shows them indented beneath
   its row; a command-level docstring entry matching two sibling
-  windows refuses ("document it in the converter's docstring").
+  windows refuses ("document it in the converter's docstring, or
+  replace that docstring with @app.argument(doc=)").
 
 Help, usage, and error output render through big's markdown +
 stylesheet pipeline (`big >= 0.15`), imported **lazily**--only when
@@ -427,29 +428,63 @@ continuation lines indent to the column after `: `)--or nothing,
 which asks for the section auto-filled.  Any other spelling is prose.
 The sections are always optional; a command's tables generate whether
 or not they're written, entries overriding the rows they name.  An
-entry documents the parameter of that name anywhere in the command's
-tree, converter parameters included; a converter's own docstring
-documents its parameters once, for every command that uses it, and
-the nearest enclosing scope wins on a clash.  **The edge decides**
-(Larry, 2026-09-10): a converter reached through an *argument* merges
-its Arguments and Options entries into the parent's tables; one
-reached through an *option* nests--the option's row is the
-converter's whole docstring, then its own Arguments and Options
-blocks, auto-filled, but only the blocks its docstring wrote (empty
-or not); a converter that wrote neither clips its subtree from the
-tables entirely.  The gate is checked exactly once, where the option's
-row is assembled, never on the way through a positional converter: an
-argument edge always merges, so entries climb through undocumented
-converters (`rgb` through `color` into `render`).  A group option's row shows a mini-usage of its
-operands (`-c|--color <HUE>`), never its nested options.  Nested
-blocks render one heading level below the section's, dressed with
-the template's words.  Entries render as the Arguments and
-Options tables (labels from the plan: `-t|--times <TIMES>`, usage
-names for operands), the template dressing the headings.  A name
-that matches no parameter is a build-time error; a name two sibling
-converters both declare is ambiguous at the command and must be
-documented in the converter.  The structure is parsed at build time;
-the formatting happens at run time.
+entry documents a row of the table at its own level--the parameter
+of that name, the command's own or one merged in from a positional
+converter; a converter's own docstring documents its parameters
+once, for every command that uses it, and the nearest enclosing
+scope wins on a clash.  **The edge decides** (Larry, 2026-09-10): a
+converter reached through an *argument* merges its Arguments and
+Options entries into the parent's tables; one reached through an
+*option* nests--the option's row is the converter's docstring, then
+its own Arguments and Options blocks, auto-filled, but only the
+blocks that docstring wrote (empty or not); a converter that wrote
+neither clips its subtree from the tables entirely.  The gate is
+checked exactly once, where the option's row is assembled, never on
+the way through a positional converter: an argument edge always
+merges, so entries climb through undocumented converters (`rgb`
+through `color` into `render`).
+
+**The textual model** (Larry, 2026-09-12): a parent documents a
+converter as if the converter's docstring were inserted as the
+definition of the parent's entry for it.  Each occurrence of a
+converter has ONE chosen docstring: behind an option, the parent's
+Options entry for that option if written, else the parent's
+`@app.option(doc=)`, else the converter's own (entry and `doc=` both
+is a build error); behind a positional argument, the parent's
+`@app.argument(doc=)`, else its own.  A parent's entry therefore
+REPLACES the converter's docstring whole (options replace, arguments
+merge); an entry's definition is a docstring in miniature, so it may
+carry the same sections, read in the converter's vocabulary--the
+only way to reach an option-converter's names from the parent (a
+flat entry for one is a build error naming the entry to nest under);
+an Arguments entry carries no sections (it documents an operand;
+`doc=` replaces the converter's docstring); an Options entry carries
+sections only for an option with a converter.  A `doc=` string is
+cleaned like a docstring and read exactly as the converter's own
+would be: its sections name the converter's parameters, its first
+paragraph is the converter's summary; on a plain operand it is that
+operand's documentation.  A command's own parameter name shadows a
+merged one (two `<COLOR>` rows, each documented by its owner, never
+ambiguous); the same name from two merged *siblings* is ambiguous at
+the parent.  **One-operand converters** are transparent to naming:
+the operand wears the annotated parameter's name, the outermost
+through a chain of them, on the usage line and in the table alike;
+its documentation is the nearest that speaks--the parent's entry,
+then each converter's entry for its one parameter, and a converter
+that wrote no Arguments section documents its one operand with its
+prose (a one-line docstring on `path(path)` documents `<SRC>` and
+`<DST>` in `copy(src: path, dst: path)`, and `--src <SRC>` when it
+converts an option's value).  An option row whose converter is a
+group keeps that prose for itself; its one oparg gets nothing.
+
+A group option's row shows a mini-usage of its operands
+(`-c|--color <HUE>`), never its nested options.  Nested blocks
+render one heading level below the section's, dressed with the
+template's words.  Entries render as the Arguments and Options
+tables (labels from the plan: `-t|--times <TIMES>`, usage names for
+operands), the template dressing the headings.  A name that matches
+no parameter is a build-time error.  The structure is parsed at
+build time; the formatting happens at run time.
 
 **Command sets**: the command listing shows each command with the
 first line of its docstring, plus the automatic `help` command

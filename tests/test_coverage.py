@@ -1121,6 +1121,325 @@ def test_plain_stylesheet_knob():
         assert 'disagree on argument_decoration' in str(e), e
 
 
+def test_composable_documentation_2026_09_12():
+    # Larry's rulings on documentation composability (2026-09-12):
+    # the textual model--a parent documents a child as if the child's
+    # docstring were inserted as the entry's definition.
+    import contextlib, io
+    from big.stylesheet import strip_styles
+    from appeal.presentation import merge_docs
+    plain = lambda rows: [(strip_styles(d), _lines(l), [(k, plain(r)) for k, r in n])
+                          for d, l, n in rows]
+    def corpus(f, **decor):
+        app = Appeal(name='t', stylesheet=False)
+        for name, kw in decor.items():
+            f = app.argument(name, **kw)(f)
+        return merge_docs(build_plan(f, decorations=app._decorations))
+    def refuses(f, *needles):
+        try:
+            merge_docs(build_plan(f))
+        except AppealConfigurationError as e:
+            for needle in needles:
+                assert needle in str(e), f'{needle!r} not in {e}'
+            return
+        assert False, f'expected AppealConfigurationError for {f.__name__}'
+
+    def option(x, y, *, color='red'):
+        """
+        The converter's own docs.
+
+        # Arguments
+        x
+        : Converter says: x.
+        y
+        : Converter says: y.
+
+        # Options
+        color
+        : Converter says: color.
+        """
+    # A1: an Options entry REPLACES the converter's docstring whole
+    def a1(a, b, *, option: option = None):
+        """
+        A1.
+
+        # Options
+        option
+        : Command says: my own words for option.
+        """
+    (row,) = plain(corpus(a1)['options'])
+    assert row == ('-o|--option <X> <Y>', ['Command says: my own words for option.'], [])
+    # A2: the entry is a docstring in miniature: its nested sections
+    # document the converter, in the converter's own vocabulary
+    def a2(a, b, *, option: option = None):
+        """
+        A2.
+
+        # Options
+        option
+        : Command says: option.
+
+          # Options
+          color
+          : Command says: color, rewritten.
+        """
+    (row,) = plain(corpus(a2)['options'])
+    assert row[1] == ['Command says: option.']
+    assert row[2] == [('options', [('-c|--color <COLOR>', ['Command says: color, rewritten.'], [])])]
+    # A2b: the converter's name is NOT addressable flat from the parent
+    def a2b(a, b, *, option: option = None):
+        """
+        # Options
+        color
+        : nope.
+        """
+    refuses(a2b, "'color'", "belongs to the converter behind 'option'",
+            "nested under the 'option' entry")
+    def a2z(a, b, *, option: option = None):
+        """
+        # Options
+        zed
+        : nope.
+        """
+    refuses(a2z, "'zed'", "not a parameter of 'a2z' or its converters")
+    # a nested section under an option that takes no converter
+    def a2c(a, *, flag=False):
+        """
+        # Options
+        flag
+        : A flag.
+
+          # Options
+          deeper
+          : nope.
+        """
+    refuses(a2c, "'flag'", "takes no converter to document")
+    # an Arguments entry documents the operand: no sections of its own
+    def a2d(a, *, flag=False):
+        """
+        # Arguments
+        a
+        : The a.
+
+          # Options
+          deeper
+          : nope.
+        """
+    refuses(a2d, "'a'", "an argument's entry documents the operand",
+            "@app.argument('a', doc=...)")
+
+    # B: a merged positional group's option IS in the parent's table,
+    # so a flat entry documents it; the parent's own name shadows
+    def stuff(x, y, *, color='red'):
+        """
+        Stuff.
+
+        # Options
+        color
+        : Stuff says: color.
+        """
+    def b2(a, b, stuff: stuff):
+        """
+        # Options
+        color
+        : Command says: stuff's --color, rewritten.
+        """
+    assert plain(corpus(b2)['options']) == \
+        [('-c|--color <COLOR>', ["Command says: stuff's --color, rewritten."], [])]
+    def b(a, b, color, stuff: stuff):
+        """
+        # Options
+        color
+        : nope.
+        """
+    refuses(b, "'color'", "is an argument, not an option")
+
+    # C: two positional colors, each documented by its own function--
+    # the parent's own shadows the merged one, no ambiguity
+    def stuffc(x, y, color='red'):
+        """
+        Stuffc.
+
+        # Arguments
+        color
+        : Stuffc says: color.
+        """
+    def c(a, b, color, stuff: stuffc):
+        """
+        # Arguments
+        color
+        : Command says: color.
+        """
+    assert plain(corpus(c)['arguments']) == [
+        ('<A>', [], []), ('<B>', [], []), ('<COLOR>', ['Command says: color.'], []),
+        ('<X>', [], []), ('<Y>', [], []), ('<COLOR>', ['Stuffc says: color.'], [])]
+    # two merged SIBLINGS with the same name: ambiguous at the parent
+    def c_twins(first: stuffc, second: stuffc):
+        """
+        # Arguments
+        color
+        : which?
+        """
+    refuses(c_twins, "'color' is ambiguous", "@app.argument(doc=)")
+
+    # the degenerate converter tree: the operand wears the OUTERMOST
+    # single-positional parameter's name, on the usage line and in
+    # the table alike; its documentation is the nearest that speaks
+    def base_thingy(base):
+        """
+        # Arguments
+        base
+        : The basis for all thingies.
+        """
+    def modified_thingy(modified: base_thingy):
+        """
+        # Arguments
+        modified
+        : A modified version of a base thingy.
+        """
+    def cmd(thingy: modified_thingy):
+        "Does something with the thingy you supply."
+    plan = build_plan(cmd)
+    assert strip_styles(plan.usage()) == 'cmd <THINGY>'
+    assert plain(merge_docs(plan)['arguments']) == \
+        [('<THINGY>', ['A modified version of a base thingy.'], [])]
+    def cmd2(thingy: modified_thingy):
+        """
+        # Arguments
+        thingy
+        : The command's own words.
+        """
+    assert plain(corpus(cmd2)['arguments']) == [('<THINGY>', ["The command's own words."], [])]
+    # ...and a converter that wrote no Arguments section documents
+    # its one operand with its prose
+    def modified_prose(modified: base_thingy):
+        "A modified thingy, in prose."
+    def cmd3(thingy: modified_prose):
+        pass
+    assert plain(corpus(cmd3)['arguments']) == [('<THINGY>', ['A modified thingy, in prose.'], [])]
+    def cmd4(thingy: base_thingy):
+        pass
+    assert plain(corpus(cmd4)['arguments']) == [('<THINGY>', ['The basis for all thingies.'], [])]
+    # the single-positional prose rule, plainly
+    def path(path):
+        "A confirmed extant path on the filesystem."
+    def copy(src: path, dst: path):
+        "Makes a copy of a file on disk."
+    assert plain(corpus(copy)['arguments']) == [
+        ('<SRC>', ['A confirmed extant path on the filesystem.'], []),
+        ('<DST>', ['A confirmed extant path on the filesystem.'], [])]
+    # a converter that WROTE an Arguments section (even empty) is
+    # documented by it alone; and an option row keeps the prose for
+    # itself--its one oparg gets nothing
+    def path2(path):
+        """
+        A path.
+
+        # Arguments
+        """
+    def copy2(src: path2):
+        pass
+    assert plain(corpus(copy2)['arguments']) == [('<SRC>', [], [])]
+    def copy3(*, src: path = None, count: int = 0):
+        pass
+    assert plain(corpus(copy3)['options']) == [
+        ('-s|--src <SRC>', ['A confirmed extant path on the filesystem.'], []),
+        ('-c|--count <COUNT>', [], [])]
+    def copy4(*, src: path2 = None):
+        pass
+    assert plain(corpus(copy4)['options']) == [('-s|--src <SRC>', [], [])]
+
+    # doc=: the parent supplies the converter's docstring, read in the
+    # converter's own context
+    replacement = """
+        Replaced stuff.
+
+        # Arguments
+        color
+        : Replacement says: stuffc's color.
+        """
+    def c_doc(a, b, color, stuff: stuffc):
+        """
+        # Arguments
+        color
+        : Command says: color.
+        """
+    rows = plain(corpus(c_doc, stuff={'doc': replacement})['arguments'])
+    assert rows[2] == ('<COLOR>', ['Command says: color.'], [])
+    assert rows[5] == ('<COLOR>', ["Replacement says: stuffc's color."], [])
+    # ...on an option too, through @app.option(doc=); writing the
+    # entry as well is two definitions
+    app = Appeal(name='t', stylesheet=False)
+    @app.command()
+    @app.option('option', '-o', '--option', doc="Doc'd option.\n\n# Options\ncolor\n: Doc'd color.")
+    def odoc(a, *, option: option = None):
+        pass
+    (row,) = plain(merge_docs(app.plan_for('odoc'))['options'])
+    assert row == ('-o|--option <X> <Y>', ["Doc'd option."],
+                   [('options', [('-c|--color <COLOR>', ["Doc'd color."], [])])])
+    @app.command()
+    @app.option('option', '-o', '--option', doc="Doc'd option.")
+    def otwice(a, *, option: option = None):
+        """
+        # Options
+        option
+        : Entry too.
+        """
+    try:
+        merge_docs(app.plan_for('otwice'))
+        assert False
+    except AppealConfigurationError as e:
+        assert "'option' is documented twice" in str(e), e
+    # doc= on a plain operand is its documentation; sections there
+    # have nothing to document
+    def leaf(a, b):
+        pass
+    assert plain(corpus(leaf, a={'doc': 'The a, by doc=.'})['arguments']) == \
+        [('<A>', ['The a, by doc=.'], []), ('<B>', [], [])]
+    try:
+        corpus(leaf, b={'doc': 'B.\n\n# Options\nx\n: nope.'})
+        assert False
+    except AppealConfigurationError as e:
+        assert "doc= for 'b' has sections" in str(e), e
+    # doc= must name a parameter, and be a string; argument() wants
+    # usage= or doc=; a converter can carry the decoration itself
+    try:
+        corpus(leaf, zzz={'doc': 'nope'})
+        assert False
+    except AppealConfigurationError as e:
+        assert "doc= names parameter 'zzz'" in str(e), e
+    try:
+        app.argument('a', doc=5)(leaf)
+        assert False
+    except AppealConfigurationError as e:
+        assert 'must be a string' in str(e), e
+    try:
+        app.argument('a')
+        assert False
+    except AppealConfigurationError as e:
+        assert 'give usage= or doc=' in str(e), e
+    app2 = Appeal(name='t', stylesheet=False)
+    @app2.argument('x', doc='The x, said by stuff itself.')
+    def stuff2(x, y):
+        pass
+    @app2.command()
+    def uses(s: stuff2):
+        pass
+    assert plain(merge_docs(app2.plan_for('uses'))['arguments']) == \
+        [('<X>', ['The x, said by stuff itself.'], []), ('<Y>', [], [])]
+    # the whole page renders (the usage line agrees with the table)
+    app3 = Appeal(name='t', stylesheet=False)
+    app3.command()(cmd)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            app3.main(['cmd', '--help'])
+        except SystemExit:
+            pass
+    assert 'usage: t cmd [-h|--help] <THINGY>' in out.getvalue()
+    assert '<THINGY>  A modified version of a base thingy.' in out.getvalue()
+
+
 def test_load_without_pathlib():
     # the pathlib leaves are recognized by identity via sys.modules;
     # a process that never imported pathlib has none to recognize
@@ -5370,17 +5689,17 @@ def test_astra_r08_tables_are_nodes_and_the_scanner_knows_code():
     # a nested definition list inside a definition is a node of its own
     scanned = scan_docstring('Summary.\n\n# Arguments\nx\n: Description.\n\n'
                              '  term\n  : Nested definition.\n')
-    ((term, blocks),) = scanned['arguments']
-    assert term == 'x' and isinstance(blocks[1], DefinitionList), blocks
+    ((term, entry),) = scanned['arguments']
+    assert term == 'x' and isinstance(entry['body'][0], DefinitionList), entry
     # a section ends at the next heading, setext included
     scanned = scan_docstring('Summary.\n\n# Options\nv\n: Doc.\n\n'
                              'Notes\n-----\nProse.\n')
-    assert [(t, markdown(b)) for t, b in scanned['options']] == [('v', 'Doc.')]
+    assert [(t, markdown(e['summary'])) for t, e in scanned['options']] == [('v', 'Doc.')]
     body = markdown(scanned['body'])
     assert 'Notes' in body and 'Prose.' in body
     # a wide gap after the ':' is big's indented code
     scanned = scan_docstring('Summary.\n\n# Options\nv\n:      code\n')
-    assert [(t, markdown(b)) for t, b in scanned['options']] == [('v', '```\n code\n```')], scanned['options']
+    assert [(t, markdown(e['body'])) for t, e in scanned['options']] == [('v', '```\n code\n```')], scanned['options']
     # inline code and fenced code pass through the CommonMark writer verbatim
     assert to_commonmark('Use `~~literal~~`.') == 'Use `~~literal~~`.'
     doc = 'Gone ~~here~~.\n\n```\n~~kept~~\nterm\n: not a list\n```\n'
@@ -6785,8 +7104,9 @@ def test_nested_documentation_across_option_edges():
     (row,) = plain(merge_docs(app.plan_for('paint'))['options'])
     assert row[1] == ['Defines a color.', '', 'More about colors.'], row
     assert [k for k, _ in row[2]] == ['arguments', 'options']
-    # the parent documenting the option replaces the converter's prose;
-    # its blocks stay
+    # the parent documenting the option REPLACES the converter's
+    # docstring whole (Larry, 2026-09-12: options replace): its
+    # blocks go too, unless the entry writes its own sections
     @app.command()
     def paint2(*, c: color = None):
         """
@@ -6797,7 +7117,24 @@ def test_nested_documentation_across_option_edges():
         : My own words.
         """
     (row,) = plain(merge_docs(app.plan_for('paint2'))['options'])
-    assert row[1] == ['My own words.'] and [k for k, _ in row[2]] == ['arguments', 'options']
+    assert row[1] == ['My own words.'] and row[2] == [], row
+    @app.command()
+    def paint3(*, c: color = None):
+        """
+        Paints.
+
+        # Options
+        c
+        : My own words.
+
+          # Options
+          value
+          : My words for value.
+        """
+    (row,) = plain(merge_docs(app.plan_for('paint3'))['options'])
+    assert row[1] == ['My own words.'], row
+    assert row[2] == [('options', [('-s|--saturation <SATURATION>', [], []),
+                                   ('-v|--value <VALUE>', ['My words for value.'], [])])], row
     # the page: nested headings beneath the row (big lays them out)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
@@ -7490,7 +7827,7 @@ def test_docstrings_are_parsed_by_big():
         r = scan_docstring('Sum.\n\n' + prose + 'v\n: Doc.\n')
         assert r['options'] is None, prose
     r = scan_docstring('Sum.\n\n# Options\nv\n: Doc.\n')
-    assert [(t, markdown(b)) for t, b in r['options']] == [('v', 'Doc.')]
+    assert [(t, markdown(e['summary'])) for t, e in r['options']] == [('v', 'Doc.')]
     corpus = {'summary': _blocks('S.'), 'documentation': [],
               'arguments': [('<X>', _blocks('    code first\n\nThen prose.'), ())],
               'options': [], 'commands': []}

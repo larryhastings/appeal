@@ -1376,8 +1376,11 @@ def test_markdown_scanner():
         r = _scan(text, where)
         out = {'summary': markdown(r['summary']), 'body': markdown(r['body'])}
         for k in ('options', 'arguments', 'commands'):
+            # an entry is a docstring in miniature: its prose is the
+            # summary and body, as a docstring's would be
             out[k] = (None if r[k] is None
-                      else [(t, markdown(b)) for t, b in r[k]])
+                      else [(t, markdown(e['summary'] + e['body']))
+                            for t, e in r[k]])
         return out
     r = scan_docstring(
         "Update the item.\n"
@@ -1441,8 +1444,8 @@ def test_markdown_scanner():
     r = _scan("Sum.\n\n# Arguments\nx\n: Description.\n\n"
               "  term\n  : Nested definition.\n")
     from big.markdown import DefinitionList
-    ((term, blocks),) = r['arguments']
-    assert term == 'x' and isinstance(blocks[1], DefinitionList), blocks
+    ((term, entry),) = r['arguments']
+    assert term == 'x' and isinstance(entry['body'][0], DefinitionList), entry
     # refusals name the offender
     from appeal import AppealConfigurationError
     for bad, fragment in (
@@ -2817,8 +2820,9 @@ def test_help_composes_through_option_converters():
     assert '--precision <PRECISION>' in text, text
     assert 'decimal places.' in text, text
 
-    # nearest enclosing scope wins: the command overrides its
-    # converter's text for the same inner option
+    # the command overrides its converter's text for an inner option
+    # through the option's OWN entry, nested (Larry, 2026-09-12: the
+    # inner name is the converter's, not the command's)
     def dd(style, *, width: int = 1):
         """
         # Options
@@ -2831,8 +2835,12 @@ def test_help_composes_through_option_converters():
         Draw.
 
         # Options
-        width
-        : COMMAND text.
+        line
+        : A line.
+
+          # Options
+          width
+          : COMMAND text.
         """
         return shape
     _, text = run_both_stdout(cmd, ['--help'])
@@ -7437,8 +7445,9 @@ def test_parse_docstring():
     assert _lines(c['summary']) == ['Summary line for foo.']
     assert _lines(c['documentation']) == [
         'First line of docs for foo.', '', 'This is the second line of docs.']
-    assert {k: _lines(v) for k, v in c['arguments'].items()} == {'x': ['the thing to foo']}
-    assert {k: _lines(v) for k, v in c['options'].items()} == {'verbose': ['Verbosity, man.']}
+    from appeal.presentation import _prose
+    assert {k: _lines(_prose(v)) for k, v in c['arguments'].items()} == {'x': ['the thing to foo']}
+    assert {k: _lines(_prose(v)) for k, v in c['options'].items()} == {'verbose': ['Verbosity, man.']}
     assert c['commands'] == {}
     # a special section runs to the next heading and must contain
     # ONLY its definition list: prose after the list refuses (put
@@ -7469,8 +7478,8 @@ def test_parse_docstring():
     )
     c = parse_docstring(doc, "f")
     from big.markdown import Paragraph, CodeBlock
-    assert [type(b) for b in c['arguments']['x']] == [Paragraph, CodeBlock]
-    assert _lines(c['arguments']['y']) == ['simple.']
+    assert [type(b) for b in _prose(c['arguments']['x'])] == [Paragraph, CodeBlock]
+    assert _lines(_prose(c['arguments']['y'])) == ['simple.']
 
     # heading-free docstring: pure prose, no sections.  A colon-
     # bearing line that isn't a section heading stays prose.
@@ -7486,13 +7495,13 @@ def test_parse_docstring():
 
     # exactly '# Commands' opens the section; other spellings are prose
     c = parse_docstring("Sum.\n\n# Commands\nserve\n: Serves.", "f")
-    assert {k: _lines(v) for k, v in c['commands'].items()} == {'serve': ['Serves.']}
+    assert {k: _lines(_prose(v)) for k, v in c['commands'].items()} == {'serve': ['Serves.']}
     c = parse_docstring("Sum.\n\n###### COMMANDS\nserve\n: Serves.", "f")
     assert c['commands'] == {} and '###### COMMANDS' in _lines(c['documentation'])
     # 'Subcommands' opens the same section as 'Commands', in any
     # context (Larry, 2026-09-10); the page emits the context's word
     c = parse_docstring("Sum.\n\n# Subcommands\nserve\n: Serves.", "f")
-    assert {k: _lines(v) for k, v in c['commands'].items()} == {'serve': ['Serves.']}
+    assert {k: _lines(_prose(v)) for k, v in c['commands'].items()} == {'serve': ['Serves.']}
 
     # the template dresses the page: nothing to present
     c = parse_docstring("Sum.\n\n# Options\nv\n: doc", "f")
