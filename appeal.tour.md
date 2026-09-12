@@ -514,8 +514,11 @@ underline live there and nowhere else--and underlines headings
 instead of ruling them; a colored theme is `_theme(role=color, ...)`,
 the uncolored base with each named role wrapped in its color,
 attributes inherited.  `ruled_headings(theme)` puts the rules back on
-any theme.  A stream that wants color gets `appeal_theme` over the
-ANSI 16; one that doesn't gets `plain_theme` over the plain palette.
+any theme.  The program holds a pair, `stylesheet` and
+`plain_stylesheet`: a stream that wants color gets the first
+(default `appeal_theme` over the ANSI 16), one that doesn't gets the
+second (default `plain_theme` over the plain palette), each verbatim
+in its slot; `resolve_stylesheet` picks.
 
 Errors ride the same pipeline: `run_main` catches `AppealError`, prints
 `error: ...` to stderr with the usage line attached (a command's error

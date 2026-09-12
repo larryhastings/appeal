@@ -1053,6 +1053,74 @@ def test_required_shared_forward_checked_in_its_own_era():
         assert "missing option '--token'" in str(e), e
 
 
+def test_plain_stylesheet_knob():
+    # Appeal(stylesheet=, plain_stylesheet=) (Larry, 2026-09-12): the
+    # first paints a stream that wants color, the second one that
+    # doesn't--each verbatim in its slot.  The tests' stdout is a
+    # capture, so only the plain slot ever paints here.
+    import io, contextlib, re
+    from big.markdown import markdown_defaults
+    from big.stylesheet import (StyleSheet, ansi_16_color_palette,
+                                transforms)
+    loud = (markdown_defaults | transforms | ansi_16_color_palette
+            | StyleSheet(appeal.appeal_theme))
+    def page(**knobs):
+        app = Appeal(name='knob', default_mappings=None, **knobs)
+        @app.precommand()
+        def knob(target):
+            "Turn it."
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            app.help()
+        return out.getvalue()
+    assert '\x1b[' not in page()
+    assert '\x1b[' not in page(stylesheet=loud)          # the color slot: unused
+    assert '\x1b[' in page(plain_stylesheet=loud)        # the plain slot: used
+    assert '\x1b[' not in page(stylesheet=False, plain_stylesheet=None)
+    # the error path rides the same pair
+    app = Appeal(name='knob', default_mappings=None, plain_stylesheet=loud)
+    @app.precommand()
+    def knob(target):
+        pass
+    err = io.StringIO()
+    app.errors = err
+    try:
+        app.main(['--nope'])
+    except SystemExit:
+        pass
+    assert '\x1b[' in err.getvalue(), err.getvalue()
+    # subcommand nodes copy both knobs
+    app = Appeal(name='knob', default_mappings=None, stylesheet=loud,
+                 plain_stylesheet=loud)
+    @app.command('db')
+    def db():
+        pass
+    @app.command('db').command()
+    def migrate():
+        pass
+    app._compile_all()
+    node = app.command('db')
+    assert node.plain_stylesheet is loud and node.stylesheet is loud
+    # the placeholder shape is baked into layout: two sheets that
+    # disagree on argument_decoration are refused; two that agree, or
+    # one alone, decide it
+    bare = (markdown_defaults | transforms | ansi_16_color_palette
+            | StyleSheet(dict(appeal.uncolored_theme,
+                              argument_decoration=('T', 'T'))))
+    decolor = lambda s: re.sub('\x1b\\[[0-9;]*m', '', s)
+    assert 'usage: knob target' in decolor(page(plain_stylesheet=bare))
+    assert 'usage: knob target' in decolor(page(stylesheet=bare))
+    assert 'usage: knob target' in decolor(page(stylesheet=bare,
+                                                plain_stylesheet=bare))
+    # a sheet with no argument_decoration entry at all says nothing
+    assert Appeal(name='k', plain_stylesheet=StyleSheet({}))._decoration_entry() is None
+    try:
+        page(stylesheet=loud, plain_stylesheet=bare)
+        assert False
+    except AppealConfigurationError as e:
+        assert 'disagree on argument_decoration' in str(e), e
+
+
 def test_load_without_pathlib():
     # the pathlib leaves are recognized by identity via sys.modules;
     # a process that never imported pathlib has none to recognize
@@ -1875,9 +1943,14 @@ def test_theme_resolution_and_markup():
                 '⦃error⦙error:⦄')
             assert '\x1b[' in resolve_stylesheet(None, tty).render(
                 '⦃error⦙error:⦄')
-        # a composed sheet is verbatim: identity, any stream
-        sentinel = resolve_stylesheet(None, tty)
-        assert resolve_stylesheet(sentinel, io.StringIO()) is sentinel
+            # the color slot's sheet is verbatim on a willing tty
+            sentinel = resolve_stylesheet(None, tty)
+            assert resolve_stylesheet(sentinel, tty) is sentinel
+        # the plain slot's sheet is verbatim off one; the color slot's
+        # never reaches a pipe
+        sentinel = resolve_stylesheet(None, io.StringIO())
+        assert resolve_stylesheet(None, io.StringIO(), sentinel) is sentinel
+        assert resolve_stylesheet(sentinel, io.StringIO()) is not sentinel
     finally:
         os.environ.clear()
         os.environ.update(old_env)
@@ -2098,14 +2171,14 @@ def test_every_theme_renders_a_link():
         sheet = (markdown_defaults | transforms | ansi_truecolor_palette
                  | StyleSheet(theme))
         text = render_baked_help((('markdown', doc),), margin=60,
-                                 stylesheet=sheet)
+                                 plain_stylesheet=sheet)
         assert 'the docs' in text, text
     # the URL rides along as luggage, so a sheet MAY show it
     sheet = (markdown_defaults | transforms | ansi_truecolor_palette
              | StyleSheet(plain_theme)
              | StyleSheet({'link': ('URL', 'T', 'T <URL>')}))
     text = render_baked_help((('markdown', doc),), margin=60,
-                             stylesheet=sheet)
+                             plain_stylesheet=sheet)
     assert 'the docs <https://example.com/docs>' in text, text
 
 
@@ -2128,7 +2201,8 @@ def test_plain_rules_and_uncolored_underlines():
     def render(theme, palette):
         sheet = (markdown_defaults | transforms | palette
                  | StyleSheet(theme))
-        return render_baked_help((('markdown', layout),), margin=40, stylesheet=sheet)
+        return render_baked_help((('markdown', layout),), margin=40,
+                                 plain_stylesheet=sheet)
     assert render(plain_theme, plain_palette) == 'Options\n-------\n'
     uncolored = render(uncolored_theme, uncolored_palette)
     assert uncolored == '\x1b[1m\x1b[4mOptions\x1b[24m\x1b[22m\n', repr(uncolored)
@@ -4025,7 +4099,7 @@ def test_branch_text_formatter_edges():
              | StyleSheet(appeal_theme))
     page = render_help_page(plan.usage_units(), merge_docs(plan),
                             default_template, margin=50,
-                            stylesheet=sheet)
+                            plain_stylesheet=sheet)
     assert '\x1b[' in page
 
 

@@ -170,8 +170,11 @@ def build_demo(stylesheet, errors, margin):
     """
     import appeal
     import pathlib
+    # the sample is captured into a buffer, never a tty: the sheet
+    # goes in BOTH slots so it paints regardless
     app = appeal.Appeal(name='serve', version='1.0', margin=margin,
-                        stylesheet=stylesheet, errors=errors)
+                        stylesheet=stylesheet, plain_stylesheet=stylesheet,
+                        errors=errors)
 
     def top():
         pass

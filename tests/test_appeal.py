@@ -1556,22 +1556,23 @@ def test_renderer_injects_line():
                  'heading3': ('T', '⦃strip⦙T⦄\n'
                                    '⦃clip⦙⦃line⦄⦙⦃fill⦙*⦙⦃strip⦙T⦄⦄⦄'),
                }))
+    # (the tests' stream is never a tty: a sheet goes in the plain slot)
     page = render_baked_help((('markdown', layout),), margin=40,
-                             stylesheet=sheet)
+                             plain_stylesheet=sheet)
     assert page == 'Deeds\n*****\n', repr(page)
     # a rule wider than the margin clips to it
     wide = (markdown_defaults | transforms | plain_stylesheet
             | StyleSheet({'heading3': ('T', '⦃clip⦙⦃line⦄⦙⦃fill⦙=⦙'
                                             '⦃strip⦙T⦄xxxxxxxxxxxx⦄⦄')}))
     page = render_baked_help((('markdown', layout),), margin=8,
-                             stylesheet=wide)
+                             plain_stylesheet=wide)
     assert page == '========\n', repr(page)
     # a sheet defining its OWN line wins over the injection
     own = (markdown_defaults | transforms | plain_stylesheet
            | StyleSheet({'line': ('##',),
                          'heading3': ('T', '⦃clip⦙⦃line⦄⦙⦃strip⦙T⦄⦄')}))
     page = render_baked_help((('markdown', layout),), margin=40,
-                             stylesheet=own)
+                             plain_stylesheet=own)
     assert page == 'De\n', repr(page)    # clipped to the SHEET's 2-wide line
 
 
@@ -6764,7 +6765,8 @@ def test_argument_decoration_follows_the_stylesheet():
              | StyleSheet(bare))
 
     def build(stylesheet):
-        app = _appeal.Appeal(name='serve', stylesheet=stylesheet)
+        app = _appeal.Appeal(name='serve', stylesheet=stylesheet,
+                             plain_stylesheet=stylesheet)
         @app.precommand()
         def serve(host, port: int = 8080):
             pass
@@ -6777,7 +6779,7 @@ def test_argument_decoration_follows_the_stylesheet():
     assert '<HOST>' not in custom, custom       # the table rows follow too
 
     # the command-set placeholder follows the same shape
-    app = _appeal.Appeal(name='prog', stylesheet=sheet)
+    app = _appeal.Appeal(name='prog', plain_stylesheet=sheet)
     @app.command()
     def push(target):
         pass
@@ -6788,7 +6790,8 @@ def test_argument_decoration_follows_the_stylesheet():
     # options (the stamp walks the whole plan tree)
     def point(x: int, y: int):
         return (x, y)
-    app2 = _appeal.Appeal(name='draw', stylesheet=sheet)
+    app2 = _appeal.Appeal(name='draw', stylesheet=sheet,
+                          plain_stylesheet=sheet)
     @app2.precommand()
     def draw(where: point, shape='dot', *, at: point = None):
         pass
@@ -7712,7 +7715,10 @@ def test_theme():
                                 transforms)
     sheet = (markdown_defaults | transforms | ansi_16_color_palette
              | StyleSheet(appeal_theme))
-    assert resolve_stylesheet(sheet, io.StringIO()) is sheet
+    # the pair (Larry, 2026-09-12): a pipe gets the plain slot's sheet
+    # verbatim, and never the color slot's
+    assert resolve_stylesheet(None, io.StringIO(), sheet) is sheet
+    assert resolve_stylesheet(sheet, io.StringIO()) is not sheet
     # None and False resolve to compositions that render
     resolved = resolve_stylesheet(None, io.StringIO())
     assert resolved.render('⦃error⦙error:⦄') == 'error:'   # pipe: plain
@@ -7804,11 +7810,11 @@ def test_colorized_help_paints_after_layout():
     # the palette what an attribute renders to
     from big.stylesheet import plain_palette
     plain = render_help_page(plan.usage_units(), corpus, default_template,
-                             stylesheet=(markdown_defaults | transforms
-                                         | plain_palette
-                                         | StyleSheet(appeal_theme)))
+                             plain_stylesheet=(markdown_defaults | transforms
+                                               | plain_palette
+                                               | StyleSheet(appeal_theme)))
     painted = render_help_page(plan.usage_units(), corpus, default_template,
-                               stylesheet=sheet)
+                               plain_stylesheet=sheet)
     assert painted != plain
     assert '\x1b[' in painted
     assert decolor(painted) == plain

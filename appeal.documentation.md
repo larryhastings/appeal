@@ -272,9 +272,12 @@ keeps it legible) and the four corners `light_warm_theme` /
         sys.exit(app.main())
 
 `stylesheet=` takes the *complete* composition and uses it
-verbatim--Appeal adds nothing and second-guesses nothing (your
-sheet, your rules; that includes coloring output that lands in
-a pipe).  To recolor one thing, extend a shipped theme:
+verbatim, for every stream that wants color--Appeal adds nothing
+and second-guesses nothing.  A stream that doesn't want color (a
+pipe, or an environment that says no) gets `plain_stylesheet=`
+instead, the same way; pass the same sheet to both to color a
+pipe too (your sheet, your rules).  To recolor one thing, extend
+a shipped theme:
 `dict(appeal.appeal_theme, error=('T', '⦃bold⦙⦃orange⦙T⦄⦄'))`.
 To draw rules under headings instead of underlining them,
 `appeal.ruled_headings(appeal.appeal_theme)`.
@@ -287,17 +290,18 @@ your own entry in the sheet you pass and usage lines, help tables,
 and the command placeholder all follow it--
 `dict(appeal.uncolored_theme, argument_decoration=('T', 'T'))`
 renders operands bare.  Shape is decided at build (it's baked into
-layout), so only an explicitly-given sheet changes it; the automatic
+layout), so only an explicitly-given sheet changes it, and when
+both sheets are given they must agree on it; the automatic
 default below keeps `<HOST>`.
 
-`stylesheet=None` (the default) means: decide per stream, at
-print time, the same way CPython itself decides
-(`PYTHON_COLORS` beats `NO_COLOR` beats `FORCE_COLOR`, then
-`TERM=dumb`, then whether the stream is a terminal)--
-`appeal_theme` over the ANSI 16 when the stream wants color,
-`plain_theme` over the plain palette (no escapes of any kind,
-headings ruled) when it doesn't.  `stylesheet=False` means never
-any color.
+Which slot paints is decided per stream, at print time, the
+same way CPython itself decides (`PYTHON_COLORS` beats
+`NO_COLOR` beats `FORCE_COLOR`, then `TERM=dumb`, then whether
+the stream is a terminal).  `stylesheet=None` (the default) is
+`appeal_theme` over the ANSI 16; `plain_stylesheet=None` (the
+default) is `plain_theme` over the plain palette (no escapes of
+any kind, headings ruled).  `stylesheet=False` means never any
+color: the plain slot paints every stream.
 
 Two guarantees worth knowing:
 

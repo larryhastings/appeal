@@ -200,8 +200,10 @@ from big.markdown import (glyphs_from_stylesheet, layout_document,
                           split_styles_document, style_document)
 from big.stylesheet import (StyleSheet, ansi_16_color_palette,
                             escape_styles, join_styles,
-                            plain_stylesheet, strip_styles, style,
+                            strip_styles, style,
                             transforms)
+# big's strip-everything palette; the name is a parameter here
+from big.stylesheet import plain_stylesheet as plain_stylesheet_palette
 from big.text import (OverflowStrategy, _iterate_over_bytes,
                       expand_tabs, format_definition_list,
                       merge_columns, split_text_with_code,
@@ -471,28 +473,31 @@ dark_cool_theme = _theme(
 )
 
 
-def resolve_stylesheet(spec, file=None):
+def resolve_stylesheet(stylesheet, file=None, plain_stylesheet=None):
     """
-    The runtime half of the stylesheet decision.  spec is what
-    the program was configured with: None (auto), False (never
-    any color), or a complete composed StyleSheet, used VERBATIM
-    (ruled 2026-08-06).  Auto composes appeal_theme over the
-    ANSI 16 when this stream wants color at this moment
-    (can_colorize: NO_COLOR and friends always win)--the 16
-    because the terminal remaps them to its own scheme, so the
-    theme stays legible on light and dark alike (ruled
-    2026-08-06); False (and colorless auto) gets the plain
-    palette: no escapes of any kind.
+    The runtime half of the stylesheet decision: which of the
+    program's two sheets paints THIS stream at THIS moment (Larry,
+    2026-09-12).  `stylesheet` is for a stream that wants color,
+    `plain_stylesheet` for one that doesn't--can_colorize decides
+    (NO_COLOR and friends always win, then whether the stream is a
+    tty).  Either may be None for the stock composition: appeal_theme
+    over the ANSI 16 (the 16 because the terminal remaps them to its
+    own scheme, so the theme stays legible on light and dark alike,
+    ruled 2026-08-06) or plain_theme over the plain palette (no
+    escapes of any kind, headings ruled).  stylesheet=False means
+    never any color: the plain sheet for every stream.  A sheet given
+    for a slot is used VERBATIM in that slot (the same sheet in both
+    colors a pipe too).
     """
-    if spec is None or spec is False:
-        if (spec is None) and can_colorize(file=file):
-            palette, theme = ansi_16_color_palette, appeal_theme
-        else:
-            # a stream with no color has no underline either: the
-            # plain theme draws its heading rules
-            palette, theme = plain_stylesheet, plain_theme
-        return markdown_defaults | transforms | palette | StyleSheet(theme)
-    return spec
+    if (stylesheet is not False) and can_colorize(file=file):
+        if stylesheet is not None:
+            return stylesheet
+        palette, theme = ansi_16_color_palette, appeal_theme
+    else:
+        if plain_stylesheet is not None:
+            return plain_stylesheet
+        palette, theme = plain_stylesheet_palette, plain_theme
+    return markdown_defaults | transforms | palette | StyleSheet(theme)
 
 
 default_template = (
@@ -541,15 +546,15 @@ def help_stylesheet(file=None):
     """
     The StyleSheet a help page paints with by default, for this
     stream at this moment: appeal_theme over the ANSI 16 when
-    the stream wants color, the plain palette (no escapes of any
-    kind) when it doesn't--pipes and captures stay clean.
-    Exactly resolve_stylesheet(None, file).
+    the stream wants color, plain_theme over the plain palette
+    (no escapes of any kind) when it doesn't--pipes and captures
+    stay clean.  Exactly resolve_stylesheet(None, file).
     """
     return resolve_stylesheet(None, file)
 
 
 def render_baked_help(pieces, margin=79, file=None,
-                      stylesheet=None):
+                      stylesheet=None, plain_stylesheet=None):
     """
     The runtime half of a help page.  pieces is the baked,
     template-ordered tuple from help_page_pieces: ('usage',
@@ -559,10 +564,10 @@ def render_baked_help(pieces, margin=79, file=None,
     layout tuples--wrap_words lays them out at the real margin
     (the sheet-rendered width measuring the words), join_styles
     fuses adjacent spans.  Either way the stylesheet paints last:
-    stylesheet is a spec (None auto per stream, False never,
-    or a composed StyleSheet used verbatim).
+    stylesheet and plain_stylesheet are the pair resolve_stylesheet
+    picks from, by whether `file` wants color.
     """
-    sheet = resolve_stylesheet(stylesheet, file)
+    sheet = resolve_stylesheet(stylesheet, file, plain_stylesheet)
     # the renderer injects `line`--'-' repeated to the margin, a
     # full-width rule bare and a margin-wide model inside
     # clip/fill (ruled 2026-08-08).  Only the renderer knows the
@@ -713,7 +718,7 @@ def rows_document(rows, header, role=None, titles=None, level=2):
 
 def render_help_page(usage_units, corpus, templates, margin=79,
                      file=None, stylesheet=None, suppress=(),
-                     subcommands=False):
+                     subcommands=False, plain_stylesheet=None):
     """
     The --help page, the Markdown pivot's engine (ruled
     2026-08-05): the template establishes the page's ORDER and
@@ -734,7 +739,7 @@ def render_help_page(usage_units, corpus, templates, margin=79,
     """
     return render_baked_help(
         help_page_pieces(usage_units, corpus, templates, suppress, subcommands),
-        margin, file=file, stylesheet=stylesheet)
+        margin, file=file, stylesheet=stylesheet, plain_stylesheet=plain_stylesheet)
 
 
 def role_layout(layout):

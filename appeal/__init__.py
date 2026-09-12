@@ -197,15 +197,15 @@ from .converters import (
 
 
 def run_main(parse, args=None, stylesheet=None, completion=None,
-             errors=None, version=None, margin=None):
+             errors=None, version=None, margin=None,
+             plain_stylesheet=None):
     """
     The main() driver: parse and execute, print errors the polite
-    way, return the exit code.  stylesheet
-    (a spec: None for auto, False for never-color, or a complete
-    composed StyleSheet used verbatim) paints the 'error:' prefix
-    and any attached usage/listing when the error stream wants
-    color; the environment always wins (resolve_stylesheet via
-    can_colorize).  completion, if
+    way, return the exit code.  stylesheet and plain_stylesheet are
+    the program's pair (Appeal's knobs): the first paints the
+    'error:' prefix and any attached usage/listing when the error
+    stream wants color, the second when it doesn't; the environment
+    always wins (resolve_stylesheet via can_colorize).  completion, if
     given, is (table, prog): with an empty args and
     _APPEAL_COMPLETE in the environment, the invocation is a
     shell-completion reentry and is answered instead of parsed.
@@ -249,7 +249,8 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         # prints, so the success path (and `import appeal`)
         # never pays big's ~40ms
         from .presentation import resolve_stylesheet, style
-        sheet = resolve_stylesheet(stylesheet, error_stream())
+        sheet = resolve_stylesheet(stylesheet, error_stream(),
+                                   plain_stylesheet)
         return sheet.render(style('error', 'error:'))
 
     def print_trailer(trailer):
@@ -552,7 +553,8 @@ def _line_trailer(node, usage_units):
         return render_baked_help(
             (('usage', 'usage: ', tuple(usage_units)),),
             help_margin(node.margin, file), file=file,
-            stylesheet=node.stylesheet).rstrip('\n')
+            stylesheet=node.stylesheet,
+            plain_stylesheet=node.plain_stylesheet).rstrip('\n')
     return trailer
 
 
@@ -1100,6 +1102,7 @@ class Appeal:
                  errors=None,
                  lazy=False,
                  margin=None,
+                 plain_stylesheet=None,
                  repeat=False,
                  script=_sys.argv[0],
                  strict=True,
@@ -1241,11 +1244,13 @@ class Appeal:
         # seeds its _node_repeat from the program-level repeat= here.
         self.repeat = repeat
         self._node_repeat = repeat
-        # None = auto (appeal_theme when the stream wants color),
-        # False = never any color, or a complete composed
-        # StyleSheet, used VERBATIM (ruled 2026-08-06); the
-        # environment always wins (resolve_stylesheet's palette).
+        # the pair (Larry, 2026-09-12): stylesheet paints a stream that
+        # wants color, plain_stylesheet one that doesn't; None is the
+        # stock composition for that slot, a sheet is used VERBATIM in
+        # it, stylesheet=False is never any color.  The environment
+        # always wins (resolve_stylesheet via can_colorize).
         self.stylesheet = stylesheet
+        self.plain_stylesheet = plain_stylesheet
         self.version = version
         # the program's documentation, tier 1 of the doc chain
         # (ruled 2026-08-01): doc= beats the global command's
@@ -1324,7 +1329,7 @@ class Appeal:
             for attr in ('_help_enabled', 'default_options',
                          'default_mappings',
                          'script', 'errors', 'repeat', 'stylesheet',
-                         'margin', '_templates'):    # the BACKING field, not the
+                         'plain_stylesheet', 'margin', '_templates'):    # the BACKING field, not the
                 setattr(node, attr, getattr(self, attr))  # `templates` property
                                                     # -- copying the property would
                                                     # force render's lazy import
@@ -1616,6 +1621,7 @@ class Appeal:
                 node._head_usage_units(),
                 corpus, node.templates, margin=help_margin(node.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=node.stylesheet,
+                plain_stylesheet=node.plain_stylesheet,
                 suppress=suppress,
                 subcommands=node.parent is not None).rstrip('\n')
         else:
@@ -1626,6 +1632,7 @@ class Appeal:
                 root.templates,
                 margin=help_margin(root.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=root.stylesheet,
+                plain_stylesheet=root.plain_stylesheet,
                 suppress=suppress).rstrip('\n')
         print(text)
 
@@ -2093,6 +2100,7 @@ class Appeal:
                 corpus, self.templates,
                 margin=help_margin(self.margin, file),
                 file=file, stylesheet=self.stylesheet,
+                plain_stylesheet=self.plain_stylesheet,
                 suppress=suppress,
                 subcommands=self.parent is not None).rstrip('\n')
         from .presentation import merge_docs, parse_docstring
@@ -2109,6 +2117,7 @@ class Appeal:
             self._head_usage_units(), corpus, self.templates,
             margin=help_margin(self.margin, file),
             file=file, stylesheet=self.stylesheet,
+            plain_stylesheet=self.plain_stylesheet,
             suppress=suppress).rstrip('\n')
 
     def _program_usage_units(self):
@@ -2383,14 +2392,27 @@ class Appeal:
         2026-09-03: the argument_decoration stylesheet entry is
         tweakable--"it's in the stylesheet precisely so users can
         tweak it").  An explicitly-given sheet's entry wins; the
-        automatic default (stylesheet=None) and stylesheet=False
-        keep the stock <NAME>, because the shape bakes into layout
-        at build time and must not vary per stream.
+        stock compositions (None, and stylesheet=False) keep the
+        stock <NAME>.  The shape bakes into layout at build time and
+        must not vary per stream, so when BOTH sheets are given they
+        must agree on it.
         """
-        sheet = self.stylesheet
-        if sheet is None or sheet is False:
+        entries = []
+        for sheet in (self.stylesheet, self.plain_stylesheet):
+            if sheet is None or sheet is False:
+                continue
+            entry = sheet.get('argument_decoration')
+            pair = (None if entry is None
+                    else tuple(entry.args) + (entry.replacement,))
+            entries.append((pair, entry))
+        if not entries:
             return None
-        return sheet.get('argument_decoration')
+        if len(entries) == 2 and entries[0][0] != entries[1][0]:
+            raise AppealConfigurationError(
+                "stylesheet and plain_stylesheet disagree on "
+                "argument_decoration; the placeholder shape is baked "
+                "into layout, so both sheets must give the same one")
+        return entries[0][1]
 
     def _node_for(self, word):
         """
@@ -3219,7 +3241,8 @@ class Appeal:
         # prints then sys.exit()s; run_main catches that and converts to a code.
         parse = lambda argv: Processor(self)(list(argv))
         _sys.exit(run_main(parse, args, stylesheet=self.stylesheet,
-                           errors=self.errors, margin=self.margin))
+                           errors=self.errors, margin=self.margin,
+                           plain_stylesheet=self.plain_stylesheet))
 
     def _mcp_instance(self, config):
         """
@@ -3341,7 +3364,8 @@ class Appeal:
         # errors ride the pipeline here too: color them (or strip, off a tty)
         # exactly as main() does, against stdout (where the REPL prints)
         from .presentation import resolve_stylesheet, style
-        sheet = resolve_stylesheet(self.stylesheet, _sys.stdout)
+        sheet = resolve_stylesheet(self.stylesheet, _sys.stdout,
+                                   self.plain_stylesheet)
         while True:
             try:
                 line = input(prompt)

@@ -2441,7 +2441,7 @@ spellings are the same classes--catch whichever you like.)
 
 ## API Reference
 
-`Appeal(name=None, *, default_mappings=default_global_mappings, default_options=default_options, doc=None, errors=None, lazy=False, margin=None, repeat=False, script=sys.argv[0], stylesheet=None, version=None)`
+`Appeal(name=None, *, default_mappings=default_global_mappings, default_options=default_options, doc=None, errors=None, lazy=False, margin=None, plain_stylesheet=None, repeat=False, script=sys.argv[0], stylesheet=None, version=None)`
 
 Creates a new Appeal instance.
 
@@ -2453,11 +2453,14 @@ Creates a new Appeal instance.
   when Appeal is imported--the only place Appeal consults
   `sys.argv[0]`, so the program name is a controllable input.
   Tests (and embedders) pass `script=` explicitly.
-* `stylesheet` colors Appeal's output: `None` means the stock
-  theme (when the environment and terminal permit), `False` means
-  never, or pass a complete composed big `StyleSheet` of your own,
-  used verbatim.  The stock themes underline headings; a stream
-  without color draws rules under them instead, and
+* `stylesheet` and `plain_stylesheet` are the pair that paints
+  Appeal's output: the first for a stream that wants color, the
+  second for one that doesn't (a pipe, or an environment that
+  says no).  Each is `None` for the stock composition, or a
+  complete composed big `StyleSheet` of your own, used verbatim
+  in that slot; `stylesheet=False` means never any color.  The
+  stock color themes underline headings; the stock plain sheet
+  draws rules under them instead, and
   `appeal.ruled_headings(theme)` gives you a theme that always
   does.  See "Color" in `appeal.documentation.md`.
 * `doc` is the program's own documentation (Markdown): it beats
