@@ -8,7 +8,7 @@
 # through them (parcel + convert + dispatch).  The front end
 # (appeal/frontend.py) produces the Plan.
 
-from . import (AppealConfigurationError, ConfigurationError,
+from . import (quoted, escaped, AppealConfigurationError, ConfigurationError,
                DataError, UsageError, did_you_mean)
 from .converters import convert, Option, MultiOption, verbatim, boolean
 from .frontend import Terminal, NO_DEFAULT
@@ -234,11 +234,12 @@ def parse_short_options(s, classifiers):
         elif option in opargs:
             if l:
                 raise UsageError(
-                    f"option '-{option}' takes several values; it must be "
-                    f"last in a bundle with its values as separate words")
+                    f"option {quoted('-' + option, 'option')} takes several "
+                    f"values; it must be last in a bundle with its values "
+                    f"as separate words")
             arg = None
         else:
-            raise UsageError(f"unknown option '-{option}'")
+            raise UsageError(f"unknown option {quoted('-' + option, 'option')}")
         yield (option, arg)
 
 
@@ -268,8 +269,9 @@ def _availability_message(owner):
         break
     ops = _operand_list(operands)
     if spoken:
-        return f"{spoken} only becomes available if you specify {ops}"
-    return f"expected {ops}" if ops else "expected an argument"
+        return (f"{quoted(spoken, 'option')} only becomes available if you "
+                f"specify {escaped(ops)}")
+    return f"expected {escaped(ops)}" if ops else "expected an argument"
 
 
 class _Raw:
@@ -323,7 +325,8 @@ class _Multi:
                 self.value = self.constructor(*args)   # ValueError/TypeError
             except (ValueError, TypeError) as e:       # is a polite usage error
                 name = getattr(self.constructor, '__name__', 'converter')
-                raise UsageError(f"not a valid {name}: {str(e) or name}") from None
+                raise UsageError(f"not a valid {escaped(name)}: "
+                                 f"{escaped(str(e) or name)}") from None
         self.done = True
 
 
@@ -367,7 +370,7 @@ class _FoldOccurrence:
         try:
             fold.instance.option(*[r.value for r in self.opargs])
         except (ValueError, TypeError) as e:    # wrap the option body's error
-            raise UsageError(f"{fold.name}: {e}")
+            raise UsageError(f"{escaped(fold.name)}: {escaped(e)}")
         self.done = True
 
 
@@ -389,7 +392,8 @@ def finish(v):
             return v()
         except (ValueError, TypeError) as e:
             name = getattr(type(v).converter, '__name__', 'converter')
-            raise UsageError(f"not a valid {name}: {e or name}") from None
+            raise UsageError(f"not a valid {escaped(name)}: "
+                             f"{escaped(e or name)}") from None
     return v
 
 
@@ -474,8 +478,8 @@ class LiveBinding:
             owner.kwargs[self.name] = boolean(value)    # (Larry, 2026-09-11)
         except ValueError as e:
             raise UsageError(
-                f"option {(spelling or self.name)!r}: {value!r} isn't a "
-                f"boolean, {e}") from None
+                f"option {quoted(spelling or self.name, 'option')}: "
+                f"{quoted(value)} isn't a boolean, {escaped(e)}") from None
 
 
 class ValueBinding:
@@ -502,7 +506,7 @@ class ValueBinding:
             return
         if value is None:
             if processor.peek() is None:
-                raise UsageError(f"option {name!r} requires a value")
+                raise UsageError(f"option {quoted(name, 'option')} requires a value")
             value = processor.advance()                 # raw: no option check
         # value options convert per occurrence: a repeated option
         # validates EVERY value (ruled 2026-08-16, "not called validate for
@@ -513,13 +517,13 @@ class ValueBinding:
         if not leaves:                                  # a nullary converter
             if value is not None:                       # (--north): presence IS
                 raise UsageError(                       # the value; '=' is refused
-                    f"option {name!r} doesn't take a value")
+                    f"option {quoted(name, 'option')} doesn't take a value")
             return processor._record(_Nullary(constructor))
         texts = [value] if value is not None else []    # =value/attached is first
         while len(texts) < len(leaves):
             if processor.peek() is None:
                 raise UsageError(
-                    f"option {name!r} requires {len(leaves)} values")
+                    f"option {quoted(name, 'option')} requires {len(leaves)} values")
             texts.append(processor.advance())           # raw grab
         leaves = [processor._cv(leaf, text, self.name)
                   for leaf, text in zip(leaves, texts)]
@@ -563,7 +567,7 @@ class MultiBinding:
         if value is not None:                           # =value / attached
             if not self.converters:                     # a 0-arity fold (counter)
                 raise UsageError(
-                    f"option {name!r} doesn't take a value")
+                    f"option {quoted(name, 'option')} doesn't take a value")
             opargs = [processor._cv(self.converters[0], value, self.name)]
         else:
             # grab the required opargs; then any OPTIONAL ones greedily, so long
@@ -575,7 +579,7 @@ class MultiBinding:
                     if k < self.minimum:
                         need = self.minimum
                         raise UsageError(
-                            f"option {name!r} requires "
+                            f"option {quoted(name, 'option')} requires "
                             f"{'a value' if need == 1 else f'{need} values'}")
                     break                               # optional tail: stop
                 opargs.append(processor._cv(converter, processor.advance(),
@@ -943,7 +947,8 @@ class Engine:
             for keys in missing.values():
                 # several strings feeding one parameter: name them all
                 raise UsageError(
-                    f"missing option {' or '.join(map(repr, keys))}")
+                    f"missing option "
+                    f"{' or '.join(quoted(k, 'option') for k in keys)}")
 
     def execute(self):
         "Convert in token order, then call the root."
@@ -1008,12 +1013,13 @@ class Engine:
             if binding is None:
                 longs = [k for k in self.handlers if k.startswith('--')]
                 raise UsageError(
-                    f"unknown option {tok!r}{did_you_mean(tok, longs)}")
+                    f"unknown option {quoted(tok, 'option')}"
+                    f"{did_you_mean(tok, longs, 'option')}")
             self.invoked.append((tok, binding))
             if value is not None and _takes_many(binding):
                 raise UsageError(
-                    f"option {tok!r} takes several values; separate them with "
-                    f"spaces, not '='")
+                    f"option {quoted(tok, 'option')} takes several values; "
+                    f"separate them with spaces, not '='")
             binding.invoke(self, value, tok)
             return
         # short: -x, a flag bundle -vd, or an attached value -uF.
@@ -1052,7 +1058,7 @@ class Engine:
                                                     # no default == required
             self.stack.pop()                    # reserved off the end, keyword
             if not arg.owner.reserve:               # too few operands
-                raise UsageError(f"missing argument {arg.name!r}")
+                raise UsageError(f"missing argument {quoted(arg.name, 'argument')}")
             raw = arg.owner.reserve.pop(0)
             arg.owner.kwargs[arg.name] = self._cv(arg.converter, raw, arg.name)
             return
@@ -1077,7 +1083,7 @@ class Engine:
                         # isn't a valid one -- name the option and its counts
                         root = arg.owner._optarg_root.plan
                         raise UsageError(
-                            f"option {arg.owner._opt_display} takes "
+                            f"option {quoted(arg.owner._opt_display, 'option')} takes "
                             f"{_count_list(root.valid_counts, root.unbounded_from)}")
                     self.stack.pop()
                     arg.owner.args.append(
@@ -1099,7 +1105,7 @@ class Engine:
                         raise UsageError(
                             f"wrong number of arguments: "
                             f"{len(arg.owner.args)} left over")
-                    raise UsageError(f"missing argument {arg.name!r}")
+                    raise UsageError(f"missing argument {quoted(arg.name, 'argument')}")
                 self.stack.pop()
                 if self.stack and isinstance(self.stack[-1], RepeatInstruction):
                     self.stack.pop()             # end a *args of leaves -- no
@@ -1200,13 +1206,14 @@ def _unexpected(token, candidates=(), dashdash=False, owners=None):
     """
     if not dashdash and token.startswith('-') and token not in ('-', '--'):
         longs = [c for c in candidates if c.startswith('--')]
-        hint = did_you_mean(token, longs)
+        hint = did_you_mean(token, longs, 'option')
         if not hint and owners and token in owners:
-            return UsageError(f"option {token!r} can't be used here; "
-                              f"it goes {owners[token]}")
-        return UsageError(f"unknown option {token!r}{hint}")
+            return UsageError(f"option {quoted(token, 'option')} can't be used "
+                              f"here; it goes {owners[token]}")
+        return UsageError(f"unknown option {quoted(token, 'option')}{hint}")
     return UsageError(
-        f"unknown command {token!r}{did_you_mean(token, candidates)}")
+        f"unknown command {quoted(token, 'command')}"
+        f"{did_you_mean(token, candidates, 'command')}")
 
 
 def execute(commands, argv, *, precommands=(), repeat=False):

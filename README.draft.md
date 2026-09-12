@@ -1171,7 +1171,7 @@ Two things worth pinning down:
   hosts. A region is strictly a tie-breaker for a *shared* option string.
 * **Conjuring turns on whether the leading arguments are required.** `tls`
   conjures because it needs no operands; `host` cannot--`link --port 2200`
-  with no name gives `--port only becomes available if you specify <NAME>`. An
+  with no name gives `'--port' only becomes available if you specify <NAME>`. An
   option can *ask* for a group, but it can't invent a required operand. (More
   in *Conjuring*, next.)
 

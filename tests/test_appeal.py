@@ -838,7 +838,7 @@ def test_star_args_option_windows():
     # summoned a size that never got its <WIDTH>, so it wasn't available yet
     got = run_both(draw, ['a', '--bold'])
     assert got[0] == 'usage'
-    assert got[1] == '--bold only becomes available if you specify <WIDTH>', got
+    assert got[1] == "'--bold' only becomes available if you specify <WIDTH>", got
     # two occurrences on one instance: idempotent store-not-
     # default (Larry's ruling, 2026-07-18)--bold twice is bold
     got = run_both(draw, ['a', '1', '--bold', '--bold', '2'])
@@ -2178,7 +2178,7 @@ def test_greedy_opargs():
     assert got == ('ok', ('X', ('p', ('q', 'r')))), got
     got = run_both(cmd2, ['-g', 'p', 'q'])
     assert got[0] == 'usage', got
-    assert 'option -g' in got[1] and '1 or 3' in got[1], got
+    assert "option '-g'" in got[1] and '1 or 3' in got[1], got
 
     # Option subclasses: option()'s optional parameters consume
     # greedily too (v1, probed)
@@ -2236,7 +2236,7 @@ def test_options_inside_converters():
         return (shape, s)
     got = run_both(draw2, ['dot', '--dashed'])
     assert got[0] == 'usage'
-    assert got[1] == ('--dashed only becomes available if you '
+    assert got[1] == ("'--dashed' only becomes available if you "
                       'specify <R> <G> and <B>'), got
 
 def test_plan_trailing_reserved_past_absorbing_group():

@@ -527,7 +527,14 @@ returns 2.  Unknown commands and unknown long options suggest a near
 match with `difflib.get_close_matches`, from the option strings in scope
 where the token appeared; an exact option string that lives elsewhere
 in the program gets "can't be used here; it goes after 'build'"
-instead.  Never both.
+instead.  Never both.  A `UsageError`'s message is style markup:
+every token it names is quoted, and inside the quotes wears the role
+it wears on the usage line--option, command, or argument--so it's
+painted on a tty and bare in a pipe (Larry, 2026-09-12: color inside
+the quotes, the whole family).  `quoted(text, role)` builds one, with
+the text escaped; `escaped(text)` makes any other text of unknown
+provenance safe to drop in.  `str(e)` strips the markup, and
+`e.render(sheet)` paints it; a plain `DataError`'s message is text.
 
 
 ## 9: One command line, start to finish

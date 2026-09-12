@@ -84,21 +84,46 @@ def _vet_default(callable, what):
 builtins_callable = callable
 
 
-def did_you_mean(word, candidates):
+def quoted(text, role=None):
+    """
+    A token from the command line, quoted for an error message:
+    repr's quoting, the text escaped for style markup, and--when
+    role is given--wearing that role inside the quotes, so the word
+    is painted as it is on the usage line (Larry, 2026-09-12: color
+    inside the quotes, the whole family).  UsageError messages are
+    style markup; str() strips it.
+    """
+    from big.stylesheet import escape_styles, style
+    r = repr(str(text))
+    inner = escape_styles(r[1:-1])
+    if role is not None:
+        inner = style(role, inner)
+    return r[0] + inner + r[0]
+
+
+def escaped(text):
+    "Text of unknown provenance, made safe to drop into an error's markup."
+    from big.stylesheet import escape_styles
+    return escape_styles(str(text))
+
+
+def did_you_mean(word, candidates, role):
     """
     The suggestion tail for an unknown-name error: " (did you
     mean 'x'?)" when something in candidates is close, '' when
-    nothing is.  difflib's gestalt matching--the stdlib's public
-    answer (git hand-rolls Damerau-Levenshtein, clap uses
-    Jaro-Winkler; on names this short they all agree).
+    nothing is; the suggestion wears `role`.  difflib's gestalt
+    matching--the stdlib's public answer (git hand-rolls
+    Damerau-Levenshtein, clap uses Jaro-Winkler; on names this
+    short they all agree).
     """
     import difflib
-    matches = difflib.get_close_matches(word, list(candidates), n=2)
+    matches = [quoted(m, role) for m in
+               difflib.get_close_matches(word, list(candidates), n=2)]
     if not matches:
         return ''
     if len(matches) == 1:
-        return f" (did you mean {matches[0]!r}?)"
-    return f" (did you mean {matches[0]!r} or {matches[1]!r}?)"
+        return f" (did you mean {matches[0]}?)"
+    return f" (did you mean {matches[0]} or {matches[1]}?)"
 
 
 class AppealError(Exception):
@@ -126,8 +151,12 @@ class DataError(AppealError):
     The data handed to the program is wrong--whatever its
     provenance: a config mapping, a mapping or CSV row being read,
     or (the most common data of all) the command line.  Carries
-    the command's usage text when there is one to show.
+    the command's usage text when there is one to show.  The
+    message is plain text (UsageError's is markup).
     """
+    def render(self, sheet):
+        return str(self)
+
     def __init__(self, message, usage=None, param=None):
         super().__init__(message)
         # usage: the error's TRAILER--a callable usage(file) -> str that
@@ -146,8 +175,18 @@ class DataError(AppealError):
 class UsageError(DataError):
     """
     The command line specifically is wrong.  Printing it shows
-    the message and the command's usage.
+    the message and the command's usage.  The message is style
+    MARKUP: the tokens it names wear the roles they wear on the
+    usage line (see quoted), and any text of unknown provenance
+    in it is escaped.  str() gives the plain text; render(sheet)
+    paints it.
     """
+    def __str__(self):
+        from big.stylesheet import strip_styles
+        return strip_styles(self.args[0])
+
+    def render(self, sheet):
+        return sheet.render(self.args[0])
 
 
 class CommandError(AppealError):
@@ -244,10 +283,16 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         # and callers redirect sys.stderr)
         return errors if errors is not None else sys.stderr
 
-    def error_prefix():
+    def error_line(e):
         # render is imported lazily--only when an error actually
         # prints, so the success path (and `import appeal`)
         # never pays big's ~40ms
+        from .presentation import resolve_stylesheet, style
+        sheet = resolve_stylesheet(stylesheet, error_stream(),
+                                   plain_stylesheet)
+        return f"{sheet.render(style('error', 'error:'))} {e.render(sheet)}"
+
+    def error_prefix():
         from .presentation import resolve_stylesheet, style
         sheet = resolve_stylesheet(stylesheet, error_stream(),
                                    plain_stylesheet)
@@ -284,7 +329,7 @@ def run_main(parse, args=None, stylesheet=None, completion=None,
         # processor, not an environment
         return 130
     except AppealDataError as e:
-        print(f"{error_prefix()} {e}", file=error_stream())
+        print(error_line(e), file=error_stream())
         if e.usage:
             print_trailer(e.usage)
         return 2
@@ -1578,8 +1623,8 @@ class Appeal:
                 print(_inspect.getdoc(fn))
                 return
             if topic not in table:
-                err = UsageError(f"unknown command {topic!r}"
-                                 f"{did_you_mean(topic, root._visible_table())}")
+                err = UsageError(f"unknown command {quoted(topic, 'command')}"
+                                 f"{did_you_mean(topic, root._visible_table(), 'command')}")
                 err.usage = _overview_trailer(root)     # the overview page
                 raise err
             node = root._node_for(topic)
@@ -1595,10 +1640,10 @@ class Appeal:
                     if alt in node_table:
                         word = alt
                     else:
-                        where = (f" of {parent._prog()!r}" if parent is not root
-                                 else '')
-                        err = UsageError(f"unknown command {word!r}{where}"
-                                         f"{did_you_mean(word, parent._visible_table())}")
+                        where = (f" of {quoted(parent._prog(), 'command')}"
+                                 if parent is not root else '')
+                        err = UsageError(f"unknown command {quoted(word, 'command')}{where}"
+                                         f"{did_you_mean(word, parent._visible_table(), 'command')}")
                         err.usage = _overview_trailer(parent)
                         raise err
                 node = parent._children[word]
@@ -2620,8 +2665,8 @@ class Appeal:
             # one of its subcommands: the option went too far
             deep = [w for w in commands
                     if path[:len(w)] == w and len(path) > len(w)]
-            flat = [repr(' '.join(w)) for w in commands if w not in deep]
-            phrases.extend(f"after {' '.join(w)!r}, but before any subcommand"
+            flat = [quoted(' '.join(w), 'command') for w in commands if w not in deep]
+            phrases.extend(f"after {quoted(' '.join(w), 'command')}, but before any subcommand"
                            for w in deep)
             if flat:
                 phrases.append('after ' + ' or '.join(flat))
@@ -3133,7 +3178,7 @@ class Appeal:
                     dash = word.startswith('-') and not line.forced
                     if not dash and not table:
                         # a program with no commands: one word too many
-                        err = UsageError(f"unexpected argument {word!r}")
+                        err = UsageError(f"unexpected argument {quoted(word, 'argument')}")
                     else:
                         err = _unexpected(word, line.tried if dash
                                           else self._visible_table(),
@@ -3183,14 +3228,15 @@ class Appeal:
                     # the deepest command dispatched has subcommands, and this
                     # isn't one of them
                     err = UsageError(
-                        f"unknown command {tok!r} of {deepest._prog()!r}"
-                        f"{did_you_mean(tok, deepest._visible_table())}")
+                        f"unknown command {quoted(tok, 'command')} of "
+                        f"{quoted(deepest._prog(), 'command')}"
+                        f"{did_you_mean(tok, deepest._visible_table(), 'command')}")
                     err.usage = _overview_trailer(deepest)
                 else:
                     # the deepest command took all it can: one word too many
                     # (that the word happens to be a command's is no help to
                     # the user--Larry, 2026-09-08)
-                    err = UsageError(f"unexpected argument {tok!r}")
+                    err = UsageError(f"unexpected argument {quoted(tok, 'argument')}")
                     err.usage = _line_trailer(self,
                                               deepest._head_usage_units())
                 raise err
@@ -3391,7 +3437,8 @@ class Appeal:
             try:
                 result = self.process(words).result
             except AppealDataError as e:
-                print(f"{sheet.render(style('error', 'error:'))} {e}")
+                print(f"{sheet.render(style('error', 'error:'))} "
+                      f"{e.render(sheet)}")
                 # the dispatch boundary attaches a trailer to every
                 # escaping data error (restored 2026-09-06); a falsy
                 # one here is an off-contract usage= from user code,

@@ -9,7 +9,7 @@
 # exceptions.
 
 import sys
-from . import (AppealConfigurationError, ConfigurationError,
+from . import (quoted, escaped, AppealConfigurationError, ConfigurationError,
                AppealDataError, DataError, UsageError)
 
 
@@ -27,12 +27,14 @@ def convert(converter, text, name):
         if getattr(converter, 'sentence', False):
             # a converter whose refusal reads as a sentence on its own
             # (the boolean language; Larry's wording, 2026-09-11)
-            raise UsageError(f"invalid value for {name!r}: {text!r} {e}",
+            raise UsageError(f"invalid value for {quoted(name, 'argument')}: "
+                             f"{quoted(text)} {escaped(e)}",
                              param=name) from None
         converter_name = getattr(converter, '__name__', 'converter')
         detail = str(e) or f'not a valid {converter_name}'
         raise UsageError(
-            f"invalid value for {name!r}: {text!r} ({detail})",
+            f"invalid value for {quoted(name, 'argument')}: "
+            f"{quoted(text)} ({escaped(detail)})",
             param=name) from None
 
 
@@ -464,8 +466,8 @@ class optional(metaclass=_OptionalMeta):
                 # crash (the greedy oparg ate the wrong token)
                 name = getattr(T, '__name__', 'value')
                 raise UsageError(
-                    f"invalid value {value!r} "
-                    f"(not a valid {name})") from None
+                    f"invalid value {quoted(value)} "
+                    f"(not a valid {escaped(name)})") from None
         # usage metavar: show the OPTION'S parameter name, not
         # this closure's ('[-j|--jobs [jobs]]', not '[value]')
         option_value.borrows_name = True

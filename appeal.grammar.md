@@ -359,7 +359,14 @@ converter) is an `AppealConfigurationError`,
 raised at build time, naming the offender.  A converter raising
 `ValueError`/`TypeError` on a user's operand becomes a
 `UsageError` naming the parameter and the offending text; the
-polite `main()` handling catches the whole data family.
+polite `main()` handling catches the whole data family.  Every
+token a `UsageError` names is **quoted, and painted inside the
+quotes** with the role it wears on the usage line (option,
+command, argument; Larry, 2026-09-12): `unknown option '--zerve'`
+shows `--zerve` in the option color on a tty and bare in a pipe.
+The quotes stay because the plain text has to stand alone.  The
+message is style markup, user text in it escaped; `str(e)` is the
+plain text.
 
 ## Help
 

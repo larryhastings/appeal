@@ -906,7 +906,7 @@ def test_valid_counts_are_exact():
         app.process(['cmd', '-g', '1', '2'])
         assert False, 'expected AppealUsageError'
     except appeal.AppealUsageError as e:
-        assert str(e) == 'option -g takes 0, 1, or 3', e
+        assert str(e) == "option '-g' takes 0, 1, or 3", e
     # the schema carries the threshold for an unbounded plan
     app2 = Appeal(name='sc')
     @app2.command()
@@ -4323,7 +4323,7 @@ def test_backend_availability_and_counts():
         return (a, b)
     def f1(*, g: grp = None, tail=''):
         return g
-    assert run(f1, ['-g']) == ('usage', 'option -g takes 1 or 2')
+    assert run(f1, ['-g']) == ('usage', "option '-g' takes 1 or 2")
     # _own_shape skips a RepeatInstruction: a *args-bearing group summoned by
     # its own option, starved of its fixed operand, names that operand
     def sub(first: int, *rest: int, tag=False):
@@ -4331,7 +4331,7 @@ def test_backend_availability_and_counts():
     def d3(g: sub = None, tail=''):
         return g
     assert run(d3, ['--tag']) == \
-        ('usage', '--tag only becomes available if you specify <FIRST>')
+        ('usage', "'--tag' only becomes available if you specify <FIRST>")
     # _own_shape reads a PreOptionInstruction (a nested-group chain); when the
     # starved converter typed no option of its own, the hint is 'expected ...'
     def leaf(x: int, *, flag=False):
