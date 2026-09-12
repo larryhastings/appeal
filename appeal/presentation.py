@@ -329,13 +329,14 @@ def _theme(**overrides):
 appeal_theme = _theme(
     command   = ('T', '⦃bold⦙⦃cyan⦙T⦄⦄'),
     option    = ('T', '⦃cyan⦙T⦄'),
-    argument  = ('T', '⦃italic⦙T⦄'),
+    argument  = ('T', '⦃bold⦙⦃cyan⦙T⦄⦄'),  # every placeholder the same as
+                                          # <COMMAND> (Larry, 2026-09-12)
     summary   = ('T', '⦃bold⦙T⦄'),
     error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
     code      = ('T', '⦃green⦙T⦄'),          # ruled: code is green
     marker    = ('T', '⦃dark_purple⦙T⦄'),
     link      = ('URL', 'T', '⦃underline⦙⦃blue⦙T⦄⦄'),      # URL: luggage
-    heading_color = ('T', '⦃cyan⦙T⦄'),
+    heading_color = ('T', '⦃blue⦙T⦄'),
 )
 
 
