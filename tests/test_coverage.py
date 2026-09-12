@@ -2109,42 +2109,51 @@ def test_every_theme_renders_a_link():
     assert 'the docs <https://example.com/docs>' in text, text
 
 
-def test_plain_and_uncolored_are_one_structure():
-    # plain and uncolored are ONE theme--the structural base--over two
-    # palettes (Larry's ruling, 2026-09-07).  The heading's line art
-    # is drawn by wrap_words from the heading2_rule glyph (big >= 0.15),
-    # which both palettes resolve, so both keep it; the palettes decide
-    # what else renders: uncolored expresses bold/italic/underline
-    # (no colors), plain expresses nothing at all.
+def test_plain_rules_and_uncolored_underlines():
+    # the theme decides how a heading is set (Larry, 2026-09-12):
+    # plain draws rules, the one structure a palette expressing
+    # nothing can show; uncolored--and so every colored theme built on
+    # it--underlines instead and draws no rule.  ruled_headings() puts
+    # the rules back on any theme; a colorless stream renders plain.
     from appeal.presentation import (plain_theme, uncolored_theme,
-                                     render_baked_help,
+                                     appeal_theme, ruled_headings,
+                                     resolve_stylesheet, render_baked_help,
                                      markdown_defaults, transforms)
     from big.markdown import (layout_document, parse,
                              split_styles_document, style_document)
-    from big.stylesheet import plain_palette, uncolored_palette, StyleSheet
+    from big.stylesheet import (plain_palette, uncolored_palette,
+                                ansi_16_color_palette, StyleSheet)
+    import io
     layout = layout_document(split_styles_document(style_document(parse("## Options\n"))))
     def render(theme, palette):
         sheet = (markdown_defaults | transforms | palette
                  | StyleSheet(theme))
         return render_baked_help((('markdown', layout),), margin=40, stylesheet=sheet)
-    plain = render(plain_theme, plain_palette)
-    assert plain == 'Options\n-------\n', repr(plain)
+    assert render(plain_theme, plain_palette) == 'Options\n-------\n'
     uncolored = render(uncolored_theme, uncolored_palette)
-    assert '-------' in uncolored              # same line art
-    assert '\x1b[1m' in uncolored              # bold renders...
-    assert '\x1b[36m' not in uncolored         # ...cyan doesn't
+    assert uncolored == '\x1b[1m\x1b[4mOptions\x1b[24m\x1b[22m\n', repr(uncolored)
+    colored = render(appeal_theme, ansi_16_color_palette)
+    assert '\x1b[4m' in colored and '-------' not in colored, repr(colored)
+    import re
+    ruled = render(ruled_headings(appeal_theme), ansi_16_color_palette)
+    assert '\x1b[4m' not in ruled, repr(ruled)
+    assert re.sub('\x1b\\[[0-9;]*m', '', ruled) == 'Options\n-------\n', repr(ruled)
+    assert '\x1b[34m-\x1b[39m' in ruled           # the rule wears the heading color
+    pipe = resolve_stylesheet(None, io.StringIO())
+    assert render_baked_help((('markdown', layout),), margin=40,
+                             stylesheet=pipe) == 'Options\n-------\n'
 
 
-def test_command_placeholder_wears_command_role():
-    # the set usage line's <COMMAND> placeholder keeps the argument
-    # DECORATION (a hole to fill) but wears the command ROLE, cross-
-    # referencing the listing's words below (Larry's ruling,
-    # 2026-09-07)
+def test_command_placeholder_wears_argument_role():
+    # the set usage line's <COMMAND> placeholder is a hole to fill
+    # like every other placeholder: argument decoration and argument
+    # role (Larry, 2026-09-12; it wore the command role from
+    # 2026-09-07, cross-referencing the listing's words below)
     app = Appeal(name='vcs', default_mappings=None)
     @app.command()
     def commit(): pass
     markup = app._head_usage_markup()
-    assert markup == '⦃program⦙vcs⦄ ⦃command⦙<COMMAND>⦄', markup
+    assert markup == '⦃program⦙vcs⦄ ⦃argument⦙<COMMAND>⦄', markup
 
 
 def test_defaults_inference_class_and_tuple():

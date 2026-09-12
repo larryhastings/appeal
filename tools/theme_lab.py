@@ -34,6 +34,16 @@
 ## yellow, green, cyan, blue, purple, gray + light_/dark_ each,
 ## white, black); the palette maps them to escapes at the end.
 ##
+## The themes are layered (2026-09-12): plain_theme is the root
+## (no-ops; headings ruled), uncolored_theme adds the attributes
+## (bold/italic/underline live there only; headings underlined),
+## and a colored theme is _theme(role='color', ...)--the uncolored
+## entry wrapped in that color.  So to make placeholders italic
+## everywhere, edit 'argument' in uncolored_theme; to make them
+## purple in one theme, edit that theme's argument='...'.  A theme
+## may also give a whole tuple for a role, used as given.
+## ruled_headings(theme) puts the drawn rules back on any theme.
+##
 
 import os
 import sys
@@ -137,45 +147,45 @@ A code block, indented four:
 
 A definition list, through the real compact layout--the
 column sits at the 80th-percentile term, so the short terms
-share it and the monster falls back man-style:
+share it:
 
-`-q`|`--quiet`
-: Hush.
+creamy
+: Smooth and rich, like a well-made custard.
 
-`-v`|`--verbose`
-: Narrate the process.
+crunchy
+: Crisp to the bite, with an audible snap.
 
-`--config` *<FILE>*
-: Read configuration from *<FILE>*.
-
-`-p`|`--port` *<PORT>*
-: The TCP port to bind.  Defaults to 8080, or the value of
-  the `SERVE_PORT` environment variable if set.
-
-`--enable-experimental-quantum-transport`
-: You have been warned.
+soft
+: Yielding under gentle pressure; think fresh bread.
 """
 
 
 def build_demo(stylesheet, errors, margin):
     """
-    The demo program.  Its overview page carries DEMO_DOC (the
-    Markdown zoo) plus the set usage line and the Commands table;
+    The demo program.  A bad option shows the error line and its
+    usage trailer--the overview page, carrying DEMO_DOC (the
+    Markdown zoo), the set usage line and the Commands table;
     `help serve` shows a command page (usage with options and
-    operands, the Arguments/Options tables); a bad option shows
-    the error line and its usage trailer.
+    operands, the Arguments/Options tables).
     """
     import appeal
+    import pathlib
     app = appeal.Appeal(name='serve', version='1.0', margin=margin,
                         stylesheet=stylesheet, errors=errors)
 
-    def top(*, verbose=False):
+    def top():
         pass
     top.__doc__ = DEMO_DOC
     app.global_command()(top)
 
     @app.command()
-    def serve(host='0.0.0.0', *, port: int = 8080, quiet=False):
+    @app.option('config', '--config')            # long only, as before
+    @app.argument('config', usage='file')
+    @app.option('enable_experimental_quantum_transport',
+                '--enable-experimental-quantum-transport')
+    def serve(host='0.0.0.0', *, quiet=False, verbose=False,
+              config: pathlib.Path = None, port: int = 8080,
+              enable_experimental_quantum_transport=False):
         """
         Start the server.
 
@@ -186,12 +196,22 @@ def build_demo(stylesheet, errors, margin):
 
         # Options
 
+        quiet
+        : Hush.
+
+        verbose
+        : Narrate the process.
+
+        config
+        : Read configuration from the file.
+
         port
         : The TCP port to bind.  Defaults to 8080, or the value
           of the `SERVE_PORT` environment variable if set.
 
-        quiet
-        : Hush.
+        enable_experimental_quantum_transport
+        : You have been warned.  (The monster term falls back
+          man-style, under the column the short terms share.)
         """
 
     @app.command()
@@ -208,14 +228,16 @@ def render_sample(sheet, margin):
     buf = io.StringIO()
     app = build_demo(sheet, buf, margin)
     with contextlib.redirect_stdout(buf):
-        app.process(['help'])
-        print()
-        app.process(['help', 'serve'])
-        print()
+        # the error line, with the overview page as its usage
+        # trailer; then a command page.  A seam between the two.
         try:
             app.main(['--zerve'])
         except SystemExit:
             pass
+        print()
+        print('_' * 70)
+        print()
+        app.process(['help', 'serve'])
     return buf.getvalue()
 
 
@@ -223,13 +245,16 @@ def print_ansi_16():
     "The ANSI 16, straight SGR--what YOUR terminal makes of them."
     print('The ANSI 16.  Terminals remap these to their own scheme;')
     print('foreground code, bright foreground, then the backgrounds.')
+    print('Using big.stylesheet color names.')
     print()
-    names = ('black', 'red', 'green', 'yellow',
-             'blue', 'magenta', 'cyan', 'white')
-    for i, name in enumerate(names):
-        normal, bright = 30 + i, 90 + i
-        print(f'  \x1b[{normal}m{normal}  {name:<8}sample\x1b[39m'
-              f'   \x1b[{bright}m{bright}  bright_{name:<8}sample\x1b[39m'
+    normal = ('black', 'red', 'green', 'yellow',
+              'blue', 'purple', 'cyan', 'light_gray')
+    bright = ('gray', 'light_red', 'light_green', 'light_yellow',
+              'light_blue', 'light_purple', 'light_cyan', 'white')
+    for i, (lo, hi) in enumerate(zip(normal, bright)):
+        n, b = 30 + i, 90 + i
+        print(f'  \x1b[{n}m{n}  {lo:<13}sample\x1b[39m'
+              f'   \x1b[{b}m{b}  {hi:<13}sample\x1b[39m'
               f'   \x1b[4{i}m  {40 + i}  \x1b[49m'
               f' \x1b[10{i}m  {100 + i}  \x1b[49m')
     print()

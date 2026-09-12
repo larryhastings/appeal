@@ -421,7 +421,7 @@ _LAZY_REEXPORTS = {
     'default_short_option': 'frontend',
     'strip_first_argument_from_signature': 'frontend',
     'strip_self_from_signature': 'frontend',
-    'appeal_markdown_defaults': 'presentation', 'appeal_theme': 'presentation',
+    'appeal_theme': 'presentation', 'ruled_headings': 'presentation',
     'uncolored_theme': 'presentation', 'plain_theme': 'presentation',
     'dark_cool_theme': 'presentation', 'dark_warm_theme': 'presentation',
     'light_cool_theme': 'presentation', 'light_warm_theme': 'presentation',
@@ -2644,12 +2644,12 @@ class Appeal:
         for plan in plans:
             units.extend(plan.usage_body_units())
         if self._table():
-            # the placeholder keeps the argument DECORATION (<COMMAND>: a
-            # hole to fill) but wears the command ROLE--the words that can
-            # fill it are printed in that same style in the listing below,
-            # so the paint cross-references them (Larry's ruling, 2026-09-07)
+            # the placeholder is a hole to fill, like every other
+            # placeholder: argument decoration AND argument role (Larry,
+            # 2026-09-12, trying it; it wore the command role from
+            # 2026-09-07 to cross-reference the listing below)
             from .presentation import decorate_argument
-            units.append(style('command',
+            units.append(style('argument',
                                decorate_argument('command',
                                                  self._decoration_entry())))
         return units

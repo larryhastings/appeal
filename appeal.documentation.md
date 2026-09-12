@@ -235,12 +235,16 @@ mapping the Markdown concepts (`heading1`..`heading6`, `code`,
 `command`, `option`, `argument`, `oparg`, `summary`, `error`)
 to style entries.  Colors in a theme are palette-independent
 *names* (`red`, `dark_red`, `orange`, ...); the palette maps
-them to escape sequences.  Appeal ships seven themes--
-`appeal_theme` (the default, designed against the ANSI 16, so
-your terminal's own light/dark scheme keeps it legible),
-`plain_theme`, `uncolored_theme`, and the four corners
-`light_warm_theme` / `dark_warm_theme` / `light_cool_theme` /
-`dark_cool_theme`:
+them to escape sequences.  Appeal ships seven themes, in
+layers: `plain_theme` is the root, every role a no-op, its
+headings drawn with rules; `uncolored_theme` copies it and adds
+the attributes (bold, italic, underline live there and nowhere
+else), and underlines headings instead of ruling them; and a
+colored theme wraps each role of the uncolored base in a color,
+attributes inherited--`appeal_theme` (the default, designed
+against the ANSI 16, so your terminal's own light/dark scheme
+keeps it legible) and the four corners `light_warm_theme` /
+`dark_warm_theme` / `light_cool_theme` / `dark_cool_theme`:
 
     import appeal
 
@@ -272,6 +276,8 @@ verbatim--Appeal adds nothing and second-guesses nothing (your
 sheet, your rules; that includes coloring output that lands in
 a pipe).  To recolor one thing, extend a shipped theme:
 `dict(appeal.appeal_theme, error=('T', '⦃bold⦙⦃orange⦙T⦄⦄'))`.
+To draw rules under headings instead of underlining them,
+`appeal.ruled_headings(appeal.appeal_theme)`.
 `tools/theme_lab.py` renders a sample page under every theme,
 built to be hacked on.
 
@@ -289,14 +295,18 @@ print time, the same way CPython itself decides
 (`PYTHON_COLORS` beats `NO_COLOR` beats `FORCE_COLOR`, then
 `TERM=dumb`, then whether the stream is a terminal)--
 `appeal_theme` over the ANSI 16 when the stream wants color,
-the plain palette (no escapes of any kind) when it doesn't.
-`stylesheet=False` means never any color.
+`plain_theme` over the plain palette (no escapes of any kind,
+headings ruled) when it doesn't.  `stylesheet=False` means never
+any color.
 
 Two guarantees worth knowing:
 
 * **Color never moves text.**  Layout is computed on
   styles-stripped text and painted afterward, so a colored help
-  page strips back to the monochrome page byte-for-byte.
+  page strips back to its theme's monochrome page byte-for-byte.
+  (The theme decides structure: a colored theme underlines its
+  headings, where `plain_theme` draws rules--so a colorless
+  stream's page differs there, and only there.)
   Piping `--help` through `sed -e 's/\x1b\[[0-9;]*m//g'`
   proves it, if you're the proving kind.
 * **Roles, not escapes.**  The page is built as structural role

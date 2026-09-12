@@ -246,149 +246,228 @@ def decorate_argument(name, entry=None):
         style('argument_decoration', escape_styles(name)))
 
 
-appeal_markdown_defaults = {
-    'heading1': ('T', '⦃strip⦙T⦄'),
-    'heading2': ('T', '⦃strip⦙T⦄'),
-    # the rule hooks: H1 over-and-under '=', H2/H3 under '-' (big's
-    # markdown_defaults already gives heading1_rule='=' and
-    # heading2_rule='-'; add the H1 above-rule and the H3 under-rule)
-    'heading1_rule_next': ('=',),
-    'heading3_rule':      ('-',),
+def ruled_headings(theme):
+    "A copy of `theme` whose headings are drawn with rules, not underlined."
+    return {**theme,
+            'heading_underline': ('T', 'T'),
+            'heading1_rule':      ('=',),
+            'heading1_rule_next': ('=',),
+            'heading2_rule':      ('-',),
+            'heading3_rule':      ('-',)}
+
+
+
+# The themes, in layers (Larry, 2026-09-12).  A theme is a dict of
+# StyleSheet entries; the palette beneath it decides what an
+# attribute or a color renders to.
+#
+#   plain_theme      the root: every role a no-op, no attribute, no
+#                    color.  Headings are drawn with rules ('=' over
+#                    and under H1, '-' under H2 and H3), the one
+#                    structure that survives a palette expressing
+#                    nothing.
+#   uncolored_theme  a copy of plain plus the attributes--bold,
+#                    italic, underline live HERE and nowhere else.
+#                    Headings are underlined, so the rules go.
+#   _theme(...)      a colored theme: the uncolored base with each
+#                    named role WRAPPED in its color, attributes
+#                    inherited.  The alert colors are shared.
+#
+# ruled_headings(theme) puts the drawn rules back on any theme.
+
+_base_theme = {
     'rule': ('T', '⦃fill⦙T⦙⦃line⦄⦄'),
-    'heading_note':      ('T', '⦃blue⦙T⦄'),
-    'heading_tip':       ('T', '⦃green⦙T⦄'),
-    'heading_important': ('T', '⦃purple⦙T⦄'),
-    'heading_warning':   ('T', '⦃dark_yellow⦙T⦄'),
-    'heading_caution':   ('T', '⦃red⦙T⦄'),
-}
 
+    # headings: the structural entry, bare, over the color hook
+    'heading_color':     ('T', 'T'),
+    'heading_underline': ('T', 'T'),
 
-uncolored_theme = {
-    **appeal_markdown_defaults,
-    'heading_color': ('T', 'T'),
-    'heading1':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
-    'heading2':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
-    'heading3':   ('T', '⦃bold⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
-    # the rule hooks paint through heading_color, so a rule matches its
-    # heading's color (big >= 0.15; the glyph stays a bare character)
+    'heading1': ('T', '⦃heading_underline⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
     'heading1_rule_ink': ('T', '⦃heading_color⦙T⦄'),
+
+    'heading2': ('T', '⦃heading_underline⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
     'heading2_rule_ink': ('T', '⦃heading_color⦙T⦄'),
+
+    'heading3': ('T', '⦃heading_underline⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄'),
     'heading3_rule_ink': ('T', '⦃heading_color⦙T⦄'),
-    'heading4':   ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
-    'heading5':   ('T', '⦃heading_color⦙T⦄'),
-    'heading6':   ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
+
+    'heading4': ('T', '⦃heading_color⦙T⦄'),
+
+    'heading5': ('T', '⦃heading_color⦙T⦄'),
+
+    'heading6': ('T', '⦃heading_color⦙⦃lower⦙T⦄⦄'),
+
     # inline structure
-    'code':       ('T', 'T'),               # themes color this
+    'code':       ('T', 'T'),
     'codeblock':  ('T', '⦃code⦙T⦄'),        # inherits code
-    'link':       ('URL', 'T', '⦃underline⦙T⦄'),   # URL is luggage (big >= 0.15)
+    'link':       ('URL', 'T', 'T'),        # URL is luggage (big >= 0.15)
     'marker':     ('T', 'T'),
     'blockquote': ('T', 'T'),
-    'term':       ('T', '⦃bold⦙T⦄'),        # deflist terms
-    # GitHub alerts: bodies wear their kind's color too
-    'note':              ('T', '⦃blue⦙T⦄'),
-    'heading_note':      ('T', '⦃bold⦙⦃blue⦙T⦄⦄'),
-    'tip':               ('T', '⦃green⦙T⦄'),
-    'heading_tip':       ('T', '⦃bold⦙⦃green⦙T⦄⦄'),
-    'important':         ('T', '⦃purple⦙T⦄'),
-    'heading_important': ('T', '⦃bold⦙⦃purple⦙T⦄⦄'),
-    'warning':           ('T', '⦃dark_yellow⦙T⦄'),
-    'heading_warning':   ('T', '⦃bold⦙⦃dark_yellow⦙T⦄⦄'),
-    'caution':           ('T', '⦃red⦙T⦄'),
-    'heading_caution':   ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
-    # the roles, attribute-only defaults
-    'program':    ('T', '⦃bold⦙T⦄'),
-    'command':    ('T', '⦃bold⦙T⦄'),
-    'option':     ('T', '⦃bold⦙T⦄'),
+    'term':       ('T', 'T'),               # deflist terms
+
+    # GitHub alerts
+    'note':              ('T', 'T'),
+    'heading_note':      ('T', 'T'),
+    'tip':               ('T', 'T'),
+    'heading_tip':       ('T', 'T'),
+    'important':         ('T', 'T'),
+    'heading_important': ('T', 'T'),
+    'warning':           ('T', 'T'),
+    'heading_warning':   ('T', 'T'),
+    'caution':           ('T', 'T'),
+    'heading_caution':   ('T', 'T'),
+
+    # the roles
+    'program':    ('T', 'T'),
+    'command':    ('T', 'T'),
+    'option':     ('T', 'T'),
     'argument':   ('T', 'T'),
+
     # the distinct decoration transform: a raw operand name -> its
     # placeholder (host -> <HOST>), formerly the app's
     # positional_argument_usage_format.  Kept out of the 'argument'
     # color role so themes stay color-only.
     'argument_decoration': ('T', '<⦃upper⦙T⦄>'),
     'oparg':      ('T', '⦃argument⦙T⦄'),    # ruled: defaults to argument
+    'summary':    ('T', 'T'),
+    'error':      ('T', 'T'),
+}
+
+plain_theme = ruled_headings(_base_theme)
+
+uncolored_theme = {
+    **_base_theme,
+    # headings underline (Larry, 2026-09-12: a heading is short, and
+    # a long one that wraps underlines across the wrap) and the rules
+    # go; bold on top
+    'heading_underline': ('T', '⦃underline⦙T⦄'),
+
+    'heading1': ('T', '⦃bold⦙⦃heading_underline⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄⦄'),
+    'heading1_rule':      ('',),
+    'heading1_rule_next': ('',),
+
+    'heading2': ('T', '⦃bold⦙⦃heading_underline⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄⦄'),
+    'heading2_rule':      ('',),
+    'heading3_rule':      ('',),
+
+    'heading3': ('T', '⦃bold⦙⦃heading_underline⦙⦃heading_color⦙⦃strip⦙T⦄⦄⦄⦄'),
+
+    'heading4': ('T', '⦃italic⦙⦃heading_color⦙T⦄⦄'),
+
+    'link':       ('URL', 'T', '⦃underline⦙T⦄'),
+    'term':       ('T', '⦃bold⦙T⦄'),
+
+    'heading_note':      ('T', '⦃bold⦙T⦄'),
+    'heading_tip':       ('T', '⦃bold⦙T⦄'),
+    'heading_important': ('T', '⦃bold⦙T⦄'),
+    'heading_warning':   ('T', '⦃bold⦙T⦄'),
+    'heading_caution':   ('T', '⦃bold⦙T⦄'),
+
+    'program':    ('T', '⦃bold⦙T⦄'),
+    'command':    ('T', '⦃bold⦙T⦄'),
+    'option':     ('T', '⦃bold⦙T⦄'),
+    'argument':   ('T', '⦃bold⦙T⦄'),       # every placeholder alike
     'summary':    ('T', '⦃bold⦙T⦄'),
     'error':      ('T', '⦃bold⦙T⦄'),
 }
 
 
-# plain and uncolored are ONE structure over two palettes: the theme
-# emits the document (heading rules are TEXT), and the palette decides
-# what renders--uncolored_palette expresses bold/italic/underline but
-# no colors, plain_palette expresses nothing.  A copy, so a red pen
-# on one can't silently edit the other.
-plain_theme = dict(uncolored_theme)
+# the colors every colored theme shares: the GitHub alert kinds
+_alert_colors = {
+    'note': 'blue',
+    'heading_note': 'blue',
+
+    'tip': 'green',
+    'heading_tip': 'green',
+
+    'important': 'purple',
+    'heading_important': 'purple',
+
+    'warning': 'dark_yellow',
+    'heading_warning': 'dark_yellow',
+
+    'caution': 'red',
+    'heading_caution': 'red',
+}
 
 
-def _theme(**overrides):
-    "A theme: the uncolored base plus your colors."
+def _theme(**colors):
+    """
+    A colored theme: the uncolored base, each named role wrapped in
+    its color (a color NAME--the attributes come from the base).  A
+    tuple instead of a name is a whole entry, used as given.
+    """
     t = dict(uncolored_theme)
-    t.update(overrides)
+    for role, color in {**_alert_colors, **colors}.items():
+        if isinstance(color, tuple):
+            t[role] = color
+            continue
+        entry = uncolored_theme[role]
+        t[role] = entry[:-1] + (f'⦃{color}⦙{entry[-1]}⦄',)
     return t
 
 
 appeal_theme = _theme(
-    command   = ('T', '⦃bold⦙⦃cyan⦙T⦄⦄'),
-    option    = ('T', '⦃cyan⦙T⦄'),
-    argument  = ('T', '⦃bold⦙⦃cyan⦙T⦄⦄'),  # every placeholder the same as
-                                          # <COMMAND> (Larry, 2026-09-12)
-    summary   = ('T', '⦃bold⦙T⦄'),
-    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
-    code      = ('T', '⦃green⦙T⦄'),          # ruled: code is green
-    marker    = ('T', '⦃dark_purple⦙T⦄'),
-    link      = ('URL', 'T', '⦃underline⦙⦃blue⦙T⦄⦄'),      # URL: luggage
-    heading_color = ('T', '⦃blue⦙T⦄'),
+    command   = 'blue',
+    option    = 'cyan',
+    argument  = 'dark_purple',
+    error     = 'red',
+    code      = 'green',                    # ruled: code is green
+    marker    = 'dark_purple',
+    link      = 'blue',
+    heading_color = 'blue',
 )
 
 
 light_warm_theme = _theme(
-    command   = ('T', '⦃bold⦙⦃dark_orange⦙T⦄⦄'),
-    option    = ('T', '⦃dark_red⦙T⦄'),
-    argument  = ('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄'),
-    summary   = ('T', '⦃bold⦙⦃dark_red⦙T⦄⦄'),
-    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),
-    code      = ('T', '⦃dark_amber⦙T⦄'),
-    marker    = ('T', '⦃dark_yellow⦙T⦄'),
-    link      = ('URL', 'T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),      # URL: luggage
-    heading_color = ('T', '⦃dark_red⦙T⦄'),
+    command   = 'dark_orange',
+    option    = 'dark_red',
+    argument  = 'dark_gray',
+    summary   = 'dark_red',
+    error     = 'red',
+    code      = 'dark_amber',
+    marker    = 'dark_yellow',
+    link      = 'dark_purple',
+    heading_color = 'dark_red',
 )
 
 
 dark_warm_theme = _theme(
-    command   = ('T', '⦃bold⦙⦃light_orange⦙T⦄⦄'),
-    option    = ('T', '⦃light_red⦙T⦄'),
-    argument  = ('T', '⦃italic⦙⦃light_gray⦙T⦄⦄'),
-    summary   = ('T', '⦃bold⦙⦃light_orange⦙T⦄⦄'),
-    error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
-    code      = ('T', '⦃light_amber⦙T⦄'),
-    marker    = ('T', '⦃light_yellow⦙T⦄'),
-    link      = ('URL', 'T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),      # URL: luggage
-    heading_color = ('T', '⦃light_red⦙T⦄'),
+    command   = 'light_orange',
+    option    = 'light_red',
+    argument  = 'light_gray',
+    summary   = 'light_orange',
+    error     = 'light_red',
+    code      = 'light_amber',
+    marker    = 'light_yellow',
+    link      = 'light_purple',
+    heading_color = 'light_red',
 )
 
 
 light_cool_theme = _theme(
-    command   = ('T', '⦃bold⦙⦃dark_cyan⦙T⦄⦄'),
-    option    = ('T', '⦃dark_blue⦙T⦄'),
-    argument  = ('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄'),
-    summary   = ('T', '⦃bold⦙⦃dark_blue⦙T⦄⦄'),
-    error     = ('T', '⦃bold⦙⦃red⦙T⦄⦄'),     # errors stay red, even here
-    code      = ('T', '⦃dark_green⦙T⦄'),
-    marker    = ('T', '⦃dark_cyan⦙T⦄'),
-    link      = ('URL', 'T', '⦃underline⦙⦃dark_purple⦙T⦄⦄'),      # URL: luggage
-    heading_color = ('T', '⦃dark_blue⦙T⦄'),
+    command   = 'dark_cyan',
+    option    = 'dark_blue',
+    argument  = 'dark_gray',
+    summary   = 'dark_blue',
+    error     = 'red',                      # errors stay red, even here
+    code      = 'dark_green',
+    marker    = 'dark_cyan',
+    link      = 'dark_purple',
+    heading_color = 'dark_blue',
 )
 
 
 dark_cool_theme = _theme(
-    command   = ('T', '⦃bold⦙⦃light_cyan⦙T⦄⦄'),
-    option    = ('T', '⦃light_blue⦙T⦄'),
-    argument  = ('T', '⦃italic⦙⦃light_gray⦙T⦄⦄'),
-    summary   = ('T', '⦃bold⦙⦃light_cyan⦙T⦄⦄'),
-    error     = ('T', '⦃bold⦙⦃light_red⦙T⦄⦄'),
-    code      = ('T', '⦃light_green⦙T⦄'),
-    marker    = ('T', '⦃light_cyan⦙T⦄'),
-    link      = ('URL', 'T', '⦃underline⦙⦃light_purple⦙T⦄⦄'),      # URL: luggage
-    heading_color = ('T', '⦃light_blue⦙T⦄'),
+    command   = 'light_cyan',
+    option    = 'light_blue',
+    argument  = 'light_gray',
+    summary   = 'light_cyan',
+    error     = 'light_red',
+    code      = 'light_green',
+    marker    = 'light_cyan',
+    link      = 'light_purple',
+    heading_color = 'light_blue',
 )
 
 
@@ -406,11 +485,13 @@ def resolve_stylesheet(spec, file=None):
     palette: no escapes of any kind.
     """
     if spec is None or spec is False:
-        palette = (ansi_16_color_palette
-                   if (spec is None) and can_colorize(file=file)
-                   else plain_stylesheet)
-        return (markdown_defaults | transforms | palette
-                | StyleSheet(appeal_theme))
+        if (spec is None) and can_colorize(file=file):
+            palette, theme = ansi_16_color_palette, appeal_theme
+        else:
+            # a stream with no color has no underline either: the
+            # plain theme draws its heading rules
+            palette, theme = plain_stylesheet, plain_theme
+        return markdown_defaults | transforms | palette | StyleSheet(theme)
     return spec
 
 

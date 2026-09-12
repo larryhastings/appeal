@@ -7688,14 +7688,22 @@ def test_theme():
                      'oparg', 'summary', 'error', 'heading_color',
                      'code', 'term'):
             assert role in theme, role
-    # plain and uncolored are ONE structure over two palettes (ruled
-    # 2026-09-07: stripping is the PALETTE's job, and flattening the
-    # theme deleted the heading line art); appeal colors (ruled:
-    # code is green)
-    assert plain_theme == uncolored_theme
-    assert plain_theme is not uncolored_theme       # a red-pen copy
+    # the layers (Larry, 2026-09-12): plain is the root, every role a
+    # no-op; uncolored copies it and adds the attributes; a colored
+    # theme wraps the uncolored entry in a color, attributes inherited
+    assert plain_theme['argument'] == ('T', 'T')
+    assert uncolored_theme['argument'] == ('T', '⦃bold⦙T⦄')
+    assert appeal_theme['argument'] == ('T', '⦃dark_purple⦙⦃bold⦙T⦄⦄')
+    assert set(plain_theme) == set(uncolored_theme) == set(appeal_theme)
     assert 'cyan' in appeal_theme['option'][1]
-    assert 'green' in appeal_theme['code'][1]
+    assert 'green' in appeal_theme['code'][1]      # ruled: code is green
+    # the link's URL luggage survives the wrap
+    assert appeal_theme['link'] == ('URL', 'T', '⦃blue⦙⦃underline⦙T⦄⦄')
+    # a whole entry (a tuple) is used as given: the theme's way to
+    # change an attribute, not just a color
+    from appeal.presentation import _theme
+    assert _theme(argument=('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄'))['argument'] == \
+        ('T', '⦃italic⦙⦃dark_gray⦙T⦄⦄')
 
     # resolve_stylesheet: a composed sheet is used VERBATIM
     # (ruled 2026-08-06)--even for a non-tty stream
@@ -7791,21 +7799,27 @@ def test_colorized_help_paints_after_layout():
              | StyleSheet(appeal_theme))
     plan = build_plan(draw)
     corpus = merge_docs(plan)
+    # the same theme over the plain palette: the theme decides the
+    # structure (underlined headings, no rules--Larry, 2026-09-12),
+    # the palette what an attribute renders to
+    from big.stylesheet import plain_palette
     plain = render_help_page(plan.usage_units(), corpus, default_template,
-                             stylesheet=False)
+                             stylesheet=(markdown_defaults | transforms
+                                         | plain_palette
+                                         | StyleSheet(appeal_theme)))
     painted = render_help_page(plan.usage_units(), corpus, default_template,
                                stylesheet=sheet)
     assert painted != plain
     assert '\x1b[' in painted
     assert decolor(painted) == plain
-    # the usage line: options wear the option role (cyan under
-    # appeal_theme over the ANSI 16)
-    assert '\x1b[36m--verbose\x1b[39m' in painted     # usage line
+    # the usage line: options wear the option role--bold from the
+    # uncolored base, cyan wrapped around it by appeal_theme
+    assert '\x1b[36m\x1b[1m--verbose\x1b[22m\x1b[39m' in painted
     # the theme lift (task #20): the BODY paints now too--the
     # flense baked role spans into the tables
     body = painted.split('\n\n', 1)[1]
     assert '\x1b[' in body, body
-    assert '\x1b[36m--verbose\x1b[39m' in body        # options table term
+    assert '\x1b[36m\x1b[1m--verbose\x1b[22m\x1b[39m' in body   # options table term
 
 
 # ---------------------------------------------------------------------

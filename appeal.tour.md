@@ -506,9 +506,16 @@ as big `DefinitionList` nodes: each row's display is a role-tagged
 a row's nested blocks as a heading one level deeper plus a nested list.
 Nothing is written back out as
 Markdown and re-parsed.  `render_baked_help` wraps the pieces at the
-real margin and paints them through the stylesheet: a theme is a dict
-of role to style, plain and uncolored are one structure over two
-palettes, and color appears only when the stream wants it.
+real margin and paints them through the stylesheet.  A theme is a
+dict of role to style, in layers (Larry, 2026-09-12): `plain_theme`
+is the root, every role a no-op, headings drawn with rules;
+`uncolored_theme` copies it and adds the attributes--bold, italic,
+underline live there and nowhere else--and underlines headings
+instead of ruling them; a colored theme is `_theme(role=color, ...)`,
+the uncolored base with each named role wrapped in its color,
+attributes inherited.  `ruled_headings(theme)` puts the rules back on
+any theme.  A stream that wants color gets `appeal_theme` over the
+ANSI 16; one that doesn't gets `plain_theme` over the plain palette.
 
 Errors ride the same pipeline: `run_main` catches `AppealError`, prints
 `error: ...` to stderr with the usage line attached (a command's error

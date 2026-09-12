@@ -2456,7 +2456,10 @@ Creates a new Appeal instance.
 * `stylesheet` colors Appeal's output: `None` means the stock
   theme (when the environment and terminal permit), `False` means
   never, or pass a complete composed big `StyleSheet` of your own,
-  used verbatim.  See "Color" in `appeal.documentation.md`.
+  used verbatim.  The stock themes underline headings; a stream
+  without color draws rules under them instead, and
+  `appeal.ruled_headings(theme)` gives you a theme that always
+  does.  See "Color" in `appeal.documentation.md`.
 * `doc` is the program's own documentation (Markdown): it beats
   the global command's docstring, which beats the module's, as the
   prose at the top of the program's help page.
