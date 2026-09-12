@@ -2312,11 +2312,9 @@ class SignaturePlan(Plan):
                     and not (kind is inspect.Parameter.KEYWORD_ONLY
                              and has_default)):
                 raise AppealConfigurationError(
-                    f"{name!r}: parameter {parameter.name!r} has a leading "
-                    f"underscore, which means \"ignore me\"--only a "
-                    f"keyword-only parameter with a default (an optional "
-                    f"option) can be ignored; this one must come from the "
-                    f"command line")
+                    f"{parameter.name!r}: the \"ignore me\" leading "
+                    f"underscore on a parameter name is only allowed for "
+                    f"keyword-only parameters with default values")
 
             if kind in (inspect.Parameter.POSITIONAL_ONLY,
                         inspect.Parameter.POSITIONAL_OR_KEYWORD):

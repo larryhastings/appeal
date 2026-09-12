@@ -1459,8 +1459,10 @@ def test_underscore_only_on_optional_options():
             build_plan(f)
             assert False, f.__name__
         except AppealConfigurationError as e:
-            assert f"parameter {param!r} has a leading underscore" in str(e), e
-            assert 'only a keyword-only parameter with a default' in str(e), e
+            assert str(e) == (f"{param!r}: the \"ignore me\" leading "
+                              f"underscore on a parameter name is only "
+                              f"allowed for keyword-only parameters with "
+                              f"default values"), e
 
 
 def test_load_without_pathlib():
