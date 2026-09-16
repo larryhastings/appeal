@@ -126,11 +126,107 @@ def did_you_mean(word, candidates, role):
     return f" (did you mean {matches[0]} or {matches[1]}?)"
 
 
-# --8<-- snipped from big.itertools (Larry's): IteratorContext and
-# iterator_context, trimmed to what the dispatcher uses (the class's
-# length/countdown/__repr__ are dropped).  Appeal's runtime never imports
-# big (the success path pays nothing for it), so the two live here.
-# Edit them in big, re-snip here.
+# --8<-- snipped from big.itertools (Larry's): PushbackIterator (verbatim),
+# IteratorContext and iterator_context (trimmed to what the dispatcher
+# uses: the class's length/countdown/__repr__ are dropped).  Appeal's
+# runtime never imports big (the success path pays nothing for it), so
+# they live here.  Edit them in big, re-snip here.  PushbackIterator is
+# big's code under big's tests: not measured here.
+class PushbackIterator:                                 # pragma: no cover
+    """
+    Wraps any iterator, letting you push items to be yielded first.
+
+    The PushbackIterator constructor accepts one argument, an iterable.
+    When you iterate over the PushbackIterator instance, it yields values
+    from that iterable.  You may also pass in None, in which case the
+    PushbackIterator is created in an "exhausted" state.
+
+    PushbackIterator also supports a push(o) method, which "pushes"
+    that object onto the iterator.  If any objects have been pushed onto
+    the iterator, they're yielded first, before attempting to yield
+    from the wrapped iterator.  Pushed values are yielded in
+    last-in-first-out order, like a stack.
+
+    Example: you have a pushback iterator J, and you call J.push(3)
+    followed by J.push('x').  The next two times you iterate over
+    J, it will yield 'x', followed by 3.
+
+    When the wrapped iterable is exhausted--or if you passed in None to
+    the constructor--you can still call push to add new items, at which
+    point the PushbackIterator can be iterated over again.
+
+    PushbackIterator also supports a next(default=None) method,
+    like Python's builtin next function, as well as a __bool__ method
+    returning true if the iterator is not exhausted.
+
+    It's explicitly supported to push values that were never yielded by
+    the wrapped iterator.  If you create J = PushbackIterator(range(1, 20)),
+    you may still call J.push(33), or J.push('xyz'), or J.push(None), etc.
+    """
+
+    __slots__ = ('i', 'stack')
+
+    def __init__(self, iterable=None):
+        if (iterable is not None) and (not hasattr(iterable, '__next__')):
+            iterable = iter(iterable)
+        self.i = iterable
+        self.stack = []
+
+    def __iter__(self):
+        return self
+
+    def push(self, o):
+        """
+        Pushes a value into the iterator's internal stack.
+        When a PushbackIterator is iterated over, and there are
+        any pushed values, the top value on the stack will be popped
+        and yielded.  PushbackIterator only yields from the
+        iterator it wraps when this internal stack is empty.
+        """
+        self.stack.append(o)
+
+    def __next__(self):
+        if self.stack:
+            return self.stack.pop()
+        if self.i is not None:
+            try:
+                return next(self.i)
+            except StopIteration:
+                self.i = None
+        raise StopIteration
+
+    def next(self, default=None):
+        """
+        Equivalent to next(PushbackIterator),
+        but won't raise StopIteration.
+        If the iterator is exhausted, returns
+        the "default" argument.
+        """
+        if self.stack:
+            return self.stack.pop()
+        if self.i is not None:
+            try:
+                return next(self.i)
+            except StopIteration:
+                self.i = None
+        return default
+
+    def __bool__(self):
+        if self.stack:
+            return True
+        if self.i is not None:
+            try:
+                o = next(self.i)
+                self.push(o)
+                return True
+            except StopIteration:
+                self.i = None
+        return False
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} i={self.i} stack={self.stack}>"
+
+
 class IteratorContext:
     "Context object yielded by big.iterator_context."
 
@@ -967,9 +1063,13 @@ def _refuse_orphan_method(callable):
 
 class _Line:
     "One command line's parse in progress: the steps, and the state eras relay."
-    __slots__ = ('argv', 'steps', 'dashdash', 'bled', 'tried', 'path')
+    __slots__ = ('words', 'steps', 'dashdash', 'bled', 'tried', 'path')
     def __init__(self, argv):
-        self.argv = argv
+        self.words = PushbackIterator(argv)     # the line's tokens, consumed
+                                        # era by era: an era drains what's
+                                        # left, and pushes back what it
+                                        # declined; a node pushes back a
+                                        # word it can't own, for its parent
         self.steps = []
         self.path = []                  # the command words dispatched, root
                                         # down: what a misplaced option's
@@ -1160,7 +1260,7 @@ class Processor:
         steps = line.steps
         problem = None
         try:
-            self.app._run_node(line, 0, top=True)
+            self.app._run_node(line, top=True)
         except AppealDataError as e:
             problem = e
         env = {}                            # class-as-app instance store
@@ -3114,28 +3214,29 @@ class Appeal:
                                  word=word, callable=callable))
         return [era.resolve(False, False) for era in eras]
 
-    def _parcel_era(self, era, line, pos, table, conv=None, conjured=None,
+    def _parcel_era(self, era, line, table, conv=None, conjured=None,
                     ahead=None, config=None):
         """
-        Parcel one era's tokens (from pos) onto its converter, list its
-        step, relay what it shares FORWARDS (its options, and the `--`
-        state); returns the new pos.  conv/conjured: the head builds its
+        Parcel one era's tokens onto its converter, list its step, relay
+        what it shares FORWARDS (its options, and the `--` state).  The
+        era takes the rest of the line and gives back what it declined
+        (the next era's tokens, or the command word).  conv/conjured: the head builds its
         converters and conjure stashes ahead of time, so that `ahead`--
         the next era's (converter, stash), given when this era shares
         BACKWARDS--can have its handlers registered here before this
         era parses.  A structural error raises wearing the right usage
         trailer.
         """
-        argv = line.argv
         if era.plan is None:                    # the word of a command that
-            return pos                          # takes something: no tokens of
+            return                              # takes something: no tokens of
                                                 # its own, and it always relays
                                                 # into its help/aoo eras
         cls = converter_for(era.plan)
         if conv is None:
             conv = cls()
         handlers, dashdash = line.bled or ({}, False)   # shared forwards into here
-        proc = backend.Engine(argv[pos:], conv, table,
+        tokens = list(line.words)               # the rest of the line
+        proc = backend.Engine(tokens, conv, table,
                               dashdash=dashdash, conjured=conjured)
         if era.kind == 'head':
             step = _Step('era', self, cls, conv, proc, plan=era.plan,
@@ -3179,13 +3280,13 @@ class Appeal:
             else:
                 step.attach_usage(e)
             raise
-        pos += proc.consumed                    # the whole era's tokens
+        for tok in reversed(tokens[proc.consumed:]):
+            line.words.push(tok)                # what the era declined
         line.dashdash = proc.force_positional
         line.bled = ((proc.handlers, proc.force_positional) if era.forwards
                      else None)
         line.tried = proc.handlers
         line.steps.append(step)
-        return pos
 
     def _split_config(self, mapping):
         """
@@ -3242,20 +3343,19 @@ class Appeal:
             per_plan.setdefault(id(plan), {})[key] = value
         return per_plan
 
-    def _run_node(self, line, pos, top, sections=None):
+    def _run_node(self, line, top, sections=None):
         """
         Parcel and scan one set node's eras--its head eras, then the
         eras each command word opens--appending the steps to execute;
         recurse for subcommands.  Runs no user code: converters are
         instantiated (Appeal's classes) and tokens are parceled onto
-        them as records.  Returns (dispatched, pos): whether a command
-        word of THIS node was parceled, and where the node's tokens end.
-        A structural error raises (the caller notes it: pass 2 raises it
-        after the immediate eras run).  sections: this node's command
-        words' config sections (the root splits its own).
+        them as records.  Returns whether a command word of THIS node
+        was parceled; a word the node can't own is pushed back for its
+        parent.  A structural error raises (the caller notes it: pass 2
+        raises it after the immediate eras run).  sections: this node's
+        command words' config sections (the root splits its own).
         """
         self._finalize()
-        argv = line.argv
         steps = line.steps
         table = self._table()
         strict = self.root.strict
@@ -3274,12 +3374,11 @@ class Appeal:
             if not ctx.is_last and ctx.next[0].backwards:
                 ahead = ctx.next[1:]                # the successor's conv, stash
             mapping = per_plan.get(id(era.plan))
-            pos = self._parcel_era(era, line, pos, table, conv, stash, ahead,
-                                   (mapping, strict) if mapping else None)
+            self._parcel_era(era, line, table, conv, stash, ahead,
+                             (mapping, strict) if mapping else None)
 
         dispatched = False              # did a command word of THIS node run?
-        while pos < len(argv):
-            word = argv[pos]
+        for word in line.words:
             if word == '--' and not line.dashdash:
                 # `--` where a command word goes: consumed, and the next
                 # token is the word, whatever it is.  One `--` before the
@@ -3289,11 +3388,11 @@ class Appeal:
                 # forces nothing beyond that--click's rule: the word's own
                 # eras start fresh (Larry, 2026-09-08)
                 line.dashdash = True
-                pos += 1
                 continue
             if word not in table:
                 if not top:
-                    return dispatched, pos      # pop back: a parent may own it
+                    line.words.push(word)       # a parent may own it
+                    return dispatched
                 else:
                     dash = word.startswith('-') and not line.dashdash
                     if not dash and not table:
@@ -3312,12 +3411,11 @@ class Appeal:
             depth = len(self._words())                # root: 0
             line.path[depth:] = [word]                # this set's word, replacing
                                                       # a cycling set's previous
-            pos += 1                                  # the word itself
             child = self._children[word]
             own, subsections = child._split_config(sections.get(word, {}))
             for era in self._command_eras(word):
-                pos = self._parcel_era(
-                    era, line, pos, table,
+                self._parcel_era(
+                    era, line, table,
                     config=(own, strict) if own and era.plan is not None
                     else None)
             dispatched = True
@@ -3328,15 +3426,14 @@ class Appeal:
             # is waiting.  Every command has a child node (lazy registration);
             # only enter one that actually has subcommands or a default.
             if child._has_commands or child._default is not None:
-                _, pos = child._run_node(line, pos, top=False,
-                                         sections=subsections)
-            if not self._node_repeat and pos < len(argv):
-                # this set doesn't cycle: pop the leftover word up to an
+                child._run_node(line, top=False, sections=subsections)
+            if not self._node_repeat and line.words:
+                # this set doesn't cycle: the leftover word goes up to an
                 # ancestor whose set does (the parent's loop re-dispatches it);
                 # at the top with nothing to claim it, it's unexpected
                 if not top:
-                    return dispatched, pos
-                tok = argv[pos]
+                    return dispatched
+                tok = next(line.words)
                 dash = tok.startswith('-') and not line.dashdash
                 deepest = self.root._node_at(line.path)
                 if dash:
@@ -3375,12 +3472,13 @@ class Appeal:
             if handler is not None and self._has_commands:
                 dcls = converter_for(self._default_plan())
                 dconv = dcls()
-                dproc = backend.Engine(argv[pos:], dconv, table,
-                                       dashdash=(line.bled or ({}, False))[1])
+                # the line is spent: the loop ran out of words (a word this
+                # node can't own was pushed back and returned before this)
+                assert not line.words
+                dproc = backend.Engine([], dconv, table)
                 dproc.parse()
-                pos += dproc.consumed
                 steps.append(_Step('default', self, dcls, dconv, dproc))
-        return dispatched, pos
+        return dispatched
 
     def main(self, args=None):
         """

@@ -374,13 +374,17 @@ An era is an object, `Appeal.Era` (private): its kind (`head`,
 neighbors into `forwards` and `backwards`), `immediate`, and the
 command word it belongs to.  A node produces them: `_head_eras()` once
 per line, `_command_eras(word)` as each word dispatches.  One method,
-`_parcel_era`, parcels any era: builds its Converter instances, makes an
-Engine over `argv[pos:]`, enters the converters (last-registered first,
-so the first-registered precommand's operands fill first), seeds any
-shared handlers, parses, lists the step, relays what it shares, and advances `pos`
-by what the era consumed.
+`_parcel_era`, parcels any era: builds its Converter instances, drains
+the rest of the line off `line.words` (a `PushbackIterator`, snipped
+from big.itertools) into an Engine, enters the converters
+(last-registered first, so the first-registered precommand's operands
+fill first), seeds any shared handlers, parses, lists the step, relays
+what it shares, and pushes back what the era declined--the next era's
+tokens, or the command word.  There is no cursor: the line is an
+iterator, and an era or a node gives back what isn't its own (Larry,
+2026-09-16).
 
-`_run_node(line, pos, top)` is the dispatcher for one node.  It:
+`_run_node(line, top)` is the dispatcher for one node.  It:
 
 1. Parcels each head era.
 2. Loops over command words: looks the word up in the table, parcels
@@ -570,7 +574,7 @@ def build(target, *, jobs: int = 1): ...
 
 and the line `tool -q build lib --jobs 4`:
 
-1. `Processor(app)(argv)` makes a `_Line`.  `_run_node(line, 0, top=True)`.
+1. `Processor(app)(argv)` makes a `_Line`.  `_run_node(line, top=True)`.
 2. Head era one, the metadata precommand: its Engine sees `-q`, which it
    doesn't own; the stack is empty (this era takes no operands), so the
    era ends having consumed nothing.  Its `--help`/`--version` handlers
