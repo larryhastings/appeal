@@ -2031,12 +2031,24 @@ That row reads "The color to render in.", with an Options block
 beneath it listing `--saturation` (undocumented now) and
 `--value` with your words.  What isn't in your entry is gone:
 the converter's `# Arguments` block isn't shown, because your
-entry didn't write one.  The converter's names are addressed
-this way only, nested: `value` is not an option of `render`,
-and a flat `value` entry in `render`'s `Options` section is an
-error that says where to put it.  (An argument-edge converter
-is the other way round: its options *are* rows of the
-command's table, so a flat entry is right.)
+entry didn't write one.
+
+**Reaching into a converter.**  A bare name in a section is
+one of the docstring's *own* parameters, nothing else.  `value`
+is not an option of `render`, and a bare `value` entry in
+`render`'s `Options` section is an error that suggests the
+spelling that works: a *dotted path* through parameter names,
+`color.value`.  The path starts at the function whose docstring
+(or decorator) you're writing and walks into the converters,
+one parameter name per step, as deep as the tree goes.  A
+dotted entry is surgical: `color`'s own docstring stands and
+one row is overridden.  The nested form above is the
+replacement: your entry becomes `color`'s whole docstring.
+Both for one row is an error.  The same paths work on
+argument-edge converters, whose rows sit in the command's own
+table: `stuff.color` documents the `--color` that `stuff`
+brought with it, and two siblings that both have a `color` are
+`first.color` and `second.color`, never ambiguous.
 
 The same replacement is available without touching the
 docstring: `@app.option('color', '-c', '--color', doc=...)`
@@ -2048,14 +2060,32 @@ the entry and `doc=` for one name is an error.  On a plain
 operand, `@app.argument('src', doc=...)` is simply that
 operand's documentation.
 
-**Names in a converter tree.**  A command's own parameter name
-shadows a merged one: `cmd(a, color, stuff: stuff)` with
-`stuff(x, y, color='red')` has two `<COLOR>` rows, and `color`
-in `cmd`'s `Arguments` section documents `cmd`'s, while
-`stuff`'s docstring documents its own.  Two merged *siblings*
-that share a name are ambiguous at the command: document the
-name in the converter, or replace that converter's docstring
-with `doc=`.
+The decorators take the same paths.  `@app.argument('copy.src',
+usage='from')` on a command renames the `src` that its `copy`
+parameter's converter takes; `@app.option('stuff.color',
+'--hue')` remaps the option a converter declared, and
+`@app.option('stuff.color')` with no strings unmaps it, for
+this use only--the converter's other uses are untouched.  What
+the command says about a path replaces *everything* the
+converter said about that parameter, its own decorators
+included: nearer the command, higher precedence.  So these two
+programs render the same `<BOOZLE>`:
+
+```Python
+@app.argument('src', usage='fizzle')     # copy's own opinion...
+def copy(src: path, dst: path):
+    "Makes a copy of a file on disk."
+
+@app.command()
+@app.argument('copy.src', usage='boozle')   # ...outranked here
+def workflow(copy: copy, edit: edit):
+    "Copies a file, then edits a file."
+```
+
+A path that reaches nothing is an error: `count.x` when `count`
+takes an `int`, a rename of a parameter that stands for two
+words (`copy` itself), or a rename aimed into a one-operand
+chain that an outer name already owns.
 
 **One-operand converters.**  A converter that consumes exactly
 one operand is transparent to naming: the operand wears the
@@ -2671,7 +2701,10 @@ at the parent, replacing `Appeal(default_subcommand=...)`.
 `Appeal.option(parameter_name, *options, annotation=..., default=..., config=None, restriction=None, doc=None)`
 
 Used as a decorator, on the callable that owns
-`parameter_name` (a command function or any converter).  Maps
+`parameter_name` (a command function or any converter)--or a
+dotted path from it into its converters, `stuff.color`, which
+replaces whatever the converter said about that parameter, for
+this use (see "Reaching into a converter").  Maps
 the given option strings to that parameter--*instead of* the
 automatic ones, and as a fresh declaration: the option's
 grammar comes from `annotation`/`default` given here, not from
@@ -2693,7 +2726,9 @@ deprecated` (or `command 'old'`) to standard error.
 
 `Appeal.argument(parameter_name, *, usage=None, doc=None)`
 
-Used as a decorator, on a command function or any converter.
+Used as a decorator, on a command function or any converter;
+`parameter_name` may be a dotted path into its converters,
+`copy.src` (see "Reaching into a converter").
 `usage=` renames how one positional parameter (or option
 metavar) displays in usage: `@app.argument('path',
 usage='FILE')`.  `doc=` supplies the docstring for the converter

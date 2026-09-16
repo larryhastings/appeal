@@ -478,11 +478,13 @@ class OptionRule:
 
     @staticmethod
     def build(name, strings, explicit, annotation, grammar_default,
-              default, metavar, build):
+              default, metavar, build, overlay=None):
         """
         One option's rule, from its (annotation, grammar_default) pair--
         the shared engine behind keyword-only parameters, @app.option
-        fresh declarations, and **kwargs-delivered options.
+        fresh declarations, and **kwargs-delivered options.  `overlay`
+        is what the levels above said about the converter's parameters
+        (a group option's), by path below this option.
         """
         if annotation is not inspect.Parameter.empty:
             annotation = dereference_annotated(annotation)
@@ -583,7 +585,7 @@ class OptionRule:
                 # --position take an int and a float)
                 return OptionRule.build(name, strings, explicit, t,
                                         inspect.Parameter.empty, default,
-                                        metavar, build)
+                                        metavar, build, overlay)
             else:
                 converters = (str,)
         elif _is_option_group(annotation):
@@ -595,7 +597,7 @@ class OptionRule:
             # app's decorations (a converter's @app.option/@app.parameter
             # apply wherever it's used--the README's promise; group options
             # were built undecorated until 2026-09-10, by accident)
-            child = build.fresh().plan(annotation)
+            child = build.fresh(overlay).plan(annotation)
             return finish(GroupOption(strings, name, (annotation,), default,
                                       child))
         elif _is_multiparam_converter(annotation):
@@ -880,7 +882,8 @@ class Plan:
                  'gated', 'certain', 'var_keyword',
                  'tree_trailing', 'scoped_keys', 'auto_help',
                  'sibling_parents', 'sibling_keys', 'pre_plan', 'argv0',
-                 'decoration', 'doc_overrides', 'compiled', 'share', 'immediate')
+                 'decoration', 'doc_overrides', 'doc_overlaid', 'compiled',
+                 'share', 'immediate')
 
     # the varieties differ here (Larry's design, 2026-09-08):
     windowed = False        # True: a *args group; options bind by window
@@ -902,6 +905,7 @@ class Plan:
         # converters (@app.option/@app.argument, recorded in the app's
         # Decorations; stamped at build)
         self.doc_overrides = {}
+        self.doc_overlaid = frozenset()
         self.gated = False      # True on the top plan: barriers exist somewhere
         self.certain = True     # False: this group might never be entered
         self.var_keyword = None # the **kwargs parameter's name, if any
@@ -1021,14 +1025,12 @@ class Plan:
 
         def transparent_name(slot):
             # the outer slot's name flows through iff the child
-            # consumes exactly one operand AND that terminal wasn't
-            # explicitly renamed (usage_name != name means
-            # @app.parameter spoke; explicit wins).  Returns the
+            # consumes exactly one operand: the parameter nearest the
+            # command that stands for that one word names it (Larry,
+            # 2026-09-16)--a rename deeper in the chain is the
+            # converter's own opinion, and is outranked.  Returns the
             # FINAL display span, or None to keep the child's own.
-            inner = slot.child.sole_terminal_slot()
-            if inner is None:
-                return None
-            if inner.usage_name != inner.name:
+            if slot.child.sole_terminal_slot() is None:
                 return None
             return name_text(slot)
 
@@ -1700,11 +1702,14 @@ class Plan:
 
         walk(self)
 
-    def child_for(self, parameter, build):
+    def child_for(self, parameter, build, overlay=None):
         """
         Decide a positional parameter's child: a Terminal, or a child Plan
-        (recursion--the heart of the metaphor).
+        (recursion--the heart of the metaphor).  `overlay` is what this
+        callable's decorations said about the converter's parameters,
+        by path below this one (`copy.src` -> {'src': ...}).
         """
+        build = build.under(overlay)
         annotation = parameter.annotation
         if annotation is inspect.Parameter.empty:
             default = parameter.default
@@ -2139,7 +2144,7 @@ def validate_option_string(s):
 
 class Decorations:
     """
-    Everything @app.option and @app.parameter EXPRESSED, recorded
+    Everything @app.option and @app.argument EXPRESSED, recorded
     inside the app and keyed by the decorated callable (ruled
     2026-08-09: Appeal never modifies objects the user owns--no
     attributes planted on functions, classes, or anything else;
@@ -2147,6 +2152,14 @@ class Decorations:
     classes, and bound methods are all hashable keys--bound
     methods compare by (instance, function), so the fresh object
     minted per attribute access still finds its entry.
+
+    A parameter name may be a DOTTED PATH from the decorated
+    callable (Larry, 2026-09-16): `copy.src` names the parameter
+    `src` of the converter behind this callable's parameter `copy`.
+    Recorded as written; the build splits the first segment off and
+    hands the rest down to the child's build as an OVERLAY, where
+    it wins whole over whatever the child said for itself--nearer
+    the command, higher precedence.
     """
     def __init__(self):
         self.option_overrides = {}   # callable -> {param: [decls]}
@@ -2201,6 +2214,60 @@ class Decorations:
         return dict(self.parameter_usage.get(callable) or {})
 
 
+def _refuse_aimed_past(where, param, child, aimed):
+    """
+    A dotted path from `where` reached past its parameter `param`
+    (`copy.src`).  Refused when there is nothing there to reach: the
+    parameter takes no converter (a leaf), or a RENAME was aimed into
+    a chain the outer parameter names--a one-word converter's own
+    parameters can't wear a name on the page, `param` does.
+    """
+    if not aimed:
+        return
+    paths = ', '.join(repr(f'{param}.{rest}') for rest in aimed)
+    if child is None or isinstance(child, Terminal):
+        raise AppealConfigurationError(
+            f"{where!r}: {paths} reaches nothing--{param!r} takes no "
+            f"converter with parameters")
+    if (child.sole_terminal_slot() is not None
+            and any('usage' in said for said in aimed.values())):
+        renamed = ', '.join(repr(f'{param}.{rest}') for rest, said
+                            in aimed.items() if 'usage' in said)
+        raise AppealConfigurationError(
+            f"{where!r}: renaming {renamed} names nothing on the page: "
+            f"{param!r} stands for that one word, and names it; rename "
+            f"{param!r} instead")
+
+
+def _suggest_paths(slots, options, names):
+    "' (did you mean 'copy.src'?)' when a deeper parameter has that name."
+    found = []
+    def search(plan, prefix):
+        for s in plan.slots:
+            here = prefix + s.name
+            if s.name in names:
+                found.append(here)
+            if not isinstance(s.child, Terminal):
+                search(s.child, here + '.')
+        for o in plan.options:
+            here = prefix + o.name
+            if o.name in names:
+                found.append(here)
+            if o.child is not None:
+                search(o.child, here + '.')
+    for s in slots:
+        if not isinstance(s.child, Terminal):
+            search(s.child, s.name + '.')
+    for o in options:
+        if o.child is not None:
+            search(o.child, o.name + '.')
+    if not found:
+        return ''
+    if len(found) == 1:
+        return f" (did you mean {found[0]!r}?)"
+    return f" (did you mean one of {', '.join(map(repr, found))}?)"
+
+
 _NO_DECORATIONS = Decorations()
 
 
@@ -2214,16 +2281,22 @@ class Build:
     its option-string policy, and the top plan's extra declarations.
     """
     __slots__ = ('memo', 'stack', 'decorations', 'default_options', 'app',
-                 'extra_overrides')
+                 'extra_overrides', 'overlay')
 
     def __init__(self, decorations=None, default_options=None, app=None,
-                 extra_overrides=None, memo=None, stack=()):
+                 extra_overrides=None, memo=None, stack=(), overlay=None):
         self.memo = {} if memo is None else memo
         self.stack = stack
         self.decorations = decorations or _NO_DECORATIONS
         self.default_options = default_options
         self.app = app
         self.extra_overrides = extra_overrides
+        # what the levels ABOVE said about this callable's parameters,
+        # by dotted path: {path: {'options': [decls], 'usage': str,
+        # 'doc': str}} (each key present only when said).  Applied
+        # per use: a converter reached with an overlay gets its own
+        # plan, never the shared one.
+        self.overlay = overlay or {}
 
     def within(self, callable):
         "The context one level down, inside `callable`; a cycle refuses."
@@ -2234,15 +2307,33 @@ class Build:
                 f"converter cycle: {cycle} -> "
                 f"{getattr(callable, '__name__', repr(callable))}")
         return Build(self.decorations, self.default_options, self.app,
-                     self.extra_overrides, self.memo, self.stack + (callable,))
+                     self.extra_overrides, self.memo, self.stack + (callable,),
+                     self.overlay)
 
-    def fresh(self):
-        "The same context with an empty memo: a plan that mustn't be shared."
+    def fresh(self, overlay=None):
+        """
+        The context for a child that mustn't share a plan: an empty
+        memo, and only what was said about THAT child (`overlay`).
+        """
         return Build(self.decorations, self.default_options, self.app,
-                     self.extra_overrides, None, self.stack)
+                     self.extra_overrides, None, self.stack, overlay)
+
+    def under(self, overlay):
+        """
+        The context for a child reached from a slot: shared (the memo)
+        when nothing was said about it from above, its own when
+        `overlay` was.  Either way this callable's own overlay stays
+        here--it is about this callable's parameters, not the child's.
+        """
+        if not overlay:
+            return Build(self.decorations, self.default_options, self.app,
+                         self.extra_overrides, self.memo, self.stack)
+        return self.fresh(overlay)
 
     def plan(self, callable):
         "The plan for a converter reached from a slot: memoized, not top."
+        if self.overlay:
+            return SignaturePlan(callable, self)     # this use's own
         plan = self.memo.get(callable)
         if plan is None:
             plan = SignaturePlan(callable, self)
@@ -2290,6 +2381,47 @@ class SignaturePlan(Plan):
                 overrides[param] = merged
         usage_names = decorations.usage_for(callable)
         doc_overrides = decorations.doc_for(callable)
+        # the levels above, by path: what they said about THIS callable's
+        # own parameters replaces what it said for itself (nearer wins,
+        # whole); what they said about deeper ones is handed down.  A
+        # rename or entry aimed from above at a parameter that can name
+        # nothing on the page is refused (checked once the slot exists)
+        overlaid = set()
+        for path, said in build.overlay.items():
+            first, _, rest = path.partition('.')
+            if rest:
+                continue
+            overlaid.add(first)
+            if 'options' in said:
+                overrides[first] = list(said['options'])
+            if 'usage' in said:
+                usage_names[first] = said['usage']
+            if 'doc' in said:
+                doc_overrides[first] = said['doc']
+        # this callable's own dotted paths, and the paths handed down
+        # that go deeper, become each child's overlay
+        below = {}
+        def hand_down(path, said):
+            first, _, rest = path.partition('.')
+            entry = below.setdefault(first, {}).setdefault(rest, {})
+            entry.update(said)
+        for param in list(overrides):
+            if '.' in param:
+                hand_down(param, {'options': overrides.pop(param)})
+        for param in list(usage_names):
+            if '.' in param:
+                hand_down(param, {'usage': usage_names.pop(param)})
+        for param in list(doc_overrides):
+            if '.' in param:
+                hand_down(param, {'doc': doc_overrides.pop(param)})
+        for path, said in build.overlay.items():
+            if '.' in path:
+                hand_down(path, said)     # from above: wins over ours
+        # a rename aimed at a parameter of this callable from above, or
+        # by this callable at its own: refused where it can name nothing
+        # (a converter standing for two or more words)--checked below
+        # once the child is known
+        aimed_usage = {p for p in usage_names}
 
         slots = []
         options = []
@@ -2318,10 +2450,21 @@ class SignaturePlan(Plan):
 
             if kind in (inspect.Parameter.POSITIONAL_ONLY,
                         inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                aimed = below.pop(parameter.name, None)
+                child = self.child_for(parameter, build, aimed)
+                _refuse_aimed_past(name, parameter.name, child, aimed)
+                renamed = parameter.name in usage_names
+                if renamed and not isinstance(child, Terminal) \
+                        and child.sole_terminal_slot() is None:
+                    raise AppealConfigurationError(
+                        f"{name!r}: @argument renames {parameter.name!r}, "
+                        f"which stands for {child.count_terminals()} words "
+                        f"on the command line and so names nothing; "
+                        f"rename its converter's parameters instead")
                 slots.append(Slot(
                     parameter.name,
                     usage_names.pop(parameter.name, parameter.name),
-                    self.child_for(parameter, build),
+                    child,
                     required=not has_default,
                     default=parameter.default if has_default else NO_DEFAULT,
                     ))
@@ -2354,9 +2497,12 @@ class SignaturePlan(Plan):
                                 f"multi-parameter converter; windowed "
                                 f"groups on *args inside a converter "
                                 f"aren't in the grammar yet")
-                        child = WindowPlan(annotation, context, build)
+                        child = WindowPlan(annotation, context,
+                                           build.under(below.get(parameter.name)))
                     else:
                         child = Terminal(_leaf_callable(annotation, context))
+                _refuse_aimed_past(name, parameter.name, child,
+                                   below.pop(parameter.name, None))
                 slots.append(Slot(
                     parameter.name,
                     usage_names.pop(parameter.name, parameter.name),
@@ -2381,12 +2527,14 @@ class SignaturePlan(Plan):
                 grammar_default = parameter.default
                 declarations = overrides.pop(parameter.name, None)
                 metavar = usage_names.pop(parameter.name, None)
+                aimed = below.pop(parameter.name, None)
                 if declarations is None:
                     rule = OptionRule.build(
                         parameter.name, _option_strings(parameter.name),
                         False, annotation, grammar_default, default, metavar,
-                        build)
+                        build, aimed)
                     rule.required = not has_default
+                    _refuse_aimed_past(name, parameter.name, rule.child, aimed)
                     options.append(rule)
                     continue
                 # @app.option maps STRINGS (ruled 2026-07-25, the
@@ -2413,8 +2561,9 @@ class SignaturePlan(Plan):
                     rule = OptionRule.build(
                         parameter.name, declaration['strings'], True,
                         decl_annotation, decl_default,
-                        default, metavar, build)
+                        default, metavar, build, aimed)
                     rule.required = not has_default
+                    _refuse_aimed_past(name, parameter.name, rule.child, aimed)
                     if declaration['config'] is not None:
                         rule.config_key = declaration['config']
                     rule.restriction = declaration['restriction']
@@ -2454,8 +2603,15 @@ class SignaturePlan(Plan):
         if usage_names:
             leftover = ', '.join(repr(n) for n in usage_names)
             raise AppealConfigurationError(
-                f"{name!r}: @parameter names parameter(s) {leftover}, "
-                f"which {name!r} doesn't have")
+                f"{name!r}: @argument names parameter(s) {leftover}, "
+                f"which {name!r} doesn't have"
+                f"{_suggest_paths(slots, options, usage_names)}")
+        if below:
+            leftover = ', '.join(repr(n) for n in below)
+            raise AppealConfigurationError(
+                f"{name!r}: a dotted path starts at parameter(s) "
+                f"{leftover}, which {name!r} doesn't have"
+                f"{_suggest_paths(slots, options, below)}")
         if overrides:
             leftover = ', '.join(repr(n) for n in overrides)
             raise AppealConfigurationError(
@@ -2487,8 +2643,13 @@ class SignaturePlan(Plan):
             if param not in names:
                 raise AppealConfigurationError(
                     f"{name!r}: doc= names parameter {param!r}, which "
-                    f"{name!r} doesn't have")
+                    f"{name!r} doesn't have"
+                    f"{_suggest_paths(slots, options, [param])}")
         self.doc_overrides = doc_overrides
+        # which of those a level ABOVE said (the merge refuses an entry
+        # from that level for the same parameter: documented twice)
+        self.doc_overlaid = frozenset(p for p in overlaid
+                                      if 'doc' in build.overlay.get(p, {}))
         self.analyze()
         if top:
             self.finalize_options(build.default_options, build.app)
@@ -2572,7 +2733,8 @@ class WindowPlan(SignaturePlan):
     windowed = True
 
     def __init__(self, callable, context, build):
-        super().__init__(callable, build.fresh())
+        # unshared, but keeping what was said about it from above
+        super().__init__(callable, build.fresh(build.overlay))
         for slot in self.slots:
             if not isinstance(slot.child, Terminal):
                 raise AppealConfigurationError(

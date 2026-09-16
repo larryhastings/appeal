@@ -4478,8 +4478,9 @@ def test_scoped_help_presentation():
     texts = [_lines(lines) for display, lines, depth in rows]
     assert ['The sweet one.'] in texts and ['The savory one.'] in texts
 
-    # documenting the shared name at the COMMAND is ambiguous:
-    # refused, pointing home
+    # a bare name is the docstring's OWN parameter (Larry, 2026-09-16):
+    # the shared inner name is refused at the command, with the
+    # dotted paths that reach each one suggested
     def dish2(first: sweet, second: savory):
         """
         Dishes.
@@ -4493,8 +4494,20 @@ def test_scoped_help_presentation():
         merge_docs(build_plan(dish2))
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert 'ambiguous' in str(e), e
-        assert "converter's docstring" in str(e), e
+        assert "'flavor' (in the Options: section) is not a parameter of 'dish2'" in str(e), e
+        assert "did you mean one of 'first.flavor', 'second.flavor'" in str(e), e
+    def dish3(first: sweet, second: savory):
+        """
+        Dishes.
+
+        # Options
+        second.flavor
+        : The second one, from dish3.
+        """
+        return (first, second)
+    texts = [_lines(lines) for display, lines, depth in
+             merge_docs(build_plan(dish3))['options']]
+    assert ['The sweet one.'] in texts and ['The second one, from dish3.'] in texts, texts
 
     # sub-options: an option whose converter declares options gets
     # them nested beneath its row--when the converter's docstring asks
@@ -7568,7 +7581,7 @@ def test_merge_docs():
         a
         : The first thing.
 
-        i
+        b.i_f.i
         : Overridden, how many knocks.
         """
 
@@ -7979,8 +7992,11 @@ def test_single_terminal_transparency():
     assert ('<TASTE>', ["the flavor, in flavor's own vocabulary."]) in \
         [(strip_styles(d), _lines(v)) for d, v, _ in corpus['arguments']]
 
-    # an explicit rename on the inner parameter wins the display
-    # (recorded in a registry, never on the converter)
+    # a rename on the inner parameter is the converter's own opinion:
+    # the parameter nearest the command that stands for the word names
+    # it (Larry, 2026-09-16), so the outer name wins; the outer's own
+    # rename wins over that; a rename aimed at the inner one BY PATH
+    # from the outer is refused, since it could never show
     from appeal import Decorations
     def hue(name):
         return name
@@ -7989,7 +8005,18 @@ def test_single_terminal_transparency():
     def tint(x, shade: hue = 'red'):
         "Tints."
     plan = build_plan(tint, decorations=d)
-    assert '[<HUE>]' in strip_styles(plan.usage()), plan.usage()
+    assert '[<SHADE>]' in strip_styles(plan.usage()), plan.usage()
+    d.add_usage(tint, 'shade', 'TINT')
+    plan = build_plan(tint, decorations=d)
+    assert '[<TINT>]' in strip_styles(plan.usage()), plan.usage()
+    d2 = Decorations()
+    d2.add_usage(tint, 'shade.name', 'DEEP')
+    try:
+        build_plan(tint, decorations=d2)
+        assert False
+    except AppealConfigurationError as e:
+        assert "renaming 'shade.name' names nothing on the page" in str(e), e
+        assert "'shade' stands for that one word" in str(e), e
 
     # multi-operand converters are NOT transparent: the invisible-
     # node error stands (pinned in test_merge_docs_errors), and

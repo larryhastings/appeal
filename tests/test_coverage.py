@@ -1193,15 +1193,26 @@ def test_composable_documentation_2026_09_12():
         color
         : nope.
         """
-    refuses(a2b, "'color'", "belongs to the converter behind 'option'",
-            "nested under the 'option' entry")
+    refuses(a2b, "'color' (in the Options: section) is not a parameter of 'a2b'",
+            "did you mean 'option.color'")
+    # ...and the dotted path reaches it, surgically: option's own
+    # docstring stands, one row overridden
+    def a2p(a, b, *, option: option = None):
+        """
+        # Options
+        option.color
+        : Command says: color, by path.
+        """
+    (row,) = plain(corpus(a2p)['options'])
+    assert row[1] == ["The converter's own docs."]
+    assert row[2][1] == ('options', [('-c|--color <COLOR>', ['Command says: color, by path.'], [])]), row
     def a2z(a, b, *, option: option = None):
         """
         # Options
         zed
         : nope.
         """
-    refuses(a2z, "'zed'", "not a parameter of 'a2z' or its converters")
+    refuses(a2z, "'zed' (in the Options: section) is not a parameter of 'a2z'")
     # a nested section under an option that takes no converter
     def a2c(a, *, flag=False):
         """
@@ -1241,11 +1252,19 @@ def test_composable_documentation_2026_09_12():
     def b2(a, b, stuff: stuff):
         """
         # Options
-        color
+        stuff.color
         : Command says: stuff's --color, rewritten.
         """
     assert plain(corpus(b2)['options']) == \
         [('-c|--color <COLOR>', ["Command says: stuff's --color, rewritten."], [])]
+    def b2flat(a, b, stuff: stuff):
+        """
+        # Options
+        color
+        : nope: not mine.
+        """
+    refuses(b2flat, "'color' (in the Options: section) is not a parameter of 'b2flat'",
+            "did you mean 'stuff.color'")
     def b(a, b, color, stuff: stuff):
         """
         # Options
@@ -1255,7 +1274,7 @@ def test_composable_documentation_2026_09_12():
     refuses(b, "'color'", "is an argument, not an option")
 
     # C: two positional colors, each documented by its own function--
-    # the parent's own shadows the merged one, no ambiguity
+    # a bare name is the command's own; the converter's is a path away
     def stuffc(x, y, color='red'):
         """
         Stuffc.
@@ -1273,14 +1292,26 @@ def test_composable_documentation_2026_09_12():
     assert plain(corpus(c)['arguments']) == [
         ('<A>', [], []), ('<B>', [], []), ('<COLOR>', ['Command says: color.'], []),
         ('<X>', [], []), ('<Y>', [], []), ('<COLOR>', ['Stuffc says: color.'], [])]
-    # two merged SIBLINGS with the same name: ambiguous at the parent
+    # two merged siblings with the same name: neither is the parent's
+    # own, and each has its path
     def c_twins(first: stuffc, second: stuffc):
         """
         # Arguments
         color
         : which?
         """
-    refuses(c_twins, "'color' is ambiguous", "@app.argument(doc=)")
+    refuses(c_twins, "'color' (in the Arguments: section) is not a parameter of 'c_twins'",
+            "did you mean one of 'first.color', 'second.color'")
+    def c_paths(first: stuffc, second: stuffc):
+        """
+        # Arguments
+        first.color
+        : The first.
+        second.color
+        : The second.
+        """
+    rows = plain(corpus(c_paths)['arguments'])
+    assert rows[2] == ('<COLOR>', ['The first.'], []) and rows[5] == ('<COLOR>', ['The second.'], []), rows
 
     # the degenerate converter tree: the operand wears the OUTERMOST
     # single-positional parameter's name, on the usage line and in
@@ -1463,6 +1494,291 @@ def test_underscore_only_on_optional_options():
                               f"underscore on a parameter name is only "
                               f"allowed for keyword-only parameters with "
                               f"default values"), e
+
+
+def test_dotted_paths_2026_09_16():
+    # Larry, 2026-09-16: a parameter name in @app.argument, @app.option
+    # and the Arguments/Options sections may be a dotted PATH from the
+    # decorated function--copy.src--walking parameter names into the
+    # converters; a bare name is the function's own parameter only.
+    # Nearer the command wins, whole; a path that names nothing on the
+    # page is refused; it's all per use.
+    from big.stylesheet import strip_styles
+    from appeal.presentation import merge_docs
+    plain = lambda rows: [(strip_styles(d), _lines(l), [(k, plain(r)) for k, r in n])
+                          for d, l, n in rows]
+    def refuses(thunk, *needles):
+        try:
+            thunk()
+            assert False, 'expected AppealConfigurationError'
+        except AppealConfigurationError as e:
+            for needle in needles:
+                assert needle in str(e), f'{needle!r} not in {e}'
+
+    def path(p):
+        "A confirmed extant path on the filesystem."
+    def copy(src: path, dst: path):
+        "Makes a copy of a file on disk."
+    def edit(file: path, editor: path):
+        "Edits a file on disk using a particular editor."
+    def stuff(x, y, *, color='red'):
+        "Stuff."
+    def option(x, y, *, color='red'):
+        """
+        The converter's own docs.
+
+        # Options
+        color
+        : Converter says: color.
+        """
+
+    def built(f, *decorations):
+        app = Appeal(name='files', stylesheet=False)
+        app.argument('p', usage='file')(path)
+        for kind, args, kw in decorations:
+            f = getattr(app, kind)(*args, **kw)(f)
+        app.command()(f)
+        return app, app.plan_for(f.__name__)
+    def usage(f, *decorations):
+        return strip_styles(built(f, *decorations)[1].usage())
+
+    # Larry's A and B: copy's own rename is outranked by workflow's,
+    # and path's by both
+    def workflow(copy: copy, edit: edit):
+        "Copies a file, then edits a file."
+    assert usage(workflow) == 'files workflow <SRC> <DST> <FILE> <EDITOR>'
+    app = Appeal(name='files')
+    app.argument('src', usage='fizzle')(copy)
+    app.argument('copy.src', usage='boozle')(workflow)
+    app.command()(workflow)
+    assert strip_styles(app.plan_for('workflow').usage()) == \
+        'files workflow <BOOZLE> <DST> <FILE> <EDITOR>'
+    assert usage(workflow, ('argument', ('copy.src',), {'usage': 'boozle'})) == \
+        'files workflow <BOOZLE> <DST> <FILE> <EDITOR>'
+    # three levels down, and the middle level's own opinion outranked
+    def mid(copy: copy, tag=''):
+        "Mid."
+    def top(mid: mid):
+        "Top."
+    assert usage(top, ('argument', ('mid.copy.dst',), {'usage': 'target'})) == \
+        'files top <SRC> <TARGET> [<TAG>]'
+    app = Appeal(name='files')
+    app.argument('copy.dst', usage='mine')(mid)
+    app.argument('mid.copy.dst', usage='target')(top)
+    app.command()(top)
+    assert strip_styles(app.plan_for('top').usage()) == 'files top <SRC> <TARGET> [<TAG>]'
+
+    # options by path: remap, unmap; another use is untouched
+    def w1(a, stuff: stuff): pass
+    assert usage(w1, ('option', ('stuff.color', '--hue'), {})) == \
+        'files w1 <A> [--hue <COLOR>] <X> <Y>'
+    assert usage(w1, ('option', ('stuff.color',), {})) == 'files w1 <A> <X> <Y>'
+    app = Appeal(name='files')
+    app.option('stuff.color')(w1)
+    app.command()(w1)
+    @app.command()
+    def w0(stuff: stuff): pass
+    assert strip_styles(app.plan_for('w1').usage()) == 'files w1 <A> <X> <Y>'
+    assert strip_styles(app.plan_for('w0').usage()) == 'files w0 [-c|--color <COLOR>] <X> <Y>'
+    # ...and into a group OPTION's converter, and a *args window's
+    def w2(a, *, option: option = None): pass
+    assert usage(w2, ('option', ('option.color', '--hue'), {})) == \
+        'files w2 [-o|--option [--hue <COLOR>] <X> <Y>] <A>'
+    def w3(*items: stuff): pass
+    assert usage(w3, ('option', ('items.color', '--hue'), {})) == \
+        'files w3 [[--hue <COLOR>] <X> <Y>]...'
+
+    # refusals: nothing there, a leaf, a chain the outer name owns, a
+    # two-word parameter, a bare name that is someone else's
+    refuses(lambda: usage(workflow, ('argument', ('nope.x',), {'usage': 'X'})),
+            "a dotted path starts at parameter(s) 'nope', which 'workflow' doesn't have")
+    refuses(lambda: usage(workflow, ('argument', ('src',), {'usage': 'X'})),
+            "@argument names parameter(s) 'src', which 'workflow' doesn't have",
+            "(did you mean 'copy.src'?)")
+    def twins(first: copy, second: copy): pass
+    refuses(lambda: usage(twins, ('argument', ('src',), {'usage': 'X'})),
+            "did you mean one of 'first.src', 'second.src'")
+    def counted(count: int, stuff: stuff): pass
+    refuses(lambda: usage(counted, ('argument', ('count.x',), {'usage': 'X'})),
+            "'count.x' reaches nothing", "'count' takes no converter with parameters")
+    refuses(lambda: usage(counted, ('option', ('stuff.color.x', '--zed'), {})),
+            "'color.x' reaches nothing")
+    refuses(lambda: usage(workflow, ('argument', ('copy.src.p',), {'usage': 'X'})),
+            "renaming 'src.p' names nothing on the page",
+            "'src' stands for that one word, and names it; rename 'src' instead")
+    refuses(lambda: usage(workflow, ('argument', ('copy',), {'usage': 'X'})),
+            "renames 'copy', which stands for 2 words")
+    refuses(lambda: usage(workflow, ('argument', ('src',), {'doc': 'X'})),
+            "doc= names parameter 'src'", "(did you mean 'copy.src'?)")
+
+    # doc= by path, read in the converter's own context; a leaf's doc
+    # from above; sections aimed at a leaf refused
+    app, plan = built(workflow, ('argument', ('copy.src',),
+                                 {'doc': 'The source, said by workflow.'}))
+    assert plain(merge_docs(plan)['arguments'])[0] == \
+        ('<SRC>', ['The source, said by workflow.'], [])
+    app, plan = built(w1, ('argument', ('stuff.x',), {'doc': 'The x, from w1.'}))
+    assert plain(merge_docs(plan)['arguments'])[1] == ('<X>', ['The x, from w1.'], [])
+    app, plan = built(w1, ('argument', ('stuff.x',), {'doc': 'X.\n\n# Options\nz\n: nope.'}))
+    refuses(lambda: merge_docs(plan), "doc= for 'x' has sections")
+
+    # docstring sections by path
+    def d1(a, stuff: stuff):
+        """
+        # Arguments
+        stuff.x
+        : The x, from d1.
+
+        # Options
+        stuff.color
+        : The color, from d1.
+        """
+    app, plan = built(d1)
+    corpus = merge_docs(plan)
+    assert plain(corpus['arguments'])[1] == ('<X>', ['The x, from d1.'], [])
+    assert plain(corpus['options']) == [('-c|--color <COLOR>', ['The color, from d1.'], [])]
+    # a dotted entry through an OPTION, carrying sections: the whole
+    # docstring for that option's converter
+    def d2(a, mid: mid, *, option: option = None):
+        """
+        # Options
+        option
+        : Plain words for option.
+
+        # Arguments
+        mid.copy.src
+        : Deep source.
+        """
+    app, plan = built(d2)
+    corpus = merge_docs(plan)
+    assert plain(corpus['arguments'])[1] == ('<SRC>', ['Deep source.'], [])
+    def d3(a, m: 'mid2' = None): pass
+    def mid2(x, *, option: option = None):
+        "Mid2."
+    def d4(a, m: mid2):
+        """
+        # Options
+        m.option
+        : Words for option, from d4.
+
+          # Options
+          color
+          : Words for color, from d4.
+        """
+    app, plan = built(d4)
+    (row,) = plain(merge_docs(plan)['options'])
+    assert row == ('-o|--option <X> <Y>', ['Words for option, from d4.'],
+                   [('options', [('-c|--color <COLOR>', ['Words for color, from d4.'], [])])]), row
+    # refusals in sections
+    def e1(a, count: int, stuff: stuff):
+        """
+        # Arguments
+        count.x
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e1)[1]), "'count' takes no converter with parameters")
+    def e2(a, stuff: stuff):
+        """
+        # Arguments
+        nope.x
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e2)[1]), "'nope' is not a parameter of 'e2'")
+    def e3(a, stuff: stuff):
+        """
+        # Arguments
+        stuff.zzz
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e3)[1]), "'stuff.zzz' (in the Arguments: section) is not a parameter of 'stuff'")
+    def e4(a, *, flag=False):
+        """
+        # Options
+        flag.x
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e4)[1]), "'flag' takes no converter with parameters")
+    def base_thingy(base): "Base."
+    def modified_thingy(modified: base_thingy): "Modified."
+    def e5(thingy: modified_thingy):
+        """
+        # Arguments
+        thingy.modified
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e5)[1]),
+            "'thingy.modified' (in the Arguments: section) documents nothing on the page")
+    def e6(a, mid: mid):
+        """
+        # Arguments
+        x
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e6)[1]), "'x' (in the Arguments: section) is not a parameter of 'e6'")
+    def e7(a, stuff: stuff):
+        """
+        # Arguments
+        stuff.x
+        : Twice.
+        """
+    app, plan = built(e7, ('argument', ('stuff.x',), {'doc': 'Twice.'}))
+    refuses(lambda: merge_docs(plan), "'stuff.x' is documented twice")
+    def e8(a, *, flag=False):
+        """
+        # Options
+        flag
+        : A flag.
+
+          # Options
+          deeper
+          : nope.
+        """
+    refuses(lambda: merge_docs(built(e8)[1]), "'flag' takes no converter to document")
+    # suggestions search through option converters too, and a section
+    # step through an unknown name is refused
+    def e9(a, *, option: option = None): pass
+    refuses(lambda: usage(e9, ('argument', ('color',), {'usage': 'X'})),
+            "(did you mean 'option.color'?)")
+    def deep(a, *, option: option = None):
+        "Deep."
+    def e10(a, *, d: deep = None):
+        """
+        # Options
+        color
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e10)[1]), "(did you mean 'd.option.color'?)")
+    def e11(a, stuff: stuff):
+        """
+        # Options
+        stuff.nope.x
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e11)[1]), "'nope' is not a parameter of 'stuff'")
+    def e12(a, m: mid2, *, flag=False): pass
+    refuses(lambda: usage(e12, ('argument', ('color',), {'usage': 'X'})),
+            "(did you mean 'm.option.color'?)")
+    refuses(lambda: usage(e12, ('argument', ('option',), {'usage': 'X'})),
+            "(did you mean 'm.option'?)")
+    refuses(lambda: usage(e12, ('argument', ('zzz',), {'usage': 'X'})),
+            "which 'e12' doesn't have")
+    def e13(a, m: mid2, *, flag=False):
+        """
+        # Arguments
+        zzz
+        : nope.
+        """
+    refuses(lambda: merge_docs(built(e13)[1]), "'zzz' (in the Arguments: section) is not a parameter of 'e13'")
+    def two(x, *, flag=False, option: option = None):
+        "Two options."
+    def e14(a, m: two):
+        """
+        # Options
+        m.option.color
+        : Through the second option.
+        """
+    rows = plain(merge_docs(built(e14)[1])['options'])
+    assert rows[1][2] == [('options', [('-c|--color <COLOR>', ['Through the second option.'], [])])], rows
 
 
 def test_load_without_pathlib():
@@ -5637,7 +5953,8 @@ def test_astra_r07_documentation_has_occurrence_identity():
     rows = merge_docs(build_plan(twice))['arguments']
     assert [_lines(lines) for display, lines, depth in rows] == \
         [['LEFT X'], [], ['LEFT X'], []]
-    # the refusal of an ambiguous bare name names the candidates
+    # a bare name at the command is the command's own parameter only;
+    # the inner ones are reached by path (Larry, 2026-09-16)
     def both(a: left, b: right):
         "Both.\n\n# Arguments\nx\n: Whose?\n"
         return a, b
@@ -5645,7 +5962,13 @@ def test_astra_r07_documentation_has_occurrence_identity():
         merge_docs(build_plan(both))
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
-        assert "'left' and 'right' each have one" in str(e), e
+        assert "did you mean one of 'a.x', 'b.x'" in str(e), e
+    def both2(a: left, b: right):
+        "Both.\n\n# Arguments\nb.x\n: RIGHT X, from both2.\n"
+        return a, b
+    rows = merge_docs(build_plan(both2))['arguments']
+    assert [_lines(lines) for display, lines, depth in rows] == \
+        [['LEFT X'], [], ['RIGHT X, from both2.'], []]
 
 
 def test_astra_r12_bad_tool_name_keeps_serving():
@@ -7091,7 +7414,7 @@ def test_nested_documentation_across_option_edges():
         ## Arguments
 
         ## Options
-        value
+        color.value
         : Overridden at text.
         """
     def quiet(q, *, loud=False):

@@ -136,9 +136,10 @@ every command using it inherits that documentation:
         label
         : What to call it.
 
-        y
+        p.y
         : The vertical coordinate.  (Overrides point's own
-          documentation--the nearest enclosing scope wins.)
+          documentation--the nearest enclosing scope wins.  A
+          converter's parameter is reached by its path.)
 
         # Options
         verbose

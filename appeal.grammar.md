@@ -461,21 +461,40 @@ is a build error); behind a positional argument, the parent's
 `@app.argument(doc=)`, else its own.  A parent's entry therefore
 REPLACES the converter's docstring whole (options replace, arguments
 merge); an entry's definition is a docstring in miniature, so it may
-carry the same sections, read in the converter's vocabulary--the
-only way to reach an option-converter's names from the parent (a
-flat entry for one is a build error naming the entry to nest under);
-an Arguments entry carries no sections (it documents an operand;
+carry the same sections, read in the converter's vocabulary; an
+Arguments entry carries no sections (it documents an operand;
 `doc=` replaces the converter's docstring); an Options entry carries
 sections only for an option with a converter.  A `doc=` string is
 cleaned like a docstring and read exactly as the converter's own
 would be: its sections name the converter's parameters, its first
 paragraph is the converter's summary; on a plain operand it is that
-operand's documentation.  A command's own parameter name shadows a
-merged one (two `<COLOR>` rows, each documented by its owner, never
-ambiguous); the same name from two merged *siblings* is ambiguous at
-the parent.  **One-operand converters** are transparent to naming:
+operand's documentation.
+
+**Dotted paths** (Larry, 2026-09-16): a bare name--in `@app.argument`,
+`@app.option`, or an Arguments/Options entry--is the function's OWN
+parameter, and nothing else (a bare name that is a converter's is a
+build error suggesting the path).  A dotted path from that function
+walks parameter names into its converters, positional or option, as
+deep as the tree goes: `copy.src`, `option.color`, `mid.copy.dst`.
+What a path says replaces WHOLE what the converter said about that
+parameter, its own decorators included--nearer the command, higher
+precedence; calls at one level accumulate as before; zero strings
+through a path unmaps the converter's option.  It is per use: the
+converter's other uses keep their own plan.  A dotted section entry
+is surgical (the converter's docstring stands, one row overridden);
+a dotted Options entry carrying sections is the whole docstring for
+that option's converter; an entry and a `doc=` for one path at one
+level is "documented twice".  A path that reaches nothing is a build
+error: into a leaf (`count.x`), a rename of a parameter standing for
+two or more words (`copy`), a rename or entry aimed into a one-operand
+chain an outer parameter names (`thingy.modified`).  Two siblings
+sharing a name are `first.color` and `second.color`--never ambiguous.
+
+**One-operand converters** are transparent to naming:
 the operand wears the annotated parameter's name, the outermost
-through a chain of them, on the usage line and in the table alike;
+through a chain of them, on the usage line and in the table alike--a
+rename deeper in the chain is that converter's own opinion, outranked
+(it shows only where that converter is the command);
 its documentation is the nearest that speaks--the parent's entry,
 then each converter's entry for its one parameter, and a converter
 that wrote no Arguments section documents its one operand with its

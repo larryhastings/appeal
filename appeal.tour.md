@@ -128,7 +128,14 @@ branching on a kind string.
   detection (`list[int]`, `X | None`); the `typing` module is not
   consulted.  `OptionRule.build` does the same for options.  A `Build`
   object carries the context (the memo of plans built, the cycle
-  stack, the decorations) that every constructor needs.
+  stack, the decorations) that every constructor needs--and the
+  `overlay`: what the levels above said about this callable's
+  parameters by dotted path (Larry, 2026-09-16).  A constructor
+  splits each path's first segment off: aimed at its own parameter,
+  it replaces the callable's own declaration whole; aimed deeper, it
+  is handed down as the child's overlay through `child_for` and
+  `OptionRule.build`.  A child reached with an overlay gets its own
+  plan (`Build.under`), never the shared memoized one.
 * `Plan.finalize_options` assigns option strings: a parameter's long
   option is its name with underscores turned to dashes, and a short
   option is proposed from the first letter and claimed if free.  Within
@@ -484,13 +491,14 @@ page writes blocks through big's troff writer, and the exports are
 big's gfm and commonmark writers.
 
 **The merge.**  `merge_docs(plan)` walks the Plan tree twice.  `walk`
-builds each occurrence's namespace (name -> kind, display, row) and
-the `Level`s (table pairs): an argument edge merges the converter's
-rows into the parent's `Level`, in plan order; an option edge opens a
-`Level` of the converter's own, whose rows become the option row's
-nested `('arguments' | 'options', rows)` blocks.  A plan's own names
-shadow merged ones; the same name from two merged siblings is marked
-ambiguous.  Then `apply` runs top-down with each occurrence's CHOSEN
+builds each occurrence's namespace--its OWN parameter names -> (kind,
+row, naming)--and the `Level`s (table pairs): an argument edge merges
+the converter's rows into the parent's `Level`, in plan order; an
+option edge opens a `Level` of the converter's own, whose rows become
+the option row's nested `('arguments' | 'options', rows)` blocks.  A
+section entry is a bare name (own) or a dotted path (Larry,
+2026-09-16), which `resolve` walks with `step`, one parameter per
+segment, into the converters' occurrences.  Then `apply` runs top-down with each occurrence's CHOSEN
 doc (Larry, 2026-09-12, the textual model): the command's own
 docstring; for an option's converter, the parent's entry for it, else
 the parent's `doc=`, else its own docstring; for a positional
