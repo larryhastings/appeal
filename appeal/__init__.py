@@ -967,26 +967,29 @@ def _refuse_orphan_method(callable):
 
 class _Line:
     "One command line's parse in progress: the steps, and the state eras relay."
-    __slots__ = ('argv', 'steps', 'dashdash', 'bled', 'tried', 'forced', 'path')
+    __slots__ = ('argv', 'steps', 'dashdash', 'bled', 'tried', 'path')
     def __init__(self, argv):
         self.argv = argv
         self.steps = []
         self.path = []                  # the command words dispatched, root
                                         # down: what a misplaced option's
                                         # placement is judged against
-        self.dashdash = False           # `--` seen in the last era, and that
-                                        # era bled it: the next era starts
-                                        # with nothing an option (era-scoped,
-                                        # Larry 2026-09-08; relayed by bleed)
-        self.bled = {}                  # option handlers bled into the next era
+        self.dashdash = False           # `--` has been seen: by the era that
+                                        # just ended, or where a command word
+                                        # goes.  After it a dash token is a
+                                        # word, not an option, and a second
+                                        # `--` is a word nobody has (one `--`
+                                        # before a command word, total)
+        self.bled = None                # what an era sharing FORWARDS passes
+                                        # into the next: (its option handlers,
+                                        # whether it saw `--`); None when the
+                                        # last era shared nothing (era-scoped
+                                        # `--`, Larry 2026-09-08: the next era
+                                        # starts fresh unless bled into)
         self.tried = {}                 # the last era's option strings (its own
                                         # and what bled into it): the scope a
                                         # mistyped option in command position
                                         # suggests from, wherever it surfaces
-        self.forced = False             # ...and whether that era had seen `--`:
-                                        # a dash token it declined was an
-                                        # operand to it, so it's diagnosed as
-                                        # a word, not an option
 
 
 _RESTRICTIONS = (None, 'hidden', 'deprecated')
@@ -3131,8 +3134,9 @@ class Appeal:
         cls = converter_for(era.plan)
         if conv is None:
             conv = cls()
+        handlers, dashdash = line.bled or ({}, False)   # shared forwards into here
         proc = backend.Engine(argv[pos:], conv, table,
-                              dashdash=line.dashdash, conjured=conjured)
+                              dashdash=dashdash, conjured=conjured)
         if era.kind == 'head':
             step = _Step('era', self, cls, conv, proc, plan=era.plan,
                          config=config, immediate=era.immediate)
@@ -3145,7 +3149,7 @@ class Appeal:
                          config=config)
         try:
             proc.enter(conv)
-            proc.seed(line.bled)                # shared forwards into here
+            proc.seed(handlers)
             if ahead is not None:               # the next era, shared back
                 proc.seed(backend.handlers_of(*ahead))
             proc._loop()
@@ -3176,10 +3180,10 @@ class Appeal:
                 step.attach_usage(e)
             raise
         pos += proc.consumed                    # the whole era's tokens
-        line.dashdash = proc.force_positional if era.forwards else False
-        line.bled = proc.handlers if era.forwards else {}
+        line.dashdash = proc.force_positional
+        line.bled = ((proc.handlers, proc.force_positional) if era.forwards
+                     else None)
         line.tried = proc.handlers
-        line.forced = proc.force_positional
         line.steps.append(step)
         return pos
 
@@ -3274,34 +3278,31 @@ class Appeal:
                                    (mapping, strict) if mapping else None)
 
         dispatched = False              # did a command word of THIS node run?
-        forced_word = False             # a `--` just said: the next token is the word
         while pos < len(argv):
             word = argv[pos]
-            if (word == '--' and not line.dashdash and not line.forced
-                    and not forced_word):
-                # `--` where a command word goes (a line with no head era,
-                # say): consumed, and the next token is the word--whatever
-                # it is, a second `--` included.  ONE `--` before the word,
-                # total: an era that ended on its own `--` (line.forced)
-                # already spent it (Larry, 2026-09-16: never swallowed
-                # forever).  It forces nothing beyond that--click's rule:
-                # the word's own eras start fresh (Larry, 2026-09-08)
+            if word == '--' and not line.dashdash:
+                # `--` where a command word goes: consumed, and the next
+                # token is the word, whatever it is.  One `--` before the
+                # word, total (Larry, 2026-09-16): a second one, or one
+                # after an era that ended on its own, is a word nobody has,
+                # and falls through to the unknown-command diagnosis.  It
+                # forces nothing beyond that--click's rule: the word's own
+                # eras start fresh (Larry, 2026-09-08)
+                line.dashdash = True
                 pos += 1
-                forced_word = True
                 continue
-            forced_word = False
             if word not in table:
                 if not top:
                     return dispatched, pos      # pop back: a parent may own it
                 else:
-                    dash = word.startswith('-') and not line.forced
+                    dash = word.startswith('-') and not line.dashdash
                     if not dash and not table:
                         # a program with no commands: one word too many
                         err = UsageError(f"unexpected argument {quoted(word, 'argument')}")
                     else:
                         err = _unexpected(word, line.tried if dash
                                           else self._visible_table(),
-                                          line.forced,
+                                          line.dashdash,
                                           self.root._option_placements(line.path))
                     # outside any command's era: global usage (the overview
                     # page when there are commands, the usage line alone
@@ -3336,11 +3337,11 @@ class Appeal:
                 if not top:
                     return dispatched, pos
                 tok = argv[pos]
-                dash = tok.startswith('-') and not line.forced
+                dash = tok.startswith('-') and not line.dashdash
                 deepest = self.root._node_at(line.path)
                 if dash:
                     # an option nobody owned: the last era's strings suggest
-                    err = _unexpected(tok, line.tried, line.forced,
+                    err = _unexpected(tok, line.tried, line.dashdash,
                                       self.root._option_placements(line.path))
                     err.usage = _global_trailer(self)
                 elif deepest._has_commands:
@@ -3375,7 +3376,7 @@ class Appeal:
                 dcls = converter_for(self._default_plan())
                 dconv = dcls()
                 dproc = backend.Engine(argv[pos:], dconv, table,
-                                       dashdash=line.dashdash)
+                                       dashdash=(line.bled or ({}, False))[1])
                 dproc.parse()
                 pos += dproc.consumed
                 steps.append(_Step('default', self, dcls, dconv, dproc))
