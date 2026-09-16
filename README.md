@@ -2087,18 +2087,55 @@ takes an `int`, a rename of a parameter that stands for two
 words (`copy` itself), or a rename aimed into a one-operand
 chain that an outer name already owns.
 
-**One-operand converters.**  A converter that consumes exactly
-one operand is transparent to naming: the operand wears the
-annotated parameter's name, outermost first through a chain of
-them (`cmd(thingy: modified_thingy)` over
+**How a placeholder gets its name.**  Every word you type on the
+command line ends up as the value of exactly one parameter,
+somewhere in the tree of converters, after passing through
+whatever converters sit between the command and the word.  The
+placeholder that stands for that word in usage and help is named
+by one rule:
+
+> A placeholder is named after the parameter closest to your
+> command that stands for exactly that one word.
+
+It helps to picture the command as the call it becomes, with
+the typed words as holes:
+
+```Python
+def path(p): ...
+def point(x: int, y: int): ...
+
+@app.command()
+def copy(src: path, dst: path): ...        # copy(src=path(p=<1>), dst=path(p=<2>))
+
+@app.command()
+def draw(location: point, label): ...     # draw(location=point(x=<1>, y=<2>), label=<3>)
+```
+
+In `copy`, the parameters `src` and `p` are both computed from
+the first word and nothing else; `src` is the closer one, so
+the placeholder is `<SRC>`, and `copy` reads `copy <SRC> <DST>`.
+In `draw`, `location` is computed from *two* words, so it can
+name neither; `x` and `y` are the closest parameters that stand
+for one word each, and `draw` reads `draw <X> <Y> <LABEL>`.
+The rule follows a chain of one-word converters all the way
+out: `cmd(thingy: modified_thingy)` over
 `modified_thingy(modified: base_thingy)` over
-`base_thingy(base)` reads `<THINGY>` on the usage line and in
-the table).  Its documentation is the nearest that speaks: the
-command's entry for `thingy`, then each converter's entry for
-its one parameter--and a converter that wrote no `Arguments`
-section at all documents its one operand with its docstring's
-prose.  So a one-line docstring on a one-parameter converter is
-that operand's documentation wherever it's used:
+`base_thingy(base)` is `cmd(thingy=modified_thingy(
+modified=base_thingy(base=<1>)))`, and every parameter along
+the chain stands for the same one word, so the closest names
+it: `cmd <THINGY>`.  A rename with `@app.argument(usage=...)`
+is just that parameter's name, so it counts only where that
+parameter is the one naming the word: the command's rename of
+`src` shows, `path`'s rename of `p` doesn't, because `src` is
+closer.  (It would show if `path` were the command itself.)
+
+Documentation follows the same walk.  The word's documentation
+is the nearest that speaks: the command's entry for `thingy`,
+then each converter's entry for its one parameter--and a
+converter that wrote no `Arguments` section at all documents
+its one operand with its docstring's prose.  So a one-line
+docstring on a one-parameter converter is that operand's
+documentation wherever it's used:
 
 ```Python
 def path(path):
