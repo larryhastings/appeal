@@ -6341,7 +6341,11 @@ def test_help_reaches_subcommands_by_word_path():
     lines = page(['help', 'db', 'stop'])
     assert lines[0] == 'usage: tool db stop [-h|--help] [<FORCE>]', lines
     assert 'Stop the database.' in lines, lines
-    assert page(['help', 'db', 're_start'])[0] == 'usage: tool db re-start [-h|--help]'
+    assert page(['help', 'db', 're-start'])[0] == 'usage: tool db re-start [-h|--help]'
+    # ONE spelling, the dash form (Larry, 2026-09-16): the underscore
+    # one is a stranger, suggested back in its proper form
+    assert refused(['help', 'db', 're_start']) == \
+        "unknown command 're_start' of 'tool db' (did you mean 're-start' or 'start'?)"
     # a bad word names where it went wrong, with a suggestion from there
     assert refused(['help', 'db', 'stpo']) == \
         "unknown command 'stpo' of 'tool db' (did you mean 'stop'?)"

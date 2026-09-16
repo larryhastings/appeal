@@ -5932,17 +5932,14 @@ def test_config_scoped_refusal():
         return (p, flavor)
     app = _appeal.Appeal(name='t')
     app.config = {'c': {'flavor': 'sour'}}
-    @app.global_command()
+    @app.precommand()
     def mg(a='', b: child = None, c: child = None):
         seen.append((b, c))
-    @app.command()
-    def work():
-        pass
-    app.process(['work'])
+    app.process([])
     assert seen == [(None, ('', 'sour'))], seen
     app.config = {'flavor': 'sour'}
     try:
-        app.process(['work']).result
+        app.process([]).result
         assert False, 'expected AppealDataError'
     except AppealDataError as e:
         assert str(e) == "config: 'flavor' is an option of 'b'; put it in the 'b' section", e

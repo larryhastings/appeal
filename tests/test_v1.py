@@ -450,35 +450,35 @@ class SmokeTests(AppealTestsBase):
     def test_simple_defaults_1(self):
         command(simple_defaults)
         self.assert_process(
-            "simple_defaults",
+            "simple-defaults",
             (simple_defaults, 0, ''),
             )
 
     def test_simple_defaults_2(self):
         command(simple_defaults)
         self.assert_process(
-            "simple_defaults 5",
+            "simple-defaults 5",
             (simple_defaults, 5, ''),
             )
 
     def test_simple_defaults_3(self):
         command(simple_defaults)
         self.assert_process(
-            "simple_defaults 33 abc",
+            "simple-defaults 33 abc",
             (simple_defaults, 33, 'abc'),
             )
 
     def test_simple_defaults_4(self):
         command(simple_defaults)
         self.assert_process_raises(
-            "simple_defaults 3.14159",
+            "simple-defaults 3.14159",
             appeal.AppealUsageError,
             )
 
     def test_simple_defaults_5(self):
         command(simple_defaults)
         self.assert_process_raises(
-            "simple_defaults 33 abc xxx",
+            "simple-defaults 33 abc xxx",
             appeal.AppealUsageError,
             )
 
@@ -941,7 +941,7 @@ class SmokeTests(AppealTestsBase):
         # groups apart.)
         command(invalid_logging)
         e = self.assert_process_raises(
-            "invalid_logging -v",
+            "invalid-logging -v",
             appeal.AppealConfigurationError,
             )
         self.assertIn("unreachable", str(e))
@@ -949,14 +949,14 @@ class SmokeTests(AppealTestsBase):
     def test_invalid_annotation_1_1(self):
         command(invalid_annotation_1)
         self.assert_process_raises(
-            "invalid_annotation_1 a",
+            "invalid-annotation-1 a",
             appeal.AppealConfigurationError,
             )
 
     def test_invalid_annotation_2_1(self):
         command(invalid_annotation_2)
         self.assert_process_raises(
-            "invalid_annotation_2 -a",
+            "invalid-annotation-2 -a",
             appeal.AppealConfigurationError,
             )
 
@@ -1028,7 +1028,7 @@ class SmokeTests(AppealTestsBase):
         # render <NAME.UPPER()> now--full clap, the git/docopt/
         # Rust convention; see register entry F-metavar
         self.bind_two_or_more_files()
-        text = capture_stdout('help two_or_more_files')
+        text = capture_stdout('help two-or-more-files')
         # every operand rides the one argument_decoration transform
         # now (ruled 2026-08-24, uniform): renames decorate too, so
         # all three show <FILE>
@@ -1039,14 +1039,14 @@ class SmokeTests(AppealTestsBase):
     def test_two_or_more_files_1(self):
         self.bind_two_or_more_files()
         self.assert_process(
-            'two_or_more_files a b ',
+            'two-or-more-files a b ',
             (two_or_more_files, 'a', 'b', (),),
             )
 
     def test_two_or_more_files_2(self):
         self.bind_two_or_more_files()
         self.assert_process(
-            'two_or_more_files a b c d e f g',
+            'two-or-more-files a b c d e f g',
             (two_or_more_files, 'a', 'b', ('c', 'd', 'e', 'f', 'g'),),
             )
 
@@ -1054,14 +1054,14 @@ class SmokeTests(AppealTestsBase):
     def test_set_path_1(self):
         command(set_path)
         self.assert_process(
-            'set_path a',
+            'set-path a',
             (set_path, ['a']),
             )
 
     def test_set_path_2(self):
         command(set_path)
         self.assert_process(
-            'set_path a:b:c',
+            'set-path a:b:c',
             (set_path, ['a', 'b', 'c']),
             )
 
@@ -1133,21 +1133,21 @@ class SmokeTests(AppealTestsBase):
     def test_inferred_list_1(self):
         command(inferred_list)
         self.assert_process(
-            'inferred_list x',
+            'inferred-list x',
             (inferred_list, 'x', [0, 0.0]),
             )
 
     def test_inferred_list_2(self):
         command(inferred_list)
         self.assert_process(
-            'inferred_list y 1 2.4',
+            'inferred-list y 1 2.4',
             (inferred_list, 'y', [1, 2.4]),
             )
 
     def test_inferred_list_3(self):
         command(inferred_list)
         self.assert_process(
-            'inferred_list z 2 4',
+            'inferred-list z 2 4',
             (inferred_list, 'z', [2, 4.0]),
             )
 
@@ -1168,42 +1168,42 @@ class SmokeTests(AppealTestsBase):
     def test_hey_argparse_watch_this_1(self):
         command(hey_argparse_watch_this)
         self.assert_process(
-            'hey_argparse_watch_this',
+            'hey-argparse-watch-this',
             (hey_argparse_watch_this, None, None, None),
             )
 
     def test_hey_argparse_watch_this_2(self):
         command(hey_argparse_watch_this)
         self.assert_process(
-            'hey_argparse_watch_this -i 0 -f 0 -c 0j',
+            'hey-argparse-watch-this -i 0 -f 0 -c 0j',
             (hey_argparse_watch_this, 0, 0.0, 0j),
             )
 
     def test_hey_argparse_watch_this_3(self):
         command(hey_argparse_watch_this)
         self.assert_process(
-            'hey_argparse_watch_this -i 3 -f 4 -c 5',
+            'hey-argparse-watch-this -i 3 -f 4 -c 5',
             (hey_argparse_watch_this, 3, 4.0, (5+0j)),
             )
 
     def test_hey_argparse_watch_this_4(self):
         command(hey_argparse_watch_this)
         self.assert_process(
-            'hey_argparse_watch_this -i -1 -f -2 -c -3j',
+            'hey-argparse-watch-this -i -1 -f -2 -c -3j',
             (hey_argparse_watch_this, -1, -2.0, -3j),
             )
 
     def test_hey_argparse_watch_this_5(self):
         command(hey_argparse_watch_this)
         self.assert_process(
-            'hey_argparse_watch_this -f inf',
+            'hey-argparse-watch-this -f inf',
             (hey_argparse_watch_this, None, float("inf"), None),
             )
 
     def test_hey_argparse_watch_this_6(self):
         command(hey_argparse_watch_this)
         self.assert_process(
-            'hey_argparse_watch_this -f -inf',
+            'hey-argparse-watch-this -f -inf',
             (hey_argparse_watch_this, None, float("-inf"), None),
             )
 
@@ -1211,7 +1211,7 @@ class SmokeTests(AppealTestsBase):
         command(hey_argparse_watch_this)
         # can't use assert_process, that uses assertEqual,
         # and nan is never equal to nan.
-        result = list(process(shlex.split('hey_argparse_watch_this -f -nan')))
+        result = list(process(shlex.split('hey-argparse-watch-this -f -nan')))
         our_nan = result[2]
         self.assertTrue(math.isnan(our_nan))
         result[2] = "was_nan"
@@ -1221,21 +1221,21 @@ class SmokeTests(AppealTestsBase):
     def test_options_stack_1(self):
         command(options_stack)
         self.assert_process(
-            'options_stack',
+            'options-stack',
             (options_stack, 'abc', False, False, (nested_option, False, False, (inner_option, False, False)))
             )
 
     def test_options_stack_2(self):
         command(options_stack)
         self.assert_process(
-            'options_stack --option --nested',
+            'options-stack --option --nested',
             (options_stack, 'abc', False, False, (nested_option, False, False, (inner_option, False, False)))
             )
 
     def test_options_stack_3(self):
         command(options_stack)
         self.assert_process(
-            'options_stack --option --nested -eca',
+            'options-stack --option --nested -eca',
             (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False)))
             )
 
@@ -1245,7 +1245,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
-            "options_stack --option --nested -ace",
+            "options-stack --option --nested -ace",
             (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, True, False))),
             )
 
@@ -1255,7 +1255,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
-            "options_stack --option --nested -ace -b",
+            "options-stack --option --nested -ace -b",
             (options_stack, 'abc', True, True, (nested_option, True, False, (inner_option, True, False))),
             )
 
@@ -1265,7 +1265,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
-            "options_stack --option --nested -ace -bdf",
+            "options-stack --option --nested -ace -bdf",
             (options_stack, 'abc', True, True, (nested_option, True, True, (inner_option, True, True))),
             )
 
@@ -1275,7 +1275,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
-            "options_stack --option --nested -a -e",
+            "options-stack --option --nested -a -e",
             (options_stack, 'abc', True, False, (nested_option, False, False, (inner_option, True, False))),
             )
 
@@ -1285,7 +1285,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
-            "options_stack --option --nested -a -c",
+            "options-stack --option --nested -a -c",
             (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, False, False))),
             )
 
@@ -1295,7 +1295,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(options_stack)
         self.assert_process(
-            "options_stack --option --nested -a -c",
+            "options-stack --option --nested -a -c",
             (options_stack, 'abc', True, False, (nested_option, True, False, (inner_option, False, False))),
             )
 
@@ -1303,35 +1303,35 @@ class SmokeTests(AppealTestsBase):
     def test_five_level_stack_1(self):
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack",
+            "five-level-stack",
             (five_level_stack,  None, False, False),
             )
 
     def test_five_level_stack_2(self):
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d",
+            "five-level-stack -a -d",
             (five_level_stack, (five_a, (five_d, None, False, False), False, False), False, False),
             )
 
     def test_five_level_stack_3(self):
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -m",
+            "five-level-stack -a -d -g -j -m",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), False, False), False, False), False, False),
             )
 
     def test_five_level_stack_4(self):
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -m -e",
+            "five-level-stack -a -d -g -j -m -e",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), False, False), True, False), False, False),
             )
 
     def test_five_level_stack_5(self):
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -me",
+            "five-level-stack -a -d -g -j -me",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), False, False), True, False), False, False),
             )
 
@@ -1341,21 +1341,21 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -me -n",
+            "five-level-stack -a -d -g -j -me -n",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), True, False), False, False), False, False), True, False), False, False),
             )
 
     def test_five_level_stack_7(self):
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -me",
+            "five-level-stack -a -d -g -j -me",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), False, False), True, False), False, False),
             )
 
     def test_five_level_stack_8(self):
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -mh -i",
+            "five-level-stack -a -d -g -j -mh -i",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), True, True), False, False), False, False),
             )
 
@@ -1366,7 +1366,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -mh -k",
+            "five-level-stack -a -d -g -j -mh -k",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), True, False), True, False), False, False), False, False),
             )
 
@@ -1376,7 +1376,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -mh -n",
+            "five-level-stack -a -d -g -j -mh -n",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), True, False), False, False), True, False), False, False), False, False),
             )
 
@@ -1384,7 +1384,7 @@ class SmokeTests(AppealTestsBase):
         command(five_level_stack)
         self.maxDiff=None
         self.assert_process(
-            "five_level_stack -a -d -g -j -mn -o",
+            "five-level-stack -a -d -g -j -mn -o",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), True, True), False, False), False, False), False, False), False, False),
             )
 
@@ -1394,7 +1394,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -mb -e",
+            "five-level-stack -a -d -g -j -mb -e",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), False, False), True, False), True, False),
             )
 
@@ -1404,7 +1404,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -mb -h",
+            "five-level-stack -a -d -g -j -mb -h",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), False, False), True, False), False, False), True, False),
             )
 
@@ -1414,7 +1414,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -mb -k",
+            "five-level-stack -a -d -g -j -mb -k",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), False, False), True, False), False, False), False, False), True, False),
             )
 
@@ -1424,7 +1424,7 @@ class SmokeTests(AppealTestsBase):
         # means (see appeal.grammar.md, scoped options)
         command(five_level_stack)
         self.assert_process(
-            "five_level_stack -a -d -g -j -mb -n",
+            "five-level-stack -a -d -g -j -mb -n",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, False, False, False), True, False), False, False), False, False), False, False), True, False),
             )
 
@@ -1435,7 +1435,7 @@ class SmokeTests(AppealTestsBase):
         command(five_level_stack)
         self.maxDiff = None
         self.assert_process(
-            "five_level_stack -a -d -g -j -m -behknp",
+            "five-level-stack -a -d -g -j -m -behknp",
             (five_level_stack, (five_a, (five_d, (five_g, (five_j, (five_m, True, False, False), True, False), True, False), True, False), True, False), True, False),
             )
 
@@ -1443,7 +1443,7 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_1(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups abc",
+            "multiple-groups abc",
             (multiple_groups,
                 'abc',
                 (multiple_groups_child, None, None, None, False, (0, 0.0, False)),
@@ -1459,7 +1459,7 @@ class SmokeTests(AppealTestsBase):
         # completable a+d distribution (the older plan this test used to pin).
         command(multiple_groups)
         e = self.assert_process_raises(
-            "multiple_groups abc def",
+            "multiple-groups abc def",
             appeal.AppealUsageError,
             )
         self.assertEqual(str(e), "missing argument 'child_b'")
@@ -1467,14 +1467,14 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_3(self):
         command(multiple_groups)
         self.assert_process_raises(
-            "multiple_groups abc -v",
+            "multiple-groups abc -v",
             appeal.AppealUsageError,
             )
 
     def test_mixed_groups_4(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups a ba bb bc ca cb cc",
+            "multiple-groups a ba bb bc ca cb cc",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
@@ -1489,7 +1489,7 @@ class SmokeTests(AppealTestsBase):
         # interval model announce-binds it to the first window
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups -f a ba bb bc ca cb cc",
+            "multiple-groups -f a ba bb bc ca cb cc",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', True,
@@ -1503,7 +1503,7 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_6(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups a -f ba bb bc ca cb cc",
+            "multiple-groups a -f ba bb bc ca cb cc",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', True, (0, 0.0, False)),
@@ -1515,7 +1515,7 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_7(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups a ba -f bb bc ca cb cc",
+            "multiple-groups a ba -f bb bc ca cb cc",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', True, (0, 0.0, False)),
@@ -1527,7 +1527,7 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_8(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups a ba bb -f bc ca cb cc",
+            "multiple-groups a ba bb -f bc ca cb cc",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', True, (0, 0.0, False)),
@@ -1539,7 +1539,7 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_9(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups a ba bb bc -f ca cb cc",
+            "multiple-groups a ba bb bc -f ca cb cc",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
@@ -1551,7 +1551,7 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_10(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups a ba bb bc ca -f cb cc",
+            "multiple-groups a ba bb bc ca -f cb cc",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
@@ -1563,7 +1563,7 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_11(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups a ba bb bc ca cb -f cc",
+            "multiple-groups a ba bb bc ca cb -f cc",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
@@ -1576,7 +1576,7 @@ class SmokeTests(AppealTestsBase):
     def test_mixed_groups_12(self):
         command(multiple_groups)
         self.assert_process(
-            "multiple_groups a ba bb bc ca cb cc -f",
+            "multiple-groups a ba bb bc ca cb cc -f",
             (multiple_groups,
                 'a',
                 (multiple_groups_child, 'ba', 'bb', 'bc', False, (0, 0.0, False)),
@@ -1589,7 +1589,7 @@ class SmokeTests(AppealTestsBase):
     def test_str_i_f_3(self):
         command(str_i_f)
         e = self.assert_process_raises(
-            "str_i_f abc 1",
+            "str-i-f abc 1",
             appeal.AppealUsageError,
             )
         self.assertEqual(str(e), "missing argument 'real'")  # 1.0 message
@@ -1602,7 +1602,7 @@ class SmokeTests(AppealTestsBase):
         # so this error used to read
         #   str_i_f, -v, --verbose requires 2 arguments in this argument group.
         e = self.assert_process_raises(
-            "str_i_f abc 1 --verbose",
+            "str-i-f abc 1 --verbose",
             appeal.AppealUsageError,
             )
         self.assertEqual(str(e), "missing argument 'real'")  # 1.0 message
@@ -1610,7 +1610,7 @@ class SmokeTests(AppealTestsBase):
     def test_str_i_f_1(self):
         command(str_i_f)
         e = self.assert_process_raises(
-            "str_i_f abc 1 --option x",
+            "str-i-f abc 1 --option x",
             appeal.AppealUsageError,
             )
         self.assertEqual(str(e), "missing argument 'real'")  # 1.0 message
@@ -1618,7 +1618,7 @@ class SmokeTests(AppealTestsBase):
     def test_str_i_f_4(self):
         command(str_i_f)
         e = self.assert_process_raises(
-            "str_i_f abc 1 --option",
+            "str-i-f abc 1 --option",
             appeal.AppealUsageError,
             )
         self.assertEqual(str(e), "option '--option' requires a value")  # v2 message

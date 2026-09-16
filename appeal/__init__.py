@@ -126,6 +126,118 @@ def did_you_mean(word, candidates, role):
     return f" (did you mean {matches[0]} or {matches[1]}?)"
 
 
+# --8<-- snipped from big.itertools (Larry's): IteratorContext and
+# iterator_context, trimmed to what the dispatcher uses (the class's
+# length/countdown/__repr__ are dropped).  Appeal's runtime never imports
+# big (the success path pays nothing for it), so the two live here.
+# Edit them in big, re-snip here.
+class IteratorContext:
+    "Context object yielded by big.iterator_context."
+
+    def __init__(self, iterator, start, index, is_first, is_last, previous, current, next):
+        self._iterator = iterator
+        self._length = None
+
+        self.start = start
+        self.index = index
+        self.is_first = is_first
+        self.is_last = is_last
+
+        if not is_first:
+            self.previous = previous
+        self.current = current
+        if not is_last:
+            self.next = next
+
+
+def iterator_context(iterator, start=0):
+    """
+    Wraps any iterator, yielding values with a helpful context object.
+
+    Wraps any iterator.  Yields (ctx, o), where o is a value
+    yielded by iterable, and ctx is a "context" variable of type
+    IteratorContext containing metadata about the iteration.
+
+    ctx supports the following attributes:
+
+    * ctx.countdown contains the "opposite" value of ctx.index.
+      The values yielded by ctx.countdown are the same as
+      ctx.index but in reversed order.  If start is 0,
+      and the iterator yields four items, ctx.index will
+      be 0, 1, 2, and 3 in that order, and ctx.countdown
+      will be 3, 2, 1, and 0 in that order.  If start is 3,
+      and the iterator yields four items, ctx.index will
+      be 3, 4, 5, and 6 in that order, and ctx.countdown
+      will be 6, 5, 4, and 3 in that order.  ctx.countdown
+      requires the iterator to support __len__; if it doesn't,
+      ctx.countdown will be undefined, and accessing it will
+      raise AttributeError (so hasattr(ctx, 'countdown') tells
+      you whether it's available).
+    * ctx.current contains the current value yielded by the
+      iterator.   (The same as the 'o' value in the
+      yielded tuple).
+    * ctx.index contains the index of this value.  The first
+      time the iterator yields a value, this will be "start";
+      the second time, it will be start + 1, etc.
+    * ctx.is_first is true for the first value yielded
+      and false otherwise.
+    * ctx.is_last is true for the last value yielded
+      and false otherwise.  (If the iterator only yields
+      one value, is_first and is_last will both be true.)
+    * ctx.length contains the total number of items that
+      will be yielded.  ctx.length requires the iterator to
+      support __len__; if it doesn't, ctx.length will be
+      undefined, and accessing it will raise AttributeError
+      (so hasattr(ctx, 'length') tells you whether it's
+      available).
+    * ctx.next contains the next value to be yielded by this
+      iterator if is_last is False.  If is_last is True,
+      ctx.next will be undefined, and accessing it will
+      raise AttributeError.
+    * ctx.previous contains the previous value yielded, if
+      is_first is false.  If is_first is true, ctx.previous
+      will be undefined, and accessing it will raise
+      AttributeError.
+    """
+    index = start
+
+    # a fresh local sentinel--NOT the module's exported "undefined"
+    # singleton, which is a public value users could legitimately
+    # iterate over.
+    previous = current = next = sentinel = object()
+    is_first = True
+    is_last = False
+
+    i = iter(iterator)
+
+    # what's *this* doing here?
+    # this saves us an "if" statement in the main loop.
+    # also, I suspect using a for loop that you immediately
+    # break out of is cheaper than "try: next = next(i)".
+    for next in i:
+        break
+
+    for o in i:
+        previous = current
+        current = next
+        next = o
+
+        ctx = IteratorContext(iterator, start, index, is_first, False, previous, current, next)
+
+        yield (ctx, current)
+        index += 1
+        is_first = False
+
+    # if the iterator yielded *any* values, yield the final one.
+    # compared by identity: asking the value's __eq__ would let a
+    # promiscuous __eq__ (e.g. unittest.mock.ANY) claim to be the
+    # sentinel, silently swallowing the final value.
+    if next is not sentinel:
+        ctx = IteratorContext(iterator, start, index, is_first, True, current, next, sentinel)
+        yield (ctx, next)
+# --8<-- end of the big.itertools snippet
+
+
 class AppealError(Exception):
     """
     The umbrella: every exception Appeal raises derives from it
@@ -1615,9 +1727,6 @@ class Appeal:
                 print('Print usage documentation on a specific command.')
                 return
             fn = table.get(topic)
-            if fn is None and topic.replace('_', '-') in table:
-                topic = topic.replace('_', '-')     # accept the underscore spelling
-                fn = table.get(topic)
             if getattr(fn, '__func__', None) is Appeal.print_version:
                 # a stock command describes itself with its summary
                 print(_inspect.getdoc(fn))
@@ -1636,16 +1745,12 @@ class Appeal:
                 parent = node
                 node_table = parent._table()
                 if word not in node_table:
-                    alt = word.replace('_', '-')
-                    if alt in node_table:
-                        word = alt
-                    else:
-                        where = (f" of {quoted(parent._prog(), 'command')}"
-                                 if parent is not root else '')
-                        err = UsageError(f"unknown command {quoted(word, 'command')}{where}"
-                                         f"{did_you_mean(word, parent._visible_table(), 'command')}")
-                        err.usage = _overview_trailer(parent)
-                        raise err
+                    where = (f" of {quoted(parent._prog(), 'command')}"
+                             if parent is not root else '')
+                    err = UsageError(f"unknown command {quoted(word, 'command')}{where}"
+                                     f"{did_you_mean(word, parent._visible_table(), 'command')}")
+                    err.usage = _overview_trailer(parent)
+                    raise err
                 node = parent._children[word]
             topic = word
         # render the topic's page directly from plans (the one engine has no
@@ -3159,15 +3264,13 @@ class Appeal:
         if top:
             own, sections = self._split_config(self.root.config or {})
             per_plan = self._head_config(own)
-        convs = [converter_for(era.plan)() for era in eras]
-        stashes = [{} for era in eras]
-        for i, era in enumerate(eras):
+        heads = [(era, converter_for(era.plan)(), {}) for era in eras]
+        for ctx, (era, conv, stash) in iterator_context(heads):
             ahead = None
-            if i + 1 < len(eras) and eras[i + 1].backwards:
-                ahead = (convs[i + 1], stashes[i + 1])
+            if not ctx.is_last and ctx.next[0].backwards:
+                ahead = ctx.next[1:]                # the successor's conv, stash
             mapping = per_plan.get(id(era.plan))
-            pos = self._parcel_era(era, line, pos, table, convs[i],
-                                   stashes[i], ahead,
+            pos = self._parcel_era(era, line, pos, table, conv, stash, ahead,
                                    (mapping, strict) if mapping else None)
 
         dispatched = False              # did a command word of THIS node run?
@@ -3181,13 +3284,9 @@ class Appeal:
                 pos += 1
                 continue
             if word not in table:
-                # command names are dash-form (my_cmd -> my-cmd); accept the
-                # underscore spelling too, exact match first so an explicitly
-                # underscore-named command still wins.
-                alt = word.replace('_', '-')
-                if alt != word and alt in table:
-                    word = alt
-                elif not top:
+                # a command word has ONE spelling, the dash form (my_cmd ->
+                # my-cmd; Larry, 2026-09-16: never the underscore one)
+                if not top:
                     return dispatched, pos      # pop back: a parent may own it
                 else:
                     dash = word.startswith('-') and not line.forced
