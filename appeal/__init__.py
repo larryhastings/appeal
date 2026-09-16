@@ -3274,18 +3274,23 @@ class Appeal:
                                    (mapping, strict) if mapping else None)
 
         dispatched = False              # did a command word of THIS node run?
+        forced_word = False             # a `--` just said: the next token is the word
         while pos < len(argv):
             word = argv[pos]
-            if word == '--' and not line.dashdash:
+            if (word == '--' and not line.dashdash and not line.forced
+                    and not forced_word):
                 # `--` where a command word goes (a line with no head era,
-                # say): consumed, and the next token is the word.  It forces
-                # nothing beyond that--click's rule: the word's own eras
-                # start fresh (Larry, 2026-09-08)
+                # say): consumed, and the next token is the word--whatever
+                # it is, a second `--` included.  ONE `--` before the word,
+                # total: an era that ended on its own `--` (line.forced)
+                # already spent it (Larry, 2026-09-16: never swallowed
+                # forever).  It forces nothing beyond that--click's rule:
+                # the word's own eras start fresh (Larry, 2026-09-08)
                 pos += 1
+                forced_word = True
                 continue
+            forced_word = False
             if word not in table:
-                # a command word has ONE spelling, the dash form (my_cmd ->
-                # my-cmd; Larry, 2026-09-16: never the underscore one)
                 if not top:
                     return dispatched, pos      # pop back: a parent may own it
                 else:

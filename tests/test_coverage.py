@@ -1781,6 +1781,25 @@ def test_dotted_paths_2026_09_16():
     assert rows[1][2] == [('options', [('-c|--color <COLOR>', ['Through the second option.'], [])])], rows
 
 
+def test_double_dash_before_a_command_word_is_consumed_once():
+    # Larry, 2026-09-16: `--` where a command word goes is consumed and
+    # the NEXT token is the word, whatever it is--a second `--` is an
+    # unknown command, never swallowed forever
+    app = Appeal(name='tool', stylesheet=False)
+    @app.command()
+    def cmd(x='dflt'):
+        return ('cmd', x)
+    assert app.process(['--', 'cmd']).result == ('cmd', 'dflt')
+    for argv in (['--', '--', 'cmd'], ['--'] * 14 + ['cmd']):
+        try:
+            app.process(argv)
+            assert False, argv
+        except UsageError as e:
+            assert str(e).startswith("unknown command '--'"), e
+    # after the word, `--` is the word's own era's business
+    assert app.process(['--', 'cmd', '--', '--x']).result == ('cmd', '--x')
+
+
 def test_load_without_pathlib():
     # the pathlib leaves are recognized by identity via sys.modules;
     # a process that never imported pathlib has none to recognize

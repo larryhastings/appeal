@@ -808,7 +808,10 @@ a required global argument that starts with a dash, `tool -- -x stash
 -v` must still let `stash` take its `-v`)--unless the era shares
 forwards, in which case the `--` state relays into the next era along
 with the era's options.  Where a command word goes, `--` is consumed and the
-next token is the word.  Otherwise a dash token is an option: unknown, with
+next token is the word, whatever it is--ONE `--` before the word, total,
+an era that ended on its own `--` having spent it; a second `--` is the
+unknown command `'--'` (Larry, 2026-09-16: never swallowed forever).
+Otherwise a dash token is an option: unknown, with
 nothing owed, it **ends the era** and is retried in the next; unknown
 with an argument still owed, it's an error; a short cluster mixing
 known and unknown letters is an error; known, it's consumed.  Any
