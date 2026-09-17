@@ -2780,14 +2780,22 @@ Processes a command-line and calls your command functions.
 Catches data errors and prints them politely (to stderr,
 with usage), then *exits the process* with the exit status--
 a script's last line can be a bare `app.main()`.  `args`
-defaults to `sys.argv[1:]`.  Want the status returned
-instead of exiting?  That's `process()`.
+defaults to `sys.argv[1:]`; this is the only entry point
+that defaults it.  Want the status returned instead of
+exiting?  That's `run()`.
 
-`Appeal.process(args=None)`
+`Appeal.run(args)`
 
-Like `main()`, but catches nothing and returns the last
-command's return value.  The automation entry point.  `args`
-defaults to `sys.argv[1:]`.
+Like `main()`, but *returns* the exit status instead of
+exiting: the polite middle.  Write your own main around it
+when the exit is yours to decide.
+
+`Appeal.process(args)`
+
+Like `main()`, but catches nothing and returns the Processor,
+whose `.result` is the last command's return value.  The
+automation entry point: every error is a real exception, yours
+to handle.
 
 `Appeal.parse(args=None)` / `Appeal.processor()`
 

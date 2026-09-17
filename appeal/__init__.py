@@ -370,7 +370,7 @@ class DataError(AppealError):
         # usage: the error's TRAILER--a callable usage(file) -> str that
         # renders what prints under the message (a `usage: <line>`, or a
         # base-help page) for that output stream, or None.  Attached at
-        # the dispatch boundary (see _run_node); the catchers (run_main,
+        # the dispatch boundary (see _run_node); the catchers (run(),
         # the REPL) call it with their error stream.
         self.usage = usage
         # the parameter/option name the error is ABOUT, when one
@@ -405,7 +405,9 @@ class CommandError(AppealError):
     was fine) and exits with .exit_code; process() lets it
     propagate.  (v1 documented exactly this contract for
     AppealCommandError but never wired the catch; restored and
-    wired, ruled 2026-08-05.)
+    wired, ruled 2026-08-05; Larry confirmed 2026-09-17: main() is a
+    wrapper over process(), which catches nothing, so a program with
+    its own main catches this itself.)
     """
     def __init__(self, message, exit_code=1):
         super().__init__(message)
@@ -441,123 +443,6 @@ from .converters import (
 # `class StrictOption(Option)` + `is_strict_option`, make is_multioption exclude
 # it, and set kind='fold1' in build for a strict Option (the fold1 handling
 # downstream is still in place).
-
-
-def run_main(parse, args=None, stylesheet=None, completion=None,
-             errors=None, version=None, margin=None,
-             plain_stylesheet=None):
-    """
-    The main() driver: parse and execute, print errors the polite
-    way, return the exit code.  stylesheet and plain_stylesheet are
-    the program's pair (Appeal's knobs): the first paints the
-    'error:' prefix and any attached usage/listing when the error
-    stream wants color, the second when it doesn't; the environment
-    always wins (resolve_stylesheet via can_colorize).  completion, if
-    given, is (table, prog): with an empty args and
-    _APPEAL_COMPLETE in the environment, the invocation is a
-    shell-completion reentry and is answered instead of parsed.
-
-    errors is the file object error messages print to, default
-    sys.stderr (the POSIX diagnostic convention, so pipelines
-    reading this program's stdout stay clean; sys.stdout is v1's
-    behavior).  Like print(file=None), the default is resolved
-    at error time, so redirecting sys.stderr works.  Requested
-    help always prints to stdout; this knob moves only the
-    errors.
-
-    version, if given, is the program's version string:
-    `--version` as the first token prints it bare and exits 0,
-    like -h/--help--program metadata outranks parsing.
-    """
-    if args is None:
-        args = sys.argv[1:]
-    if completion is not None and not args:
-        from .completion import (complete_command, complete_command_set,
-                                 completion_reentry)
-        table, prog = completion
-        if 'commands' in table:
-            completer = lambda w, p: complete_command_set(table, w, p)
-        else:
-            completer = lambda w, p: complete_command(table, w, p)
-        code = completion_reentry(completer, prog)
-        if code is not None:
-            return code
-    # (--version/-V are ordinary precommand options now--Larry's
-    # design, 2026-07-19--scanned in the pre-command-word era and
-    # yielding to user declarations; no first-token special case)
-
-    def error_stream():
-        # None resolves at error time, not at call time (tests
-        # and callers redirect sys.stderr)
-        return errors if errors is not None else sys.stderr
-
-    def error_line(e):
-        # render is imported lazily--only when an error actually
-        # prints, so the success path (and `import appeal`)
-        # never pays big's ~40ms
-        from .presentation import resolve_stylesheet, style
-        sheet = resolve_stylesheet(stylesheet, error_stream(),
-                                   plain_stylesheet)
-        return f"{sheet.render(style('error', 'error:'))} {e.render(sheet)}"
-
-    def error_prefix():
-        from .presentation import resolve_stylesheet, style
-        sheet = resolve_stylesheet(stylesheet, error_stream(),
-                                   plain_stylesheet)
-        return sheet.render(style('error', 'error:'))
-
-    def print_trailer(trailer):
-        # trailer is a callable usage(file) -> str: it renders itself
-        # (colored on a tty, plain otherwise, wrapped to the stream) for
-        # the error stream -- errors ride the pipeline too (2026-08-06).
-        # A blank line sets it off from the error (Larry, 2026-09-09)
-        text = trailer(error_stream())
-        if text:
-            print(file=error_stream())
-            print(text, file=error_stream())
-
-    try:
-        result = parse(list(args))
-    except SystemExit as e:
-        # the precommand exits (program metadata: --version, help);
-        # main()'s contract is to RETURN the exit code.  Appeal's own
-        # exits carry an int (0, explicitly--Astra D04); a user's
-        # sys.exit(message) is a message -- Python prints it to stderr
-        # and exits 1; reproduce that half of the contract too.
-        code = e.code
-        if isinstance(code, int):
-            return code
-        print(code, file=error_stream())
-        return 1
-    except KeyboardInterrupt:
-        # a process ended by SIGINT dies quietly with 128+SIGINT
-        # (the shell already echoed ^C).  ONLY here (ruled
-        # 2026-07-09): run_main is the whole-program driver;
-        # process()/parse() stay raw--Appeal is an argument
-        # processor, not an environment
-        return 130
-    except AppealDataError as e:
-        print(error_line(e), file=error_stream())
-        if e.usage:
-            print_trailer(e.usage)
-        return 2
-    except AppealConfigurationError:
-        raise               # a bug in the program: traceback
-    except CommandError as e:
-        # the command failed on purpose: message, its chosen
-        # code, no usage (the command line was fine)
-        print(f"{error_prefix()} {e}", file=error_stream())
-        return e.exit_code
-    except AppealError as e:
-        print(f"{error_prefix()} {e}", file=error_stream())
-        return 1
-    # the same reading as backend._halts: an exit status is an int that
-    # isn't a bool.  True/False are answers, not verdicts--a command
-    # returning True ("it worked") mustn't exit 1.  Any other value,
-    # or none at all, is success.
-    if isinstance(result, int) and not isinstance(result, bool):
-        return result
-    return 0
 
 
 import os
@@ -1241,8 +1126,8 @@ class Processor:
         self.result = None
         self.instances = []
 
-    def __call__(self, args=None):
-        argv = _sys.argv[1:] if args is None else list(args)
+    def __call__(self, args):
+        argv = list(args)
         if not self.app.root._lazy:         # eager: build every command's plan
             self.app._compile_all()         # up front (once) so config errors
                                             # surface at startup, not on invoke
@@ -3092,17 +2977,105 @@ class Appeal:
                 order.insert(first, cls)
         return order
 
-    def process(self, args=None):
+    def process(self, args):
         """
-        Parse args (default: sys.argv[1:]) and invoke the command.
-        Returns the Processor for this run: its .result is the command's
-        return value, .instances the execution log.  (A shortcut for
-        Processor(app)(args); see Processor.)  Config is no longer passed
-        here -- bind it to the app via Appeal(config=...).
+        Parse args and invoke the command.  Catches nothing.  Returns
+        the Processor for this run: its .result is the command's return
+        value, .instances the execution log.  (A shortcut for
+        Processor(app)(args); see Processor.)  Config is bound to the
+        app via Appeal(config=...).  Only main() defaults args to
+        sys.argv[1:] (Larry, 2026-09-17).
         """
         processor = Processor(self)
         processor(args)
         return processor
+
+    def run(self, args):
+        """
+        Parse and execute, print errors the polite way, RETURN the exit
+        code (the middle of the three: process() raises, main() exits).
+        Usage and data errors print `error: ...` to self.errors (default
+        sys.stderr--the POSIX diagnostic convention, so pipelines
+        reading stdout stay clean; resolved at error time, so
+        redirecting sys.stderr works) with the usage trailer, and
+        return 2; a CommandError prints its message alone and returns
+        its exit code; a help/version precommand's sys.exit becomes its
+        code; ^C returns 130; a command's nonzero int return is the
+        code; anything else is 0.  Errors are painted through the
+        program's stylesheet pair, as help is.
+        """
+        def error_stream():
+            # None resolves at error time, not at call time (tests
+            # and callers redirect sys.stderr)
+            return self.errors if self.errors is not None else _sys.stderr
+
+        def sheet():
+            # render is imported lazily--only when an error actually
+            # prints, so the success path (and `import appeal`)
+            # never pays big's ~40ms
+            from .presentation import resolve_stylesheet
+            return resolve_stylesheet(self.stylesheet, error_stream(),
+                                      self.plain_stylesheet)
+
+        def error_prefix():
+            from .presentation import style
+            return sheet().render(style('error', 'error:'))
+
+        def print_trailer(trailer):
+            # trailer is a callable usage(file) -> str: it renders itself
+            # (colored on a tty, plain otherwise, wrapped to the stream)
+            # for the error stream--errors ride the pipeline too
+            # (2026-08-06).  A blank line sets it off from the error
+            # (Larry, 2026-09-09)
+            text = trailer(error_stream())
+            if text:
+                print(file=error_stream())
+                print(text, file=error_stream())
+
+        try:
+            result = Processor(self)(list(args))    # the command's return
+        except SystemExit as e:
+            # the precommand exits (program metadata: --version, help);
+            # run()'s contract is to RETURN the exit code.  Appeal's own
+            # exits carry an int (0, explicitly--Astra D04); a user's
+            # sys.exit(message) is a message--Python prints it to stderr
+            # and exits 1; reproduce that half of the contract too.
+            code = e.code
+            if isinstance(code, int):
+                return code
+            print(code, file=error_stream())
+            return 1
+        except KeyboardInterrupt:
+            # a process ended by SIGINT dies quietly with 128+SIGINT
+            # (the shell already echoed ^C).  ONLY here (ruled
+            # 2026-07-09): run() is the whole-program driver;
+            # process() stays raw--Appeal is an argument processor,
+            # not an environment
+            return 130
+        except AppealDataError as e:
+            print(f"{error_prefix()} {e.render(sheet())}", file=error_stream())
+            # the dispatch boundary attaches a trailer to every data
+            # error that escapes a run (2026-09-06)
+            assert e.usage is not None
+            print_trailer(e.usage)
+            return 2
+        except AppealConfigurationError:
+            raise               # a bug in the program: traceback
+        except CommandError as e:
+            # the command failed on purpose: message, its chosen
+            # code, no usage (the command line was fine)
+            print(f"{error_prefix()} {e}", file=error_stream())
+            return e.exit_code
+        except AppealError as e:
+            print(f"{error_prefix()} {e}", file=error_stream())
+            return 1
+        # the same reading as backend._halts: an exit status is an int
+        # that isn't a bool.  True/False are answers, not verdicts--a
+        # command returning True ("it worked") mustn't exit 1.  Any
+        # other value, or none at all, is success.
+        if isinstance(result, int) and not isinstance(result, bool):
+            return result
+        return 0
 
     class Era:
         """
@@ -3489,24 +3462,20 @@ class Appeal:
         code to the shell.  Usage errors exit 2 (the getopt/
         argparse convention); a command's nonzero int return is
         the exit code; success exits 0.  Want the code returned
-        instead?  That's process().
+        instead?  That's run(); raw exceptions, process().  This is the
+        one place args defaults to sys.argv[1:] (Larry, 2026-09-17).
         """
         import os as _os
-        if (args is None and '_APPEAL_COMPLETE' in _os.environ
-                and not _sys.argv[1:]):
-            # a shell-completion reentry: bare args, mode in the
-            # environment.  Answer it instead of parsing.
-            from .completion import completion_reentry
-            _sys.exit(completion_reentry(
-                lambda words, prefix: self.complete(words, prefix),
-                self._prog()))
-        # the one engine (2026-08-22): main() drives the same in-memory dispatch
-        # process() does (config layering included).  A help/version precommand
-        # prints then sys.exit()s; run_main catches that and converts to a code.
-        parse = lambda argv: Processor(self)(list(argv))
-        _sys.exit(run_main(parse, args, stylesheet=self.stylesheet,
-                           errors=self.errors, margin=self.margin,
-                           plain_stylesheet=self.plain_stylesheet))
+        if args is None:
+            args = _sys.argv[1:]
+            if '_APPEAL_COMPLETE' in _os.environ and not args:
+                # a shell-completion reentry: bare args, mode in the
+                # environment.  Answer it instead of parsing.
+                from .completion import completion_reentry
+                _sys.exit(completion_reentry(
+                    lambda words, prefix: self.complete(words, prefix),
+                    self._prog()))
+        _sys.exit(self.run(args))
 
     def _mcp_instance(self, config):
         """

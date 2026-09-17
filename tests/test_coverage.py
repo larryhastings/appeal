@@ -379,34 +379,38 @@ def test_completion_word_boundaries_and_prog_quoting():
 
 
 # ---------------------------------------------------------------------
-# run_main's remaining branches
+# run()'s remaining branches
 
-def test_run_main_branches():
-    from appeal import run_main
-
-    # argv=None reads sys.argv[1:]
-    old = sys.argv
-    sys.argv = ['prog', 'ok']
-    try:
-        assert run_main(lambda argv: 0 if argv == ['ok'] else 9) == 0
-    finally:
-        sys.argv = old
-
-    # a non-int, non-None result means success
-    assert run_main(lambda argv: 'a string', ['x']) == 0
-
-    # a foreign non-appeal exception propagates
+def test_run_branches():
+    # run() is the polite middle: process() raises, run() returns the
+    # exit code, main() exits (Larry, 2026-09-17).  Only main() defaults
+    # args to sys.argv[1:]; run() and process() require them.
+    app = Appeal(name='prog', default_mappings=None)
+    seen = []
+    @app.command()
+    def ok(): return 0
+    @app.command()
+    def text(): return 'a string'
+    @app.command()
+    def weird(): raise Weird('pop')
     class Weird(Exception):
         pass
+    assert app.run(['ok']) == 0
+    # a non-int, non-None result means success
+    assert app.run(['text']) == 0
+    # a foreign non-appeal exception propagates
     try:
-        run_main(lambda argv: (_ for _ in ()).throw(Weird('pop')), [])
+        app.run(['weird'])
         assert False, 'expected Weird'
     except Weird:
         pass
+    for call in (app.run, app.process, appeal.Processor(app)):
+        try:
+            call()
+            assert False, 'args are required'
+        except TypeError:
+            pass
 
-
-# ---------------------------------------------------------------------
-# rung 1's scoped-overlay kinds: every kind through a window
 
 def test_plan_reprs_and_walkers():
     from appeal.frontend import Terminal
@@ -2439,32 +2443,6 @@ def test_codegen_option_group_counts():
 # converters, themes, templates, vocabulary, streams
 
 
-def test_run_main_completion_param():
-    from appeal import run_main
-    from appeal.completion import completion_table
-    def go(x: int):
-        return 0
-    table = completion_table(build_plan(go))
-    app = Appeal(name='go', default_mappings=None)
-    app.global_command()(go)
-    parse = lambda argv: appeal.Processor(app)(list(argv))
-    old_env = dict(os.environ)
-    os.environ.update({'_APPEAL_COMPLETE': 'bash',
-                       'COMP_WORDS': 'go\n-', 'COMP_CWORD': '1'})
-    out = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(out):
-            code = run_main(parse, [], completion=(table, 'go'))
-    finally:
-        os.environ.clear()
-        os.environ.update(old_env)
-    assert code == 0, code
-    # and with no reentry environment, an empty argv just parses
-    err = io.StringIO()
-    code = run_main(parse, [], completion=(table, 'go'), errors=err)
-    assert code == 2 and 'missing' in err.getvalue(), (code, err.getvalue())
-
-
 def test_option_abc_and_predicates():
     o = appeal.Option()
     assert o.init(None) is None
@@ -4230,9 +4208,8 @@ def test_runtime_token_and_set_edges():
     assert got == ('usage', "option '--mode' doesn't take a value"), got
 
 
-def test_run_main_themed_and_set_completion():
-    from appeal import UsageError, run_main
-    from appeal.completion import completion_set_table
+def test_run_themed_errors():
+    from appeal import UsageError
     class FakeTTY(io.StringIO):
         def isatty(self):
             return True
@@ -4241,35 +4218,20 @@ def test_run_main_themed_and_set_completion():
     os.environ.pop('FORCE_COLOR', None)
     os.environ['TERM'] = 'xterm-256color'
     tty = FakeTTY()
-    def parse_bad(argv):
-        # usage is now a trailer callable usage(file) -> str
+    app = Appeal(name='prog', default_mappings=None, errors=tty)
+    @app.command()
+    def bad():
+        # usage is a trailer callable usage(file) -> str
         raise UsageError('nope', lambda file: 'usage: prog x')
     try:
         # stylesheet=None: auto--the fake tty (and willing TERM)
         # gets appeal_theme over the ANSI 16
-        code = run_main(parse_bad, [], errors=tty)
+        code = app.run(['bad'])
     finally:
         os.environ.clear()
         os.environ.update(old_env)
     text = tty.getvalue()
     assert code == 2 and 'error:' in text and '\x1b[' in text
-    # a command SET completion table through run_main
-    def go(x: int):
-        return 0
-    table = completion_set_table({'go': build_plan(go)}, None)
-    assert 'commands' in table
-    old_env = dict(os.environ)
-    os.environ.update({'_APPEAL_COMPLETE': 'bash',
-                       'COMP_WORDS': 'prog\ng', 'COMP_CWORD': '1'})
-    out = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(out):
-            code = run_main(lambda argv: 0, [],
-                            completion=(table, 'prog'))
-    finally:
-        os.environ.clear()
-        os.environ.update(old_env)
-    assert code == 0 and 'go' in out.getvalue()
 
 
 def test_wrap_words_variants():
@@ -4544,7 +4506,7 @@ def test_entry_points_default_to_sys_argv():
     saved = sys.argv
     try:
         sys.argv = ['ep', 'go', '5']
-        assert app.process().result == 5              # None -> sys.argv[1:]
+        assert app.process(['go', '5']).result == 5
         try:
             app.main()
             code = 0
@@ -4647,20 +4609,17 @@ def test_schema_degenerate_group_transparent():
     assert 'anyOf' in entry, entry
 
 
-def test_branch_run_main_error_edges():
-    from appeal import run_main
-
-    def quiet_main(fn):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = run_main(lambda argv: fn(), [], stylesheet=False)
-        return code, err.getvalue()
-
-    # a real AppealDataError WITHOUT usage: no usage line printed
+def test_branch_run_error_edges():
+    # a data error raised inside a command reaches run() wearing the
+    # usage trailer the dispatch boundary attached: error, blank, usage
+    app = Appeal(name='t', default_mappings=None, stylesheet=False)
+    @app.precommand()
     def d():
-        raise AppealDataError('data, no usage')
-    code, err = quiet_main(d)
-    assert code == 2 and 'usage:' not in err, (code, err)
+        raise AppealDataError('data from inside')
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = app.run([])
+    assert code == 2 and err.getvalue() == 'error: data from inside\n\nusage: t\n', err.getvalue()
 
 
 def test_branch_negative_number_global_operand():

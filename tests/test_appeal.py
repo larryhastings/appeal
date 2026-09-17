@@ -2617,7 +2617,7 @@ def test_command_sys_exit_message():
     import contextlib, io
     # a command's sys.exit("msg") must reproduce Python's own
     # SystemExit contract: print the message to stderr, exit 1.
-    # run_main used to catch the SystemExit and drop the string,
+    # the driver used to catch the SystemExit and drop the string,
     # returning 1 silently (fixed 2026-08-09).
     app = Appeal(name='boom')
     @app.command()
@@ -4853,7 +4853,7 @@ _PRECOMPILE_RUNNER = (
 
 def test_usage_attached_on_error():
     # Restored (Larry, 2026-09-06): a UsageError prints the error AND a
-    # trailer.  The catcher (run_main) renders it to the error stream;
+    # trailer.  The catcher (app.run()) renders it to the error stream;
     # this pins the trailer each error shape earns.  (The old engine
     # dropped the usage threading; every raise site passed None, so
     # nothing printed--the Quickstart's promised usage line was fiction.)
@@ -5374,7 +5374,7 @@ def test_did_you_mean():
 
 def test_keyboard_interrupt():
     # ^C dies quietly with 128+SIGINT=130--in main() ONLY (ruled
-    # 2026-07-09: run_main is the whole-program driver; process()
+    # 2026-07-09: run() is the whole-program driver; process()
     # stays raw, the automation contract; nothing else in Appeal
     # touches signals)
     import appeal as _appeal

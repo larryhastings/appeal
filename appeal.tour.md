@@ -543,7 +543,7 @@ any theme.  The program holds a pair, `stylesheet` and
 second (default `plain_theme` over the plain palette), each verbatim
 in its slot; `resolve_stylesheet` picks.
 
-Errors ride the same pipeline: `run_main` catches `AppealError`, prints
+Errors ride the same pipeline: `app.run()` catches `AppealError`, prints
 `error: ...` to stderr with the usage line attached (a command's error
 wears that command's usage; an era's error wears the program's), and
 returns 2.  Unknown commands and unknown long options suggest a near
