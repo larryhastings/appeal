@@ -861,9 +861,10 @@ def parse_docstring(doc, where):
         commands       dict of name -> the entry, parsed the same way
         requested      the sections the docstring wrote (empty or not)
 
-    THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05;
-    Markdown ONLY--the 'Arguments:' + 'name: desc' grammar died
-    unshipped), parsed by big.  The first paragraph is the summary; a
+    THE DOCSTRING IS MARKDOWN (the pivot, ruled 2026-08-05; Markdown
+    ONLY--the 'Arguments:' + 'name: desc' grammar died unshipped, and
+    a docstring written that way renders as prose, no warning; Larry
+    confirmed 2026-09-17), parsed by big.  The first paragraph is the summary; a
     heading of any level reading exactly Options, Arguments, Commands
     or Subcommands opens a special section, which must contain exactly
     one definition list with plain-text terms; everything else is the
@@ -904,7 +905,8 @@ def _doc_from_scan(scanned, where):
         'requested': frozenset(k for k in SPECIAL_SECTIONS
                                if scanned[k] is not None),
         # the template establishes the page's order and dresses
-        # the headings (ruled 2026-08-05): nothing to present
+        # the headings, program-wide (ruled 2026-08-05; Larry
+        # confirmed 2026-09-17): nothing to present
         'presentation': {'order': (), 'headers': {}, 'indents': {}},
     }
 
