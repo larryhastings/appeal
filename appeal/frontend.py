@@ -1016,7 +1016,7 @@ class Plan:
             # (the color role).  An explicit @app.parameter rename
             # rides the same decoration (ruled 2026-08-24: one uniform
             # decoration; the SHAPE follows the app's stylesheet,
-            # ruled 2026-09-03).
+            # ruled 2026-09-03, Larry confirmed 2026-09-18).
             return style('argument',
                          decorate_argument(name, self.decoration))
 

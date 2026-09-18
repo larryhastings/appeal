@@ -806,11 +806,11 @@ an option.  A later era starts fresh--click's rule (Larry,
 a required global argument that starts with a dash, `tool -- -x stash
 -v` must still let `stash` take its `-v`)--unless the era shares
 forwards, in which case the `--` state relays into the next era along
-with the era's options.  Where a command word goes, `--` is consumed and the
-next token is the word, whatever it is--ONE `--` before the word, total,
-an era that ended on its own `--` having spent it; a second `--` is the
-unknown command `'--'` (Larry, 2026-09-16: never swallowed forever).
-Otherwise a dash token is an option: unknown, with
+with the era's options.  **The first `--` is the marker; every `--`
+after it is an ordinary token** (Larry, 2026-09-18): inside an era it
+is an operand (`echo -- -- hello --` prints `-- hello --`), and where
+a command word goes it is a word nobody has, the unknown command
+`'--'`.  Otherwise a dash token is an option: unknown, with
 nothing owed, it **ends the era** and is retried in the next; unknown
 with an argument still owed, it's an error; a short cluster mixing
 known and unknown letters is an error; known, it's consumed.  Any

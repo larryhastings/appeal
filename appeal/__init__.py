@@ -747,7 +747,8 @@ def _config_vet(plan, table_words, config, command_plan_for,
     path), ...]--the placements _config_apply makes and the required
     check consults.  Anything else refuses, naming what the key is (a
     config file is end-user input, so loudness is AppealDataError);
-    strict=False (ruled 2026-08-29, the rc-file-adaptation case)
+    strict=False (ruled 2026-08-29, Larry confirmed 2026-09-18: the
+    rc-file-adaptation case)
     instead SKIPS every key that can't layer: take what's mine, ignore
     the rest.
     """
@@ -3369,13 +3370,12 @@ class Appeal:
         dispatched = False              # did a command word of THIS node run?
         for word in line.words:
             if word == '--' and not line.dashdash:
-                # `--` where a command word goes: consumed, and the next
-                # token is the word, whatever it is.  One `--` before the
-                # word, total (Larry, 2026-09-16): a second one, or one
-                # after an era that ended on its own, is a word nobody has,
-                # and falls through to the unknown-command diagnosis.  It
-                # forces nothing beyond that--click's rule: the word's own
-                # eras start fresh (Larry, 2026-09-08)
+                # the first `--` is the marker; every `--` after it is an
+                # ordinary token (Larry, 2026-09-18).  Here, where a
+                # command word goes, that makes a later `--` a word nobody
+                # has: it falls through to the unknown-command diagnosis.
+                # The marker forces nothing beyond this position--click's
+                # rule: the word's own eras start fresh (Larry, 2026-09-08)
                 line.dashdash = True
                 continue
             if word not in table:
@@ -3635,7 +3635,8 @@ class Appeal:
             if words == ['quit'] or words == ['exit']:
                 return
             # the session survives everything except the user leaving
-            # (ruled 2026-09-03, the Sol review): a command's failure,
+            # (ruled 2026-09-03, the Sol review; Larry confirmed
+            # 2026-09-18): a command's failure,
             # its bugs, and the help machinery's sys.exit all print
             # and CONTINUE--quit and ^D are the only doors out.
             try:

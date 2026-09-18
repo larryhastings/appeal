@@ -1786,13 +1786,18 @@ def test_dotted_paths_2026_09_16():
 
 
 def test_double_dash_before_a_command_word_is_consumed_once():
-    # Larry, 2026-09-16: `--` where a command word goes is consumed and
-    # the NEXT token is the word, whatever it is--a second `--` is an
-    # unknown command, never swallowed forever
+    # Larry, 2026-09-18: the first `--` is the marker; every `--` after
+    # it is an ordinary token--an operand inside an era, and where a
+    # command word goes, a word nobody has
     app = Appeal(name='tool', stylesheet=False)
     @app.command()
     def cmd(x='dflt'):
         return ('cmd', x)
+    @app.command()
+    def echo(*args):
+        return list(args)
+    assert app.process(['echo', '--', '--', '--', 'hello', '--', '--']).result == \
+        ['--', '--', 'hello', '--', '--']
     assert app.process(['--', 'cmd']).result == ('cmd', 'dflt')
     for argv in (['--', '--', 'cmd'], ['--'] * 14 + ['cmd']):
         try:

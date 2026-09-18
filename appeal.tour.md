@@ -304,10 +304,10 @@ on 2026-09-07:
 `--` is **era-scoped**: once seen, no later token in that era is an
 option.  The next era starts fresh (click's behavior), unless the era
 shares forwards, in which case the `--` state relays along with the
-era's options.  Where a command word goes, `--` is consumed and the next
-token is the word, whatever it is: one `--` before the word, total (an
-era that ended on its own `--` has spent it), so `tool -- -- cmd` is the
-unknown command `'--'`.
+era's options.  The first `--` is the marker; every `--` after it is an
+ordinary token (Larry, 2026-09-18): an operand inside an era, and where
+a command word goes, a word nobody has--`tool -- -- cmd` is the unknown
+command `'--'`.
 
 A **verbatim** slot (`*args: appeal.verbatim`, or a single parameter)
 sidesteps the rule: the Engine fills it with the next token before

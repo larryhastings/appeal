@@ -408,7 +408,8 @@ def read_mapping(callable, mapping, *, strict=True):
     pointed at a config file.  Groups (converter annotations) read
     a sub-mapping under their parameter's name, or flat keys at the
     same level; defaults fill absent keys.  A key nothing in the
-    tree claims raises (ruled 2026-08-29: fail loud by default);
+    tree claims raises (ruled 2026-08-29, Larry confirmed 2026-09-18:
+    fail loud by default);
     strict=False ignores such keys instead--for reading a slice of
     somebody else's document.  An Option subclass folds: it reads
     a sequence of occurrences, option() per element.

@@ -241,8 +241,9 @@ def decorate_argument(name, entry=None):
     # 2026-08-24).  Color stays a late, per-theme concern (the
     # 'argument'/'oparg' roles); only the decoration bakes in here.
     #
-    # The SHAPE is the caller's stylesheet entry (ruled 2026-09-03:
-    # "it's in the stylesheet precisely so users can tweak it")--
+    # The SHAPE is the caller's stylesheet entry (ruled 2026-09-03,
+    # Larry confirmed 2026-09-18: "it's in the stylesheet precisely
+    # so users can tweak it")--
     # entry is the app sheet's 'argument_decoration' definition,
     # stamped onto its plans at build; None means the stock shape.
     # Bake-time, deliberately: the per-stream automatic default
