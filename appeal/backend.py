@@ -1359,10 +1359,12 @@ def _build_class(plan, classes):
          o.strings, o)
         for o in plan.options]
 
-    # spellings the enclosing command owns: a sub-converter option with the
-    # same spelling is SHADOWED -- the command's own option is used, and it
-    # never conjures the sub (conjuring is only for UNBOUND options, ruled
-    # 2026-08-22).  The sub still gets the option once it's entered by an operand.
+    # spellings the enclosing command owns: a windowed sub-converter's option
+    # with the same spelling is positional--the command's own until an operand
+    # opens the window, the window's after--so it never conjures the sub
+    # (conjuring is only for UNBOUND options, ruled 2026-08-22).  A zero-
+    # operand sub-converter sharing a spelling is refused at build (Larry,
+    # 2026-09-18): it has no position to be told apart by.
     own_strings = {s for o in plan.options for s in o.strings}
 
     def register(self, processor):

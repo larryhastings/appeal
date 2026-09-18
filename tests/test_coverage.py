@@ -5212,13 +5212,25 @@ def test_frontend_reachable_edges_2():
     def cmd2(tags: appeal.accumulator[str] = []):
         return tags
     assert read_mapping(build_plan(cmd2), {'tags': 'solo'}) == ['solo']
-    # a zero-width group option whose string the command also owns is shadowed
-    # in the reachability check (the command's own wins, no clash raised)
+    # a zero-width group option whose string the command also owns is
+    # refused (Larry, 2026-09-18: no position could tell them apart);
+    # the remedy is a remap by path, and then both are reachable
     def zg(*, flag=False):
         return flag
     def cmd3(x: zg = None, *, flag=False):
         return (x, flag)
-    build_plan(cmd3)
+    try:
+        build_plan(cmd3)
+        assert False
+    except AppealConfigurationError as e:
+        assert str(e) == ("option '--flag' is declared by 'cmd3' and by its "
+                          "converter 'zg' (through 'x'); remap one, e.g. "
+                          "@app.option('x.flag', '--x-flag')"), e
+    app3 = appeal.Appeal(name='t', stylesheet=False)
+    app3.option('x.flag', '--x-flag')(cmd3)
+    app3.command()(cmd3)
+    assert app3.process(['cmd3', '--flag']).result == (None, True)
+    assert app3.process(['cmd3', '--x-flag']).result == (True, False)
 
 
 def test_backend_more_errors():

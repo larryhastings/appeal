@@ -1277,7 +1277,19 @@ class Plan:
             for o in child.options:
                 for s in o.strings:
                     if s in own:
-                        continue            # the command's own option shadows it
+                        # the command's own option and its zero-operand
+                        # converter's, one spelling: no position could ever
+                        # tell them apart, so the converter's would be
+                        # unreachable--refused (Larry, 2026-09-18; it used to
+                        # be shadowed silently).  The remedy is a remap by
+                        # path.  A converter that consumes operands is a
+                        # window, and its spelling is positional: fine.
+                        raise AppealConfigurationError(
+                            f"option {s!r} is declared by {self.name!r} and by "
+                            f"its converter {child.name!r} (through "
+                            f"{slot.name!r}); remap one, e.g. "
+                            f"@app.option({slot.name + '.' + o.name!r}, "
+                            f"'--{slot.name}-{o.name.replace('_', '-')}')")
                     if s in claimed and claimed[s] != slot.name:
                         raise AppealConfigurationError(
                             f"option {s!r} of {claimed[s]!r} is unreachable: "

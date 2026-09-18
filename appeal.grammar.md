@@ -245,6 +245,13 @@ All v1 semantics, empirically probed and kept:
   a footgun, deliberately fixed.  The price: an *optional* global
   operand can't positionally hold a value that names a command;
   make it required, or pass it through an option.)
+* A command's own option and a zero-operand converter's option with
+  one spelling is a build error (Larry, 2026-09-18; it used to shadow
+  silently): no position could tell them apart, so the converter's
+  would be unreachable--remap one by path (`@app.option('x.flag',
+  '--x-flag')`).  A converter that consumes operands is a window, and
+  a shared spelling there is positional: the command's until an
+  operand opens the window, the window's after.
 * The precommands and each command are **separate option
   scopes**: a global option after the command word is unknown
   there (matches v1), and same-named options in different commands
