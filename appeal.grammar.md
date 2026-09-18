@@ -216,7 +216,7 @@ big: a program that only ever succeeds never imports it, and pays none
 of big's startup.  There is one copy of the wrapping/rendering code in
 the world, big's; appeal calls it, it doesn't embed it.
 
-## Multiple commands and the global command
+## Multiple commands and the precommands
 
 All v1 semantics, empirically probed and kept:
 
@@ -225,14 +225,15 @@ All v1 semantics, empirically probed and kept:
   (`add_item`, not `add-item`; command names don't dash-mangle,
   only option strings do).  The command word is required even when
   only one command is registered.
-* `@app.global_command()` is the command with no name.  Its options
-  and operands come **before** the command word (its operands fill
-  first; the next operand is the command).  It is called before the
-  command runs, even when nothing of its was given.  A **nonzero
+* `@app.precommand()` (the older name: `global_command`) is a
+  command with no name.  Its options and operands come **before**
+  the command word (its operands fill first; the next operand is the
+  command).  It is called before the command runs, even when nothing
+  of its was given.  A **nonzero
   int return halts dispatch** and becomes the program's result
   (v1's early-exit-code contract, uniform across every command on
   the line since cycling).
-* A global command **with no subcommands owns the whole line**--
+* A precommand **with no subcommands owns the whole line**--
   that's how you spell a program without subcommands.  Full
   grammar, options anywhere.
 * Global operands are the full grammar--optional operands,
@@ -244,7 +245,7 @@ All v1 semantics, empirically probed and kept:
   a footgun, deliberately fixed.  The price: an *optional* global
   operand can't positionally hold a value that names a command;
   make it required, or pass it through an option.)
-* The global command and each command are **separate option
+* The precommands and each command are **separate option
   scopes**: a global option after the command word is unknown
   there (matches v1), and same-named options in different commands
   never collide.
@@ -254,7 +255,7 @@ All v1 semantics, empirically probed and kept:
   needs; never a string).  The stock one prints the program's usage
   line and command summary to stdout and exits 1--orientation, not an
   error (Larry, 2026-09-09).  It runs where a command would, so the
-  global command has already run.  A program with no commands at all
+  precommands have already run.  A program with no commands at all
   never consults it.  A line that stops at a command with subcommands
   runs that command's **default** after its body: `@db_command.default()`
   on the node (`db_command = app.command('db')`), stock nothing--
@@ -556,7 +557,7 @@ restored 2026-07-18); `.command()` on it attaches subcommands:
 the parent runs first, its options come before the subcommand
 word, and a parent invoked alone just runs--then the node's
 `.default()`, if it has one--implemented as
-a nested command set with the parent as its global command, so
+a nested command set with the parent as its precommand, so
 it's the same machinery one level down.  `@app.command('x')`
 also RENAMES: the word is `'x'`, the decorated function's name
 is ignored.
@@ -582,11 +583,11 @@ docstring unless a higher tier outranks it.
 A class can be the app: `@app.app()` on the class (Larry,
 2026-09-18; under the covers a precommand--`@app.precommand()` on a
 class still works, but doesn't make it *the* app) makes
-its `__init__` the global command (execution calls **the class**,
+its `__init__` the program's precommand (execution calls **the class**,
 so `__new__` works the ordinary Python way), and the
 `@app.command()`-decorated functions in its body are the program's
 commands--**nothing is automatic**, decorate a method to expose
-it.  At execution the global command constructs the instance into
+it.  At execution the precommand constructs the instance into
 the run's environment; method commands read their `self` from it.
 `@app.command()` on a *nested* class makes a subcommand tree: the
 nested class constructs via attribute access on the parent
@@ -629,7 +630,7 @@ contract, uniform across every command on the line).
 `app.process(args)` parses and runs, returning the `Processor` for
 that run (there is no separate public parse-only call).  The Processor's `instances` list
 is the execution log, one `(command, instance)` pair per command
-run, in order (the global command logs `(None, ...)`; instances
+run, in order (a precommand logs `(None, ...)`; instances
 arrive with class-based commands).
 
 **Cycling** (`repeat`): when a command's arguments are satisfied--

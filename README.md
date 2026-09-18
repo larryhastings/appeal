@@ -116,9 +116,10 @@ APIs--it runs all the old tests--but adds a bounty of new marquee powers:
   you can reshape, and a color theme you can restyle.
 * **Tab completion** for bash, zsh, and fish, answered by the
   same grammar that parses your command line.
-* **A class as your whole program**: `__init__` handles the
-  global options, decorated methods are the commands.  The
-  old "preparers" are gone, it *just works.*
+* **A class as your whole program** (`@app.app()`): `__init__`
+  handles the global options, decorated methods are the
+  commands, the class docstring is the program's documentation.
+  The old "preparers" are gone, it *just works.*
 * **Config layering**: hand Appeal one dict of settings
   (`Appeal(config=...)`), shaped like your command tree, filled
   from your config file; the command line still wins.
@@ -689,7 +690,7 @@ reason there are no required options: give the parameter a
 default instead.
 
 
-## Commands, The Global Command, And Subcommands
+## Commands, Precommands, And Subcommands
 
 Many programs that support "commands" also have
 "global options".  Global options are options
@@ -700,13 +701,14 @@ option specified before the command--which makes it
 a "global option".
 
 Appeal supports global options, too.  It's simple:
-write your command function like normal, but
-instead of decorating it with `@app.command()`, decorate
-it with `@app.global_command()`.  Appeal will process all
-those options before the command, and call your global
-command function--*before* it calls the command function.
+write your function like normal, but instead of
+decorating it with `@app.command()`, decorate it with
+`@app.precommand()`.  A *precommand* runs before the
+command: Appeal processes its options and arguments, which
+come before the command word, and calls the precommand
+function--*before* it calls the command function.
 
-`@app.global_command()` also gets used for programs that
+`@app.precommand()` also gets used for programs that
 don't use "commands".  Although the "command" command-line
 paradigm is popular these days, most programs don't bother
 with them.  For example, `ls`, `grep`, and... hey! `python`
@@ -714,24 +716,25 @@ itself!  None of these programs support commands, but they
 all support command-line arguments and options.
 
 Naturally, Appeal supports this behavior.  Simply decorate
-one function with `@app.global_command()` and don't add
+one function with `@app.precommand()` and don't add
 any command functions.  Now that function owns the whole
 command-line.
 
-`@app.global_command()` is the friendly name for
-`@app.precommand()`, and you can register several: each
-runs before the commands, in registration order, and each
-parses its own stretch of the line--its *era*.  The
-precommands' options are recognized across all of their
-eras, so `foo -q --version` works whichever precommand maps
-which option, and none of them reach the first command.
-Two keywords shape that head, and Appeal's own
-`-h`/`--help`/`--version` handling is just a precommand using
-them: `share=True` keeps the precommand's options recognized
-after the first command word as well; `immediate=True` runs
-the era before anything on the line is judged--which is why
-`foo -h` prints help even when the program's required
-arguments are missing.  Commands can share too:
+You can register several precommands: each runs before the
+commands, in registration order, and each parses its own
+stretch of the line--its *era*.  The precommands' options
+are recognized across all of their eras, so `foo -q
+--version` works whichever precommand maps which option,
+and none of them reach the first command.  Two keywords
+shape that head, and Appeal's own `-h`/`--help`/`--version`
+handling is just a precommand using them: `share=True` keeps
+the precommand's options recognized after the first command
+word as well; `immediate=True` runs the era before anything
+on the line is judged--which is why `foo -h` prints help
+even when the program's required arguments are missing.
+(`@app.global_command()` is the older name for
+`@app.precommand()`, and still works.)  Commands can share
+too:
 `@app.command(share=True)` keeps that command's options
 recognized through the next command on the line (its
 subcommands, say).
@@ -769,7 +772,7 @@ So now the whole command-line looks something like this:
 
     script.py [global options] db <label> deploy <version>
 
-The parent command runs first--it's the "global command" of
+The parent command runs first--it's the precommand of
 its own little command set--then the subcommand.  Running
 `script.py db main deploy 9` prints `db main` and then
 `deploy 9`.
@@ -798,7 +801,7 @@ decision, and there is no program-wide setting for it.
 Notice that the default command doesn't take any arguments
 or options.  It simply can't accept any, by definition.
 (If the user specified options without a command, they'd be
-"global options", processed by the global command.  And if
+"global options", processed by the precommands.  And if
 the user specified an argument, that would automatically be
 the name of the command to run.)
 
@@ -1717,7 +1720,7 @@ converter only adds options!  This is what object-oriented
 programmers might call a "mix-in".  With the `Logging` converter,
 you can add logging options to every one of your commands, without
 having to re-implement it each time.  (Though in most cases it's
-probably better to add such options to a global command function.)
+probably better to add such options to a precommand.)
 
 Internally this works exactly like you'd expect.  Since the
 `log` parameter consumes no command-line arguments, Appeal will
@@ -1825,7 +1828,7 @@ app.main()
 
 Here's what that means:
 
-* The class's `__init__` is the *global command*: its
+* The class's `__init__` is the program's precommand: its
   parameters are the program's global options and arguments.
   Running `script.py -v add 1 2` constructs `MyApp(verbose=True)`.
 * Each decorated method is a command, and when it runs, `self`
@@ -2376,8 +2379,8 @@ import appeal
 config = {}                       # bind it now, fill it before main()
 app = appeal.Appeal(name='edit', config=config)
 
-@app.global_command()
-def global_command(*, editor='vi', verbose=False):
+@app.precommand()
+def edit(*, editor='vi', verbose=False):
     print(f"editor={editor} verbose={verbose}")
 
 @app.command()
@@ -2721,12 +2724,17 @@ wrapper.  `repeat=True` makes that node's subcommand set cycle.
 The node is the one way to reach a subcommand set: there is no
 path-string form and no `parent=` spelling.
 
-`Appeal.global_command()`
+`Appeal.precommand(*, index=-1, share=False, immediate=False)`
 
-Used as a decorator.  Sets the *global command*: the callable
-that owns everything before the first command word (or the
-whole line, if the program has no commands).  The older name
-for `precommand()`.
+Used as a decorator.  Registers a precommand: a function that
+owns a stretch of the line before the first command word (or
+the whole line, if the program has no commands), and runs
+before the commands.  Repeatable; each call adds an era, run
+front to back; `index=` places one explicitly.  `share=True`
+keeps its options recognized after the first command word;
+`immediate=True` runs it before the line is judged, the way
+`-h` and `--version` do.  `Appeal.global_command()` is the
+older name.
 
 `Appeal.app()`
 

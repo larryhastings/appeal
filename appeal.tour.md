@@ -322,8 +322,9 @@ tokens the same way.
 ## 5: The dispatcher: eras, command words, and the tree
 
 An `Appeal` object is a **node** in a tree.  Each node has a **table**
-of command words to child nodes, an optional **global command** (its
-own body), an ordered list of **precommands**, and possibly a
+of command words to child nodes, its own body (a command's function;
+at the root, the precommands--`_impl` is the last of them, the older
+"global command"), an ordered list of **precommands**, and possibly a
 **default** command for a bare line.  `@app.command()` registers a
 word; `app.command('parent')` is the node for that word, and its own
 `.command()` registers a word one level down;

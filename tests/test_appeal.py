@@ -8248,10 +8248,10 @@ README_DRIVES = {
         (['fgrep', '--color', 'green', 'boogaloo'], None,
          "fgrep boogaloo () 'green' 0 False"),
     ],
-    ('Commands, The Global Command, And Subcommands', 0): [
+    ('Commands, Precommands, And Subcommands', 0): [
         (['db', 'main', 'deploy', '9'], None, 'db main\ndeploy 9'),
     ],
-    ('Commands, The Global Command, And Subcommands', 2): [
+    ('Commands, Precommands, And Subcommands', 2): [
         (['add-item', '3'], None, 'added 3'),
     ],
     ('Cycling: several commands on one line', 0): [

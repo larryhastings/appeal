@@ -2566,7 +2566,7 @@ class Appeal:
                  if node._command_callable() is not None}
         if self._global is not None and self._global.__name__ in table:
             raise AppealConfigurationError(
-                f"the global command {self._global.__name__!r} has the "
+                f"the precommand {self._global.__name__!r} has the "
                 f"same name as a command")
         if not table and self._global is None:
             raise AppealConfigurationError(
