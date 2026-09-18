@@ -8268,7 +8268,7 @@ README_DRIVES = {
     ('Commands, Precommands, And Subcommands', 0): [
         (['db', 'main', 'deploy', '9'], None, 'db main\ndeploy 9'),
     ],
-    ('Commands, Precommands, And Subcommands', 3): [
+    ('Commands, Precommands, And Subcommands', 4): [
         (['add-item', '3'], None, 'added 3'),
     ],
     ('Cycling: several commands on one line', 0): [

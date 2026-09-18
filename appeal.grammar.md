@@ -569,7 +569,11 @@ word, and a parent invoked alone just runs--then the node's
 a nested command set with the parent as its precommand, so
 it's the same machinery one level down.  `@app.command('x')`
 also RENAMES: the word is `'x'`, the decorated function's name
-is ignored.
+is ignored.  `app.command()` with no word returns an *anonymous*
+node (Larry, 2026-09-18), named by the function that bodies it,
+whenever that happens--subcommands and a default may be attached
+first; one never bodied is refused at finalize, and one whose
+function's name collides with an existing word is refused.
 
 ## The program's documentation (Larry, 2026-09-18)
 

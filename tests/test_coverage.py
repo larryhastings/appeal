@@ -1844,6 +1844,90 @@ def test_help_hint_names_the_best_way_in():
         assert err(app, ['db', 'strat']) == at_db, (mappings, err(app, ['db', 'strat']))
 
 
+def test_anonymous_command_nodes():
+    # Larry, 2026-09-18: app.command() with no word returns an ANONYMOUS
+    # node, named by the function that bodies it--whenever that
+    # happens.  Subcommands and a default may be hung on it first.
+    def program(order):
+        ran = []
+        app = Appeal(name='t', stylesheet=False)
+        stash = app.command()
+        if order == 'body first':
+            @stash
+            def stash_body(): ran.append('stash')
+        @stash.command()
+        def drop(): ran.append('drop')
+        @stash.default()
+        @stash.command()
+        def list(*words): ran.append(('list',) + words)
+        if order == 'body last':
+            @stash
+            def stash_body(): ran.append('stash')
+        return app, ran
+    for order in ('body first', 'body last'):
+        app, ran = program(order)
+        app.process(['stash-body'])
+        assert ran == ['stash', ('list', 'stash-body')], (order, ran)
+        ran.clear()
+        app.process(['stash-body', 'drop'])
+        assert ran == ['stash', 'drop'], (order, ran)
+    # the everyday order still bodies an existing node: app.command('db')
+    # first, @app.command() def db() after--and the decorator's knobs
+    # land on that node
+    app = Appeal(name='t', stylesheet=False)
+    db = app.command('db')
+    @db.command()
+    def start(): return 'start'
+    @app.command(repeat=True, restriction='hidden', default_mappings=None)
+    def db(): return 'db'
+    node = app.command('db')
+    assert node._node_repeat and node._node_restriction == 'hidden'
+    assert node._command_mappings is None
+    assert app.process(['db', 'start']).result == 'start'
+    assert 'db' not in app._visible_table()
+    # an anonymous node that already carries subcommands can't take an
+    # existing word: that would be two nodes for one word
+    app = Appeal(name='t', stylesheet=False)
+    app.command('db')
+    other = app.command()
+    @other.command()
+    def sub(): pass
+    try:
+        @other
+        def db(): pass
+        assert False
+    except AppealConfigurationError as e:
+        assert "command 'db' already exists under 't'" in str(e), e
+    # one never bodied is refused when the program runs
+    app = Appeal(name='t', stylesheet=False)
+    @app.command()
+    def real(): pass
+    orphan = app.command()
+    @orphan.command()
+    def sub2(): pass
+    try:
+        app.process(['real'])
+        assert False
+    except AppealConfigurationError as e:
+        assert "made with app.command() but never given a body" in str(e), e
+    # a default vetted on an anonymous node knows its depth, not its word
+    app = Appeal(name='t', stylesheet=False)
+    anon = app.command()
+    try:
+        anon.default()(lambda: None)
+        assert False
+    except AppealConfigurationError as e:
+        assert "here it is called with 1 word (the command words that reach it)" in str(e), e
+    assert anon._prog() == 't ?'
+    # ...and deeper: two words
+    deep = app.command('a').command()
+    try:
+        deep.default()(lambda x, y, z: None)
+        assert False
+    except AppealConfigurationError as e:
+        assert "takes 3; here it is called with 2 words" in str(e), e
+
+
 def test_load_without_pathlib():
     # the pathlib leaves are recognized by identity via sys.modules;
     # a process that never imported pathlib has none to recognize

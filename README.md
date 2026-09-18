@@ -768,6 +768,23 @@ app.main()
 decorator grammar.  The two-step spelling above parses on every
 Python Appeal supports.)
 
+`app.command()` with no word is the same node, *anonymous*: it
+takes its word from the function you decorate with it, whenever
+that happens.  So the order is yours--subcommands first, body
+last works too:
+
+```Python
+stash = app.command()
+
+@stash.command()
+def drop(): ...
+
+@stash
+def stash(): ...             # names the node 'stash'
+```
+
+A node that never gets a body is refused when the program runs.
+
 So now the whole command-line looks something like this:
 
     script.py [global options] db <label> deploy <version>
@@ -2722,17 +2739,20 @@ you `--version` and a `version` command for free.
 
 `Appeal.command(name=None, *, repeat=False, restriction=None)`
 
-Used as a decorator; registers the decorated callable as a
-command.  The command word is the callable's `__name__`,
-verbatim--or `name`, verbatim, if you pass it
-(`@app.command('sync-all')`: dashes welcome, the function's own
-name is ignored).  Decorating a *class* registers a constructing
-command whose decorated methods are its subcommands.
-Registering a word twice replaces: the second wins.
-
-`app.command('db')` returns the child **Appeal instance** for
-the word `db`, creating it if needed--the command tree is a tree
-of Appeal instances, linked by `.parent`.  Everything chains:
+Returns the child **Appeal instance** for the word `name`,
+creating it if needed--the command tree is a tree of Appeal
+instances, linked by `.parent`.  Call the node with a function
+to make it the command's body: `@app.command('sync-all')`
+(dashes welcome, the function's own name is ignored).  Without
+`name`, the node is *anonymous* until a function bodies it, and
+takes that function's `__name__` with underscores turned to
+dashes--so `@app.command()` on a function is the everyday
+spelling, and `stash = app.command()` is a node you can attach
+subcommands and a default to before naming it.  Decorating a
+*class* registers a constructing command whose decorated methods
+are its subcommands.  Registering a word twice replaces: the
+second wins; naming an anonymous node after an existing word is
+refused.  Everything chains:
 `.command()` attaches subcommands, `.default()` picks what
 runs when the line stops at `db`, `.option()` remaps a
 subcommand's options, and so on--the child is an Appeal, not a

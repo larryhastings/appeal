@@ -96,8 +96,12 @@ def _vet_default(callable, words):
                 f"supplies")
     n = len(words)
     if required > n or (accepted is not None and accepted < n):
-        reach = (' '.join(repr(w) for w in words) if words
-                 else 'no arguments')
+        if not words:
+            reach = 'no arguments'
+        elif None in words:             # an anonymous node: depth known, word not
+            reach = f"{n} word{'s' if n > 1 else ''}"
+        else:
+            reach = ' '.join(repr(w) for w in words)
         takes = ('any number' if accepted is None
                  else f'{required}' if required == accepted
                  else f'{required} to {accepted}')
@@ -1332,6 +1336,9 @@ class Appeal:
         # derived from this tree.
         self.parent = None        # set by _child(): the node's parent
         self._children = {}       # command word -> child Appeal
+        self._anonymous = []      # app.command() nodes not yet named by a
+                                  # body (Larry, 2026-09-18); refused at
+                                  # finalize if still nameless
         self._impl = None         # this node's command function
         self._precommands = []    # ordered precommand eras (the head; _impl
                                   # tracks the primary until dispatch runs them all)
@@ -1407,7 +1414,8 @@ class Appeal:
         self._precommand_overrides = {} # param -> (annotation, default) from
                                         # app.option(annotation=, default=)
         # EVERYTHING @app.option/@app.parameter expressed, keyed
-        # by the decorated callable (ruled 2026-08-09: Appeal
+        # by the decorated callable (ruled 2026-08-09, Larry confirmed
+        # 2026-09-18: Appeal
         # never modifies objects the user owns--decoration writes
         # it down HERE and moves on).  One registry per tree.
         self._decorations = Decorations()
@@ -1518,23 +1526,32 @@ class Appeal:
         "Fetch-or-create the child Appeal for a command word."
         node = self._children.get(word)
         if node is None:
-            # a subcommand node is a full Appeal; the program knobs are
-            # the root's, copied as processed values
-            node = Appeal(word)
-            node.parent = self
-            for attr in ('_help_enabled', 'default_options',
-                         'default_mappings',
-                         'script', 'errors', 'repeat', 'stylesheet',
-                         'plain_stylesheet', 'margin', '_templates'):    # the BACKING field, not the
-                setattr(node, attr, getattr(self, attr))  # `templates` property
-                                                    # -- copying the property would
-                                                    # force render's lazy import
-            node.version = None
-            node._finalized = True      # the ROOT runs the pass
-            node._decorations = self.root._decorations
-            node._method_owner = self._method_owner
+            node = self._new_node(word)
             self._children[word] = node
             self._invalidate()
+        return node
+
+    def _new_node(self, word):
+        """
+        A child Appeal for a command word--or for none yet, when
+        app.command() was called without one (Larry, 2026-09-18): an
+        anonymous node, named by the function that bodies it.  A
+        subcommand node is a full Appeal; the program knobs are the
+        root's, copied as processed values.
+        """
+        node = Appeal(word)
+        node.parent = self
+        for attr in ('_help_enabled', 'default_options',
+                     'default_mappings',
+                     'script', 'errors', 'repeat', 'stylesheet',
+                     'plain_stylesheet', 'margin', '_templates'):    # the BACKING field, not the
+            setattr(node, attr, getattr(self, attr))  # `templates` property
+                                                # -- copying the property would
+                                                # force render's lazy import
+        node.version = None
+        node._finalized = True      # the ROOT runs the pass
+        node._decorations = self.root._decorations
+        node._method_owner = self._method_owner
         return node
 
     def __call__(self, callable):
@@ -1542,9 +1559,39 @@ class Appeal:
         Calling an Appeal node with a callable sets the node's
         command function (v1): `@app.command('sync-all')`
         decorates through here, so the command word is the node's
-        name and the function's own name is ignored.  On the root
-        it sets the global command.  Decorating again replaces.
+        name and the function's own name is ignored.  An anonymous
+        node (app.command() with no word) takes its word from the
+        function here, and joins its parent's table (Larry,
+        2026-09-18).  On the root it sets the global command.
+        Decorating again replaces.
         """
+        parent = self.parent
+        if parent is not None and self.name is None:
+            word = parent._command_word(None, callable)
+            parent._anonymous.remove(self)
+            existing = parent._children.get(word)
+            if existing is not None:
+                # the word is already a node (app.command('db') came
+                # first): a bare anonymous node--@app.command() on the
+                # function, nothing hung on it--bodies THAT node, the
+                # knobs it was given landing there; one that already
+                # carries subcommands or a default is a second node for
+                # one word, refused
+                if self._children or self._node_default is not None:
+                    raise AppealConfigurationError(
+                        f"command {word!r} already exists under "
+                        f"{parent._prog()!r}; use app.command({word!r}) "
+                        f"to reach it")
+                existing._node_repeat = existing._node_repeat or self._node_repeat
+                existing._node_share = existing._node_share or self._node_share
+                if self._command_mappings is not default_command_mappings:
+                    existing._command_mappings = self._command_mappings
+                if self._node_restriction is not None:
+                    existing._node_restriction = self._node_restriction
+                return existing(callable)
+            self.name = word
+            parent._children[word] = self
+            parent._invalidate()
         self._impl = callable
         self._invalidate()
         return callable
@@ -1745,6 +1792,14 @@ class Appeal:
                     f"command {node._prog()!r} has subcommands or a default "
                     f"but no body: decorate a function with "
                     f"@app.command({word!r}) (Appeal never synthesizes one)")
+        # an anonymous node never named: nothing on the line can reach
+        # it, and nothing it was given can run
+        for parent in (self,) + tuple(node for _, node in self._iter_nodes()):
+            for node in parent._anonymous:
+                raise AppealConfigurationError(
+                    f"a command of {parent._prog()!r} was made with "
+                    f"app.command() but never given a body: decorate a "
+                    f"function with it, which names it")
 
     def print_version(self):
         "Print the program's version."
@@ -1986,16 +2041,18 @@ class Appeal:
                 node._node_restriction = restriction
                 self._invalidate()
             return node
-        def decorator(callable):
-            node = self._child(self._command_word(None, callable))
-            node._node_repeat = node._node_repeat or repeat
-            node._node_share = node._node_share or share
-            if default_mappings is not _UNSET:
-                node._command_mappings = default_mappings
-            if restriction is not None:
-                node._node_restriction = restriction
-            return node(callable)
-        return decorator
+        # no word: an anonymous node, named by the function that bodies
+        # it (Larry, 2026-09-18)--so `@app.command()` on a function is
+        # this node called with it, and `stash = app.command()` is a
+        # node to hang subcommands and a default on before OR after
+        node = self._new_node(None)
+        node._node_repeat = repeat
+        node._node_share = share
+        if default_mappings is not _UNSET:
+            node._command_mappings = default_mappings
+        node._node_restriction = restriction
+        self._anonymous.append(node)
+        return node
 
     def _visible_table(self):
         "The command table without the hidden words (Larry, 2026-09-10)."
@@ -2791,7 +2848,7 @@ class Appeal:
     def _prog(self):
         "The program name; for a subcommand set, the word path to it (tool db)."
         if self.parent is not None:
-            return f'{self.parent._prog()} {self.name}'
+            return f'{self.parent._prog()} {self.name or "?"}'
         return self.name or _os.path.basename(self.script) or 'program'
 
     def _help_hint(self):
@@ -2830,7 +2887,7 @@ class Appeal:
         """
         if self.parent is None:
             return ()
-        return self.parent._words() + (self.name,)
+        return self.parent._words() + (self.name,)      # None: anonymous
 
     def _option_placements(self, path):
         """

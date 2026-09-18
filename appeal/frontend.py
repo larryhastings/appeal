@@ -1227,7 +1227,8 @@ class Plan:
         counts, so the set can't disagree with the engine (the retired
         completable-distribution fold was a superset: it called two
         operands valid for f(a='A', p: pair='P'), which fill a and
-        starve pair; ruled exact 2026-09-07).  Trailing operands are
+        starve pair; ruled exact 2026-09-07, Larry confirmed 2026-09-18).
+        Trailing operands are
         pocketed from the end of the stream first, shifting everything
         by the tree's trailing count.
         """
@@ -2146,7 +2147,7 @@ class Decorations:
     """
     Everything @app.option and @app.argument EXPRESSED, recorded
     inside the app and keyed by the decorated callable (ruled
-    2026-08-09: Appeal never modifies objects the user owns--no
+    2026-08-09, Larry confirmed 2026-09-18: Appeal never modifies objects the user owns--no
     attributes planted on functions, classes, or anything else;
     and decoration only writes down what was said).  Functions,
     classes, and bound methods are all hashable keys--bound

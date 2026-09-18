@@ -510,7 +510,7 @@ class ValueBinding:
             value = processor.advance()                 # raw: no option check
         # value options convert per occurrence: a repeated option
         # validates EVERY value (ruled 2026-08-16, "not called validate for
-        # nothing"), last wins.
+        # nothing"; Larry confirmed 2026-09-18), last wins.
         owner.kwargs[self.name] = processor._cv(conv, value, self.name)
     def _multi(self, processor, conv, value, name):
         constructor, leaves = conv[0], conv[1:]
