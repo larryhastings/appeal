@@ -1142,7 +1142,8 @@ class Engine:
             # reports it (invoke-always; no conjurable flag).
         if obj is None and tok is None:
             if arg.required:
-                obj = arg.converter()                # invoke-always (ruled): a
+                obj = arg.converter()                # invoke-always (ruled; Larry
+                                                     # confirmed 2026-09-18): a
                                                      # required slot builds its
                                                      # shell; a starved required
                                                      # operand surfaces in its fill

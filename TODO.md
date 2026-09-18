@@ -32,4 +32,8 @@ Agreed work, not yet built.  Larry's rulings; one entry per item.
 * **The man page's SYNOPSIS stops at top-level commands** (same
   walk): `tool db` appears, `tool db start` never does, and
   subcommand pages aren't in the COMMANDS section either.
+* **An optional zero-operand converter prints as empty brackets in
+  usage** (found 2026-09-18, rulings walk): `go(a, b='', c: Stamp =
+  None, d='')` reads `go <A> [<B>] [] [<D>]`.  A slot with nothing
+  to type should print nothing.
 
