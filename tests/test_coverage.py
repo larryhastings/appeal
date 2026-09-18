@@ -1956,13 +1956,13 @@ def test_nested_class_repeat_and_parse_for():
     @app.command()
     def solo():
         ran.append('solo')
-    db_app = app.command('db', repeat=True)
-    @db_app
+    db_command = app.command('db', repeat=True)
+    @db_command
     class Db:
         def __init__(self, label):
             self.label = label
             ran.append(('db', label))
-        @db_app.command()
+        @db_command.command()
         def wipe(self):
             ran.append(('wipe', self.label))
     proc = app.process(['db', 'main', 'wipe'])
@@ -2697,12 +2697,12 @@ def test_completion_candidate_edges():
     @app.command()
     def go(x, *, level: int = 0):
         return x
-    db_app = app.command('db')
-    @db_app
+    db_command = app.command('db')
+    @db_command
     class Db:
         def __init__(self, label):
             self.label = label
-        @db_app.command()
+        @db_command.command()
         def wipe(self):
             pass
     assert 'go' in app.complete([], 'g')
@@ -6287,14 +6287,14 @@ def test_help_reaches_subcommands_by_word_path():
     @tool.command()
     def db(*, url=''):
         "Database things."
-    db_app = tool.command('db')
-    @db_app.command()
+    db_command = tool.command('db')
+    @db_command.command()
     def stop(force=False):
         "Stop the database."
-    @db_app.command()
+    @db_command.command()
     def start():
         "Start it."
-    @db_app.command()
+    @db_command.command()
     def re_start():
         "Restart it."
     def page(argv):
@@ -6582,11 +6582,11 @@ def test_default_command_and_subcommand_handlers():
     # default command after the head eras--stock: print the program's
     # usage and command summary (orientation, exit 1, not an error);
     # @app.default() replaces it.  A line stopping at a command with
-    # subcommands runs the default subcommand after the parent's body:
-    # Appeal(default_subcommand=...) program-wide (stock None: they're
-    # optional; no_subcommand requires them), @db_app.default() per
-    # command, where db_app = app.command('db') is the command's node.
-    # Handlers are callables with no arguments; never strings.
+    # subcommands runs that command's default after its body:
+    # @db_command.default() on the node (db_command = app.command('db')),
+    # stock nothing--subcommands are never required, and there is no
+    # program-wide knob (Larry, 2026-09-18).  Handlers are callables
+    # with no arguments; never strings.
     import contextlib, io
     def cli(app, argv):
         out, err = io.StringIO(), io.StringIO()
@@ -6620,38 +6620,31 @@ def test_default_command_and_subcommand_handlers():
     app = make()
     app.default()(lambda: ran.append('menu'))
     assert cli(app, ['-v'])[0] == 0 and ran == [('tool', True), 'menu'], ran
-    # never something that needs an argument, never a string
-    try:
-        Appeal(name='t', default_subcommand=lambda x, y: None)
-        assert False
-    except AppealConfigurationError as e:
-        assert "requires 'x'" in str(e), e
-    try:
-        Appeal(name='t', default_subcommand='status')
-        assert False
-    except AppealConfigurationError as e:
-        assert 'no arguments' in str(e), e
-    # subcommands are optional by default: db alone just runs db
+    # subcommands are optional by default: db alone just runs db (the
+    # stock default for a command is run_nothing)
     app = make()
     assert cli(app, ['db'])[0] == 0 and ran == [('tool', False), 'db'], ran
-    # program-wide no_subcommand requires them: the error wears db's
-    # page (a blank line between), db's body having run first
-    app = make(default_subcommand=appeal.no_subcommand)
+    assert app.command('db')._default is appeal.run_nothing
+    assert cli(app, ['db', 'stop'])[0] == 0 and ran[-1] == 'stop'
+    # a node's default requires subcommands if it wants to: raise
+    app = make()
+    @app.command('db').default()
+    def need_one():
+        raise UsageError('no subcommand specified')
     code, out, err = cli(app, ['db'])
     assert code == 2, err
     assert err.startswith('error: no subcommand specified\n\n'
                           'usage: tool db [-h|--help] <COMMAND>\n'), err
     assert 'stop' in err and ran == [('tool', False), 'db'], ran
-    assert cli(app, ['db', 'stop'])[0] == 0 and ran[-1] == 'stop'
-    # ...and a command with no subcommands never consults it
+    # ...and a command with no subcommands never consults a default
     assert cli(app, ['status'])[0] == 0
     # per command: the node's own default, decorated before OR after the
     # command itself is bodied
-    app = Appeal(name='t2', default_subcommand=appeal.no_subcommand)
-    db_app = app.command('db')
-    @db_app.default()
+    app = Appeal(name='t2')
+    db_command = app.command('db')
+    @db_command.default()
     def db_menu(): ran.append('db-menu')
-    @db_app.command()
+    @db_command.command()
     def start(): ran.append('start')
     @app.command()
     def db(): ran.append('db')
@@ -6670,19 +6663,45 @@ def test_default_command_and_subcommand_handlers():
         assert False
     except AppealConfigurationError as e:
         assert "'t3 cache' has subcommands or a default but no body" in str(e), e
-    # *args/**kwargs are fine (nothing is required); a decorator default
-    # that needs an argument is refused when its plan builds
-    Appeal(name='t4', default_subcommand=lambda *a, **k: None)
+    # *args/**kwargs are fine (nothing is required); a default that
+    # needs an argument is refused when its plan builds
+    app4 = Appeal(name='t4')
+    @app4.command()
+    def go4(): pass
+    app4.default()(lambda *a, **k: None)
+    assert app4.process([]).result is None
     app5 = Appeal(name='t5')
     @app5.command()
     def go5(): pass
-    @app5.default()
-    def needy(x): pass
     try:
-        app5.process([])
+        @app5.default()
+        def needy(x): pass
         assert False
     except AppealConfigurationError as e:
         assert "'needy' requires 'x'" in str(e), e
+    # ...at decoration (Larry, 2026-09-18), strings too
+    try:
+        app5.default()('status')
+        assert False
+    except AppealConfigurationError as e:
+        assert 'no arguments' in str(e), e
+    # a method default that needs an argument is refused when its plan
+    # builds, which is where its owner is known
+    app7 = Appeal(name='t7')
+    @app7.precommand()
+    class Seven:
+        def __init__(self): pass
+        @app7.command()
+        def go7(self): pass
+        @app7.default()
+        def needy7(self, x): pass
+    try:
+        app7.process([])
+        assert False
+    except AppealConfigurationError as e:
+        assert "'needy7' requires 'x'" in str(e), e
+    # the stock nothing is a function whose body is `pass`
+    assert appeal.run_nothing() is None
     # a handler's error that already wears usage keeps it
     app6 = Appeal(name='t6')
     @app6.command()
@@ -6790,10 +6809,10 @@ def test_verbatim():
     def sub(): pass
     assert both.complete(['x'], '-') == []
     tree = Appeal(name='tree')
-    db_app = tree.command('db')
+    db_command = tree.command('db')
     @tree.command()
     def db(label: verbatim): pass
-    @db_app.command()
+    @db_command.command()
     def wipe(): pass
     assert tree.complete(['db'], '-') == []
     assert tree.complete(['db', '-x'], 'w') == ['wipe']
@@ -7347,12 +7366,12 @@ def test_restriction_hidden_and_deprecated():
         't play [-a|--alt [--legacy] [<LEVEL>]] [--legacy] [<T>]'
     # hidden subcommands stay out of completion too
     tree = Appeal(name='s')
-    db_app = tree.command('db')
+    db_command = tree.command('db')
     @tree.command()
     def db(): pass
-    @db_app.command()
+    @db_command.command()
     def start(): pass
-    @db_app.command(restriction='hidden')
+    @db_command.command(restriction='hidden')
     def nuke(): pass
     assert tree.complete(['db'], '') == ['start']
     assert tree.process(['db', 'nuke']).result is None
@@ -7742,11 +7761,11 @@ def test_subcommands_heading_and_hanging_indent():
         verbose
         : Say more.
         """
-    db_app = app.command('db')
+    db_command = app.command('db')
     @app.command()
     def db(*, url=''):
         "Database things."
-    @db_app.command()
+    @db_command.command()
     def start(): "Start it."
     def page(*topic):
         out = io.StringIO()
@@ -7943,12 +7962,12 @@ def test_command_paths_come_from_the_tree():
         except SystemExit as e:
             assert e.code == 0
     assert app2.command('two words')._words() == ('two words',)
-    db_app = app2.command('db')
-    assert db_app.command('stop')._words() == ('db', 'stop')
+    db_command = app2.command('db')
+    assert db_command.command('stop')._words() == ('db', 'stop')
     # the misplaced-option placement still names the path in words
     @app2.command()
     def db(): pass
-    @db_app.command()
+    @db_command.command()
     def stop(*, force=False): pass
     try:
         app2.process(['db', 'stop', 'x', '--force'])

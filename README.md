@@ -790,12 +790,10 @@ def default():
 
 The same question one level down: the line stops at `db`, which
 has subcommands.  By default `db` simply runs and that's that--
-subcommands are never required.  `Appeal(default_subcommand=...)`
-sets a *default subcommand* for every such command, run after
-the parent's body; `appeal.no_subcommand` makes them required
-(`error: no subcommand specified`, then that command's page).
-`@db_app.default()` on the command's node overrides it for `db`
-alone.
+subcommands are never required.  `@db_command.default()` on the
+command's node (`db_command = app.command('db')`) names what runs
+after `db`'s body in that case, for `db` alone; it's a local
+decision, and there is no program-wide setting for it.
 
 Notice that the default command doesn't take any arguments
 or options.  It simply can't accept any, by definition.
@@ -1843,24 +1841,24 @@ Here's what that means:
   ```Python
       @app.command()
       class db:
-          db_app = app.command('db')
+          db_command = app.command('db')
           def __init__(self, label):
               self.label = label
 
-          @db_app.command()
+          @db_command.command()
           def wipe(self):
               print(f"wiping {self.label}")
   ```
 
   ```Python
-      db_app = app.command('db')
+      db_command = app.command('db')
 
-      @db_app
+      @db_command
       class db:
           def __init__(self, label):
               self.label = label
 
-          @db_app.command()
+          @db_command.command()
           def wipe(self):
               print(f"wiping {self.label}")
   ```
@@ -2729,10 +2727,13 @@ and its decorated methods are the commands.
 
 Used as a decorator.  Sets the command run when the program
 has commands but the user names none, replacing the stock one
-(usage and the command summary).  Takes no parameters, by
-definition.  On a subcommand node (`db_app = app.command('db')`,
-then `@db_app.default()`) it sets what runs when the line stops
-at the parent, replacing `Appeal(default_subcommand=...)`.
+(usage and the command summary).  The function must be callable
+with no arguments; the decorator refuses one that isn't.  On a
+subcommand node (`db_command = app.command('db')`, then
+`@db_command.default()`) it sets what runs after the parent's
+body when the line stops there, replacing the stock nothing
+(`appeal.run_nothing`, a function whose body is `pass`).  A
+default runs only where there are subcommands to be missing.
 `default_command()` is the older spelling.
 
 `Appeal.option(parameter_name, *options, annotation=..., default=..., config=None, restriction=None, doc=None)`

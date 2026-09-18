@@ -75,7 +75,7 @@ def tron_program(config=None):
         """
         log.append(('deploy', target, region, dry_run))
 
-    db_app = app.command('db')
+    db_command = app.command('db')
     @app.command()
     def db(*, url='postgres://localhost'):
         """
@@ -87,17 +87,17 @@ def tron_program(config=None):
         """
         log.append(('db', url))
 
-    @db_app.command()
+    @db_command.command()
     def start(port: int = 5432):
         "Start the database."
         log.append(('start', port))
 
-    @db_app.command()
+    @db_command.command()
     def stop(*, force=False):
         "Stop the database."
         log.append(('stop', force))
 
-    @db_app.default()
+    @db_command.default()
     def db_status():
         log.append('db-status')
 
@@ -180,13 +180,13 @@ def tool_program():
             name
             : Which database.
             """
-            db_app = app.command('Db')
+            db_command = app.command('Db')
 
             def __init__(self, name):
                 self.name = name
                 log.append(('Db', name))
 
-            @db_app.command()
+            @db_command.command()
             def wipe(self, *, really=False):
                 "Wipe it."
                 log.append(('wipe', self.name, really))

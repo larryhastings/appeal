@@ -4679,13 +4679,13 @@ def test_command_name_override():
     def add_item(x: int):
         ran.append(('add-item', x))
 
-    db_app = app.command('db')
-    @db_app
+    db_command = app.command('db')
+    @db_command
     class Db:
         def __init__(self, label):
             self.label = label
 
-        @db_app.command()
+        @db_command.command()
         def wipe(self):
             ran.append(('wipe', self.label))
 
@@ -6518,13 +6518,13 @@ def test_class_as_app_nested():
             # the node, fetched in the class body (Larry's spelling,
             # 2026-09-09): the body runs before the class's decorator,
             # and the decorator bodies this same node
-            db_app = app.command('Db')
+            db_command = app.command('Db')
 
             def __init__(self, name):
                 self.name = name
                 out.append(('db', name))
 
-            @db_app.command()
+            @db_command.command()
             def add(self, x: int):
                 out.append(('add', self.name, x))
 
@@ -7216,27 +7216,27 @@ def test_precommand_config_bound_dicts():
 
 def test_subcommand():
     # Subcommands hang off the parent's NODE (Larry, 2026-09-09, the
-    # one API): db_app = app.command('db') fetches or creates it, in
-    # any order relative to db's own body; @db_app.command() adds
+    # one API): db_command = app.command('db') fetches or creates it, in
+    # any order relative to db's own body; @db_command.command() adds
     # subcommands.  Appeal never infers subcommand-ness.
     import appeal as _appeal
     ran = []
     app = _appeal.Appeal(name='t')
 
-    db_app = app.command('db')       # the node, BEFORE its parent is bodied
-    @db_app.command()
+    db_command = app.command('db')       # the node, BEFORE its parent is bodied
+    @db_command.command()
     def add(x: int):
         ran.append(('add', x))
 
     @app.command()
     def db(*, verbose=False):
         ran.append(('db', verbose))
-    assert app.command('db') is db_app   # the same node, after
+    assert app.command('db') is db_command   # the same node, after
 
-    @db_app.command()
+    @db_command.command()
     def remove(x: int):
         ran.append(('remove', x))
-    @db_app.command()
+    @db_command.command()
     def drop():
         ran.append('drop')
 
@@ -7247,14 +7247,14 @@ def test_subcommand():
                    ('remove', 2), ('db', False), 'drop'], ran
 
     # depth is nodes of nodes; the word given wins over the function's
-    @db_app.command('add').command('audit-log')
+    @db_command.command('add').command('audit-log')
     def audit():
         pass
     assert ('audit-log', audit) in app._subs['add']
     # the manual spelling, no decorator syntax
     def my_lucky_day():
         ran.append('lucky')
-    db_app.command()(my_lucky_day)
+    db_command.command()(my_lucky_day)
     ran.clear()
     app.process(['db', 'my-lucky-day'])
     assert ran == [('db', False), 'lucky'], ran
@@ -7270,7 +7270,7 @@ def test_subcommand():
     # (it would even work--the body is the first precommand of the
     # node's own set--but it's daffy; in the back pocket)
     try:
-        db_app.precommand()
+        db_command.precommand()
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert str(e) == ("precommand(): only the program has precommands, "
@@ -7278,8 +7278,8 @@ def test_subcommand():
 
     # option()/argument() through a node are the root's: they act on
     # the callable decorated, whichever node they were reached by
-    assert db_app.option.__func__ is app.option.__func__
-    assert db_app.argument.__func__ is app.argument.__func__
+    assert db_command.option.__func__ is app.option.__func__
+    assert db_command.argument.__func__ is app.argument.__func__
     app2 = _appeal.Appeal(name='u')
     db2 = app2.command('db')
     @app2.command()

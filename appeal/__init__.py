@@ -49,16 +49,15 @@ BACKWARDS = 'backwards'
 PRECOMMAND = 'precommand'
 
 
-def no_subcommand():
+def run_nothing():
     """
-    A default subcommand that REQUIRES one: `error: no subcommand
-    specified`, then the command's page with its subcommands listed.
-    Subcommands are optional by default (the stock default_subcommand
-    is None); Appeal(default_subcommand=no_subcommand) requires them
-    program-wide, @app.command(default_subcommand=no_subcommand) for
-    one command.
+    The stock default for a command that has subcommands: when the
+    line stops at the command and names none of them, the command's
+    body has run, and nothing else happens (Larry, 2026-09-18:
+    subcommands are never required; a node's own @default() replaces
+    this).
     """
-    raise UsageError("no subcommand specified")
+    pass
 
 
 def _vet_default(callable, what):
@@ -82,6 +81,21 @@ def _vet_default(callable, what):
 
 
 builtins_callable = callable
+
+
+def _defined_in_class(callable):
+    """
+    Was this function defined in a class body (so its first parameter
+    is the instance), or is it a class?  Read off __qualname__--
+    Python's own record of where a function was defined--never off
+    the parameter names.
+    """
+    if not builtins_callable(callable):
+        return False                    # not a function at all: vet it now
+    if isinstance(callable, type):
+        return True
+    parts = getattr(callable, '__qualname__', '').split('.')
+    return len(parts) >= 2 and parts[-2] != '<locals>'
 
 
 def quoted(text, role=None):
@@ -1242,7 +1256,6 @@ class Appeal:
                  config=None,
                  default_mappings=default_global_mappings,
                  default_options=_DEFAULT_OPTIONS,
-                 default_subcommand=None,
                  doc=None,
                  errors=None,
                  lazy=False,
@@ -1303,10 +1316,12 @@ class Appeal:
         # of it--the program answers -h/--help only if it declares
         # them itself.  (A command that defines its own help still
         # wins even when help=True; this is the blanket off switch.)
-        # the v1 help= knob is dead (ruled 2026-07-25):
-        # default_mappings is the policy switch.  The legacy
-        # bare-app help machinery still keys off this flag;
-        # approximate it until the era unification lands
+        # the v1 help= knob is dead (ruled 2026-07-25; Larry confirmed
+        # 2026-09-17): default_mappings is the policy switch.  Want the
+        # stock mappings minus one?  Write the ones you want by hand:
+        # there's no un-mapping API yet (a wrapper that calls
+        # default_global_mappings and then unmaps is the API we haven't
+        # designed).
         self._help_enabled = default_mappings is not None
         # eager plan compilation (Larry, 2026-08-24): unless lazy, the first
         # process()/main() builds every command's plan across the tree, so a
@@ -1343,15 +1358,6 @@ class Appeal:
                 f"default_mappings must be callable or None, "
                 f"not {default_mappings!r}")
         self.default_mappings = default_mappings
-        # the program-wide default subcommand (Larry's design, 2026-09-09):
-        # what runs when a line stops at a command that has subcommands,
-        # after the command's body.  Stock None: nothing--subcommands are
-        # optional; no_subcommand requires them.  A callable that takes no
-        # arguments.  @node.default() overrides it per command, and sets
-        # the root's default command (stock: print the program's usage).
-        if default_subcommand is not None:
-            _vet_default(default_subcommand, 'default_subcommand')
-        self._default_subcommand = default_subcommand
         self._finalized = False
         self._precommand_options = {}   # param -> (strings...)
         self._precommand_overrides = {} # param -> (annotation, default) from
@@ -1382,7 +1388,8 @@ class Appeal:
                 f"errors= must be a writable file object "
                 f"(sys.stderr, sys.stdout, ...), not {errors!r}")
         self.errors = errors
-        # cycling is PER NODE (ruled 2026-08-22): `repeat` on a node means its
+        # cycling is PER NODE (ruled 2026-08-22; Larry confirmed
+        # 2026-09-17): `repeat` on a node means its
         # own set may cycle -- run more than one command from it.  The root's
         # set is the top-level commands; a command's set is its subcommands.
         # Not inherited: each node's repeat governs only its own set.  The root
@@ -1417,7 +1424,7 @@ class Appeal:
         # Markdown, yours to replace.  Loaded lazily (it lives in render, which
         # pulls big/markdown) so a successful dispatch never imports render.
         self._templates = None
-        # NO lock (ruled 2026-08-22): builds are idempotent and cache installs
+        # NO lock (ruled 2026-08-22; Larry confirmed 2026-09-17): builds are idempotent and cache installs
         # are atomic (setdefault / attribute assignment), so racing first-parses
         # each build and one install wins -- see _init_caches.
         self._method_owner = {}   # id(callable) -> owning class's env key
@@ -1436,7 +1443,7 @@ class Appeal:
         self._templates = value
 
     def _init_caches(self):
-        # lock-free lazy caches (ruled 2026-08-22: no Lock).  Builds are
+        # lock-free lazy caches (ruled 2026-08-22, Larry confirmed 2026-09-17: no Lock).  Builds are
         # idempotent (same callable -> equivalent artifact), and dict.setdefault
         # / attribute assignment are atomic (GIL, and PEP 703 free-threaded), so
         # racing first-parses each build and one install wins -- the rest
@@ -1527,7 +1534,8 @@ class Appeal:
     def callable(self):
         """
         This node's command function (spelled like plan.callable
-        one layer down; ruled 2026-07-25).  On the root, the
+        one layer down; ruled 2026-07-25, Larry confirmed 2026-09-17).
+        On the root, the
         global command; on a child, the function bound to its
         word.  None if never bound.
         """
@@ -1629,7 +1637,7 @@ class Appeal:
                 self.command(value)(self.help)
                 # help()'s usage=/summary=/doc= knobs are API, not
                 # command-line surface: the zero-string option() is the
-                # explicit unmap (ruled 2026-08-05)
+                # explicit unmap (Larry, 2026-08-05; confirmed 2026-09-17)
                 self.option('usage')(self.help)
                 self.option('summary')(self.help)
                 self.option('doc')(self.help)
@@ -1680,7 +1688,7 @@ class Appeal:
 
     def _refuse_bodyless_parents(self):
         """
-        `db_app = app.command('db')` may be decorated with subcommands
+        `db_command = app.command('db')` may be decorated with subcommands
         and a default before `db` itself is bodied--but by the time the
         program runs, it must be (Larry, 2026-09-09; the no-pure-
         dispatcher ruling of 2026-08-22: Appeal never synthesizes the
@@ -1830,13 +1838,12 @@ class Appeal:
         The handler for a line that stops at this node: the node's own
         (@node.default()), else the stock--at the root, print the
         program's usage (Larry, 2026-09-09: a bare line is a request for
-        orientation, not an error); below, the program's
-        default_subcommand.  None: nothing runs.
+        orientation, not an error); at a command, nothing (Larry,
+        2026-09-18: a local decision, never a program-wide knob).
         """
         if self._node_default is not None:
             return self._node_default
-        root = self.root
-        return self._print_usage if self is root else root._default_subcommand
+        return self._print_usage if self is self.root else run_nothing
 
     def _print_usage(self):
         "The stock default command: the program's usage and command summary."
@@ -1975,14 +1982,22 @@ class Appeal:
         The command run when the line stops at this node--for the
         root, a line naming no command (replacing the stock one,
         which prints the program's usage and command summary); for
-        a subcommand node (db_app = app.command('db');
-        @db_app.default()), a line ending at the parent (replacing
-        Appeal(default_subcommand=)).  Any callable that runs with
-        no arguments; never a string.
+        a subcommand node (db_command = app.command('db');
+        @db_command.default()), a line ending at the parent (replacing
+        the stock nothing).  Any callable that runs with no
+        arguments; never a string.
         """
         def decorator(callable):
-            self._node_default = callable   # vetted when its plan builds:
-            self._invalidate()              # a method's self isn't an argument
+            # a default runs with no arguments (Larry, 2026-09-09):
+            # refused here, at decoration, for a function or a lambda.
+            # A function defined in a class body is a method-to-be,
+            # whose self isn't an argument, and a class's __init__ may
+            # bind an outer instance: those are vetted when the plan
+            # builds, which knows the owner.
+            if not _defined_in_class(callable):
+                _vet_default(callable, 'default')
+            self._node_default = callable
+            self._invalidate()
             return callable
         return decorator
     default_command = default           # the old spelling (deprecated)
@@ -2307,7 +2322,7 @@ class Appeal:
             return self._help_topic_page(list(topic), suppress)
         print(self._overview_text(_sys.stdout, suppress))
         # returns None: help is a COMMAND implementation now
-        # (ruled 2026-07-25), and a command's return value is its
+        # (ruled 2026-07-25; Larry confirmed 2026-09-17), and a command's return value is its
         # exit status--text would sys.exit(text).  Capture stdout
         # for the text.
 
@@ -2315,7 +2330,8 @@ class Appeal:
         """
         The program's documentation rendered in the named format--
         the grammar describing itself in one more dialect, like
-        completion(shell).  Formats (ruled 2026-08-05): 'gfm'
+        completion(shell).  Formats (ruled 2026-08-05; Larry confirmed
+        2026-09-17): 'gfm'
         (GitHub-flavored Markdown: definition lists as
         inline-HTML <dl>, everything else GitHub renders
         natively), 'commonmark' (pure CommonMark: definition
@@ -3398,7 +3414,7 @@ class Appeal:
             # default command -- so recurse even at end-of-line when a default
             # is waiting.  Every command has a child node (lazy registration);
             # only enter one that actually has subcommands or a default.
-            if child._has_commands or child._default is not None:
+            if child._has_commands or child._node_default is not None:
                 child._run_node(line, top=False, sections=subsections)
             if not self._node_repeat and line.words:
                 # this set doesn't cycle: the leftover word goes up to an
@@ -3436,13 +3452,14 @@ class Appeal:
             # it: the node's default handler runs, after the head eras (the
             # root) or after the parent's body (below)--the stock root one
             # prints the program's usage and command summary (Larry,
-            # 2026-09-09); below, the stock is Appeal(default_subcommand=),
-            # None: subcommands are optional (ruled 2026-08-22).
-            # A handler applies only where there are commands to be missing.
+            # 2026-09-09); a command's stock one does nothing (Larry,
+            # 2026-09-18: subcommands are never required).  A handler
+            # applies only where there are subcommands to be missing.
             # (It runs in pass 3 like any command, so what came before it
             # on the line--the global command included--has already run.)
-            handler = self._default
-            if handler is not None and self._has_commands:
+            # The stock nothing schedules nothing: the parent's result
+            # stands as the run's.
+            if self._has_commands and self._default is not run_nothing:
                 dcls = converter_for(self._default_plan())
                 dconv = dcls()
                 # the line is spent: the loop ran out of words (a word this

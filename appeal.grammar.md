@@ -256,12 +256,11 @@ All v1 semantics, empirically probed and kept:
   error (Larry, 2026-09-09).  It runs where a command would, so the
   global command has already run.  A program with no commands at all
   never consults it.  A line that stops at a command with subcommands
-  runs the **default subcommand** after the parent's body:
-  `Appeal(default_subcommand=...)` program-wide, `@db_app.default()`
-  per command (`db_app = app.command('db')`), stock `None`--
-  subcommands are never required by default (ruled 2026-08-22);
-  `appeal.no_subcommand` requires them, its error wearing that
-  command's page with the subcommands listed.  A node given
+  runs that command's **default** after its body: `@db_command.default()`
+  on the node (`db_command = app.command('db')`), stock nothing--
+  subcommands are never required (Larry; the program-wide
+  `default_subcommand=` knob and `no_subcommand` were mine, removed
+  2026-09-18: a local decision has no program-wide setting).  A node given
   subcommands or a default but never a body of its own is refused
   when the program runs: Appeal never synthesizes the parent.
 * **Which usage an error wears** (Larry's rule, 2026-09-09): an error
