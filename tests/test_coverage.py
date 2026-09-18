@@ -5375,7 +5375,7 @@ def test_init_internal_edges():
     def migrate():
         pass
     @db.default()
-    def dbdefault():
+    def dbdefault(*words):
         pass
     assert isinstance(app2._sub_defaults, dict)
 
@@ -6665,7 +6665,7 @@ def test_default_command_and_subcommand_handlers():
     # a node's default requires subcommands if it wants to: raise
     app = make()
     @app.command('db').default()
-    def need_one():
+    def need_one(db):
         raise UsageError('no subcommand specified')
     code, out, err = cli(app, ['db'])
     assert code == 2, err
@@ -6680,15 +6680,74 @@ def test_default_command_and_subcommand_handlers():
     app = Appeal(name='t2')
     db_command = app.command('db')
     @db_command.default()
-    def db_menu(): ran.append('db-menu')
+    def db_menu(*words): ran.append(('db-menu',) + words)
     @db_command.command()
     def start(): ran.append('start')
     @app.command()
     def db(): ran.append('db')
     ran.clear()
-    assert cli(app, ['db'])[0] == 0 and ran == ['db', 'db-menu'], ran
+    assert cli(app, ['db'])[0] == 0 and ran == ['db', ('db-menu', 'db')], ran
     ran.clear()
     assert cli(app, ['db', 'start'])[0] == 0 and ran == ['db', 'start'], ran
+    # the words that reach the node, splatted (Larry, 2026-09-18): one
+    # handler serves every depth, and hands them to help; a handler
+    # whose positionals don't fit its node is refused, at decoration
+    # for a function, at build for a method
+    app8 = Appeal(name='t8', stylesheet=False)
+    @app8.command('db')
+    def db8(): ran.append('db8')
+    @app8.command('db').command('splunk')
+    def splunk(): ran.append('splunk')
+    @app8.command('db').command('splunk').command()
+    def deep(): pass
+    def show(*words):
+        ran.append(words)
+        app8.help(*words)
+    app8.default()(show)
+    app8.command('db').default()(show)
+    app8.command('db').command('splunk').default()(show)
+    ran.clear()
+    code, out, err = cli(app8, [])
+    assert ran == [()] and out.startswith('usage: t8 '), (ran, out)
+    ran.clear()
+    code, out, err = cli(app8, ['db', 'splunk'])
+    assert ran == ['db8', 'splunk', ('db', 'splunk')], ran
+    assert out.startswith('usage: t8 db splunk '), out
+    @app8.command('db').default()
+    def named(db): ran.append(db)
+    ran.clear()
+    cli(app8, ['db'])
+    assert ran == ['db8', 'db'], ran
+    for handler in (lambda: None, lambda a, b: None):
+        try:
+            app8.command('db').default()(handler)
+            assert False
+        except AppealConfigurationError as e:
+            assert "here it is called with 'db' (the command words that reach it)" in str(e), e
+    try:
+        app8.default()(lambda a: None)
+        assert False
+    except AppealConfigurationError as e:
+        assert "takes 1; here it is called with no arguments" in str(e), e
+    try:
+        app8.default()(lambda *, k: None)
+        assert False
+    except AppealConfigurationError as e:
+        assert "requires 'k', which nothing supplies" in str(e), e
+    def loose(*words, **extra): ran.append(words)
+    app8.command('db').default()(loose)
+    ran.clear()
+    cli(app8, ['db'])
+    assert ran == ['db8', ('db',)], ran
+    # a defaulted positional counts as accepted, not required: it can
+    # take the word, and it can serve the root too
+    def lenient(db='db'): ran.append(db)
+    app8.command('db').default()(lenient)
+    app8.default()(lenient)
+    ran.clear()
+    cli(app8, ['db'])
+    cli(app8, [])
+    assert ran == ['db8', 'db', 'db'], ran
     # a node with subcommands or a default and no body is refused when
     # the program runs (Appeal never synthesizes the parent)
     app = Appeal(name='t3')
@@ -6715,13 +6774,13 @@ def test_default_command_and_subcommand_handlers():
         def needy(x): pass
         assert False
     except AppealConfigurationError as e:
-        assert "'needy' requires 'x'" in str(e), e
+        assert "default 'needy' takes 1; here it is called with no arguments" in str(e), e
     # ...at decoration (Larry, 2026-09-18), strings too
     try:
         app5.default()('status')
         assert False
     except AppealConfigurationError as e:
-        assert 'no arguments' in str(e), e
+        assert 'must be a callable' in str(e), e
     # a method default that needs an argument is refused when its plan
     # builds, which is where its owner is known
     app7 = Appeal(name='t7')
@@ -6736,7 +6795,7 @@ def test_default_command_and_subcommand_handlers():
         app7.process([])
         assert False
     except AppealConfigurationError as e:
-        assert "'needy7' requires 'x'" in str(e), e
+        assert "default 'needy7' takes 1; here it is called with no arguments" in str(e), e
     # the stock nothing is a function whose body is `pass`
     assert appeal.run_nothing() is None
     # a handler's error that already wears usage keeps it

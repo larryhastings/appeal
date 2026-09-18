@@ -95,7 +95,7 @@ def tron_program(config=None):
         log.append(('stop', force))
 
     @db_command.default()
-    def db_status():
+    def db_status(db):
         log.append('db-status')
 
     @app.command('sync-all', restriction='deprecated')

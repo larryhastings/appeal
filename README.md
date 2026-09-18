@@ -781,9 +781,8 @@ What should Appeal do if your program takes commands, but the
 user doesn't supply one?  It runs the *default command*.  The
 stock one prints the program's usage line and the list of
 commands, to standard output, and exits with status 1--an
-orientation page, not an error.  Any callable that runs with no
-arguments can replace it (a function that needs arguments gets a
-wrapper; never a string); decorate it with `@app.default()`:
+orientation page, not an error.  Any callable can replace it;
+decorate it with `@app.default()`:
 
 ```Python
 @app.default()
@@ -794,9 +793,26 @@ def default():
 The same question one level down: the line stops at `db`, which
 has subcommands.  By default `db` simply runs and that's that--
 subcommands are never required.  `@db_command.default()` on the
-command's node (`db_command = app.command('db')`) names what runs
-after `db`'s body in that case, for `db` alone; it's a local
-decision, and there is no program-wide setting for it.
+command's node (`db_commands` above) names what runs after `db`'s
+body in that case, for `db` alone; it's a local decision, and
+there is no program-wide setting for it.
+
+A default handler is called with the command words that reach its
+node, as positional arguments: none at the root, `'db'` under
+`db`, `'db', 'splunk'` under db's splunk.  So one handler can
+serve any node, and the words are exactly what `app.help()` takes:
+
+```Python
+def show(*words):
+    app.help(*words)          # this node's own page
+
+app.default()(show)
+db_commands.default()(show)
+```
+
+A handler written for one node may name its word, `def
+db_menu(db)`; one whose parameters can't take its node's words is
+refused when you decorate it.
 
 Notice that the default command doesn't take any arguments
 or options.  It simply can't accept any, by definition.
@@ -2748,13 +2764,14 @@ program's documentation.  One class per program.
 
 Used as a decorator.  Sets the command run when the program
 has commands but the user names none, replacing the stock one
-(usage and the command summary).  The function must be callable
-with no arguments; the decorator refuses one that isn't.  On a
-subcommand node (`db_command = app.command('db')`, then
-`@db_command.default()`) it sets what runs after the parent's
-body when the line stops there, replacing the stock nothing
-(`appeal.run_nothing`, a function whose body is `pass`).  A
-default runs only where there are subcommands to be missing.
+(usage and the command summary).  On a subcommand node
+(`db_command = app.command('db')`, then `@db_command.default()`)
+it sets what runs after the parent's body when the line stops
+there, replacing the stock nothing (`appeal.run_nothing`, a
+function whose body is `pass`).  The handler is called with the
+command words that reach its node, splatted (none at the root),
+and the decorator refuses one whose parameters can't take them.
+A default runs only where there are subcommands to be missing.
 `default_command()` is the older spelling.
 
 `Appeal.option(parameter_name, *options, annotation=..., default=..., config=None, restriction=None, doc=None)`

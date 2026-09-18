@@ -24,4 +24,12 @@ Agreed work, not yet built.  Larry's rulings; one entry per item.
   the sheet and Appeal's `rule` role fills the break glyph to it.
   When wrap_words tiles the break itself, both go, and the theme's
   `rule` entry with them.
+* **A subcommand's `plan.usage()` drops its parent words** (found
+  2026-09-18, rulings walk): `tool start [<PORT>]` for `tool db
+  start`.  Help pages build the line from the node and are right;
+  the MCP schema's `usage` field uses `plan.usage()` and is wrong
+  for subcommands.
+* **The man page's SYNOPSIS stops at top-level commands** (same
+  walk): `tool db` appears, `tool db start` never does, and
+  subcommand pages aren't in the COMMANDS section either.
 

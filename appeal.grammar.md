@@ -250,9 +250,13 @@ All v1 semantics, empirically probed and kept:
   there (matches v1), and same-named options in different commands
   never collide.
 * A program that takes commands, given none, runs its **default
-  command** after the head eras: `@app.default()`, any callable that
-  runs with no arguments (a wrapper supplies what a real command
-  needs; never a string).  The stock one prints the program's usage
+  command** after the head eras: `@app.default()`.  A default is
+  called with the command words that reach its node, splatted (Larry,
+  2026-09-18): none at the root, `'db'` under db, `'db', 'splunk'`
+  under db's splunk--one `def show(*words): app.help(*words)` serves
+  every node; a handler whose positionals can't take exactly its
+  node's words is refused at decoration (a method's at build, where
+  its owner is known); never a string.  The stock one prints the program's usage
   line and command summary to stdout and exits 1--orientation, not an
   error (Larry, 2026-09-09).  It runs where a command would, so the
   precommands have already run.  A program with no commands at all

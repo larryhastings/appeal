@@ -66,24 +66,44 @@ def run_nothing():
     pass
 
 
-def _vet_default(callable, what):
+def _vet_default(callable, words):
     """
-    A default command/subcommand handler must be callable with no
-    arguments at all (Larry, 2026-09-09: a wrapper supplies any the
-    real command needs); refused by name otherwise.  Never a string.
+    A default handler is called with the command words that reach its
+    node, splatted (Larry, 2026-09-18): nothing at the root, 'db'
+    under db, 'db', 'splunk' under db's splunk--so one handler can
+    serve several nodes, and hand the words straight to app.help().
+    Refused, by name, when its positional parameters can't take
+    exactly that many (`*args` takes any); a keyword-only parameter
+    without a default is refused too.  Never a string.
     """
     if not builtins_callable(callable):
         raise AppealConfigurationError(
-            f"{what} must be a callable that takes no arguments, "
-            f"not {callable!r}")
+            f"default must be a callable, not {callable!r}")
     from .frontend import signature, empty
+    name = getattr(callable, '__name__', repr(callable))
+    required = 0
+    accepted = 0
     for p in signature(callable).parameters.values():
-        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD,
-                      p.KEYWORD_ONLY) and p.default is empty:
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD):
+            accepted += 1
+            if p.default is empty:
+                required += 1
+        elif p.kind is p.VAR_POSITIONAL:
+            accepted = None
+        elif p.kind is p.KEYWORD_ONLY and p.default is empty:
             raise AppealConfigurationError(
-                f"{what} must be callable with no arguments; "
-                f"{getattr(callable, '__name__', callable)!r} requires "
-                f"{p.name!r}")
+                f"default {name!r} requires {p.name!r}, which nothing "
+                f"supplies")
+    n = len(words)
+    if required > n or (accepted is not None and accepted < n):
+        reach = (' '.join(repr(w) for w in words) if words
+                 else 'no arguments')
+        takes = ('any number' if accepted is None
+                 else f'{required}' if required == accepted
+                 else f'{required} to {accepted}')
+        raise AppealConfigurationError(
+            f"default {name!r} takes {takes}; here it is called with "
+            f"{reach} (the command words that reach it)")
 
 
 builtins_callable = callable
@@ -2007,18 +2027,20 @@ class Appeal:
         which prints the program's usage and command summary); for
         a subcommand node (db_command = app.command('db');
         @db_command.default()), a line ending at the parent (replacing
-        the stock nothing).  Any callable that runs with no
-        arguments; never a string.
+        the stock nothing).  Called with the command words that reach
+        the node, splatted--none at the root, 'db' under db--so
+        `def show(*words): app.help(*words)` serves any node (Larry,
+        2026-09-18).  Never a string.
         """
         def decorator(callable):
-            # a default runs with no arguments (Larry, 2026-09-09):
-            # refused here, at decoration, for a function or a lambda.
-            # A function defined in a class body is a method-to-be,
-            # whose self isn't an argument, and a class's __init__ may
-            # bind an outer instance: those are vetted when the plan
-            # builds, which knows the owner.
+            # vetted here, at decoration, for a function or a lambda:
+            # its positionals must take the node's words.  A function
+            # defined in a class body is a method-to-be, whose self
+            # isn't an argument, and a class's __init__ may bind an
+            # outer instance: those are vetted when the plan builds,
+            # which knows the owner.
             if not _defined_in_class(callable):
-                _vet_default(callable, 'default')
+                _vet_default(callable, self._words())
             self._node_default = callable
             self._invalidate()
             return callable
@@ -2686,14 +2708,18 @@ class Appeal:
             if owner is None:                   # a self-method no class
                 _refuse_orphan_method(self._default)   # claimed: refuse
             plan = self._build(self._default, method_of=owner)
-            if plan.minimum:
-                # a default handler runs with no arguments (Larry,
-                # 2026-09-09); a wrapper supplies any the real command needs
-                names = ', '.join(repr(s.name) for s in plan.slots
-                                  if s.required)
+            n = len(self._words())
+            if plan.minimum > n or (plan.maximum is not None
+                                    and plan.maximum < n):
+                # the handler is called with the words that reach the
+                # node (Larry, 2026-09-18); a method's self is bound
+                reach = (' '.join(repr(w) for w in self._words())
+                         if n else 'no arguments')
                 raise AppealConfigurationError(
-                    f"the default command must be callable with no "
-                    f"arguments; {plan.name!r} requires {names}")
+                    f"default {plan.name!r} takes {plan.minimum}"
+                    f"{'' if plan.maximum == plan.minimum else ' or more' if plan.maximum is None else f' to {plan.maximum}'}"
+                    f"; here it is called with {reach} (the command words "
+                    f"that reach it)")
             plan = self._plans.setdefault('default', plan)
         return plan
 
@@ -3518,9 +3544,11 @@ class Appeal:
                 dcls = converter_for(self._default_plan())
                 dconv = dcls()
                 # the line is spent: the loop ran out of words (a word this
-                # node can't own was pushed back and returned before this)
+                # node can't own was pushed back and returned before this).
+                # The handler's operands are the command words that reach
+                # this node (Larry, 2026-09-18); none of them is a boundary
                 assert not line.words
-                dproc = backend.Engine([], dconv, table)
+                dproc = backend.Engine(list(self._words()), dconv, ())
                 dproc.parse()
                 steps.append(_Step('default', self, dcls, dconv, dproc))
         return dispatched

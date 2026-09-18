@@ -935,9 +935,9 @@ class Plan:
         self.pre_plan = None
         # the string the program was invoked as, stamped on
         # COMMAND plans at build so the usage line reads
-        # `usage: prog go ...` (0.6.4's shape, ruled 2026-07-19)
-        # --pasteable into a shell.  Named argv0 (ruled
-        # 2026-08-04).
+        # `usage: prog go ...` (0.6.4's shape, ruled 2026-07-19; Larry
+        # confirmed 2026-09-18)--pasteable into a shell.  Named argv0
+        # (ruled 2026-08-04).
         self.argv0 = None
         self.callable = callable
         self.name = name

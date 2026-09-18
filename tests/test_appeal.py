@@ -5562,7 +5562,7 @@ def db(*, host='local'):
     print('db', host)
 def deploy(n: int):
     print('deploy', n)
-def db_default():
+def db_default(db):
     print('db-default')
 def root_default():
     print('root-default')
@@ -8268,7 +8268,7 @@ README_DRIVES = {
     ('Commands, Precommands, And Subcommands', 0): [
         (['db', 'main', 'deploy', '9'], None, 'db main\ndeploy 9'),
     ],
-    ('Commands, Precommands, And Subcommands', 2): [
+    ('Commands, Precommands, And Subcommands', 3): [
         (['add-item', '3'], None, 'added 3'),
     ],
     ('Cycling: several commands on one line', 0): [
