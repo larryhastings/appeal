@@ -343,42 +343,46 @@ appeal.completion.md, Part 3.
 
 The `--jobs`/`-j` option of unix `make` has two defaults: run
 `make` and it uses one job; `make -j 5` uses five; a bare
-`make -j` uses as many as it likes.  In Appeal that's the marked
-spelling for an optional option-argument, `optional[T]` (ruled
-2026-08-03, the make precedent):
+`make -j` uses as many as it likes.  In Appeal an option's value
+is required unless you say otherwise (ruled 2026-08-03, the make
+precedent: `-f file` is the common case), and the way to say
+otherwise is a converter that takes one operand with a default
+(Larry, 2026-09-18: the one spelling):
 
     import appeal
-    from appeal import optional
 
     app = appeal.Appeal(name='make')
 
+    def jobs(jobs: int = 0):
+        "How many jobs to run in parallel; zero means as many as it likes."
+        return jobs
+
     @app.precommand()
-    def make(*targets, jobs: optional[int] = 1):
+    def make(*targets, jobs: jobs = 1):
         """
         Builds the targets.
 
         # Arguments
         targets
         : What to build.
-
-        # Options
-        jobs
-        : How many jobs to run in parallel.  Bare `-j` means as
-          many as it likes.
         """
         count = 'unlimited' if jobs == 0 else jobs
         print(f"building {targets} with {count} jobs")
 
     app.main()
 
-Absent, the parameter's own default fills (`1`).  Bare `-j`
-gives `int()`--zero--your sentinel for "no limit".  With a
-value, `make -j 5` is five jobs, and so are `make -j5` and
-`make --jobs=5`.  (Not `-j=5`: `=` is a long-option separator
-only--on a short option the rest of the token binds verbatim,
-so `-j=5` hands the int converter `=5`.)  An option whose parameter is NOT wrapped in `optional[]`
-requires its value, full stop--`optional[T]` is the marked case,
-exactly like make's man page marks `-j [jobs]`.
+Three cases.  Absent, the parameter's own default fills (`1`).
+Bare `-j` calls the converter with nothing, so its own default
+answers--zero here, your sentinel for "no limit"; you choose it,
+not the type.  With a value, `make -j 5` is five jobs, and so are
+`make -j5` and `make --jobs=5`.  (Not `-j=5`: `=` is a long-option
+separator only--on a short option the rest of the token binds
+verbatim, so `-j=5` hands the int converter `=5`.)  The usage line
+reads `[-j|--jobs [<JOBS>]]`: the converter's own parameter name is
+plumbing, and the option's names the placeholder, as it does for a
+positional argument.  An option whose parameter is a plain type
+requires its value, full stop--exactly like make's man page marks
+`-j [jobs]` and not `-f [file]`.
 
 An optional operand is *greedy*: when `-j` has a next token, it
 takes it--whatever it looks like.  So `make all -j install`

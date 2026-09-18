@@ -1804,25 +1804,29 @@ def test_template_dresses_the_page():
     assert text.startswith('usage: p [-h|--help] [-l|--loud] <THING>'), text
 
 
-def test_optional_oparg_subscript():
-    # Ruled 2026-08-03 (the make precedent, superseding the brief
-    # None-default rule of earlier the same day): opargs are
-    # REQUIRED by default--`-f file` is the common case--and the
-    # optional oparg is the MARKED case, spelled optional[T]:
-    #     --debug[=FLAGS]     debug: optional[str] = None
+def test_optional_oparg_by_converter():
+    # Ruled 2026-08-03 (the make precedent): opargs are REQUIRED by
+    # default--`-f file` is the common case--and the optional oparg is
+    # the marked case.  Its one spelling (Larry, 2026-09-18, TOOWTDI:
+    # optional[T] is gone) is a converter with one defaulted operand:
+    #     --debug[=FLAGS]     debug: flags = None,  flags(flags: str = '')
     #     -f file             file=None
-    #     -j [jobs]           jobs: optional[int] = 1
-    # Absent -> the parameter default; bare -> T() (str '', int
-    # 0); given -> T(value).
+    #     -j [jobs]           jobs: jobs = 1,       jobs(jobs: int = 0)
+    # Absent -> the parameter default; bare -> the converter's own
+    # default; given -> converted.
     import appeal as _appeal
-    from appeal import optional
-    assert not hasattr(_appeal, 'optional_str')
+    assert not hasattr(_appeal, 'optional')
 
+    def flags(flags: str = ''):
+        return flags
+    def jobs(jobs: int = 0):
+        return jobs
     app = _appeal.Appeal('make', default_mappings=None)
-    @app.global_command()
-    def make(*, debug: optional[str] = None, file=None,
-             jobs: optional[int] = 1):
+    @app.precommand()
+    def make(*, debug: flags = None, file=None, jobs: jobs = 1):
         return (debug, file, jobs)
+    assert strip_styles(app.plan.usage()) == \
+        'make [-d|--debug [<DEBUG>]] [-f|--file <FILE>] [-j|--jobs [<JOBS>]]'
     assert app.process([]).result == (None, None, 1)
     assert app.process(['--debug']).result == ('', None, 1)
     assert app.process(['--debug=vj']).result == ('vj', None, 1)
@@ -1830,7 +1834,6 @@ def test_optional_oparg_subscript():
     assert app.process(['-j', '3']).result == (None, None, 3)
     # a greedy oparg that eats the wrong token is the USER's
     # error--UsageError, never a raw ValueError traceback
-    # (found 2026-08-06 writing the die famous-make docs)
     try:
         app.process(['-j', 'zork']).result
         assert False, 'expected UsageError'
@@ -1843,16 +1846,39 @@ def test_optional_oparg_subscript():
         assert False, 'expected UsageError'
     except UsageError as e:
         assert 'requires a value' in str(e)
-    # the bare factory refuses by name
-    app2 = _appeal.Appeal('t2', default_mappings=None)
-    @app2.global_command()
-    def g(*, x: optional = None):
-        return x
-    try:
-        app2.process([]).result
-        assert False, 'expected ConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'optional[str]' in str(e)
+
+    # the naming rule reaches a group option (Larry, 2026-09-18): the
+    # converter's parameter name is plumbing when it consumes exactly
+    # one operand; the OPTION's parameter names the placeholder, on
+    # the usage line, in the table row, and in the nested table, and
+    # @app.argument's rename wins over that
+    def count(n: int = None):
+        return n
+    app2 = _appeal.Appeal('make', default_mappings=None)
+    @app2.precommand()
+    def make2(*, jobs: count = None):
+        """
+        # Options
+        jobs
+        : Parallel jobs.
+
+          # Arguments
+          n
+          : How many.
+        """
+        return jobs
+    assert strip_styles(app2.plan.usage()) == 'make2 [-j|--jobs [<JOBS>]]'
+    from appeal.presentation import merge_docs
+    (row,) = merge_docs(app2.plan)['options']
+    assert strip_styles(row[0]) == '-j|--jobs [<JOBS>]', row[0]
+    ((kind, rows),) = row[2]
+    assert kind == 'arguments'
+    assert [(strip_styles(d), _lines(v)) for d, v, _ in rows] == [('<JOBS>', ['How many.'])]
+    assert app2.process(['-j', '4']).result == 4 and app2.process(['-j']).result is None
+    app3 = _appeal.Appeal('make', default_mappings=None)
+    app3.argument('jobs', usage='workers')(make2)
+    app3.precommand()(make2)
+    assert strip_styles(app3.plan.usage()) == 'make2 [-j|--jobs [<WORKERS>]]'
 
 
 def test_command_listings_are_definition_order():
@@ -4594,7 +4620,9 @@ def test_scoped_help_presentation():
     corpus = merge_docs(build_plan(draw))
     rows = [(strip_styles(display), _lines(lines), nested)
             for display, lines, nested in corpus['options']]
-    assert [d for d, _, _ in rows] == ['-s|--stroke [<WIDTH>]', '-o|--other [<WIDTH>]'], rows
+    # a converter taking one operand: the option's name is the
+    # placeholder's (Larry, 2026-09-18)
+    assert [d for d, _, _ in rows] == ['-s|--stroke [<STROKE>]', '-o|--other [<OTHER>]'], rows
     assert rows[0][1] == ['Fancy strokes.']
     ((kind, sub),) = rows[0][2]
     assert kind == 'options' and [strip_styles(d) for d, _, _ in sub] == ['-d|--dotted'], sub

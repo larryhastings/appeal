@@ -489,22 +489,25 @@ and help (the operand name, or an option's metavar).
 
 You know `make -j`: bare `-j` means "as many jobs as you like," `-j4` means
 four. That's an option whose oparg is *optional*. By default an option that
-takes a value **requires** it (`-f file`); to mark the value optional, wrap
-the converter in `appeal.optional[...]`:
+takes a value **requires** it (`-f file`); to make the value optional, give
+the option a converter that takes one operand with a default:
 
 ```Python
 import appeal
 
+def jobs(jobs: int = 0):
+    return jobs
+
 @app.command()
-def build(*, jobs: appeal.optional[int] = 1):
+def build(*, jobs: jobs = 1):
     ...
 ```
 
 Three cases, and this is the whole rule:
 
 * **absent** (`build`) → the parameter default, `1`.
-* **bare** (`build --jobs`, or `-j`) → `int()`, i.e. `0`. The oparg's type,
-  called with no arguments. (For `optional[str]`, bare gives `''`.)
+* **bare** (`build --jobs`, or `-j`) → the converter called with nothing,
+  so its own default: `0` here. You choose the sentinel, not the type.
 * **given** (`build --jobs 4`, `-j4`, `--jobs=4`) → `int('4')`, i.e. `4`.
 
 The bare case gives you a distinguishable sentinel--`0` here--so `make`'s
@@ -1379,8 +1382,9 @@ The same command, same converters, no command-line string:
 
 Annotate a parameter with one of these to shape its conversion.
 
-* `appeal.optional[T]` — mark an option's oparg optional (the `make -j`
-  case): absent → the parameter default, bare → `T()`, given → `T(value)`.
+* An option's oparg is optional when its converter takes one operand with
+  a default (the `make -j` case): absent → the parameter default, bare →
+  the converter's default, given → converted.
 * `appeal.counter(delta=1, clamp=None)` — add `delta` per occurrence,
   starting from the parameter's default (`-vvv` → `3`).  `delta` needn't be
   a number; `clamp` is a barrier the value stops on, from either side.
@@ -1500,9 +1504,10 @@ completion, and a REPL. The full itemized list:
 * **A command may have a body *and* subcommands**; subcommands are never
   required, and a parent runs its own body when none is named.
 * **`*args: tuple[X, Y, Z]`** chunks the operand stream by the tuple's arity.
-* **`optional[T]`** marks an option's oparg optional (the `make -j` case).
+* An option's oparg is optional when its converter takes one operand with
+  a default (the `make -j` case); there is no `optional[T]`.
 * Command names **dash-mangle** by default (`sync_all` → `sync-all`); the
-  underscore spelling is accepted on lookup too, for commands and for
+  dash form is the one spelling, for commands and for
   `help TOPIC`.
 
 **Presentation**

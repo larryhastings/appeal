@@ -1052,9 +1052,20 @@ def merge_docs(plan, command_names=None):
             sub = None
             if o.child is not None:
                 # an option edge: the converter's own tables nest under
-                # the row
+                # the row.  A converter taking exactly one operand: the
+                # option's parameter names that operand's row (the naming
+                # rule, for options too--Larry, 2026-09-18)
                 sub = Level()
-                walk(o.child, sub, None, (None, None), rowkey)
+                sub_override = None
+                if o.child.sole_terminal_slot() is not None:
+                    top = next(s for s in o.child.slots
+                               if isinstance(s.child, Terminal)
+                               or s.child.count_terminals())
+                    name = o.usage_name if o.usage_name is not None else o.name
+                    sub_override = (rowkey + (id(top),),
+                                    style('argument',
+                                          decorate_argument(name, plan.decoration)))
+                walk(o.child, sub, sub_override, (None, None), rowkey)
             if o.restriction == 'hidden':
                 continue                # documentable, never shown
             if o.restriction == 'deprecated':
@@ -1416,16 +1427,20 @@ def summary(callable):
     return ' '.join(markdown(scan_docstring(doc)['summary']).split())
 
 
-def _operand_markup(plan, decoration=None):
+def _operand_markup(plan, decoration=None, rename=None):
     """
     A plan's operands as a usage fragment, role-tagged: `<HUE>`,
     `[<LEVEL>]`, `[<FILE>]...`; a nested converter's operands are
     spelled out (or its outer name, when it takes exactly one).
+    `rename`, when given, is the display for the plan's one operand--
+    the option's own name, when a group option's converter takes
+    exactly one (Larry, 2026-09-18).
     """
     bits = []
     for s in plan.slots:
         if isinstance(s.child, Terminal) or s.child.sole_terminal_slot():
-            text = style('oparg', decorate_argument(s.usage_name, decoration))
+            text = (rename if rename is not None
+                    else style('oparg', decorate_argument(s.usage_name, decoration)))
         else:
             text = _operand_markup(s.child, decoration)
         if s.repeat:
@@ -1446,8 +1461,13 @@ def _option_display(o, decoration=None):
     bits = ['|'.join(style('option', escape_styles(s)) for s in o.strings)]
     if o.child is not None:
         # a mini-usage of the group's operands (Larry, 2026-09-10)--never
-        # its nested options: those are the row's own Options block
-        text = _operand_markup(o.child, decoration)
+        # its nested options: those are the row's own Options block.  A
+        # converter taking exactly one operand: the option names it
+        rename = None
+        if o.child.sole_terminal_slot() is not None:
+            name = o.usage_name if o.usage_name is not None else o.name
+            rename = style('oparg', decorate_argument(name, decoration))
+        text = _operand_markup(o.child, decoration, rename)
         if text:
             bits.append(text)
     elif o.consumes_operands:

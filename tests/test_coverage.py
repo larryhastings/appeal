@@ -4752,7 +4752,7 @@ def test_branch_text_formatter_edges():
     assert units(prog) == ['prog', '[-o|--opt <OPT>]', '-n|--need <NEED>', '<A>', '[<B>]']
     def group(x, *, deep: int = 0): pass
     def prog2(*, g: group): pass
-    assert units(prog2) == ['prog2', '-g', '[-d|--deep <DEEP>]', '<X>']
+    assert units(prog2) == ['prog2', '-g', '[-d|--deep <DEEP>]', '<G>']
 
     # themed table painting walks PAST a wrapped description's
     # continuation lines to find the next row
@@ -4890,21 +4890,6 @@ class PtOpt(appeal.Option):
 def sneaky_default(x, *, pt: PtOpt = Sneaky({'a': 1})):
     print(x, pt)
 '''
-
-
-def test_optional_parameterize_refusals():
-    # optional[...] takes exactly one callable converter
-    from appeal import optional, AppealConfigurationError
-    try:
-        optional[int, float]                 # a tuple of two
-        assert False, 'expected refusal'
-    except AppealConfigurationError as e:
-        assert 'exactly one converter' in str(e)
-    try:
-        optional[5]                          # not callable
-        assert False, 'expected refusal'
-    except AppealConfigurationError as e:
-        assert "isn't callable" in str(e)
 
 
 def test_degenerate_leaf_type_non_degenerate():
@@ -5253,11 +5238,12 @@ def test_backend_more_errors():
         ('usage', "option '-a' takes several values; it must be last in "
                   "a bundle with its values as separate words")
     # the trailing-reservation scan spans a multi-operand group option
-    # (GroupBinding) and an optional[group] value option (tuple converter)
+    # (GroupBinding) and a one-operand group option with a default
     # to find the trailing operand past them (tail is reserved from the end)
     assert both2(opt_group, ['-a', '1', '2', 'T']) == ('ok', ((1, 2), 'T'))
-    from appeal import optional
-    def opt_group2(items: _absorb, tail, *, at: optional[point] = None):
+    def maybe(v: str = None):
+        return v
+    def opt_group2(items: _absorb, tail, *, at: maybe = None):
         return (at, tail)
     assert both2(opt_group2, ['-a', '1', '2', 'T'])[0] in ('ok', 'usage')
     # a group whose constructor raises ValueError is a polite usage error
@@ -7414,7 +7400,7 @@ def test_restriction_hidden_and_deprecated():
     page = out.getvalue()
     assert '--quiet' not in page and page.count('--legacy (deprecated)') == 2, page
     assert strip_styles(app.plan_for('play').usage()) == \
-        't play [-a|--alt [--legacy] [<LEVEL>]] [--legacy] [<T>]'
+        't play [-a|--alt [--legacy] [<ALT>]] [--legacy] [<T>]'
     # hidden subcommands stay out of completion too
     tree = Appeal(name='s')
     db_command = tree.command('db')
@@ -7560,7 +7546,7 @@ def test_nested_documentation_across_option_edges():
     @app.command()
     def draw2(*, o: opt = None): pass
     (row,) = merge_docs(app.plan_for('draw2'))['options']
-    assert strip_styles(row[0]) == '-o [<X>]', row
+    assert strip_styles(row[0]) == '-o [<O>]', row       # the option names its one operand
     # a group with no operands at all: just its strings
     def knobs(*, fast=False): pass
     @app.command()

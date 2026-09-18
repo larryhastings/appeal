@@ -53,8 +53,9 @@ class Option:
         this from v1's render(); everything Appeal defers is rendered
         by calling it.)
 
-    An Option may be given any number of times (ruled 2026-07-09:
-    repetition is the norm--getopt, argparse, click).  If the option
+    An Option may be given any number of times (ruled 2026-07-09,
+    Larry confirmed 2026-09-18: repetition is the norm--getopt,
+    argparse, click; a plain option's last occurrence wins).  If the option
     is never given, the class is never instantiated: the parameter's
     default passes through untouched.
     """
@@ -427,52 +428,6 @@ def file(mode='r', *, buffering=-1, encoding=None, errors=None,
     if opener is None:
         file_converter.recipe = True
     return file_converter
-
-
-class _OptionalMeta(type):
-    "optional[T] parameterizes via metaclass __getitem__ (3.6-safe)."
-    def __getitem__(cls, T):
-        return cls._parameterize(T)
-
-
-class optional(metaclass=_OptionalMeta):
-    """
-    Marks an option's oparg as OPTIONAL, make-style (`-j [jobs]`):
-    annotate the parameter with optional[T].  Absent: the
-    parameter's own default.  Bare: T() -- int gives 0, str gives
-    ''.  With a value: T(value).  Opargs are REQUIRED by default
-    (ruled 2026-08-03, the make precedent: `-f file` is the
-    common case, `-j [jobs]` is the marked one).
-    """
-    factory = "optional[str]"
-
-    @classmethod
-    def _parameterize(cls, T):
-        if isinstance(T, tuple):
-            raise AppealConfigurationError(
-                "optional[...] takes exactly one converter")
-        if not callable(T):
-            raise AppealConfigurationError(
-                f"optional[...]: {T!r} isn't callable")
-        # None is the no-oparg sentinel: an operand that WAS
-        # given always arrives as a str, never the None object
-        def option_value(value: str = None):
-            if value is None:
-                return T()
-            try:
-                return T(value)
-            except (ValueError, TypeError):
-                # a conversion failure is the USER's error, not a
-                # crash (the greedy oparg ate the wrong token)
-                name = getattr(T, '__name__', 'value')
-                raise UsageError(
-                    f"invalid value {quoted(value)} "
-                    f"(not a valid {escaped(name)})") from None
-        # usage metavar: show the OPTION'S parameter name, not
-        # this closure's ('[-j|--jobs [jobs]]', not '[value]')
-        option_value.borrows_name = True
-        option_value.recipe = True
-        return option_value
 
 
 class _Subscriptable(type):

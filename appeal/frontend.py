@@ -1057,14 +1057,14 @@ class Plan:
             parts = ['|'.join(style('option', escape_styles(s))
                               for s in o.strings)]
             if o.child is not None:
-                if getattr(o.child.callable,
-                           'borrows_name', False):
-                    # an optional[T]-style wrapper: its own
-                    # parameter name is plumbing; the metavar is
-                    # the OPTION's parameter (or its rename)
+                if o.child.sole_terminal_slot() is not None:
+                    # the converter consumes exactly one operand: the
+                    # option's parameter is the one nearest the command
+                    # that stands for that word, so it names it (Larry,
+                    # 2026-09-16, the rule; 2026-09-18, for options too)
                     name = (o.usage_name if o.usage_name is not None
                             else o.name)
-                    parts.append(f'[{_arg(name)}]')
+                    parts.extend(body_units(o.child, rename=_arg(name)))
                 else:
                     parts.extend(body_units(o.child))
             elif o.consumes_operands:

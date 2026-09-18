@@ -50,6 +50,11 @@ BACKWARDS = 'backwards'
 PRECOMMAND = 'precommand'
 
 
+def _topic(topic: str = ''):
+    "The help option's operand: a command to describe, or '' for the overview."
+    return topic
+
+
 def run_nothing():
     """
     The stock default for a command that has subcommands: when the
@@ -445,7 +450,7 @@ AppealBaseException = AppealError
 # and the public API their names.
 from .converters import (
     Option, MultiOption, is_option, is_multioption,
-    split, validate, validate_range, counter, file, optional,
+    split, validate, validate_range, counter, file,
     accumulator, mapping, verbatim, boolean,
     )
 
@@ -1801,8 +1806,7 @@ class Appeal:
                 suppress=suppress).rstrip('\n')
         print(text)
 
-    def _metadata_precommand(self, *, help: optional[str] = None,
-                   version=False):
+    def _metadata_precommand(self, *, help=None, version=False):
         """
         The stage ahead of the global command: program metadata.
         Its options live in the precommand+global era and unmap at
@@ -2911,20 +2915,21 @@ class Appeal:
         # 2026-07-25): treated as not mapped at all
         want_v = bool(mapped.get('version'))
         want_h = bool(mapped.get('help'))
-        # the closures mirror Appeal.precommand's signature:
-        # optional[str] marks the topic's oparg optional (bare -h
-        # gives ''), version=False is a flag.  The parameter is named
-        # `topic` for the usage line ([-h|--help [<TOPIC>]]); the
-        # user-facing mapping name stays 'help'
+        # the closures mirror Appeal.precommand's signature: the topic
+        # converts through _topic, a one-operand converter with a
+        # default (bare -h gives ''--the bare page; Larry, 2026-09-18:
+        # the one spelling of an optional oparg), version=False is a
+        # flag.  The parameter is named `topic` for the usage line
+        # ([-h|--help [<TOPIC>]]); the user-facing mapping name stays
+        # 'help'
         if want_v and want_h:
-            def precommand(*, topic: optional[str] = None,
-                           version=False):
+            def precommand(*, topic: _topic = None, version=False):
                 app._metadata_precommand(help=topic, version=version)
         elif want_v:
             def precommand(*, version=False):
                 app._metadata_precommand(version=version)
         else:
-            def precommand(*, topic: optional[str] = None):
+            def precommand(*, topic: _topic = None):
                 app._metadata_precommand(help=topic)
         from .frontend import empty
         overrides = app.root._precommand_overrides
