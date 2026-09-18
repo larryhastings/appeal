@@ -294,7 +294,7 @@ def ruled_headings(theme):
 # ruled_headings(theme) puts the drawn rules back on any theme.
 
 _base_theme = {
-    'rule': ('T', '⦃fill⦙T⦙⦃line⦄⦄'),
+    'rule': ('T', 'T'),        # paint role over the thematic break; big sizes it to the line (>= 0.15)
 
     # headings: the structural entry, bare, over the color hook
     'heading_color':     ('T', 'T'),
@@ -347,6 +347,7 @@ _base_theme = {
     # color role so themes stay color-only.
     'argument_decoration': ('T', '<⦃upper⦙T⦄>'),
     'oparg':      ('T', '⦃argument⦙T⦄'),    # ruled: defaults to argument
+                                            # (its own role; Larry confirmed 2026-09-18)
     'summary':    ('T', 'T'),
     'error':      ('T', 'T'),
 }
@@ -430,7 +431,9 @@ appeal_theme = _theme(
     option    = 'cyan',
     argument  = 'dark_purple',
     error     = 'red',
-    code      = 'green',                    # ruled: code is green
+    code      = 'green',                    # Larry, 2026-09-18: code is green in
+                                            # the Appeal and cool themes, amber
+                                            # in the warm ones
     marker    = 'dark_purple',
     link      = 'blue',
     heading_color = 'blue',

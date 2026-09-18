@@ -3719,7 +3719,7 @@ class Appeal:
                 traceback.print_exc()
             else:
                 # a value the command RETURNED, printed exactly as
-                # print() would (ruled: this is the program's REPL,
+                # print() would (ruled, Larry confirmed 2026-09-18: this is the program's REPL,
                 # not Python's--no repr, no quotes)
                 if result is not None:
                     print(result)
