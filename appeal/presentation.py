@@ -199,7 +199,8 @@ def render_markdown_help(text, width=None, stylesheet=None):
     joined = join_styles(rendered)
     if stylesheet is None:
         stylesheet = uncolored_palette | markdown_defaults
-    # the renderer injects `line` (ruled 2026-08-08): the margin
+    # the renderer injects `line` (ruled 2026-08-08; Larry confirmed
+    # 2026-09-18: a horizontal rule spans the margin): the margin
     # as a drawable string, underneath so the sheet's own wins
     from big.stylesheet import StyleSheet
     stylesheet = StyleSheet({'line': ('-' * width,)}) | stylesheet
@@ -585,7 +586,7 @@ def render_baked_help(pieces, margin=79, file=None,
     sheet = resolve_stylesheet(stylesheet, file, plain_stylesheet)
     # the renderer injects `line`--'-' repeated to the margin, a
     # full-width rule bare and a margin-wide model inside
-    # clip/fill (ruled 2026-08-08).  Only the renderer knows the
+    # clip/fill (ruled 2026-08-08; Larry confirmed 2026-09-18).  Only the renderer knows the
     # margin; injected UNDERNEATH, so a sheet that defines its
     # own `line` wins (the stylesheet= verbatim rule).
     sheet = StyleSheet({'line': ('-' * margin,)}) | sheet

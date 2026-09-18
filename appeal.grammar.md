@@ -267,9 +267,14 @@ All v1 semantics, empirically probed and kept:
 * **Which usage an error wears** (Larry's rule, 2026-09-09): an error
   outside any command's era--in the head, at command position, from
   the root's default handler--wears *global usage*: the program's usage
-  line, then the command summary when there are commands.  An error
-  inside a command's era, in any pass, or from that command's default
-  subcommand handler, wears that command's usage.
+  line and, when the program has commands, one line pointing at the
+  list of them (Larry, 2026-09-18, after hg--the list itself could
+  scroll the error off the screen): `(run 'tool help' for a list of
+  commands)`, naming the `help` command, else `--help`, else `-h`,
+  else nothing.  An unknown subcommand wears its set's usage and
+  pointer (`tool help db`).  An error inside a command's era, in any
+  pass, or from that command's default handler, wears that command's
+  usage.
 * Standalone: one script embeds every command's parser, the global
   command's, and the dispatcher; converters shared between commands
   are rendered once.

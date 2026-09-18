@@ -365,19 +365,7 @@ Arguments
 error: unknown command 'psuh' of 'tron db'
 
 usage: tron db [-h|--help] [-u|--url <URL>] <COMMAND>
-
-Database things.
-
-Options
--------
-
--u|--url <URL>  Where the database lives.
-
-Subcommands
------------
-
-start  Start the database.
-stop   Stop the database.
+(run 'tron help db' for a list of commands)
 """,
      []),
     (['bogus'], 2,
@@ -387,27 +375,7 @@ error: unknown command 'bogus'
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
             <COMMAND>
-
-Manage containers.
-
-Every command respects --verbose.
-
-Options
--------
-
--v|--verbose      Say what's happening.
--j|--jobs <JOBS>  How many things to do at once.
-
-Commands
---------
-
-status    Show what's running.
-run       Run a command inside the container.
-deploy    Deploy to a target.
-db        Database things.
-sync-all  Sync everything (the old spelling of sync).  (deprecated)
-version   Print the program's version.
-help      Print usage documentation on a specific command.
+(run 'tron help' for a list of commands)
 """,
      []),
     (['stauts'], 2,
@@ -417,27 +385,7 @@ error: unknown command 'stauts' (did you mean 'status'?)
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
             <COMMAND>
-
-Manage containers.
-
-Every command respects --verbose.
-
-Options
--------
-
--v|--verbose      Say what's happening.
--j|--jobs <JOBS>  How many things to do at once.
-
-Commands
---------
-
-status    Show what's running.
-run       Run a command inside the container.
-deploy    Deploy to a target.
-db        Database things.
-sync-all  Sync everything (the old spelling of sync).  (deprecated)
-version   Print the program's version.
-help      Print usage documentation on a specific command.
+(run 'tron help' for a list of commands)
 """,
      []),
     (['sync-all'], 0,
@@ -457,27 +405,7 @@ error: invalid value for 'jobs': 'many' (invalid literal for int() with base 10:
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
             <COMMAND>
-
-Manage containers.
-
-Every command respects --verbose.
-
-Options
--------
-
--v|--verbose      Say what's happening.
--j|--jobs <JOBS>  How many things to do at once.
-
-Commands
---------
-
-status    Show what's running.
-run       Run a command inside the container.
-deploy    Deploy to a target.
-db        Database things.
-sync-all  Sync everything (the old spelling of sync).  (deprecated)
-version   Print the program's version.
-help      Print usage documentation on a specific command.
+(run 'tron help' for a list of commands)
 """,
      []),
     (['status', 'extra'], 2,
@@ -495,27 +423,7 @@ error: unknown option '--loud'
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
             <COMMAND>
-
-Manage containers.
-
-Every command respects --verbose.
-
-Options
--------
-
--v|--verbose      Say what's happening.
--j|--jobs <JOBS>  How many things to do at once.
-
-Commands
---------
-
-status    Show what's running.
-run       Run a command inside the container.
-deploy    Deploy to a target.
-db        Database things.
-sync-all  Sync everything (the old spelling of sync).  (deprecated)
-version   Print the program's version.
-help      Print usage documentation on a specific command.
+(run 'tron help' for a list of commands)
 """,
      []),
     (['help', 'deploy'], 0,
@@ -544,27 +452,7 @@ error: option '-v' can't be used here; it goes before the command
 
 usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
             <COMMAND>
-
-Manage containers.
-
-Every command respects --verbose.
-
-Options
--------
-
--v|--verbose      Say what's happening.
--j|--jobs <JOBS>  How many things to do at once.
-
-Commands
---------
-
-status    Show what's running.
-run       Run a command inside the container.
-deploy    Deploy to a target.
-db        Database things.
-sync-all  Sync everything (the old spelling of sync).  (deprecated)
-version   Print the program's version.
-help      Print usage documentation on a specific command.
+(run 'tron help' for a list of commands)
 """,
      []),
 ]

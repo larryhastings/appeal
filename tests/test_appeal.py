@@ -4968,18 +4968,16 @@ def test_usage_attached_on_error():
     code, text = cli(app, ['add', '1', 'nope'])
     assert 'usage: calc add <A> <B>' in text, text
 
-    # an unknown command earns the base help page (decision A)
+    # an unknown command earns the program's usage line and a pointer
+    # to the list of commands--never the list itself, which can scroll
+    # the error off the screen (Larry, 2026-09-18, after hg); this
+    # program maps no help at all, so there is no pointer
     code, text = cli(app, ['bogus'])
-    assert "error: unknown command 'bogus'" in text
-    assert 'usage: calc <COMMAND>' in text and 'Commands' in text, text
-    assert 'add' in text and 'Add.' in text, text     # the listing
+    assert text == "error: unknown command 'bogus'\n\nusage: calc <COMMAND>\n", text
 
-    # an unknown OPTION at top earns global usage: the program usage
-    # line AND the command summary (Larry's rule, 2026-09-09)
+    # an unknown OPTION at top earns the same global trailer
     code, text = cli(app, ['--nope'])
-    assert "unknown option '--nope'" in text
-    assert 'usage: calc <COMMAND>' in text
-    assert 'Commands' in text and 'Add.' in text, text
+    assert text == "error: unknown option '--nope'\n\nusage: calc <COMMAND>\n", text
 
     # a CommandError carries NO trailer--the command line was fine
     app2 = _appeal.Appeal(name='c', default_mappings=None)
@@ -5032,19 +5030,10 @@ def test_repl():
             'ready\n'
             'calc> 5\n'                                   # print(result)
             'calc> hello, world\n'                        # bare, no quotes
-            # an unknown command earns the base help page (decision A)
+            # an unknown command earns usage and a pointer to the list
             "calc> error: unknown command 'bogus'\n"
             'usage: calc [-h|--help [<TOPIC>]] [--version] <COMMAND>\n'
-            '\n'
-            'Commands\n'
-            '--------\n'
-            '\n'
-            'add\n'
-            'greet\n'
-            'divide\n'
-            'crash\n'
-            "version  Print the program's version.\n"
-            'help     Print usage documentation on a specific command.\n'
+            "(run 'calc help' for a list of commands)\n"
             # a CommandError carries NO usage--the command line was fine
             'calc> error: no dividing by zero\n'
             'calc> '                                      #  crash -> stderr,

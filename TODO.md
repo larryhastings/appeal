@@ -18,4 +18,10 @@ Agreed work, not yet built.  Larry's rulings; one entry per item.
   word was typed right after `db migrate`.  The suggestion should
   draw on both sets: the one the word was popped from and the one
   that caught it.
+* **Drop the injected `line` role once big draws a thematic break to
+  the margin** (2026-09-18; the bug report went to the big session).
+  `render_markdown_help` and `render_baked_help` inject `line` under
+  the sheet and Appeal's `rule` role fills the break glyph to it.
+  When wrap_words tiles the break itself, both go, and the theme's
+  `rule` entry with them.
 

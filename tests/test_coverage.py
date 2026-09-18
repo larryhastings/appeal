@@ -1805,6 +1805,45 @@ def test_double_dash_before_a_command_word_is_consumed_once():
     assert app.process(['--', 'cmd', '--', '--x']).result == ('cmd', '--x')
 
 
+def test_help_hint_names_the_best_way_in():
+    # the pointer under a global usage trailer (Larry, 2026-09-18): the
+    # `help` command, else --help, else -h, else nothing--at the root
+    # and at a subcommand set alike
+    def program(mappings):
+        app = Appeal(name='tool', stylesheet=False, default_mappings=mappings)
+        @app.command()
+        def build(target): "Build."
+        @app.command('db')
+        def db(): "Db."
+        @app.command('db').command()
+        def start(): "Start."
+        return app
+    def err(app, argv):
+        e = io.StringIO(); app.errors = e
+        try:
+            app.main(argv)
+        except SystemExit:
+            pass
+        return e.getvalue().splitlines()[-1]
+    def only_options(app): app.map_help_options('-h', '--help')
+    def only_h(app): app.map_help_options('-h')
+    cases = (
+        (appeal.default_global_mappings, "(run 'tool help' for a list of commands)",
+                                         "(run 'tool help db' for a list of commands)"),
+        (only_options, "(run 'tool --help' for a list of commands)",
+                       "(run 'tool db --help' for a list of commands)"),
+        # a command node's help strings come from ITS policy
+        # (default_command_mappings: -h and --help), not the program's
+        (only_h, "(run 'tool -h' for a list of commands)",
+                 "(run 'tool db --help' for a list of commands)"),
+        (None, 'usage: tool <COMMAND>', 'usage: tool db <COMMAND>'),
+        )
+    for mappings, at_root, at_db in cases:
+        app = program(mappings)
+        assert err(app, ['buidl']) == at_root, (mappings, err(app, ['buidl']))
+        assert err(app, ['db', 'strat']) == at_db, (mappings, err(app, ['db', 'strat']))
+
+
 def test_load_without_pathlib():
     # the pathlib leaves are recognized by identity via sys.modules;
     # a process that never imported pathlib has none to recognize
@@ -6644,9 +6683,10 @@ def test_default_command_and_subcommand_handlers():
         raise UsageError('no subcommand specified')
     code, out, err = cli(app, ['db'])
     assert code == 2, err
-    assert err.startswith('error: no subcommand specified\n\n'
-                          'usage: tool db [-h|--help] <COMMAND>\n'), err
-    assert 'stop' in err and ran == [('tool', False), 'db'], ran
+    assert err == ('error: no subcommand specified\n\n'
+                   'usage: tool db [-h|--help] <COMMAND>\n'
+                   "(run 'tool help db' for a list of commands)\n"), err
+    assert ran == [('tool', False), 'db'], ran
     # ...and a command with no subcommands never consults a default
     assert cli(app, ['status'])[0] == 0
     # per command: the node's own default, decorated before OR after the

@@ -31,11 +31,12 @@ __version__ = '1.0'
 
 import sys
 
-# Appeal REQUIRES big (ruled 2026-08-06) for its help/usage rendering.
-# NB: this core imports NOTHING from big--the parse/convert/dispatch
-# core is stdlib-only, so plain `import appeal` is near bare-Python
-# speed.  All big-backed rendering lives in appeal/render.py, imported
-# lazily.
+# Appeal REQUIRES big (ruled 2026-08-06; Larry confirmed 2026-09-18) for
+# its help/usage rendering.  NB: this core imports NOTHING from big at
+# import time--the parse/convert/dispatch core is stdlib-only, so plain
+# `import appeal` is near bare-Python speed.  big is imported lazily: the
+# rendering lives in appeal/presentation.py, and an error message (style
+# markup, since 2026-09-12) pulls in big.stylesheet to be built.
 
 
 # an era's share (Larry's design, 2026-09-08): which neighboring eras
@@ -713,9 +714,8 @@ def _line_trailer(node, usage_units):
 def _global_trailer(node):
     """
     What an error outside any command's era wears (Larry's rule,
-    2026-09-09): the program's usage, then the command summary when
-    the program has commands--the overview page; the usage line
-    alone for a program without them.
+    2026-09-09): the program's usage line--and, when the program has
+    commands, a pointer to the list of them (Larry, 2026-09-18).
     """
     root = node.root
     if root._table():
@@ -725,12 +725,21 @@ def _global_trailer(node):
 
 def _overview_trailer(node):
     """
-    A UsageError trailer: renders `node`'s base help page (the command
-    overview, as `help` with no topic) for the output stream--what an
-    unknown command earns (ruled 2026-09-06).
+    A UsageError trailer for a command set: the set's usage line, then
+    one line pointing at its list of commands--what an unknown command
+    earns (Larry, 2026-09-18, after hg: the list itself can scroll the
+    error off the screen).  The pointer names the best way in: the
+    `help` command, else `--help`, else `-h`, else nothing.
     """
     def trailer(file):
-        return node._overview_text(file)
+        text = _line_trailer(node, node._head_usage_units())(file)
+        hint = node._help_hint()
+        if hint:
+            from .presentation import resolve_stylesheet
+            sheet = resolve_stylesheet(node.stylesheet, file,
+                                       node.plain_stylesheet)
+            text += '\n' + sheet.render(hint)
+        return text
     return trailer
 
 
@@ -2754,6 +2763,31 @@ class Appeal:
         if self.parent is not None:
             return f'{self.parent._prog()} {self.name}'
         return self.name or _os.path.basename(self.script) or 'program'
+
+    def _help_hint(self):
+        """
+        "(run 'tool help db' for a list of commands)": the best way to
+        this set's listing--the `help` command with this node's words,
+        else this set's `--help`, else its `-h` (Larry, 2026-09-18)--or
+        '' when none of the three is mapped.
+        """
+        root = self.root
+        if 'help' in root._table():
+            run = ' '.join((root._prog(), 'help') + self._words())
+        else:
+            if self is root:
+                strings = root._precommand_options.get('help', ())
+            else:
+                plan = self._help_plan()
+                strings = (tuple(s for _, o in plan.all_options()
+                                 for s in o.strings) if plan else ())
+            if '--help' in strings:
+                run = f'{self._prog()} --help'
+            elif '-h' in strings:
+                run = f'{self._prog()} -h'
+            else:
+                return ''
+        return f"(run {quoted(run, 'command')} for a list of commands)"
 
     def _words(self):
         """
