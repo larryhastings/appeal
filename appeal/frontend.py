@@ -2064,9 +2064,9 @@ class _PolicyRegistrar:
                 "STRINGS; annotation=/default= overrides belong "
                 "to an explicit @app.option declaration")
         if not strings:
-            # same meaning as everywhere (ruled 2026-07-25):
-            # zero strings = this parameter isn't an option.
-            # Equivalent to declining by not calling.
+            # same meaning as everywhere (ruled 2026-07-25; Larry
+            # confirmed 2026-09-17): zero strings = this parameter
+            # isn't an option.  Equivalent to declining by not calling.
             def unmapped(callable):
                 return callable
             return unmapped
@@ -2170,10 +2170,13 @@ class Decorations:
                    annotation=inspect.Parameter.empty,
                    default=inspect.Parameter.empty, config=None,
                    restriction=None):
-        # zero strings is legal (ruled 2026-07-25): "I'm speaking
-        # for this parameter: nothing"--the explicit per-parameter
-        # unmap, symmetric with a policy declining.  The parameter
-        # stays keyword-only, its default always fills.
+        # zero strings is legal (ruled 2026-07-25; Larry confirmed
+        # 2026-09-17): "I'm speaking for this parameter: nothing"--the
+        # explicit per-parameter unmap, symmetric with a policy
+        # declining.  The parameter stays keyword-only, its default
+        # always fills.  The level nearest the command that spoke is
+        # the only one heard (dotted paths, 2026-09-16); at one level
+        # the calls accumulate, an empty one among real ones is noise.
         for s in strings:
             validate_option_string(s)
         declaration = {'strings': tuple(strings),
@@ -2537,9 +2540,9 @@ class SignaturePlan(Plan):
                     _refuse_aimed_past(name, parameter.name, rule.child, aimed)
                     options.append(rule)
                     continue
-                # @app.option maps STRINGS (ruled 2026-07-25, the
+                # @app.option maps STRINGS (ruled 2026-07-25, Larry's
                 # arglet style, superseding the July fresh-declaration
-                # rule): the grammar comes from the PARAMETER unless
+                # rule; confirmed 2026-09-17): the grammar comes from the PARAMETER unless
                 # the declaration overrides it--annotation=/default=
                 # are escape hatches, not obligations.  Blow-away
                 # still applies to the strings (that's how you

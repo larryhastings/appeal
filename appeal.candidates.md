@@ -264,6 +264,14 @@ it so you can decide whether the env should be keyed by plan identity.
   named holes, never concatenated fragments, since translations
   reorder words.
 
+* **Un-mapping a default mapping** (Larry, 2026-09-17).  Today a
+  program that wants the stock mappings minus one (say, `-h` on
+  every command but no `help` command) writes the mappings it wants
+  by hand as its `default_mappings`.  The nicer shape is a wrapper
+  that calls `default_global_mappings(app)` and then unmaps the
+  thing it doesn't want; the unmap API isn't designed.  Whatever it
+  becomes, it should be the same spelling for options and commands.
+
 * **Lazy commands** (Larry, 2026-09-09, parity review item 22; wanted
   as a first-class feature, punted for now).  Larry's spelling:
 
