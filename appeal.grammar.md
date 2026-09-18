@@ -561,9 +561,27 @@ it's the same machinery one level down.  `@app.command('x')`
 also RENAMES: the word is `'x'`, the decorated function's name
 is ignored.
 
+## The program's documentation (Larry, 2026-09-18)
+
+The prose at the top of the overview page (`tool`, `tool -h`, `tool
+help`, and the head of `documentation()` and the man page) comes
+from four tiers, highest first: `Appeal(doc=)`; the docstring of the
+class given to `@app.app()`; the docstring of the module that called
+`Appeal()` (captured off the calling frame at construction, ~40ns,
+skipping Appeal's own frames); nothing.  A precommand *function*'s
+docstring documents its parameters (its Arguments/Options sections
+feed the head era's tables) and never supplies the program's prose,
+however many precommands there are.  A class-as-app's `__init__`
+docstring is never consulted.  A subcommand set's overview shows its
+parent command's own docstring.  A bare app (no commands) is its one
+function's page, and `documentation()` reads that function's
+docstring unless a higher tier outranks it.
+
 ## Class-based commands (§8.6, July 2026 rulings)
 
-A class can be the app: `@app.global_command()` on the class makes
+A class can be the app: `@app.app()` on the class (Larry,
+2026-09-18; under the covers a precommand--`@app.precommand()` on a
+class still works, but doesn't make it *the* app) makes
 its `__init__` the global command (execution calls **the class**,
 so `__new__` works the ordinary Python way), and the
 `@app.command()`-decorated functions in its body are the program's

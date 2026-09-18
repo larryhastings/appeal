@@ -1623,12 +1623,12 @@ def test_heading_with_inline_formatting():
                     '========================\n'), repr(page)
 
 
-def test_program_doc_three_tiers():
-    # Ruled 2026-08-01: the program's documentation, highest
-    # first: (1) Appeal(doc=...); (2) the global command's
-    # docstring; (3) when every user command shares one module,
-    # that module's docstring--write a module docstring, get
-    # program docs for free.
+def test_program_doc_four_tiers():
+    # Larry, 2026-09-18: the program's documentation, highest first:
+    # (1) Appeal(doc=...); (2) the docstring of the class given to
+    # @app.app(); (3) the docstring of the module that called Appeal();
+    # (4) nothing.  A precommand FUNCTION's docstring documents its
+    # parameters and never supplies the program's prose.
     import appeal as _appeal
     import contextlib, io, sys, types
 
@@ -1641,12 +1641,13 @@ def test_program_doc_three_tiers():
                 pass
         return out.getvalue()
 
-    # tier 1 beats tier 2; its Commands entries curate the listing
+    # tier 1 beats everything; its Commands entries curate the listing
     app = _appeal.Appeal('t1',
                          doc='Doc wins.\n\n# Commands\nwork\n: curated.')
-    @app.global_command()
-    def g():
-        "Global docstring loses."
+    @app.app()
+    class One:
+        "Class loses."
+        def __init__(self): pass
     @app.command()
     def work():
         "Fallback summary."
@@ -1654,32 +1655,58 @@ def test_program_doc_three_tiers():
     assert 'Doc wins.' in out and 'curated.' in out
     assert 'loses' not in out
 
-    # tier 3: the module-docstring magic (stock help/version
-    # commands don't get a vote)
+    # tier 2: the @app.app() class's docstring; __init__'s is never read
+    app2 = _appeal.Appeal('t2')
+    @app2.app()
+    class Two:
+        "The class speaks."
+        def __init__(self):
+            "The __init__ docstring is not documentation."
+        @app2.command()
+        def work(self): "W."
+    out = helppage(app2)
+    assert 'The class speaks.' in out and '__init__' not in out
+
+    # a precommand function's docstring is NOT the program's prose
+    app2b = _appeal.Appeal('t2b')
+    @app2b.precommand()
+    def head(*, verbose=False):
+        "Head prose, kept to itself."
+    @app2b.command()
+    def work2():
+        "W."
+    assert 'Head prose' not in helppage(app2b)
+
+    # tier 3: the module that called Appeal()--not the commands' modules
     mod = types.ModuleType('_appeal_doc_fakemod')
     mod.__doc__ = 'The module speaks.\n\nProse from the module.'
     sys.modules['_appeal_doc_fakemod'] = mod
     try:
-        app3 = _appeal.Appeal('t3', version='1.0')
+        exec("import appeal\napp3 = appeal.Appeal('t3', version='1.0')", mod.__dict__)
+        app3 = mod.app3
         def alpha(): "A."
-        def beta(): "B."
-        alpha.__module__ = beta.__module__ = '_appeal_doc_fakemod'
+        alpha.__module__ = 'somewhere_else'
         app3.command()(alpha)
-        app3.command()(beta)
         out = helppage(app3)
         assert 'The module speaks.' in out
         assert 'Prose from the module.' in out
-        # ...but mixed modules mean no tier-3 doc
-        app4 = _appeal.Appeal('t4')
-        def gamma(): "G."
-        gamma.__module__ = 'somewhere_else'
-        def delta(): "D."
-        delta.__module__ = '_appeal_doc_fakemod'
-        app4.command()(gamma)
-        app4.command()(delta)
-        assert 'module speaks' not in helppage(app4)
+        # the class outranks the module
+        exec("app3b = appeal.Appeal('t3b')", mod.__dict__)
+        @mod.app3b.app()
+        class Three:
+            "Class over module."
+            def __init__(self): pass
+        mod.app3b.command()(alpha)
+        assert 'Class over module.' in helppage(mod.app3b)
+        assert 'module speaks' not in helppage(mod.app3b)
     finally:
         del sys.modules['_appeal_doc_fakemod']
+
+    # tier 4: nothing (this test module has no docstring)
+    app4 = _appeal.Appeal('t4')
+    app4.command()(work)
+    out = helppage(app4)
+    assert out.startswith('usage: t4 ') and 'Commands' in out
 
     # unknown Commands entries in doc= refuse by name
     app5 = _appeal.Appeal('t5', doc='Hi.\n\n# Commands\nzork\n: no.')
@@ -1691,6 +1718,47 @@ def test_program_doc_three_tiers():
         assert False, 'expected ConfigurationError'
     except _appeal.ConfigurationError as e:
         assert 'zork' in str(e)
+
+    # a bare app (no commands): documentation() reads the function's
+    # docstring, its page's prose, unless doc= or the class/module
+    # outranks it; a class without a docstring says nothing (the
+    # module's turn), and an empty module docstring is nothing
+    app7 = _appeal.Appeal('t7')
+    @app7.precommand()
+    def solo(x):
+        "Solo prose."
+    assert 'Solo prose' in app7.documentation('commonmark')
+    app8 = _appeal.Appeal('t8', doc='Doc over solo.')
+    app8.precommand()(solo)
+    assert 'Solo prose' not in app8.documentation('commonmark')
+    mod2 = types.ModuleType('_appeal_doc_blankmod')
+    mod2.__doc__ = '   '
+    sys.modules['_appeal_doc_blankmod'] = mod2
+    try:
+        exec("import appeal\napp9 = appeal.Appeal('t9')", mod2.__dict__)
+        @mod2.app9.app()
+        class Nine:
+            def __init__(self): pass
+        mod2.app9.command()(work)
+        assert helppage(mod2.app9).startswith('usage: t9 ')
+    finally:
+        del sys.modules['_appeal_doc_blankmod']
+
+    # @app.app() takes one class, and only a class
+    app6 = _appeal.Appeal('t6')
+    @app6.app()
+    class Six:
+        def __init__(self): pass
+    try:
+        app6.app()(Six)
+        assert False
+    except _appeal.ConfigurationError as e:
+        assert "already the class 'Six'" in str(e), e
+    try:
+        app6.app()(work)
+        assert False
+    except _appeal.ConfigurationError as e:
+        assert 'a class, not' in str(e), e
 
 
 def test_template_dresses_the_page():
@@ -5690,13 +5758,11 @@ def test_documentation_man():
     import appeal as _appeal
     import shutil as _shutil
 
-    app = _appeal.Appeal(name='mytool', version='2.0')
-    @app.global_command()
+    app = _appeal.Appeal(name='mytool', version='2.0',
+                         doc="A demonstration tool.\n\nLonger prose about the tool.")
+    @app.precommand()
     def top(*, trace=False):
         """
-        A demonstration tool.
-
-        Longer prose about the tool.
 
         # Options
         trace

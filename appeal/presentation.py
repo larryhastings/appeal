@@ -1359,11 +1359,10 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True,
     """
     words = [word for word, _ in entries]
     if doc is not None:
-        # the resolved program documentation (the doc= argument
-        # or the shared module's docstring, ruled 2026-08-01)
-        # supplies the program half: summary, prose, Commands:
-        # overrides.  The global command's docstring still
-        # documents ITS parameters in its own contexts.
+        # the resolved program documentation (doc=, the class's or the
+        # constructing module's docstring--Larry, 2026-09-18) supplies
+        # the program half: summary, prose, Commands: overrides.  A
+        # precommand's docstring documents ITS parameters only.
         parsed = parse_docstring(doc, '<program documentation>')
         known = set(words)
         for name in parsed['commands']:
@@ -1381,12 +1380,11 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True,
                   'commands': [(w, _prose(parsed['commands'][w])
                                    if w in parsed['commands'] else [], 0)
                                for w in words]}
-    elif global_plan is not None:
-        corpus = merge_docs(global_plan, command_names=words)
     else:
-        corpus = {'summary': [], 'documentation': [],
-                  'arguments': [], 'options': [],
-                  'commands': [(word, [], 0) for word in words]}
+        # a subcommand set: the parent command's own docstring is the
+        # page's prose (the root always passes a doc, '' when the
+        # program has none--a precommand's docstring never stands in)
+        corpus = merge_docs(global_plan, command_names=words)
     if not tables_wanted:
         # a program whose head is only Appeal's own -h/--version
         # precommand has no tables of its own to show

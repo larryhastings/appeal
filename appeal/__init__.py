@@ -1269,6 +1269,15 @@ class Appeal:
                  version=None):
         from .frontend import Decorations
         self.name = name
+        # the module that called Appeal(): its docstring is the program's
+        # documentation when nothing outranks it (Larry, 2026-09-18).
+        # Read off the calling frame, skipping Appeal's own frames (a
+        # subclass's __init__, a node's construction); ~40ns
+        frame = _sys._getframe(1)
+        while frame is not None and frame.f_globals.get('__name__') == __name__:
+            frame = frame.f_back
+        self._module = frame.f_globals.get('__name__') if frame else None
+        self._class_app = None      # the class given to @app.app()
         # config (Larry, 2026-09-10): ONE mapping for the whole tree,
         # bound here and filled before main() (Appeal holds the same
         # object).  Its shape mirrors the command tree: at each level a
@@ -1405,9 +1414,9 @@ class Appeal:
         self.stylesheet = stylesheet
         self.plain_stylesheet = plain_stylesheet
         self.version = version
-        # the program's documentation, tier 1 of the doc chain
-        # (ruled 2026-08-01): doc= beats the global command's
-        # docstring beats the shared module's docstring
+        # the program's documentation, tier 1 of four (Larry,
+        # 2026-09-18): doc= beats the @app.app() class's docstring
+        # beats the constructing module's docstring beats nothing
         self.doc = doc
         # the help formatter's knob (v1's, wired 2026-07-09):
         # margin is the wrap width.  None (the default) measures: a
@@ -1762,7 +1771,7 @@ class Appeal:
             # add the auto `help` row unless the set already registers one
             corpus = command_set_corpus(
                 node.global_plan, entries,
-                doc=node._program_doc_override(),
+                doc=node._page_doc(),
                 tables_wanted=node._global is not None)
             text = render_help_page(
                 node._head_usage_units(),
@@ -2051,6 +2060,28 @@ class Appeal:
         return decorator
     global_command = precommand         # transitional alias for the old name
 
+    def app(self):
+        """
+        Register a class as the program (Larry, 2026-09-18: the
+        spelling for class-as-app).  The class's __init__ is the head
+        era's grammar; its @app.command() methods are the commands, its
+        nested classes subcommand nodes; and its docstring is the
+        program's documentation, outranked only by Appeal(doc=).
+        Under the covers, a precommand.  One class per program.
+        """
+        def decorator(cls):
+            if not isinstance(cls, type):
+                raise AppealConfigurationError(
+                    f"app(): a class, not {cls!r}--a function is a "
+                    f"precommand: @app.precommand()")
+            if self._class_app is not None:
+                raise AppealConfigurationError(
+                    f"app(): the program is already the class "
+                    f"{self._class_app.__name__!r}")
+            self._class_app = cls
+            return self.precommand()(cls)
+        return decorator
+
     def _node_at(self, path):
         "The node at a word path (a sequence of command words)."
         node = self.root
@@ -2251,7 +2282,7 @@ class Appeal:
             entries = self._listing_entries()
             corpus = command_set_corpus(
                 self.global_plan, entries,
-                doc=self._program_doc_override(),
+                doc=self._page_doc(),
                 tables_wanted=self._global is not None)
             return render_help_page(
                 self._head_usage_units(),
@@ -2351,6 +2382,11 @@ class Appeal:
             table = self._table()
             doc = self._program_doc()
             if not table:
+                # a bare app: the function is the program, and its page is
+                # its own docstring, unless doc= or the class/module
+                # outranks it
+                if doc is None and self._global is not None:
+                    doc = _inspect.getdoc(self._global)
                 return transform(doc or '')
             parts = [f'# {prog}']
             if doc:
@@ -2380,7 +2416,7 @@ class Appeal:
         entries = self._listing_entries()
         corpus = command_set_corpus(
             self.global_plan, entries,
-            doc=self._program_doc_override(), listing=False)
+            doc=self._page_doc(), listing=False)
         pages = [(word,
                   self._children[word]._head_usage_markup(),
                   merge_docs(self.plan_for(word)))
@@ -2679,59 +2715,39 @@ class Appeal:
                 visit(child)
         visit(root)
 
-    def _program_doc(self):
+    def _page_doc(self):
         """
-        The program's documentation, three tiers (ruled
-        2026-08-01), highest first: the doc= constructor
-        argument; the global command's docstring; and--the
-        pleasant magic--the module docstring, when every user
-        command lives in one module.  Returns None when nobody
-        has anything to say.
+        The prose a set's overview page shows: at the root, the
+        program's documentation ('' when there is none--the head
+        precommands' docstrings never stand in); at a subcommand set,
+        None, so the page reads the parent command's own docstring.
         """
-        root = self.root
-        if root.doc is not None:
-            return root.doc
-        if root._global is not None:
-            d = _inspect.getdoc(root._global)
-            if d and d.strip():
-                return d
-        modules = set()
-        for word, node in root._children.items():
-            fn = node._command_callable()
-            if fn is None:
-                continue
-            f = getattr(fn, '__func__', fn)
-            if f in (Appeal.help, Appeal.print_version):
-                continue    # the stock commands live in appeal;
-                            # they don't get a vote
-            m = getattr(fn, '__module__', None)
-            if m is None:
-                return None
-            modules.add(m)
-        if len(modules) == 1:
-            module = _sys.modules.get(modules.pop())
-            d = getattr(module, '__doc__', None)
-            if d and d.strip():
-                import textwrap as _textwrap
-                return _textwrap.dedent(d).strip('\n')
+        if self is self.root:
+            return self._program_doc() or ''
         return None
 
-    def _program_doc_override(self):
+    def _program_doc(self):
         """
-        Tiers 1 and 3 of the doc chain--the sources that
-        OVERRIDE what merge_docs would read from the global
-        command.  Tier 2 (the global docstring) returns None
-        here: the existing merge path already honors it, with
-        its fuller validation.
+        The program's documentation, four tiers (Larry, 2026-09-18),
+        highest first: the doc= constructor argument; the docstring of
+        the class given to @app.app(); the docstring of the module that
+        called Appeal(); nothing.  A precommand FUNCTION's docstring
+        documents its parameters and never supplies the program's
+        prose.  Returns None when nobody has anything to say.
         """
         root = self.root
         if root.doc is not None:
             return root.doc
-        if root._global is not None:
-            d = _inspect.getdoc(root._global)
+        if root._class_app is not None:
+            d = _inspect.getdoc(root._class_app)
             if d and d.strip():
-                return None         # tier 2: merge_docs' job
-        return self._program_doc() if root.doc is None else root.doc
+                return d
+        module = _sys.modules.get(root._module) if root._module else None
+        d = getattr(module, '__doc__', None)
+        if d and d.strip():
+            import textwrap as _textwrap
+            return _textwrap.dedent(d).strip('\n')
+        return None
 
     def _prog(self):
         "The program name; for a subcommand set, the word path to it (tool db)."

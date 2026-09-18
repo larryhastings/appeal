@@ -1797,15 +1797,18 @@ methods?  Can you use those for commands?  In 1.0, the
 answer isn't just "yes"--it's the nicest way to structure a
 whole program.
 
-Decorate a *class* with `@app.global_command()`, and decorate
-its methods with `@app.command()`:
+Decorate a *class* with `@app.app()`, and decorate its methods
+with `@app.command()`:
 
 ```Python
 import appeal
 app = appeal.Appeal()
 
-@app.global_command()
+@app.app()
 class MyApp:
+    """
+    My application.  This docstring is the program's documentation.
+    """
     def __init__(self, *, verbose=False):
         self.verbose = verbose
 
@@ -2610,9 +2613,12 @@ Creates a new Appeal instance.
   draws rules under them instead, and
   `appeal.ruled_headings(theme)` gives you a theme that always
   does.  See "Color" in `appeal.documentation.md`.
-* `doc` is the program's own documentation (Markdown): it beats
-  the global command's docstring, which beats the module's, as the
-  prose at the top of the program's help page.
+* `doc` is the program's own documentation (Markdown), the prose
+  at the top of the program's help page.  Four tiers, highest
+  first: `doc=`; the docstring of the class given to `@app.app()`;
+  the docstring of the module that called `Appeal()`; nothing.  A
+  precommand *function*'s docstring documents its own parameters
+  and never stands in for the program's prose.
 * `version` is your program's version string.  It wires up
   `--version` (as the first token--prints the bare string,
   exits 0) and, when the program has commands, an automatic
@@ -2719,9 +2725,16 @@ path-string form and no `parent=` spelling.
 
 Used as a decorator.  Sets the *global command*: the callable
 that owns everything before the first command word (or the
-whole line, if the program has no commands).  Decorating a
-class makes it your program: `__init__` is the global command
-and its decorated methods are the commands.
+whole line, if the program has no commands).  The older name
+for `precommand()`.
+
+`Appeal.app()`
+
+Used as a decorator, on a class: the class is your program.
+Its `__init__` is the head of the line (the global options and
+arguments), its `@app.command()` methods are the commands, its
+nested classes are subcommand sets, and its docstring is the
+program's documentation.  One class per program.
 
 `Appeal.default()`
 
@@ -3031,8 +3044,7 @@ changes, all of them:
   with a message and a chosen exit code.
 * **Preparers are gone.**  `app.app_class()`,
   `app.command_method()`, and `CommandMethodPreparer` are
-  replaced by the class-as-app (`@app.global_command()` on a
-  class).
+  replaced by the class-as-app (`@app.app()` on a class).
 * **`Appeal()` constructor arguments** changed: `help=` is
   gone (help is always on), `positional_argument_usage_format=`
   and `default_options=` are gone (see `@app.parameter()` and

@@ -554,16 +554,12 @@ def test_schema_branches():
 
 
 def test_man_page_edges():
-    app = Appeal(name='dotty', version='1.0')
-    @app.global_command()
+    app = Appeal(name='dotty', version='1.0',
+                 doc=".starts with a dot, troff-hostile.\n\n"
+                     "First paragraph.\n\nSecond paragraph.\n")
+    @app.precommand()
     def top(*, trace=False):
-        """
-        .starts with a dot, troff-hostile.
-
-        First paragraph.
-
-        Second paragraph.
-        """
+        pass
     @app.command()
     def plain(x):
         """
@@ -5492,9 +5488,19 @@ def test_init_reachable_edges():
     with contextlib.redirect_stdout(o):
         a2.help()
     assert 'Override' in o.getvalue()
-    # tier 2: the global command's own docstring supplies program prose
+    # a set with no head at all: an empty corpus for the listing
+    a2b = appeal.Appeal('q2', default_mappings=None)
+    @a2b.command()
+    def c2():
+        "C2."
+    o2 = io.StringIO()
+    with contextlib.redirect_stdout(o2):
+        a2b.help()
+    assert 'C2.' in o2.getvalue()
+    # a precommand's docstring documents its parameters, never the
+    # program (Larry, 2026-09-18): its prose is not the listing's
     a3 = appeal.Appeal('r')
-    @a3.global_command()
+    @a3.precommand()
     def gg(x):
         "Global derived prose."
     @a3.command()
@@ -5503,7 +5509,7 @@ def test_init_reachable_edges():
     o3 = io.StringIO()
     with contextlib.redirect_stdout(o3):
         a3.help()
-    assert 'Global derived prose' in o3.getvalue()
+    assert 'Global derived prose' not in o3.getvalue()
 
 
 def test_init_empty_node_paths():
@@ -7753,15 +7759,13 @@ def test_subcommands_heading_and_hanging_indent():
     assert parse(_reword_heading('\nCommands\n--------\n', 'Commands', 'Subcommands')) == \
         parse('## Subcommands')
     assert _reword_heading('\n## Cmds\n', 'Commands', 'Subcommands') == '\n## Cmds\n'
-    app = Appeal(name='t', stylesheet=False)
+    app = Appeal(name='t', stylesheet=False, doc='The program.')
     app.templates = ('usage: {usage}\n\n{summary}\n\n{doc}\n\n'
                      'Arguments\n---------\n{arguments}\n\nOptions\n-------\n{options}\n\n'
                      'Commands\n--------\n{commands}\n')
-    @app.global_command()
+    @app.precommand()
     def main(*, verbose=False):
         """
-        The program.
-
         # Options
         verbose
         : Say more.

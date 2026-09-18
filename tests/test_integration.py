@@ -28,15 +28,12 @@ from appeal import Appeal, verbatim
 def tron_program(config=None):
     """A tron-shaped program: commands, subcommands, config, passthrough."""
     log = []
-    app = Appeal(name='tron', version='2.1', config=config, stylesheet=False)
+    app = Appeal(name='tron', version='2.1', config=config, stylesheet=False,
+                 doc="Manage containers.\n\nEvery command respects `--verbose`.")
 
-    @app.global_command()
+    @app.precommand()
     def tron(*, verbose=False, jobs: int = 1):
         """
-        Manage containers.
-
-        Every command respects `--verbose`.
-
         # Options
         verbose
         : Say what's happening.
@@ -119,7 +116,7 @@ def dl_program():
     log = []
     app = Appeal(name='dl', version='0.3', stylesheet=False)
 
-    @app.global_command()
+    @app.precommand()
     def dl(url, *more: str, out: pathlib.Path = pathlib.Path('.'),
            quality: typing.Literal['best', 'worst'] = 'best',
            retries: int = 3, quiet=False):
@@ -153,7 +150,7 @@ def tool_program():
     log = []
     app = Appeal(name='tool', repeat=True, stylesheet=False)
 
-    @app.global_command()
+    @app.app()
     class Tool:
         """
         A tool built from a class.
