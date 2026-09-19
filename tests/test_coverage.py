@@ -1928,6 +1928,46 @@ def test_anonymous_command_nodes():
         assert "takes 3; here it is called with 2 words" in str(e), e
 
 
+def test_a_function_belongs_to_one_class():
+    # membership by identity (ruled 2026-08-10): a function found in
+    # two mounted classes has two possible selfs--refused by name
+    # (Larry, 2026-09-18), never claimed by whichever came first
+    app = Appeal(name='t', stylesheet=False)
+    @app.command()
+    def blasto(self):
+        return type(self).__name__
+    @app.precommand()
+    class App1:
+        def __init__(self): pass
+        member = blasto
+    @app.precommand()
+    class App2:
+        def __init__(self): pass
+        member = blasto
+    try:
+        app.process(['blasto'])
+        assert False
+    except AppealConfigurationError as e:
+        assert str(e) == ("'blasto' is a method of both 'App1' and 'App2'; "
+                          "a command function belongs to one class"), e
+    # the same class mounted twice (as the app and as a command) is one
+    # owner, not a clash; two class precommands with their OWN methods
+    # each bind their own instance
+    app2 = Appeal(name='t', stylesheet=False)
+    @app2.precommand()
+    class One:
+        def __init__(self): pass
+        @app2.command()
+        def first(self): return type(self).__name__
+    @app2.precommand()
+    class Two:
+        def __init__(self): pass
+        @app2.command()
+        def second(self): return type(self).__name__
+    assert app2.process(['first']).result == 'One'
+    assert app2.process(['second']).result == 'Two'
+
+
 def test_load_without_pathlib():
     # the pathlib leaves are recognized by identity via sys.modules;
     # a process that never imported pathlib has none to recognize

@@ -2180,7 +2180,8 @@ class Appeal:
 
     def _derive_method_owners(self):
         """
-        Membership derivation (ruled 2026-08-10): a registered
+        Membership derivation (ruled 2026-08-10, Larry confirmed
+        2026-09-18): a registered
         command function found--by IDENTITY--in the __dict__ of a
         mounted class is that class's method command; self binds
         to the instance constructed at the class's mount.  Not
@@ -2196,6 +2197,17 @@ class Appeal:
         owners = self._method_owner
         classes = []                    # (cls, mount node)
         seen = set()
+        def own(fn, key):
+            # one class per function (Larry, 2026-09-18): a function found
+            # in two mounted classes has two possible selfs, so it's
+            # refused by name rather than claimed by whichever came first
+            prior = owners.get(id(fn))
+            if prior is not None and prior != key:
+                names = sorted(k.rsplit('.', 1)[-1] for k in (prior, key))
+                raise AppealConfigurationError(
+                    f"{fn.__name__!r} is a method of both {names[0]!r} and "
+                    f"{names[1]!r}; a command function belongs to one class")
+            owners[id(fn)] = key
         def add_class(fn, mount):
             # a class mounted in ANY slot (precommand era, command, default);
             # dedup so a class that is both _impl and a precommand counts once
@@ -2225,7 +2237,7 @@ class Appeal:
                     # attribute--BIC composes without Appeal
                     # knowing
                     if fn is not None and id(fn) in members:
-                        owners[id(fn)] = key
+                        own(fn, key)
                         # class members too: a nested class
                         # constructs from its owner's instance,
                         # which exists only at the owner's mount
@@ -2246,13 +2258,13 @@ class Appeal:
                 # class (same slot-agnostic membership as a command)
                 dfn = node._node_default
                 if dfn is not None and id(dfn) in members:
-                    owners[id(dfn)] = key
+                    own(dfn, key)
                 # a precommand ERA may also be a method/inner class of the
                 # class (the class's own precommand isn't in its own __dict__,
                 # so it never self-claims)
                 for pre in node._precommands:
                     if pre is not None and id(pre) in members:
-                        owners[id(pre)] = key
+                        own(pre, key)
             claim(self)
 
     def option(self, name, *options, annotation=None,
