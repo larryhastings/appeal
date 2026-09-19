@@ -1405,7 +1405,7 @@ def test_composable_documentation_2026_09_12():
     @app.option('option', '-o', '--option', doc="Doc'd option.\n\n# Options\ncolor\n: Doc'd color.")
     def odoc(a, *, option: option = None):
         pass
-    (row,) = plain(merge_docs(app.plan_for('odoc'))['options'])
+    (row,) = plain(merge_docs(app.command('odoc').plan)['options'])
     assert row == ('-o|--option <X> <Y>', ["Doc'd option."],
                    [('options', [('-c|--color <COLOR>', ["Doc'd color."], [])])])
     @app.command()
@@ -1417,7 +1417,7 @@ def test_composable_documentation_2026_09_12():
         : Entry too.
         """
     try:
-        merge_docs(app.plan_for('otwice'))
+        merge_docs(app.command('otwice').plan)
         assert False
     except AppealConfigurationError as e:
         assert "'option' is documented twice" in str(e), e
@@ -1456,7 +1456,7 @@ def test_composable_documentation_2026_09_12():
     @app2.command()
     def uses(s: stuff2):
         pass
-    assert plain(merge_docs(app2.plan_for('uses'))['arguments']) == \
+    assert plain(merge_docs(app2.command('uses').plan)['arguments']) == \
         [('<X>', ['The x, said by stuff itself.'], []), ('<Y>', [], [])]
     # the whole page renders (the usage line agrees with the table)
     app3 = Appeal(name='t', stylesheet=False)
@@ -1538,7 +1538,7 @@ def test_dotted_paths_2026_09_16():
         for kind, args, kw in decorations:
             f = getattr(app, kind)(*args, **kw)(f)
         app.command()(f)
-        return app, app.plan_for(f.__name__)
+        return app, app.command(f.__name__).plan
     def usage(f, *decorations):
         return strip_styles(built(f, *decorations)[1].usage())
 
@@ -1551,7 +1551,7 @@ def test_dotted_paths_2026_09_16():
     app.argument('src', usage='fizzle')(copy)
     app.argument('copy.src', usage='boozle')(workflow)
     app.command()(workflow)
-    assert strip_styles(app.plan_for('workflow').usage()) == \
+    assert strip_styles(app.command('workflow').plan.usage()) == \
         'files workflow <BOOZLE> <DST> <FILE> <EDITOR>'
     assert usage(workflow, ('argument', ('copy.src',), {'usage': 'boozle'})) == \
         'files workflow <BOOZLE> <DST> <FILE> <EDITOR>'
@@ -1566,7 +1566,7 @@ def test_dotted_paths_2026_09_16():
     app.argument('copy.dst', usage='mine')(mid)
     app.argument('mid.copy.dst', usage='target')(top)
     app.command()(top)
-    assert strip_styles(app.plan_for('top').usage()) == 'files top <SRC> <TARGET> [<TAG>]'
+    assert strip_styles(app.command('top').plan.usage()) == 'files top <SRC> <TARGET> [<TAG>]'
 
     # options by path: remap, unmap; another use is untouched
     def w1(a, stuff: stuff): pass
@@ -1578,8 +1578,8 @@ def test_dotted_paths_2026_09_16():
     app.command()(w1)
     @app.command()
     def w0(stuff: stuff): pass
-    assert strip_styles(app.plan_for('w1').usage()) == 'files w1 <A> <X> <Y>'
-    assert strip_styles(app.plan_for('w0').usage()) == 'files w0 [-c|--color <COLOR>] <X> <Y>'
+    assert strip_styles(app.command('w1').plan.usage()) == 'files w1 <A> <X> <Y>'
+    assert strip_styles(app.command('w0').plan.usage()) == 'files w0 [-c|--color <COLOR>] <X> <Y>'
     # ...and into a group OPTION's converter, and a *args window's
     def w2(a, *, option: option = None): pass
     assert usage(w2, ('option', ('option.color', '--hue'), {})) == \
@@ -2004,7 +2004,7 @@ def test_refuse_orphan_uninspectable():
     app = Appeal(name='orph')
     app.command(name='ga')(getattr)
     try:
-        app.plan_for('ga')
+        app.command('ga').plan
     except Exception:
         pass
 
@@ -2033,7 +2033,7 @@ def test_registration_errors():
     except AppealConfigurationError as e:
         assert 'no commands' in str(e)
     try:
-        app3.plan_for('zzz')
+        app3.command('zzz').plan
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError:
         pass
@@ -2056,17 +2056,16 @@ def test_plan_and_schema_properties():
     @app.command()
     def go():
         pass
-    try:
-        app.plan
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'subcommands' in str(e)
+    # app.plan is the head's plan, commands or not; a command's is on
+    # its node (Larry, 2026-09-18: one spelling)
+    assert app.plan is app.global_plan
+    assert app.command('go').plan.name == 'go'
     app2 = Appeal(name='nope')
     @app2.command()
     def solo(dest):
         return dest
     try:
-        app2.plan_for('missing')
+        app2.command('missing').plan
         assert False, 'expected AppealConfigurationError'
     except AppealConfigurationError as e:
         assert 'missing' in str(e)
@@ -3243,7 +3242,7 @@ def test_frontend_more_shapes():
     @app4.command()
     def trio(*, a: g1 = None, b: g2 = None, c: g3 = None):
         return (a, b, c)
-    plan = app4.plan_for('trio')
+    plan = app4.command('trio').plan
     assert [k for k, keys in plan.sibling_parents] == ['-a', '-b']
     assert app4.process(['trio', '-a', '--shared']).result == \
         (('g1', True), None, None)
@@ -3339,7 +3338,7 @@ def test_schema_more_shapes():
     def pick(*choices: appeal.validate('a', 'b')):
         return choices
     from appeal.schema import describe_set
-    entry = describe_set({'pick': app.plan_for('pick')}, None, 'cc')
+    entry = describe_set({'pick': app.command('pick').plan}, None, 'cc')
     assert 'commands' in entry and 'global' not in entry
     # ...and a *args operand through a recipe converter (validate:
     # a terminal whose name is no JSON type): an array, untyped items
@@ -3755,7 +3754,7 @@ def test_era_share_and_immediate():
     @app7.command('db').command(share=True)
     def migrate(*, dry=False):
         return dry
-    assert app7.plan_for('migrate').share == appeal.FORWARDS
+    assert app7.command('db').command('migrate').plan.share == appeal.FORWARDS
     node = app7.command('db', share=True)  # the name path stamps the node
     assert node._node_share
 
@@ -5595,7 +5594,6 @@ def test_init_reachable_edges():
     @app.global_command()
     def g(x):
         "Global doc."
-    assert app.default_callable is None               # no default set
     assert isinstance(app.plan, Plan)                 # root .plan -> global
     def cmd(a, *, v=False):
         pass
@@ -5644,7 +5642,7 @@ def test_init_empty_node_paths():
         pass
     app.command('ghost')                 # creates the node, never binds it
     try:
-        app.plan_for('ghost')            # asking for its plan is an error
+        app.command('ghost').plan            # asking for its plan is an error
         assert False, 'expected AppealConfigurationError'
     except Cfg as e:
         assert "no command named 'ghost'" in str(e), e
@@ -5710,7 +5708,7 @@ def test_init_more_reachable_edges():
     @app.command()
     def go(a):
         pass
-    assert app._plan() is app.global_plan
+    assert app.plan is app.global_plan
     # a BARE app (global command via @app, empty command table) whose tier-1
     # doc= override replaces the derived program prose
     bare = appeal.Appeal('b', doc="Overridden summary.\n\nBody paragraph.\n")
@@ -5742,7 +5740,7 @@ def test_init_more_reachable_edges():
     @nested.command()
     def db():
         pass
-    assert nested.plan_for('add') is not None
+    assert nested.command('db').command('add').plan is not None
     # option() on a bound app method (help's knobs) refuses an unknown param
     knobs = appeal.Appeal('k')
     @knobs.command()
@@ -5963,7 +5961,7 @@ def test_init_misconfig_and_edges():
         pass
     # plan_for a word that isn't a command
     try:
-        app.plan_for('ghost'); assert False
+        app.command('ghost').plan; assert False
     except CE:
         pass
 
@@ -6968,10 +6966,10 @@ def test_verbatim():
     assert app.complete(['cp', 'a', 'b'], '-') == []
     assert app.complete(['cp'], '-') == ['--help', '--verbose', '-h', '-v']
     # the positions, through nesting: files' run begins after one operand
-    assert app.plan_for('run').verbatim_sites() == (set(), 0)
-    assert app.plan_for('cp').verbatim_sites() == (set(), 1)
-    assert app.plan_for('add').verbatim_sites() == ({0}, None)
-    assert app.plan_for('ex').verbatim_sites() == (set(), None)
+    assert app.command('run').plan.verbatim_sites() == (set(), 0)
+    assert app.command('cp').plan.verbatim_sites() == (set(), 1)
+    assert app.command('add').plan.verbatim_sites() == ({0}, None)
+    assert app.command('ex').plan.verbatim_sites() == (set(), None)
     # a plain *args, and a nested absorber, end the walk with no run
     def pair(a, b): return (a, b)
     def rest(x, *more): return (x, more)
@@ -6981,9 +6979,9 @@ def test_verbatim():
     def nested(r: rest, q: verbatim = ''): pass
     @app.command()
     def single_in(p: pair, n: verbatim, *more): pass
-    assert app.plan_for('plain').verbatim_sites() == (set(), None)
-    assert app.plan_for('nested').verbatim_sites() == (set(), None)
-    assert app.plan_for('single-in').verbatim_sites() == ({2}, None)
+    assert app.command('plain').plan.verbatim_sites() == (set(), None)
+    assert app.command('nested').plan.verbatim_sites() == (set(), None)
+    assert app.command('single-in').plan.verbatim_sites() == ({2}, None)
     # a program with a global verbatim *args: the head era's own
     # completion table carries the positions too
     solo = Appeal(name='solo')
@@ -7051,18 +7049,18 @@ def test_exclusive_options_feed_one_parameter():
         assert False
     except UsageError as e:
         assert 'unknown option' in str(e) or "can't be used" in str(e), e
-    assert strip_styles(app.plan_for('export').usage()) == \
+    assert strip_styles(app.command('export').plan.usage()) == \
         't export [--yaml | --json [-i|--indent <INDENT>]] [-v|--verbose]'
     # the class spellings
     assert got(['export2', '--json', '--indent', '2']).indent == 2
     assert isinstance(got(['export2', '--yaml']), Yaml)
     assert got(['export3', '--format']).indent == 0
     assert got(['export3', '--format', '-i', '4']).indent == 4
-    assert strip_styles(app.plan_for('export3').usage()) == \
+    assert strip_styles(app.command('export3').plan.usage()) == \
         't export3 [-f|--format [-i|--indent <INDENT>]]'
     # complex is a leaf: one token, converted--as an option AND an argument
     assert got(['watch', '-c', '-3j']) == -3j
-    assert strip_styles(app.plan_for('watch').usage()) == 't watch [-c <C>]'
+    assert strip_styles(app.command('watch').plan.usage()) == 't watch [-c <C>]'
     @app.command()
     def watch2(c: complex): return c
     assert got(['watch2', '3j']) == 3j
@@ -7087,7 +7085,7 @@ def test_path_classes_are_leaves():
     def f(path: pathlib.Path, pure: pathlib.PurePath, *,
           out: pathlib.PosixPath = None, win: pathlib.PureWindowsPath = None):
         return (path, pure, out, win)
-    assert strip_styles(app.plan_for('f').usage()) == \
+    assert strip_styles(app.command('f').plan.usage()) == \
         't f [-o|--out <OUT>] [-w|--win <WIN>] <PATH> <PURE>'
     got = app.process(['f', 'a', 'b', '--out', 'x', '--win', 'm']).result
     assert got == (pathlib.Path('a'), pathlib.PurePath('b'),
@@ -7100,7 +7098,7 @@ def test_path_classes_are_leaves():
             self.tag = tag
     @app.command()
     def g(p: Tagged): return (str(p), p.tag)
-    assert strip_styles(app.plan_for('g').usage()) == \
+    assert strip_styles(app.command('g').plan.usage()) == \
         't g [-t|--tag <TAG>] [<P>]...'
     assert app.process(['g', 'a', '--tag', 'x']).result == ('a', 'x')
     try:
@@ -7161,12 +7159,12 @@ def test_required_options():
         except UsageError as e:
             return str(e)
     # usage: unbracketed, alternatives too
-    assert strip_styles(app.plan_for('deploy').usage()) == \
+    assert strip_styles(app.command('deploy').plan.usage()) == \
         't deploy -r|--region <REGION> [-d|--dry-run] <TARGET>'
-    assert strip_styles(app.plan_for('measure').usage()) == \
+    assert strip_styles(app.command('measure').plan.usage()) == \
         't measure [-s|--scale <SCALE>] -u|--unit <UNIT> <P>'
-    assert strip_styles(app.plan_for('login').usage()) == 't login -T|--token <TOKEN>'
-    assert strip_styles(app.plan_for('export').usage()) == \
+    assert strip_styles(app.command('login').plan.usage()) == 't login -T|--token <TOKEN>'
+    assert strip_styles(app.command('export').plan.usage()) == \
         't export --yaml | --json [-i|--indent <INDENT>]'
     # given, in any order relative to the operands
     assert got(['deploy', 'prod', '--region', 'eu']) == ('prod', 'eu', False)
@@ -7226,10 +7224,10 @@ def test_required_options():
     cfg.process(['--token', 'typed', 'go'])
     assert ran == [('head', 'typed'), 'go'], ran
     # schema: required, no default
-    d = describe(app.plan_for('deploy'))
+    d = describe(app.command('deploy').plan)
     (region,) = [o for o in d['options'] if o['name'] == 'region']
     assert region['required'] is True and 'default' not in region
-    assert mcp_input_schema(app.plan_for('deploy'))['required'] == ['target', 'region']
+    assert mcp_input_schema(app.command('deploy').plan)['required'] == ['target', 'region']
     # the readers: a mapping without it is refused, by path
     assert read_mapping(deploy, {'target': 'p', 'region': 'eu'}) == ('p', 'eu', False)
     try:
@@ -7389,7 +7387,7 @@ def test_literal_and_choice_completion():
     try:
         @app.command()
         def mixed(x: typing.Literal['a', 1]): pass
-        app.plan_for('mixed')
+        app.command('mixed').plan
         assert False
     except AppealConfigurationError as e:
         assert 'non-homogeneous' in str(e), e
@@ -7496,7 +7494,7 @@ def test_restriction_hidden_and_deprecated():
     assert run(['-v', 'sync']) == ([('main', True, False), ('sync', '', False)], '')
     # usage: hidden absent, deprecated present
     assert strip_styles(app.global_plan.usage()) == 'main [--loud | -v|--verbose]'
-    assert strip_styles(app.plan_for('sync').usage()) == 't sync [--old-flag]'
+    assert strip_styles(app.command('sync').plan.usage()) == 't sync [--old-flag]'
     # the listing and the help page
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
@@ -7504,7 +7502,7 @@ def test_restriction_hidden_and_deprecated():
     page = out.getvalue()
     assert 'dump-plan' not in page and '--debug-dump' not in page
     assert 'sync-all  Sync everything (old spelling).  (deprecated)' in page, page
-    assert 'dump-plan' in app.plans          # plans is everything, hidden included
+    assert 'dump-plan' in app.commands       # commands is everything, hidden included
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         app.help('sync')
@@ -7554,7 +7552,7 @@ def test_restriction_hidden_and_deprecated():
         app.help('play')
     page = out.getvalue()
     assert '--quiet' not in page and page.count('--legacy (deprecated)') == 2, page
-    assert strip_styles(app.plan_for('play').usage()) == \
+    assert strip_styles(app.command('play').plan.usage()) == \
         't play [-a|--alt [--legacy] [<ALT>]] [--legacy] [<T>]'
     # hidden subcommands stay out of completion too
     tree = Appeal(name='s')
@@ -7621,7 +7619,7 @@ def test_nested_documentation_across_option_edges():
         bold
         : Make it bold.
         """
-    corpus = merge_docs(app.plan_for('render'))
+    corpus = merge_docs(app.command('render').plan)
     plain = lambda rows: [(strip_styles(d), _lines(l), [(k, plain(r)) for k, r in n])
                           for d, l, n in rows]
     assert plain(corpus['arguments']) == [('<RENDERER>', [], [])]
@@ -7642,7 +7640,7 @@ def test_nested_documentation_across_option_edges():
     # where asked (color's Arguments, nothing for Options... asked empty)
     @app.command()
     def paint(*, c: color = None): pass
-    (row,) = plain(merge_docs(app.plan_for('paint'))['options'])
+    (row,) = plain(merge_docs(app.command('paint').plan)['options'])
     assert row[1] == ['Defines a color.', '', 'More about colors.'], row
     assert [k for k, _ in row[2]] == ['arguments', 'options']
     # the parent documenting the option REPLACES the converter's
@@ -7657,7 +7655,7 @@ def test_nested_documentation_across_option_edges():
         c
         : My own words.
         """
-    (row,) = plain(merge_docs(app.plan_for('paint2'))['options'])
+    (row,) = plain(merge_docs(app.command('paint2').plan)['options'])
     assert row[1] == ['My own words.'] and row[2] == [], row
     @app.command()
     def paint3(*, c: color = None):
@@ -7672,7 +7670,7 @@ def test_nested_documentation_across_option_edges():
           value
           : My words for value.
         """
-    (row,) = plain(merge_docs(app.plan_for('paint3'))['options'])
+    (row,) = plain(merge_docs(app.command('paint3').plan)['options'])
     assert row[1] == ['My own words.'], row
     assert row[2] == [('options', [('-s|--saturation <SATURATION>', [], []),
                                    ('-v|--value <VALUE>', ['My words for value.'], [])])], row
@@ -7692,21 +7690,21 @@ def test_nested_documentation_across_option_edges():
     # non-transparent nested converter spelled out
     def pair(a, b): pass
     def shapes(first, p: pair, *rest, count: int = 1): pass
-    assert strip_styles(_operand_markup(app.plan_for('render').options[0].child)) == '<S> <COLOR>'
+    assert strip_styles(_operand_markup(app.command('render').plan.options[0].child)) == '<S> <COLOR>'
     @app.command()
     def draw(*, s: shapes = None): pass
-    (row,) = merge_docs(app.plan_for('draw'))['options']
+    (row,) = merge_docs(app.command('draw').plan)['options']
     assert strip_styles(row[0]) == '-s <FIRST> <A> <B> [<REST>]...', row
     def opt(x=1): pass
     @app.command()
     def draw2(*, o: opt = None): pass
-    (row,) = merge_docs(app.plan_for('draw2'))['options']
+    (row,) = merge_docs(app.command('draw2').plan)['options']
     assert strip_styles(row[0]) == '-o [<O>]', row       # the option names its one operand
     # a group with no operands at all: just its strings
     def knobs(*, fast=False): pass
     @app.command()
     def draw3(*, k: knobs = None): pass
-    (row,) = merge_docs(app.plan_for('draw3'))['options']
+    (row,) = merge_docs(app.command('draw3').plan)['options']
     assert strip_styles(row[0]) == '-k', row
 
 
@@ -7803,7 +7801,7 @@ def test_default_long_option_is_lowercased():
     @app.command()
     def sync(*, Update=False, Dry_Run=False, verbose=False, Verbose_Mode=False):
         return (Update, Dry_Run, verbose, Verbose_Mode)
-    assert strip_styles(app.plan_for('sync').usage()) == \
+    assert strip_styles(app.command('sync').plan.usage()) == \
         't sync [-U|--update] [-D|--dry-run] [-v|--verbose] [-V|--verbose-mode]'
     assert app.process(['sync', '-U', '--dry-run', '-V']).result == (True, True, False, True)
     try:
@@ -7814,14 +7812,14 @@ def test_default_long_option_is_lowercased():
     @app.command()
     @app.option('Update', '--Update')
     def exact(*, Update=False): return Update
-    assert strip_styles(app.plan_for('exact').usage()) == 't exact [--Update]'
+    assert strip_styles(app.command('exact').plan.usage()) == 't exact [--Update]'
     assert app.process(['exact', '--Update']).result is True
     # the long-only and short-only policies agree
     from appeal import default_long_option, default_short_option
     app2 = Appeal(name='t2', default_options=default_long_option)
     @app2.command()
     def go(*, Dry_Run=False): pass
-    assert strip_styles(app2.plan_for('go').usage()) == 't2 go [--dry-run]'
+    assert strip_styles(app2.command('go').plan.usage()) == 't2 go [--dry-run]'
 
 
 def test_map_methods():
@@ -7892,7 +7890,7 @@ def test_map_methods():
     @app7.command()
     def gamma(): pass
     app7.command('gamma').map_help_options('-H')
-    assert strip_styles(app7.plan_for('alpha').usage()) == 't7 alpha'
+    assert strip_styles(app7.command('alpha').plan.usage()) == 't7 alpha'
     assert strip_styles(app7._children['alpha']._help_plan().usage()) == 't7 alpha [--help]'
     assert app7._children['beta']._help_plan() is None
     assert strip_styles(app7._children['gamma']._help_plan().usage()) == 't7 gamma [-H]'
@@ -7915,15 +7913,15 @@ def test_default_long_and_short_option():
     @app.command()
     def sync(*, Dry_Run=False, verbose=False, x=False):
         return (Dry_Run, verbose, x)
-    assert strip_styles(app.plan_for('sync').usage()) == \
+    assert strip_styles(app.command('sync').plan.usage()) == \
         't sync [--dry-run] [-v|--verbose] [-x]'
     assert app.process(['sync', '--dry-run', '-v', '-x']).result == (True, True, True)
     # the same strings as the stock policy, in the stock order
     stock = Appeal(name='s')
     @stock.command()
     def sync2(*, Dry_Run=False, x=False): pass
-    assert strip_styles(stock.plan_for('sync2').usage()) == 's sync2 [-D|--dry-run] [-x]'
-    assert [o.strings for o in stock.plan_for('sync2').options] == \
+    assert strip_styles(stock.command('sync2').plan.usage()) == 's sync2 [-D|--dry-run] [-x]'
+    assert [o.strings for o in stock.command('sync2').plan.options] == \
         [('-D', '--dry-run'), ('-x',)]
 
 
@@ -8315,7 +8313,7 @@ def test_the_boolean_language():
     assert got(['flag', '--quiet=off']) is False and got(['flag', '--quiet=1']) is True
     assert got(['flag', '--quiet']) is True
     # the required boolean: an option with an oparg, unbracketed in usage
-    assert strip_styles(app.plan_for('need').usage()) == 't need -f|--force <FORCE>'
+    assert strip_styles(app.command('need').plan.usage()) == 't need -f|--force <FORCE>'
     assert got(['need', '--force', 'yes']) is True
     assert got(['need', '-f', 'no']) is False
     assert got(['need', '--force=0']) is False
@@ -8350,8 +8348,8 @@ def test_the_boolean_language():
     except AppealDataError as e:
         assert str(e) == "can't convert 'goforit', expected true/false, yes/no, on/off, or 1/0 (at x)", e
     from appeal.schema import mcp_input_schema
-    assert mcp_input_schema(app.plan_for('need'))['properties']['force'] == {'type': 'boolean'}
-    assert mcp_input_schema(app.plan_for('pos'))['properties']['x'] == {'type': 'boolean'}
+    assert mcp_input_schema(app.command('need').plan)['properties']['force'] == {'type': 'boolean'}
+    assert mcp_input_schema(app.command('pos').plan)['properties']['x'] == {'type': 'boolean'}
 
 
 def test_docstrings_are_parsed_by_big():

@@ -4770,8 +4770,8 @@ def test_command_name_override():
     app.process(['db', 'main', 'wipe']).result
     assert ran == [('add-item', 3), ('wipe', 'main')], ran
     # the word is the word everywhere: usage and the plan name
-    assert app.plan_for('add-item').name == 'add-item'
-    assert 'add-item' in app.plan_for('add-item').usage()
+    assert app.command('add-item').plan.name == 'add-item'
+    assert 'add-item' in app.command('add-item').plan.usage()
     # the registrar form takes name= too
     app2 = _appeal.Appeal(name='t2')
     @app2.command()
@@ -4784,7 +4784,7 @@ def test_command_name_override():
     app2.process(['base', 'drop-all']).result
     assert ran[-2:] == ['base', 'drop-all'], ran
     # the visible word keeps its dashes in usage
-    assert 'add-item' in app.plan_for('add-item').usage()
+    assert 'add-item' in app.command('add-item').plan.usage()
 
 
 def test_cycling_completion():
@@ -6048,7 +6048,7 @@ def test_concurrent_first_parse():
         assert sorted(results) == sorted(
             [i + 1 for i in range(n)] + [i * 2 for i in range(n)])
         # post-race, the caches are coherent: one plan per word
-        assert app.plan_for('add') is app.plan_for('add')
+        assert app.command('add').plan is app.command('add').plan
 
     # racing plan_for directly: every thread gets the SAME object
     app2 = _appeal.Appeal(name='cc2')
@@ -6059,7 +6059,7 @@ def test_concurrent_first_parse():
     barrier = threading.Barrier(8)
     def get_plan():
         barrier.wait()
-        seen.append(app2.plan_for('solo'))
+        seen.append(app2.command('solo').plan)
     threads = [threading.Thread(target=get_plan) for _ in range(8)]
     for t in threads:
         t.start()
@@ -6410,12 +6410,10 @@ def test_two_classes_same_method_name():
     # the instances log can't tell WHICH `run` from the bare word,
     # so it answers None rather than guess wrong
     assert proc.instances[-1] == (None, None)
-    # plan_for on the ambiguous bare word refuses, naming parents
-    try:
-        app.plan_for('run')
-        assert False, 'expected AppealConfigurationError'
-    except AppealConfigurationError as e:
-        assert 'alpha' in str(e) and 'beta' in str(e)
+    # each `run` is reached through its own node--no bare-word search,
+    # so nothing is ambiguous (Larry, 2026-09-18: one spelling)
+    assert app.command('alpha').command('run').plan is not \
+        app.command('beta').command('run').plan
 
     # a duplicate name= within one class replaces, like every
     # other re-registration (v1's rule: the second wins)

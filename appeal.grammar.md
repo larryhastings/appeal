@@ -348,8 +348,8 @@ and all tested:
 * Laziness is **per command**: dispatching (or examining) one
   command never builds the others, and each compiles once, at its
   first dispatch.  A config error in command B surfaces when B is
-  first used.  The one deliberate, eager exception is `.plans`,
-  which asks for everything.
+  first used.  (Eager compilation at the first process()/main() is
+  the stock; `Appeal(lazy=True)` keeps this per-command behavior.)
 
 The build must preserve this: no stage may require work at
 decoration or import time.  Signatures are inspected when the plan

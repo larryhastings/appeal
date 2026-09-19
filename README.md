@@ -2760,6 +2760,13 @@ wrapper.  `repeat=True` makes that node's subcommand set cycle.
 The node is the one way to reach a subcommand set: there is no
 path-string form and no `parent=` spelling.
 
+`Appeal.plan`
+
+Read-only.  The node's Plan--the parsed grammar of its command:
+`app.plan` is the head's (the precommands'), `app.command('db').plan`
+is `db`'s, and so on down the tree.  One spelling for every node.
+Built at first request.
+
 `Appeal.precommand(*, index=-1, share=False, immediate=False)`
 
 Used as a decorator.  Registers a precommand: a function that

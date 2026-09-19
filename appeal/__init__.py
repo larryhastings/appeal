@@ -1109,7 +1109,7 @@ class _Step:
                     # a BOUND config mapping: argv parsed already; merge config
                     # for options argv didn't set, THEN invoke (argv wins, whole)
                     _config_apply(conv, node._table(), self.plan,
-                                  self.config[0], node.plan_for, self.config[1])
+                                  self.config[0], node._plan_of, self.config[1])
                 self.proc.resolve()             # the merged era's records
                 result = conv()
             except AppealDataError as e:
@@ -1148,7 +1148,7 @@ class _Step:
                 # parsed already; merge for options argv didn't set
                 child = node._children[self.word]
                 _config_apply(conv, child._table(), plan,
-                              self.config[0], child.plan_for, self.config[1])
+                              self.config[0], child._plan_of, self.config[1])
             result = self.proc.execute()
         except AppealDataError as e:
             self.attach_usage(e)
@@ -1617,8 +1617,7 @@ class Appeal:
         Read-only mapping: command word -> the child Appeal node,
         in definition order.  The node IS the configuration
         object: .callable is its function, .commands its
-        subcommands, .options its option table, .default_callable
-        its default command.
+        subcommands, .options its option table, .plan its Plan.
         """
         import types as _types
         return _types.MappingProxyType(self._children)
@@ -1635,25 +1634,19 @@ class Appeal:
         return self._impl
 
     @property
-    def default_callable(self):
-        "The default command's function (None if unset; ruled 2026-08-04)."
-        return self._node_default
-
-    @property
     def options(self):
         """
         Read-only mapping: option string -> the OptionRule that
         owns it, declaration order, converters' nested options
         included.  On the root: every string mapped in the
         precommand+global era.  Compiles what it needs, lazily,
-        like .plan and .plans.
+        like .plan.
         """
         import types as _types
         table = {}
         plan = None
         if self._impl is not None:
-            plan = (self.global_plan if self.parent is None
-                    else self._plan())
+            plan = self.plan
         if plan is not None:
             for owner, o in plan.all_options():
                 for s in o.strings:
@@ -1663,15 +1656,18 @@ class Appeal:
                 table.setdefault(s, None)
         return _types.MappingProxyType(table)
 
-    def _plan(self):
-        "This node's own Plan (the root: the global plan; ruled private 2026-08-04)."
+    @property
+    def plan(self):
+        """
+        This node's Plan (Larry, 2026-09-18, one spelling): the root's
+        is the global plan--the head--and a command's is the command's:
+        `app.plan`, `app.command('db').plan`, `app.command('db')
+        .command('start').plan`.  Built at first request.
+        """
+        self.root._finalize()
         if self.parent is None:
             return self.global_plan
-        return self.root.plan_for(self.name)
-
-    # ------------------------------------------------------------
-    # the default mappings pass and its default implementations
-    # ------------------------------------------------------------
+        return self.root._plan_for_node(self, self.name)
 
     def _finalize(self):
         """
@@ -1809,9 +1805,8 @@ class Appeal:
 
     def _help_topic_page(self, words, suppress=frozenset()):
         """
-        help(*words)'s command-page path.  One word names a command
-        (a direct one, or a unique deeper one--_node_for); several
-        walk the tree from the root, `help db stop`.  A word that
+        help(*words)'s command-page path.  One word names a direct
+        command; several walk the tree from the root, `help db stop`.  A word that
         isn't a command where it stands refuses naming that place,
         with a suggestion from its table; the trailer is that set's
         overview.
@@ -1833,7 +1828,7 @@ class Appeal:
                                  f"{did_you_mean(topic, root._visible_table(), 'command')}")
                 err.usage = _overview_trailer(root)     # the overview page
                 raise err
-            node = root._node_for(topic)
+            node = root._children[topic]
             parent = node.parent
         else:
             # a word path: each word must be a command of the set before it
@@ -2063,7 +2058,7 @@ class Appeal:
 
     def _visible_plans(self):
         "Every visible command's Plan (schema and completion read these)."
-        return {word: self.plan_for(word) for word in self._visible_table()}
+        return {word: self._children[word].plan for word in self._visible_table()}
 
     def _listing_entries(self):
         """
@@ -2345,8 +2340,9 @@ class Appeal:
         if not table:
             return completions(self.plan, words, prefix)
         sets = {}
+        nodes = dict(self._iter_set_nodes())    # _subs refused a repeated word
         for parent, entries in self._subs.items():
-            children = self._node_for(parent)._children
+            children = nodes[parent]._children
             sets[parent] = {
                 'commands': {
                     name: self._build(fn, name=name,
@@ -2513,7 +2509,7 @@ class Appeal:
             doc=self._page_doc(), listing=False)
         pages = [(word,
                   self._children[word]._head_usage_markup(),
-                  merge_docs(self.plan_for(word)))
+                  merge_docs(self._children[word].plan))
                  for word in table]
         return man_page(prog, corpus, self._head_usage_markup(),
                         command_pages=pages, version=version)
@@ -2561,7 +2557,7 @@ class Appeal:
                     f"{', '.join(map(repr, _MCP_VERSIONS))}")
             if not table:
                 return {self._prog(): mcp_input_schema(self.plan)}
-            return {word: mcp_input_schema(self.plan_for(word))
+            return {word: mcp_input_schema(self._children[word].plan)
                     for word in table}
         raise AppealConfigurationError(
             f"schema(): unknown format {format!r}; the formats are "
@@ -2714,33 +2710,9 @@ class Appeal:
                 "into layout, so both sheets must give the same one")
         return entries[0][1]
 
-    def _node_for(self, word):
-        """
-        The tree node a bare word means: a direct child, or the
-        UNIQUE descendant with that word.  Ambiguous bare words
-        refuse by name (path addressing--walk .commands--is the
-        unambiguous spelling; dispatch itself resolves per-parent,
-        deepest set first, and never comes through here).
-        """
-        node = self._children.get(word)
-        if node is not None:
-            return node
-        matches = []
-        def walk(parent):
-            for w, child in parent._children.items():
-                if w == word:
-                    matches.append((parent, child))
-                walk(child)
-        walk(self)
-        if len(matches) > 1:
-            parents = ', '.join(sorted(repr(p.name or '(root)')
-                                       for p, _ in matches))
-            raise AppealConfigurationError(
-                f"plan_for({word!r}): ambiguous--commands "
-                f"named {word!r} exist under {parents}")
-        if matches:
-            return matches[0][1]
-        return None
+    def _plan_of(self, word):
+        "A table word's Plan: the config vet's lookup."
+        return self._children[word].plan
 
     def _plan_for_node(self, node, word):
         "The node's Plan, cached by NODE (words can repeat)."
@@ -2781,14 +2753,6 @@ class Appeal:
                     f"that reach it)")
             plan = self._plans.setdefault('default', plan)
         return plan
-
-    def plan_for(self, word):
-        "The named command's Plan, built at first request."
-        self._finalize()
-        node = self._node_for(word)
-        if node is None:
-            raise AppealConfigurationError(f"no command named {word!r}")
-        return self._plan_for_node(node, word)
 
     def _compile_all(self):
         """
@@ -2936,20 +2900,6 @@ class Appeal:
                 phrases.append('after ' + ' or '.join(flat))
             owners[s] = '; or '.join(phrases) if deep else ', or '.join(phrases)
         return owners
-
-    @property
-    def plan(self):
-        "The lone plan of a global-command-only app."
-        if self._table():
-            raise AppealConfigurationError(
-                "this program has subcommands; use .plan_for(name)")
-        return self.global_plan
-
-    @property
-    def plans(self):
-        "Every command's Plan.  Deliberately eager: builds them all."
-        return {word: self.plan_for(word) for word in self._table()}
-
 
     def _head_usage_markup(self):
         "The usage LINE for this node's program, space-joined (the man page)."
@@ -3394,7 +3344,7 @@ class Appeal:
                 # an oparg--so a false flag's absence can't be in question.)
                 owner = self if era.kind == 'head' else self._children[era.word]
                 vetted = _config_vet(step.plan, frozenset(owner._table()),
-                                     step.config[0], owner.plan_for,
+                                     step.config[0], owner._plan_of,
                                      step.config[1])
                 supplied = frozenset(id(rule) for rule, *_ in vetted)
             proc.check_required(supplied)
@@ -3659,7 +3609,7 @@ class Appeal:
                     "no class to construct")
             return None
         _config_vet(global_plan, frozenset(table), config or {},
-                    command_plan_for=self.plan_for)
+                    command_plan_for=self._plan_of)
         return read_mapping(global_plan, config or {})
 
     def _mcp_bound_plan(self, word, plan, instance):
