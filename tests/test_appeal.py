@@ -8488,15 +8488,25 @@ def test_help_topics():
         assert False
     except _appeal.AppealConfigurationError as e:
         assert "help topic 'commit' is also a command word" in str(e)
+    # ...at the second declaration (Larry, 2026-09-19): a worded
+    # command, and an anonymous node named by its function
     late = _appeal.Appeal(name='late', stylesheet=False)
     late.topic('commit', 'x')
-    @late.command()
-    def commit(): "C."
-    try:
-        run(late, 'help')
-        assert False
-    except _appeal.AppealConfigurationError as e:
-        assert "help topic 'commit' is also a command word" in str(e)
+    for declare in (lambda: late.command('commit'),
+                    lambda: late.command()(commit)):
+        try:
+            declare()
+            assert False
+        except _appeal.AppealConfigurationError as e:
+            assert "help topic 'commit' is also a command word" in str(e)
+    assert 'commit' not in late._children
+    # a subcommand may share a topic's name: `help db commit` and
+    # `help commit` are different words
+    @late.command('db').command()
+    def commit(): "Sub."
+    @late.command('db')
+    def db(): "D."
+    assert 'Sub.' in run(late, 'help', 'db', 'commit')
     # a bare program has no way to reach a topic: refused
     bare = _appeal.Appeal(name='bare', stylesheet=False)
     bare.topic('lore', 'x')

@@ -1537,10 +1537,22 @@ class Appeal:
     # the command tree: registration
     # ------------------------------------------------------------
 
+    def _refuse_topic_word(self, word):
+        """
+        A command word on the root can't be a help topic's name, and
+        the refusal comes at the second declaration whichever came
+        first (Larry, 2026-09-19): here when the command is second,
+        in topic() when the topic is.
+        """
+        if self is self.root and word in self._topics:
+            raise AppealConfigurationError(
+                f"help topic {word!r} is also a command word")
+
     def _child(self, word):
         "Fetch-or-create the child Appeal for a command word."
         node = self._children.get(word)
         if node is None:
+            self._refuse_topic_word(word)
             node = self._new_node(word)
             self._children[word] = node
             self._invalidate()
@@ -1604,6 +1616,7 @@ class Appeal:
                 if self._node_restriction is not None:
                     existing._node_restriction = self._node_restriction
                 return existing(callable)
+            parent._refuse_topic_word(word)
             self.name = word
             parent._children[word] = self
             parent._invalidate()
@@ -1706,16 +1719,13 @@ class Appeal:
 
     def _vet_topics(self):
         """
-        A help topic's name is a word you type after `help`, so it
-        can't also be a command word, whichever was declared first;
-        and topics need a command set to be reached through (a bare
-        program has no `help` command, and its -h takes no topic).
+        Topics need a command set to be reached through (a bare
+        program has no `help` command, and its -h takes no subject).
+        (A topic sharing a command's word was refused when the second
+        of the two was declared.)
         """
         root = self.root
-        for name in root._topics:
-            if name in root._children:
-                raise AppealConfigurationError(
-                    f"help topic {name!r} is also a command word")
+        assert not root._topics.keys() & root._children.keys()  # refused at declaration
         if root._topics and not root._has_commands:
             raise AppealConfigurationError(
                 "help topics need commands: a program with none has no "
