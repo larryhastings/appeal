@@ -432,8 +432,10 @@ only what it declares itself.
 a command's page whether it has subcommands or not--shows the usage
 line, the summary and prose, and the Arguments, Options, and Commands
 tables of the command it describes, each only when there is
-something to list (a head that is only Appeal's own -h/--version
-precommand has no tables).  The commands table is headed *Commands*
+something to list.  The tables walk the same plans the usage line
+does, every head era in order (Larry, 2026-09-19), so a row exists
+for every option the line shows--Appeal's own `-h` and `--version`
+included, and every precommand's.  The commands table is headed *Commands*
 on the program's overview and *Subcommands* on a command's page (a
 template heading worded otherwise is left alone); docstrings may
 write either word.  A usage line that wraps hangs its continuation
