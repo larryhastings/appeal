@@ -228,8 +228,12 @@ Every command respects --verbose.
 Options
 -------
 
--v|--verbose      Say what's happening.
--j|--jobs <JOBS>  How many things to do at once.
+-h|--help [<SUBJECT>]  Print usage and documentation, about this program, or
+                       optionally about a specific subject.  A subject can be a
+                       command name or a topic.
+--version              Print the program's version.
+-v|--verbose           Say what's happening.
+-j|--jobs <JOBS>       How many things to do at once.
 
 Commands
 --------
@@ -256,8 +260,12 @@ Every command respects --verbose.
 Options
 -------
 
--v|--verbose      Say what's happening.
--j|--jobs <JOBS>  How many things to do at once.
+-h|--help [<SUBJECT>]  Print usage and documentation, about this program, or
+                       optionally about a specific subject.  A subject can be a
+                       command name or a topic.
+--version              Print the program's version.
+-v|--verbose           Say what's happening.
+-j|--jobs <JOBS>       How many things to do at once.
 
 Commands
 --------
@@ -281,6 +289,7 @@ Database things.
 Options
 -------
 
+-h|--help       Print this command's usage and documentation.
 -u|--url <URL>  Where the database lives.
 
 Subcommands
@@ -300,6 +309,7 @@ Stop the database.
 Options
 -------
 
+-h|--help   Print this command's usage and documentation.
 -f|--force
 """,
      '',
@@ -336,6 +346,11 @@ Arguments
 ---------
 
 <ARGS>
+
+Options
+-------
+
+-h|--help  Print this command's usage and documentation.
 """,
      '',
      []),
@@ -440,6 +455,7 @@ Arguments
 Options
 -------
 
+-h|--help             Print this command's usage and documentation.
 -r|--region <REGION>  The region to deploy into.
 -d|--dry-run          Plan only.
 """,
@@ -476,6 +492,8 @@ Arguments
 Options
 -------
 
+-h|--help               Print usage and documentation.
+--version               Print the program's version.
 -o|--out <OUT>          Where to put the files.
 -q|--quality <QUALITY>  Which rendition to fetch.
 -r|--retries <RETRIES>  Give up after this many failures.
@@ -558,7 +576,10 @@ A tool built from a class.
 Options
 -------
 
--v|--verbose  Say more.
+-h|--help [<SUBJECT>]  Print usage and documentation, about this program, or
+                       optionally about a specific subject.  A subject can be a
+                       command name or a topic.
+-v|--verbose           Say more.
 
 Commands
 --------
@@ -578,7 +599,10 @@ A tool built from a class.
 Options
 -------
 
--v|--verbose  Say more.
+-h|--help [<SUBJECT>]  Print usage and documentation, about this program, or
+                       optionally about a specific subject.  A subject can be a
+                       command name or a topic.
+-v|--verbose           Say more.
 
 Commands
 --------
@@ -616,6 +640,11 @@ Arguments
 
 <NAME>  Which database.
 
+Options
+-------
+
+-h|--help  Print this command's usage and documentation.
+
 Subcommands
 -----------
 
@@ -632,6 +661,7 @@ Wipe it.
 Options
 -------
 
+-h|--help    Print this command's usage and documentation.
 -r|--really
 """,
      '',
@@ -647,6 +677,11 @@ Arguments
 
 <A>
 <B>
+
+Options
+-------
+
+-h|--help  Print this command's usage and documentation.
 """,
      '',
      [('Tool', False)]),

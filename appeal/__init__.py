@@ -976,7 +976,9 @@ def _merge_mapping(into, mapping):
 
 
 def _whole_program():
-    "The help topic a bare -h means on a program with no commands."
+    # the -h converter on a program with no commands: a flag whose
+    # presence means the whole program; its docstring is the -h row
+    "Print usage and documentation."
     return ''
 
 
@@ -1911,10 +1913,8 @@ class Appeal:
             entries = node._listing_entries()
             # add the auto `help` row unless the set already registers one
             corpus = command_set_corpus(
-                node.global_plan, entries,
-                doc=node._page_doc(),
-                tables_wanted=node._global is not None,
-                topics=node._page_topics())
+                node.global_plan, node._head_plans(), entries,
+                doc=node._page_doc(), topics=node._page_topics())
             text = render_help_page(
                 node._head_usage_units(),
                 corpus, node.templates, margin=help_margin(node.margin, _sys.stdout),
@@ -1923,10 +1923,11 @@ class Appeal:
                 suppress=suppress,
                 subcommands=node.parent is not None).rstrip('\n')
         else:
-            from .presentation import merge_docs
+            from .presentation import page_corpus
             plan = root._plan_for_node(node, topic)
             text = render_help_page(
-                node._head_usage_units(), merge_docs(plan),
+                node._head_usage_units(),
+                page_corpus(plan, node._head_plans()),
                 root.templates,
                 margin=help_margin(root.margin, _sys.stdout),
                 file=_sys.stdout, stylesheet=root.stylesheet,
@@ -2467,10 +2468,8 @@ class Appeal:
             from .presentation import command_set_corpus
             entries = self._listing_entries()
             corpus = command_set_corpus(
-                self.global_plan, entries,
-                doc=self._page_doc(),
-                tables_wanted=self._global is not None,
-                topics=self._page_topics())
+                self.global_plan, self._head_plans(), entries,
+                doc=self._page_doc(), topics=self._page_topics())
             return render_help_page(
                 self._head_usage_units(),
                 corpus, self.templates,
@@ -2479,9 +2478,8 @@ class Appeal:
                 plain_stylesheet=self.plain_stylesheet,
                 suppress=suppress,
                 subcommands=self.parent is not None).rstrip('\n')
-        from .presentation import merge_docs, parse_docstring
-        plan = self.plan
-        corpus = merge_docs(plan)
+        from .presentation import page_corpus, parse_docstring
+        corpus = page_corpus(self.plan, self._head_plans())
         override = self.root.doc
         if override is not None:
             # tier 1 overrides a bare app's prose too; the
@@ -2592,17 +2590,16 @@ class Appeal:
             raise AppealConfigurationError(
                 f"documentation format {format!r} isn't supported "
                 f"(only 'gfm', 'commonmark', and 'troff', for now)")
-        from .presentation import command_set_corpus, man_page, merge_docs, summary
+        from .presentation import command_set_corpus, man_page, page_corpus
         prog = self._prog()
         version = str(self.version) if self.version is not None else None
         table = self._table()
         if not table:
-            plan = self.plan
-            return man_page(prog, merge_docs(plan), self._head_usage_markup(),
-                            version=version)
+            return man_page(prog, page_corpus(self.plan, self._head_plans()),
+                            self._head_usage_markup(), version=version)
         entries = self._listing_entries()
         corpus = command_set_corpus(
-            self.global_plan, entries,
+            self.global_plan, self._head_plans(), entries,
             doc=self._page_doc(), listing=False,
             topics=self._page_topics())
         # a subsection per command at EVERY depth, in tree order, each
@@ -2615,12 +2612,11 @@ class Appeal:
                 path = words + (word,)
                 if child._table():
                     page = command_set_corpus(
-                        child.global_plan, child._listing_entries(),
-                        doc=child._page_doc(),
-                        tables_wanted=child._global is not None,
-                        topics=child._page_topics())
+                        child.global_plan, child._head_plans(),
+                        child._listing_entries(),
+                        doc=child._page_doc(), topics=child._page_topics())
                 else:
-                    page = merge_docs(child.plan)
+                    page = page_corpus(child.plan, child._head_plans())
                 pages.append((' '.join(path), child._head_usage_markup(), page))
                 walk(child, path)
         walk(self, ())
@@ -3022,6 +3018,21 @@ class Appeal:
         "The usage LINE for this node's program, space-joined (the man page)."
         return ' '.join(self._head_usage_units())
 
+    def _head_plans(self):
+        """
+        The plans whose options and operands make this node's usage
+        line, in era order--and whose tables its help page shows, so
+        a row exists for every option the line does (Larry,
+        2026-09-19).  At the root: every head era, the metadata
+        precommand's -h/--help/--version first, then each precommand
+        registered.  At a command node: its help era, then the
+        command's own plan.
+        """
+        if self.parent is None:
+            return self.global_plans()
+        return [p for p in (self._help_plan(), self.global_plan)
+                if p is not None]
+
     def _head_usage_units(self):
         """
         The usage line for this node's program, as UNITS: the program
@@ -3034,12 +3045,7 @@ class Appeal:
         """
         from big.stylesheet import style, escape_styles
         units = [style('program', escape_styles(self._prog()))]
-        if self.parent is None:
-            plans = self.global_plans()
-        else:
-            plans = [p for p in (self._help_plan(), self.global_plan)
-                     if p is not None]
-        for plan in plans:
+        for plan in self._head_plans():
             units.extend(plan.usage_body_units())
         if self._table():
             # the placeholder is a hole to fill, like every other
@@ -3074,11 +3080,24 @@ class Appeal:
         # flag.  The parameter is named `subject` for the usage line
         # ([-h|--help [<SUBJECT>]]); the user-facing mapping name stays
         # 'help'
+        # the closures' docstrings document their parameters, like any
+        # precommand's: --version's row (the -h row's text is its
+        # operand's converter's, _subject)
         if want_v and want_h:
             def precommand(*, subject: _subject = None, version=False):
+                """
+                # Options
+                version
+                : Print the program's version.
+                """
                 app._metadata_precommand(help=subject, version=version)
         elif want_v:
             def precommand(*, version=False):
+                """
+                # Options
+                version
+                : Print the program's version.
+                """
                 app._metadata_precommand(version=version)
         else:
             def precommand(*, subject: _subject = None):
@@ -3375,6 +3394,11 @@ class Appeal:
             node = self
             path = self._words()
             def help(*, help=False):
+                """
+                # Options
+                help
+                : Print this command's usage and documentation.
+                """
                 if help:
                     root.help(*path)
                     _sys.exit(0)

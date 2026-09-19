@@ -1377,8 +1377,33 @@ def topic_corpus(name, doc):
             'commands': [], 'topics': []}
 
 
-def command_set_corpus(global_plan, entries, doc=None, listing=True,
-                       tables_wanted=True, topics=None):
+def page_corpus(prose_plan, head_plans, command_names=None):
+    """
+    A page's corpus: the prose--summary, documentation, Commands:
+    entries--from prose_plan, the command's own, and the Arguments
+    and Options tables from EVERY plan in head_plans, in order: the
+    list the usage line walks, so a row exists for every option the
+    line shows (Larry, 2026-09-19; before, one plan's tables stood
+    for the whole head, and a second precommand's options--and
+    Appeal's own -h and --version--went undocumented).
+    """
+    corpus = merge_docs(prose_plan, command_names=command_names)
+    corpus['arguments'], corpus['options'] = head_tables(head_plans)
+    return corpus
+
+
+def head_tables(plans):
+    "The (arguments, options) rows of every plan in plans, in order."
+    arguments, options = [], []
+    for plan in plans:
+        docs = merge_docs(plan)
+        arguments.extend(docs['arguments'])
+        options.extend(docs['options'])
+    return arguments, options
+
+
+def command_set_corpus(global_plan, head_plans, entries, doc=None,
+                       listing=True, topics=None):
     """
     The corpus for a multi-command program's listing.  entries is
     a sequence of (word, summary) pairs in declaration order;
@@ -1386,9 +1411,9 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True,
     overview only), become the Topics: rows, each its summary.  The
     command rows' documentation comes from the global command's
     Commands: entries, falling back to each command's own summary.
-    The listing shows the head's own Arguments and Options tables
-    too (Larry, 2026-09-10: every page shows its tables), unless
-    tables_wanted says the head has none of its own.
+    The listing shows the head's Arguments and Options tables too
+    (Larry, 2026-09-10: every page shows its tables), walking every
+    head plan like the usage line does (Larry, 2026-09-19).
     """
     words = [word for word, _ in entries]
     if doc is not None:
@@ -1403,13 +1428,12 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True,
                 raise AppealConfigurationError(
                     f"program documentation: 'Commands:' entry "
                     f"{name!r} isn't a command word")
-        tables = (merge_docs(global_plan) if global_plan is not None
-                  else {'arguments': [], 'options': []})
+        arguments, options = head_tables(head_plans)
         corpus = {'summary': parsed['summary'],
                   'documentation': parsed['documentation'],
                   'presentation': parsed.get('presentation'),
-                  'arguments': tables['arguments'],
-                  'options': tables['options'],
+                  'arguments': arguments,
+                  'options': options,
                   'commands': [(w, _prose(parsed['commands'][w])
                                    if w in parsed['commands'] else [], 0)
                                for w in words]}
@@ -1417,12 +1441,7 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True,
         # a subcommand set: the parent command's own docstring is the
         # page's prose (the root always passes a doc, '' when the
         # program has none--a precommand's docstring never stands in)
-        corpus = merge_docs(global_plan, command_names=words)
-    if not tables_wanted:
-        # a program whose head is only Appeal's own -h/--version
-        # precommand has no tables of its own to show
-        corpus['arguments'] = []
-        corpus['options'] = []
+        corpus = page_corpus(global_plan, head_plans, command_names=words)
     from big.markdown import parse
     fallback = dict(entries)
     corpus['commands'] = [

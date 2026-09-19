@@ -7812,6 +7812,7 @@ Arguments
 Options
 -------
 
+-h|--help                     Print this command's usage and documentation.
 -s|--saturation <SATURATION>
 -v|--value <VALUE>
 """
@@ -7829,6 +7830,7 @@ Arguments
 Options
 -------
 
+-h|--help               Print this command's usage and documentation.
 -c|--color <R> <G> <B>  An RGB color, further influenced by saturation and
                         value.
 """
@@ -8014,7 +8016,10 @@ The program.
 Options
 -------
 
--v|--verbose  Say more.
+-h|--help [<SUBJECT>]  Print usage and documentation, about this program, or
+                       optionally about a specific subject.  A subject can be a
+                       command name or a topic.
+-v|--verbose           Say more.
 
 Commands
 --------
@@ -8030,6 +8035,7 @@ Database things.
 Options
 -------
 
+-h|--help       Print this command's usage and documentation.
 -u|--url <URL>
 
 Subcommands
