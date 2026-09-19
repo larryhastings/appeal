@@ -1544,39 +1544,20 @@ def test_documentation_markdown_formats():
         assert 'docx' in str(e)
 
 
-def test_renderer_injects_line():
-    # Ruled 2026-08-08: `line` is '-' repeated to the margin--a
-    # full-width rule bare, a margin-wide model inside big's
-    # clip/fill.  The RENDERER injects it (only the renderer
-    # knows the margin), underneath the sheet so a sheet's own
-    # `line` wins (the stylesheet= verbatim rule).
-    from appeal.presentation import render_baked_help
-    from big.markdown import markdown_defaults
+def test_thematic_break_spans_the_margin():
+    # a horizontal rule spans the margin (ruled 2026-08-08; Larry
+    # confirmed 2026-09-18), drawn by big's wrap_words to its context
+    # since big 4e40e20--Appeal no longer injects a margin-wide `line`
+    from appeal.presentation import render_baked_help, appeal_theme
+    from big.markdown import (markdown_defaults, parse, style_document,
+                              split_styles_document, layout_document)
     from big.stylesheet import StyleSheet, plain_stylesheet, transforms
-    layout = ('⦃heading3⦙Deeds⦄',)
-    sheet = (markdown_defaults | transforms | plain_stylesheet
-             | StyleSheet({
-                 'heading3': ('T', '⦃strip⦙T⦄\n'
-                                   '⦃clip⦙⦃line⦄⦙⦃fill⦙*⦙⦃strip⦙T⦄⦄⦄'),
-               }))
-    # (the tests' stream is never a tty: a sheet goes in the plain slot)
-    page = render_baked_help((('markdown', layout),), margin=40,
+    layout = layout_document(split_styles_document(style_document(
+        parse("Above.\n\n---\n\nBelow.\n"))))
+    sheet = markdown_defaults | transforms | plain_stylesheet | StyleSheet(appeal_theme)
+    page = render_baked_help((('markdown', layout),), margin=24,
                              plain_stylesheet=sheet)
-    assert page == 'Deeds\n*****\n', repr(page)
-    # a rule wider than the margin clips to it
-    wide = (markdown_defaults | transforms | plain_stylesheet
-            | StyleSheet({'heading3': ('T', '⦃clip⦙⦃line⦄⦙⦃fill⦙=⦙'
-                                            '⦃strip⦙T⦄xxxxxxxxxxxx⦄⦄')}))
-    page = render_baked_help((('markdown', layout),), margin=8,
-                             plain_stylesheet=wide)
-    assert page == '========\n', repr(page)
-    # a sheet defining its OWN line wins over the injection
-    own = (markdown_defaults | transforms | plain_stylesheet
-           | StyleSheet({'line': ('##',),
-                         'heading3': ('T', '⦃clip⦙⦃line⦄⦙⦃strip⦙T⦄⦄')}))
-    page = render_baked_help((('markdown', layout),), margin=40,
-                             plain_stylesheet=own)
-    assert page == 'De\n', repr(page)    # clipped to the SHEET's 2-wide line
+    assert page == 'Above.\n\n' + '─' * 24 + '\n\nBelow.\n', repr(page)
 
 
 def test_wrapped_heading_fuses():

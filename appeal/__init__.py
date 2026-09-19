@@ -459,8 +459,10 @@ class CommandError(AppealError):
 
 
 # the old prefixed names (0.6.4 called them exactly that--"old
-# names"--and kept them as aliases; ruled again 2026-07-25:
-# the unprefixed spellings are canonical, appeal.UsageError)
+# names"--and kept them as aliases; ruled again 2026-07-25, Larry
+# confirmed 2026-09-19: the unprefixed spellings are canonical,
+# appeal.UsageError; AppealError stays the base, and no child ever
+# gets the prefix back)
 AppealUsageError = UsageError
 AppealDataError = DataError
 AppealConfigurationError = ConfigurationError
