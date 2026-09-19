@@ -3075,12 +3075,14 @@ def test_defaults_inference_class_and_tuple():
         return box
     assert app2.process(['crop']).result == (0, 2.5)
     assert app2.process(['crop', '3', '4']).result == (3, 4.0)
-    # a class whose constructor can't take one string fails politely,
-    # at conversion, naming the parameter
-    import datetime
+    # a class with no inspectable signature takes one string, and one
+    # whose constructor can't take it fails politely, at conversion,
+    # naming the parameter.  range, not datetime (Larry, 2026-09-19):
+    # Python 3.15 gave datetime a signature, so there Appeal reads its
+    # three required operands instead--range has none on any version
     app3 = Appeal(name='fg')
     @app3.command()
-    def when(at=datetime.datetime(2026, 1, 1)):
+    def when(at=range(1)):
         return at
     try:
         app3.process(['when', '2026-09-07'])
