@@ -3167,7 +3167,8 @@ class Appeal:
         except KeyboardInterrupt:
             # a process ended by SIGINT dies quietly with 128+SIGINT
             # (the shell already echoed ^C).  ONLY here (ruled
-            # 2026-07-09): run() is the whole-program driver;
+            # 2026-07-09, Larry confirmed 2026-09-18): run() is the
+            # whole-program driver;
             # process() stays raw--Appeal is an argument processor,
             # not an environment
             return 130

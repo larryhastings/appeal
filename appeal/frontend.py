@@ -1014,7 +1014,8 @@ class Plan:
             # EARLY into its placeholder (host -> <HOST>, via the
             # argument_decoration transform) and tagged 'argument'
             # (the color role).  An explicit @app.parameter rename
-            # rides the same decoration (ruled 2026-08-24: one uniform
+            # rides the same decoration (ruled 2026-08-24, Larry confirmed
+            # 2026-09-18 with ruling 13: one uniform
             # decoration; the SHAPE follows the app's stylesheet,
             # ruled 2026-09-03, Larry confirmed 2026-09-18).
             return style('argument',

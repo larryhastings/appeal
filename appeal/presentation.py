@@ -11,7 +11,8 @@ from . import ConfigurationError
 
 
 ##
-## The docstring dialect (proposal §8.7, as ruled in §8.7.1).
+## The docstring dialect (proposal §8.7, as ruled in §8.7.1--the
+## 2026-07-07 design review, Larry's).
 ##
 ## A docstring is Markdown, parsed ONCE by big (Larry, 2026-09-11:
 ## one recognizer of Markdown syntax, big's--Appeal's own line
@@ -234,7 +235,7 @@ def decorate_argument(name, entry=None):
     # placeholder decoration.  Applied EARLY--baked into the text--so
     # big's layout sizes def-list columns at the decorated width and
     # the usage wrap sees real widths, both colored and plain (ruled
-    # 2026-08-24).  Color stays a late, per-theme concern (the
+    # 2026-08-24, Larry confirmed 2026-09-18 with ruling 13).  Color stays a late, per-theme concern (the
     # 'argument'/'oparg' roles); only the decoration bakes in here.
     #
     # The SHAPE is the caller's stylesheet entry (ruled 2026-09-03,
@@ -497,7 +498,7 @@ def resolve_stylesheet(stylesheet, file=None, plain_stylesheet=None):
     tty).  Either may be None for the stock composition: appeal_theme
     over the ANSI 16 (the 16 because the terminal remaps them to its
     own scheme, so the theme stays legible on light and dark alike,
-    ruled 2026-08-06) or plain_theme over the plain palette (no
+    ruled 2026-08-06, Larry confirmed 2026-09-18) or plain_theme over the plain palette (no
     escapes of any kind, headings ruled).  stylesheet=False means
     never any color: the plain sheet for every stream.  A sheet given
     for a slot is used VERBATIM in that slot (the same sheet in both
@@ -836,7 +837,8 @@ from . import AppealConfigurationError
 
 
 ##
-## The docstring parser (proposal §8.7, as ruled in §8.7.1).
+## The docstring parser (proposal §8.7, as ruled in §8.7.1--the
+## 2026-07-07 design review, Larry's).
 ##
 ## A docstring is input, never output: section headings and their
 ## entries are slurped out, the remaining prose coalesces into one
