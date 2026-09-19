@@ -1345,7 +1345,7 @@ def test_help_knobs():
     assert 'Start the server.' in no_doc      # summary survives
     # bare listing obeys the knobs too
     bare = captured(app.help, doc=False)
-    assert bare.startswith('usage: t [-h|--help [<TOPIC>]]'), bare
+    assert bare.startswith('usage: t [-h|--help [<SUBJECT>]]'), bare
     assert 'Commands' not in bare
     # the help COMMAND has no --usage/--summary/--doc surface
     knob_options = [s for s in app.commands['help'].options
@@ -2977,11 +2977,11 @@ def test_command_set_help():
     # `help`: the listing, with summaries and the help row (v1's shape)
     result, listing = grab(['help'])
     assert result is None
-    assert listing.startswith('usage: pile [-h|--help [<TOPIC>]]'), listing
+    assert listing.startswith('usage: pile [-h|--help [<SUBJECT>]]'), listing
     assert listing.splitlines()[0].endswith('<COMMAND>'), listing
     assert 'add-item  Adds an item to the pile.' in listing
     assert 'remove    Removes an item.' in listing
-    assert 'help      Print usage documentation on a specific command.' in listing
+    assert 'help      Print usage documentation on a specific subject.' in listing
 
     # `help CMD`: the command's page -- usage first (0.6.4's order), the prog
     # prefix on an app-built plan, and the renamed argument table
@@ -3057,7 +3057,7 @@ def test_set_level_help_flag():
         return code, out.getvalue()
 
     code, text = grab(['--help'])
-    assert code == 0 and text.startswith('usage: pile [-h|--help [<TOPIC>]]'), text
+    assert code == 0 and text.startswith('usage: pile [-h|--help [<SUBJECT>]]'), text
     assert 'add-item  Adds an item.' in text        # _ -> - in the command word
     hcode, htext = grab(['help'])                    # the `help` command: same listing
     assert hcode == 'returned' and htext == text
@@ -5041,7 +5041,7 @@ def test_repl():
             'calc> hello, world\n'                        # bare, no quotes
             # an unknown command earns usage and a pointer to the list
             "calc> error: unknown command 'bogus'\n"
-            'usage: calc [-h|--help [<TOPIC>]] [--version] <COMMAND>\n'
+            'usage: calc [-h|--help [<SUBJECT>]] [--version] <COMMAND>\n'
             "(run 'calc help' for a list of commands)\n"
             # a CommandError carries NO usage--the command line was fine
             'calc> error: no dividing by zero\n'
@@ -5782,7 +5782,7 @@ def test_documentation_man():
     text = app.documentation('troff')
     assert text.startswith('.TH MYTOOL 1 "" "mytool 2.0" ""\n')
     assert '.SH NAME\nmytool \\- A demonstration tool.' in text
-    assert ('.B mytool [\\-h|\\-\\-help [<TOPIC>]] [\\-\\-version] '
+    assert ('.B mytool [\\-h|\\-\\-help [<SUBJECT>]] [\\-\\-version] '
             '[\\-t|\\-\\-trace] <COMMAND>') in text, text
     assert '.B mytool greet [\\-h|\\-\\-help] [\\-s|\\-\\-shout] <NAME>' in text, text
     assert '.SH OPTIONS' in text and 'Print a trace' in text
@@ -6139,7 +6139,7 @@ def test_version():
     assert main(app, ['help', 'version']) == \
         (0, "Print the program's version.\n")
     assert main(app, ['help', 'help']) == \
-        (0, 'Print usage documentation on a specific command.\n')
+        (0, 'Print usage documentation on a specific subject.\n')
     # completion offers the word
     assert 'version' in app.complete([], '')
 
@@ -6888,7 +6888,7 @@ def test_argument_decoration_follows_the_stylesheet():
     def push(target):
         pass
     listing = rendered(app, ['-h'])
-    assert 'usage: prog [-h|--help [topic]] command' in listing, listing
+    assert 'usage: prog [-h|--help [subject]] command' in listing, listing
 
     # groups follow it too--positional converter groups AND group
     # options (the stamp walks the whole plan tree)
@@ -8451,7 +8451,7 @@ def test_help_topics():
     assert '.SH TOPICS' in man and '.SS "hg help revisions"' in man
     assert man.index('.SS "hg commit"') < man.index('.SH TOPICS')
     assert 'How to name a revision.' in man and 'every revision' in man
-    assert 'about a specific command or topic' in man
+    assert 'A subject can be a command name or a topic.' in man
     md = app.documentation('gfm')
     assert '## hg help revisions' in md and 'every revision' in md
     # a topic that opens with a heading has no summary row; a

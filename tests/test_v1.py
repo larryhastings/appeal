@@ -1786,7 +1786,7 @@ class NewStyleTests(AppealTestsBase):
             app.help()
             text = end()
 
-            assertIn(f"usage: {expected_prog} [-h|--help [<TOPIC>]] <COMMAND>",
+            assertIn(f"usage: {expected_prog} [-h|--help [<SUBJECT>]] <COMMAND>",
                      text)
             # converted from a v1 pin (ruled 2026-08-05, the
             # Markdown pivot): the listing's heading is the

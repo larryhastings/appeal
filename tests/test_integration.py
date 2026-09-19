@@ -218,8 +218,8 @@ TRON_CONFIG = {'jobs': 4, 'deploy': {'region': 'eu'}, 'db': {'url': 'postgres://
 TRON = [
     ([], 1,
      """\
-usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-            <COMMAND>
+usage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]
+            [-j|--jobs <JOBS>] <COMMAND>
 
 Manage containers.
 
@@ -240,14 +240,14 @@ deploy    Deploy to a target.
 db        Database things.
 sync-all  Sync everything (the old spelling of sync).  (deprecated)
 version   Print the program's version.
-help      Print usage documentation on a specific command.
+help      Print usage documentation on a specific subject.
 """,
      '',
      [('tron', False, 4)]),
     (['-h'], 0,
      """\
-usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-            <COMMAND>
+usage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]
+            [-j|--jobs <JOBS>] <COMMAND>
 
 Manage containers.
 
@@ -268,7 +268,7 @@ deploy    Deploy to a target.
 db        Database things.
 sync-all  Sync everything (the old spelling of sync).  (deprecated)
 version   Print the program's version.
-help      Print usage documentation on a specific command.
+help      Print usage documentation on a specific subject.
 """,
      '',
      []),
@@ -373,8 +373,8 @@ usage: tron db [-h|--help] [-u|--url <URL>] <COMMAND>
      """\
 error: unknown command 'bogus'
 
-usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-            <COMMAND>
+usage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]
+            [-j|--jobs <JOBS>] <COMMAND>
 (run 'tron help' for a list of commands)
 """,
      []),
@@ -383,8 +383,8 @@ usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
      """\
 error: unknown command 'stauts' (did you mean 'status'?)
 
-usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-            <COMMAND>
+usage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]
+            [-j|--jobs <JOBS>] <COMMAND>
 (run 'tron help' for a list of commands)
 """,
      []),
@@ -403,8 +403,8 @@ warning: command 'sync-all' is deprecated
      """\
 error: invalid value for 'jobs': 'many' (invalid literal for int() with base 10: 'many')
 
-usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-            <COMMAND>
+usage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]
+            [-j|--jobs <JOBS>] <COMMAND>
 (run 'tron help' for a list of commands)
 """,
      []),
@@ -421,8 +421,8 @@ usage: tron status [-h|--help]
      """\
 error: unknown option '--loud'
 
-usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-            <COMMAND>
+usage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]
+            [-j|--jobs <JOBS>] <COMMAND>
 (run 'tron help' for a list of commands)
 """,
      []),
@@ -450,8 +450,8 @@ Options
      """\
 error: option '-v' can't be used here; it goes before the command
 
-usage: tron [-h|--help [<TOPIC>]] [--version] [-v|--verbose] [-j|--jobs <JOBS>]
-            <COMMAND>
+usage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]
+            [-j|--jobs <JOBS>] <COMMAND>
 (run 'tron help' for a list of commands)
 """,
      []),
@@ -551,7 +551,7 @@ usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
 TOOL = [
     ([], 1,
      """\
-usage: tool [-h|--help [<TOPIC>]] [-v|--verbose] <COMMAND>
+usage: tool [-h|--help [<SUBJECT>]] [-v|--verbose] <COMMAND>
 
 A tool built from a class.
 
@@ -565,13 +565,13 @@ Commands
 
 add   Add two numbers.
 Db    A database, named.
-help  Print usage documentation on a specific command.
+help  Print usage documentation on a specific subject.
 """,
      '',
      [('Tool', False)]),
     (['-h'], 0,
      """\
-usage: tool [-h|--help [<TOPIC>]] [-v|--verbose] <COMMAND>
+usage: tool [-h|--help [<SUBJECT>]] [-v|--verbose] <COMMAND>
 
 A tool built from a class.
 
@@ -585,7 +585,7 @@ Commands
 
 add   Add two numbers.
 Db    A database, named.
-help  Print usage documentation on a specific command.
+help  Print usage documentation on a specific subject.
 """,
      '',
      []),

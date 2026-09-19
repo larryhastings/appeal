@@ -54,15 +54,16 @@ import re as _re
 _TOPIC_NAME = _re.compile(r'[a-z][a-z0-9-]*')
 
 
-def _topic(topic: str = ''):
-    # the -h/--help operand; a one-operand converter's docstring
-    # documents its operand, so this is the -h row's text (Larry,
-    # 2026-09-19)
+def _subject(subject: str = ''):
+    # the -h/--help operand, named for the usage line ([<SUBJECT>]);
+    # a one-operand converter's docstring documents its operand, so
+    # this is the -h row's text (Larry, 2026-09-19)
     """
     Print usage and documentation, about this program, or optionally
-    about a specific command or topic.
+    about a specific subject.  A subject can be a command name or a
+    topic.
     """
-    return topic
+    return subject
 
 
 def run_nothing():
@@ -1847,7 +1848,7 @@ class Appeal:
         from .presentation import help_margin, render_help_page
         if len(words) == 1:
             if topic == 'help':
-                print('Print usage documentation on a specific command.')
+                print('Print usage documentation on a specific subject.')
                 return
             if topic in root._topics:
                 # a help topic (Larry, 2026-09-19): its Markdown is the
@@ -2494,13 +2495,14 @@ class Appeal:
         """
         return self._head_usage_units()
 
-    def help(self, *topic, usage=True, summary=True, doc=True):
+    def help(self, *subject, usage=True, summary=True, doc=True):
         """
-        Print usage documentation on a specific command.
+        Print usage documentation on a specific subject.
 
-        With no topic, prints the program's overview: its usage line,
-        its documentation, and its lists of commands and topics.  With
-        a command's words, `help db stop`, prints that command's page:
+        A subject can be a command name or a topic.  With no subject,
+        prints the program's overview: its usage line, its
+        documentation, and its lists of commands and topics.  With a
+        command's words, `help db stop`, prints that command's page:
         its usage line, its documentation, and its arguments and
         options.  With a topic's name, `help revisions`, prints that
         topic.
@@ -2522,8 +2524,8 @@ class Appeal:
             suppress.update(('doc', 'arguments', 'options',
                              'commands'))
         suppress = frozenset(suppress)
-        if topic:
-            return self._help_topic_page(list(topic), suppress)
+        if subject:
+            return self._help_topic_page(list(subject), suppress)
         print(self._overview_text(_sys.stdout, suppress))
         # returns None: help is a COMMAND implementation now
         # (ruled 2026-07-25; Larry confirmed 2026-09-17), and a command's return value is its
@@ -3056,21 +3058,21 @@ class Appeal:
         want_v = bool(mapped.get('version'))
         want_h = bool(mapped.get('help'))
         # the closures mirror Appeal.precommand's signature: the topic
-        # converts through _topic, a one-operand converter with a
+        # converts through _subject, a one-operand converter with a
         # default (bare -h gives ''--the bare page; Larry, 2026-09-18:
         # the one spelling of an optional oparg), version=False is a
-        # flag.  The parameter is named `topic` for the usage line
-        # ([-h|--help [<TOPIC>]]); the user-facing mapping name stays
+        # flag.  The parameter is named `subject` for the usage line
+        # ([-h|--help [<SUBJECT>]]); the user-facing mapping name stays
         # 'help'
         if want_v and want_h:
-            def precommand(*, topic: _topic = None, version=False):
-                app._metadata_precommand(help=topic, version=version)
+            def precommand(*, subject: _subject = None, version=False):
+                app._metadata_precommand(help=subject, version=version)
         elif want_v:
             def precommand(*, version=False):
                 app._metadata_precommand(version=version)
         else:
-            def precommand(*, topic: _topic = None):
-                app._metadata_precommand(help=topic)
+            def precommand(*, subject: _subject = None):
+                app._metadata_precommand(help=subject)
         from .frontend import empty
         overrides = app.root._precommand_overrides
         if want_v:
@@ -3087,7 +3089,7 @@ class Appeal:
                 # flag whose presence yields the whole-program topic
                 # (Larry, 2026-09-08); absent, help stays None
                 annotation, default = _whole_program, None
-            app.root._decorations.add_option(precommand, 'topic',
+            app.root._decorations.add_option(precommand, 'subject',
                                              mapped['help'],
                                              annotation=annotation,
                                              default=default)

@@ -2893,10 +2893,10 @@ unparsed Processor you can drive yourself.
 
 The latest run's `(command, instance)` log.
 
-`Appeal.help(*topic)` / `Appeal.schema(format, version)` / `Appeal.documentation(format)`
+`Appeal.help(*subject)` / `Appeal.schema(format, version)` / `Appeal.documentation(format)`
 
-The help page (printed): the overview, a command's page by its
-words, or a topic's; the JSON-safe program description
+The help page (printed): the overview, or a subject's page--a
+command by its words, or a topic; the JSON-safe program description
 (returned); and the docs rendered in a named format (returned):
 `'gfm'`, `'commonmark'`, or `'troff'` for a man page.
 

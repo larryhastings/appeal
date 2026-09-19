@@ -407,17 +407,18 @@ usage line, then the command's docstring rendered to the margin at
 *run time* through big's markdown + stylesheet pipeline (imported
 lazily, so the success path never pays for it; indented paragraphs
 pass through intact).  On a program with commands, `-h`/`--help`
-take an optional topic (`tool -h build`); on a program with none
-(grep) they take no oparg at all--`grep -h foo` is help, not a
-request for a topic named foo (Larry, 2026-09-08).  The `help`
-command takes the topic as words, so a subcommand's page is reached
+take an optional subject--a command name or a help topic (`tool -h
+build`, `tool -h revisions`; Larry, 2026-09-19); on a program with
+none (grep) they take no oparg at all--`grep -h foo` is help, not a
+request for a subject named foo (Larry, 2026-09-08).  The `help`
+command takes the subject as words, so a subcommand's page is reached
 the way the command is typed: `tool help db stop`.  `tool help db`
 shows db's page with its subcommands listed (git-style).  `-h`'s one
 oparg is never split into a path: `tool -h 'db stop'` is an unknown
 command named `db stop`.  Help wins
 even when required operands are missing and exits successfully.
 `-h`/`--help` and `--version` ride in the program's usage line like
-any other option--`tool [-h|--help [<TOPIC>]] [--version]
+any other option--`tool [-h|--help [<SUBJECT>]] [--version]
 <COMMAND>`--they aren't special enough to break the rules (Larry,
 2026-09-08, reversing v1, which hid them).  The user's options always win
 the strings: claim `-h` and help keeps only `--help`; claim

@@ -7881,7 +7881,7 @@ def test_map_methods():
     app = Appeal(name='t', version='1')
     @app.command()
     def go(): pass
-    assert usage(app) == 't [-h|--help [<TOPIC>]] [--version] <COMMAND>'
+    assert usage(app) == 't [-h|--help [<SUBJECT>]] [--version] <COMMAND>'
     assert list(app.commands) == ['go', 'version', 'help']       # v1's order
     # None plus direct calls, at module level, before any command exists
     app2 = Appeal(name='t2', version='1', default_mappings=None)
@@ -7890,21 +7890,21 @@ def test_map_methods():
     app2.map_help_options('--help')
     @app2.command()
     def go2(): pass
-    assert usage(app2) == 't2 [--help [<TOPIC>]] [-V|--version] <COMMAND>'   # help first, always
+    assert usage(app2) == 't2 [--help [<SUBJECT>]] [-V|--version] <COMMAND>'   # help first, always
     assert list(app2.commands) == ['go2', 'about']
     # the user's --help declaration owns the parameter: no -h sneaks in
     app3 = Appeal(name='t3')
     @app3.command()
     def go3(): pass
     app3.option('help', '--help')(app3._metadata_precommand)
-    assert usage(app3) == 't3 [--help [<TOPIC>]] <COMMAND>'
+    assert usage(app3) == 't3 [--help [<SUBJECT>]] <COMMAND>'
     # a user option holding -h keeps it; the policy maps the rest
     app4 = Appeal(name='t4')
     @app4.global_command()
     def main4(*, hosts=''): pass
     @app4.command()
     def go4(): pass
-    assert usage(app4) == 't4 [--help [<TOPIC>]] [-h|--hosts <HOSTS>] <COMMAND>'
+    assert usage(app4) == 't4 [--help [<SUBJECT>]] [-h|--hosts <HOSTS>] <COMMAND>'
     # a taken command word stays the user's
     app5 = Appeal(name='t5', version='1')
     @app5.command()
@@ -8005,7 +8005,7 @@ def test_subcommands_heading_and_hanging_indent():
             app.help(*topic)
         return out.getvalue()
     assert page() == """\
-usage: t [-h|--help [<TOPIC>]] [-v|--verbose] <COMMAND>
+usage: t [-h|--help [<SUBJECT>]] [-v|--verbose] <COMMAND>
 
 The program.
 
@@ -8018,7 +8018,7 @@ Commands
 --------
 
 db    Database things.
-help  Print usage documentation on a specific command.
+help  Print usage documentation on a specific subject.
 """
     assert page('db') == """\
 usage: t db [-h|--help] [-u|--url <URL>] <COMMAND>
