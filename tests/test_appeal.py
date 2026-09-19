@@ -5787,6 +5787,30 @@ def test_documentation_man():
     assert '.B mytool greet [\\-h|\\-\\-help] [\\-s|\\-\\-shout] <NAME>' in text, text
     assert '.SH OPTIONS' in text and 'Print a trace' in text
     assert '.SS "mytool greet"' in text
+    # every depth gets a subsection and a SYNOPSIS line (Larry,
+    # 2026-09-19); Appeal's own help command shows its documentation,
+    # never implementation notes, and its -h operand says nothing
+    deep = _appeal.Appeal(name='deep', version='1')
+    @deep.command('db')
+    def db(*, url=''): "Database things."
+    @deep.command('db').command()
+    def start(port: int = 5432):
+        """
+        Start the database.
+
+        # Arguments
+        port
+        : Which port.
+        """
+    page = deep.documentation('troff')
+    assert '.B deep db start [\\-h|\\-\\-help] [<PORT>]' in page, page
+    assert '.SS "deep db start"' in page and page.index('.SS "deep db"') < page.index('.SS "deep db start"')
+    assert 'Which port.' in page
+    # a set's subsection lists its commands, like its help page
+    assert page.index('.SS "deep db"') < page.index('.B Commands:') < page.index('.SS "deep db start"')
+    assert 'Start the database.' in page
+    assert 'knobs' not in page and 'post-it' not in page and 'Larry' not in page, page
+    assert "The help option's operand" not in page
     assert '.B \\-s|\\-\\-shout' in text and 'LOUDER.' in text
     # the auto commands document themselves in COMMANDS
     assert "Print the program's version." in text

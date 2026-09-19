@@ -51,7 +51,10 @@ PRECOMMAND = 'precommand'
 
 
 def _topic(topic: str = ''):
-    "The help option's operand: a command to describe, or '' for the overview."
+    # the help option's operand: a command to describe, or '' for the
+    # overview.  (A comment, not a docstring: a one-operand converter's
+    # docstring documents its operand, and Appeal's own has nothing to
+    # say on a user's page.)
     return topic
 
 
@@ -2424,25 +2427,20 @@ class Appeal:
         """
         Print usage documentation on a specific command.
 
-        (That first paragraph doubles as the help command's listing
-        row, so it stays one sentence.)  Bare: the --help text (bare
-        apps) or the command listing (sets), v1-style--also returned.
-        With a topic: that command's help page; a subcommand's page is
-        reached by its word path, `help db stop` (Larry, 2026-09-08--
-        the words as they're typed on the line, never split out of one
-        string).  This method IS the help command (and -h/--help, via
-        the precommand, which passes one word); subclass and override
-        to customize every spelling at once.
-
-        The knobs (Larry's design, 2026-08-05; v1's usage()
-        folded in): usage=False suppresses the usage line,
-        summary=False the summary line, doc=False the doc AND the
-        arguments/options/commands sections--each with the
-        template text before it.  help(summary=False, doc=False)
-        is just the usage line.  As the help command the knobs
-        stay API-only: default_mappings unmaps them (zero-string
-        app.option()).
+        With no topic, prints the program's overview: its usage line,
+        its documentation, and the list of its commands.  With a
+        topic--one or more command words, `help db stop`--prints that
+        command's page: its usage line, its documentation, and its
+        arguments and options.
         """
+        # (The docstring is the help command's own documentation: its
+        # first paragraph is the listing row.)  This method IS the help
+        # command, and -h/--help reach it through the precommand with
+        # one word; subclass and override to customize every spelling
+        # at once.  The knobs (Larry's design, 2026-08-05): usage=False
+        # leaves out the usage line, summary=False the summary,
+        # doc=False the prose and the arguments/options/commands
+        # sections; they are API-only--default_mappings unmaps them.
         suppress = set()
         if not usage:
             suppress.add('usage')
@@ -2519,10 +2517,24 @@ class Appeal:
         corpus = command_set_corpus(
             self.global_plan, entries,
             doc=self._page_doc(), listing=False)
-        pages = [(word,
-                  self._children[word]._head_usage_markup(),
-                  merge_docs(self._children[word].plan))
-                 for word in table]
+        # a subsection per command at EVERY depth, in tree order, each
+        # after its parent (Larry, 2026-09-19): the corpus its help
+        # page renders--a set's listing, a leaf's tables--in troff
+        pages = []
+        def walk(node, words):
+            for word in node._visible_table():
+                child = node._children[word]
+                path = words + (word,)
+                if child._table():
+                    page = command_set_corpus(
+                        child.global_plan, child._listing_entries(),
+                        doc=child._page_doc(),
+                        tables_wanted=child._global is not None)
+                else:
+                    page = merge_docs(child.plan)
+                pages.append((' '.join(path), child._head_usage_markup(), page))
+                walk(child, path)
+        walk(self, ())
         return man_page(prog, corpus, self._head_usage_markup(),
                         command_pages=pages, version=version)
 

@@ -1475,8 +1475,10 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
     """
     The help corpus in troff clothing: a man(1) page assembled
     from the same predigested rows --help renders.  command_pages,
-    for a multi-command program, is [(word, usage, corpus), ...]--
-    each becomes a subsection under COMMANDS.  Returns the troff
+    for a multi-command program, is [(words, usage, corpus), ...],
+    every command at every depth in tree order, `words` its word path
+    ('db start')--each becomes a subsection under COMMANDS, and each
+    usage a SYNOPSIS line.  Returns the troff
     text; installing it somewhere is packaging's business, not
     Appeal's.
     """
@@ -1554,7 +1556,8 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
                 line('.PP')
                 paragraphs(sub_corpus['documentation'])
             for label, pairs in (('Arguments:', sub_corpus['arguments']),
-                                 ('Options:', sub_corpus['options'])):
+                                 ('Options:', sub_corpus['options']),
+                                 ('Commands:', sub_corpus['commands'])):
                 if not pairs:
                     continue
                 line('.PP')
