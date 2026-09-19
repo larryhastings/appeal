@@ -2281,19 +2281,38 @@ Appeal decides whether color actually appears the same way
 CPython does, and layout never moves--a colored page strips
 back to the monochrome page byte-for-byte).
 
+**Help that isn't a command.**  Some things deserve a page of
+their own but aren't commands--how your program names a
+revision, say, the way `hg help revisions` explains it.  Give
+them a *topic*:
+
+    app.topic('revisions', """
+        How to name a revision.
+
+        A revision is a number, a hash prefix, a bookmark, or a tag.
+        """)
+
+The text is Markdown, dedented like a docstring.  Its first
+paragraph is the summary, shown in the overview under a
+`Topics` heading below the commands; `tool help revisions` (or
+`tool -h revisions`) prints the whole thing, with no usage
+line, since there is nothing to type.  A topic's name is
+lowercase letters, digits, and dashes, starting with a letter,
+and can't also be a command word.  Naming a topic again
+replaces it.
+
 The full walkthrough--every rule, every template placeholder,
 the theme vocabulary--lives in
 [appeal.documentation.md](appeal.documentation.md).
 Every example in it is executed by the test suite.
 
 And the same corpus renders one more dialect:
-`app.documentation('man')` returns your program as a troff
+`app.documentation('troff')` returns your program as a troff
 man(1) page--NAME, SYNOPSIS, OPTIONS, a COMMANDS section with a
-subsection per top-level command--assembled from the docstrings
+subsection per command at every depth (`tool db start` gets
+its own), and a TOPICS section--assembled from the docstrings
 you already wrote.  (Returns the text; where it installs is
-your packaging's business.  Nested subcommand sets appear in
-their parent's listing but don't get subsections of their own
-yet.)
+your packaging's business.)
 
 
 ## Tab Completion
@@ -2874,11 +2893,18 @@ unparsed Processor you can drive yourself.
 
 The latest run's `(command, instance)` log.
 
-`Appeal.help()` / `Appeal.schema(format, version)` / `Appeal.documentation(format)`
+`Appeal.help(*topic)` / `Appeal.schema(format, version)` / `Appeal.documentation(format)`
 
-The help page (printed); the JSON-safe program description
-(returned); and the docs rendered in a named format--only
-`'man'` for now, a troff man page (returned).
+The help page (printed): the overview, a command's page by its
+words, or a topic's; the JSON-safe program description
+(returned); and the docs rendered in a named format (returned):
+`'gfm'`, `'commonmark'`, or `'troff'` for a man page.
+
+`Appeal.topic(name, doc)`
+
+A help topic: `help NAME` prints DOC (Markdown), and the
+overview lists it under Topics.  NAME matches `[a-z][a-z0-9-]*`
+and can't be a command word.
 
 `Appeal.complete(words, prefix='')` / `Appeal.completion(shell)`
 

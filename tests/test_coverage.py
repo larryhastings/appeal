@@ -2778,18 +2778,21 @@ def test_theme_resolution_and_markup():
 
 def test_section_template_validation():
     # the single-template model (ruled 2026-08-01; {summary}
-    # split out 2026-08-05): six sections, each exactly once,
-    # nothing else in braces
+    # split out 2026-08-05; {topics} added 2026-09-19): seven
+    # sections, each exactly once, nothing else in braces
     from appeal.presentation import parse_help_template
     cases = (
         'no placeholders at all',
-        '{usage}\n{summary}\n{doc}\n{options}\n{arguments}',  # missing commands
+        '{usage}\n{summary}\n{doc}\n{options}\n{arguments}\n'
+        '{topics}',                                        # missing commands
         '{usage}\n{doc}\n{options}\n{arguments}\n'
-        '{commands}',                                      # missing summary
+        '{commands}\n{topics}',                            # missing summary
         '{usage}\n{summary}\n{doc}\n{options}\n{arguments}\n'
-        '{commands}\n{commands}',                          # duplicate
+        '{commands}',                                      # missing topics
         '{usage}\n{summary}\n{doc}\n{options}\n{arguments}\n'
-        '{commands}\n{zzz}',                               # unknown
+        '{commands}\n{commands}\n{topics}',                # duplicate
+        '{usage}\n{summary}\n{doc}\n{options}\n{arguments}\n'
+        '{commands}\n{topics}\n{zzz}',                     # unknown
         )
     for template in cases:
         try:
@@ -2800,10 +2803,10 @@ def test_section_template_validation():
     # the parse: headers and indents fall out of the text
     parsed = parse_help_template(
         'usage: {usage}\n\n{summary}\n\n{doc}\n\nOpts:\n  {options}\n\n'
-        'Args:\n  {arguments}\n\nCmds:\n  {commands}')
+        'Args:\n  {arguments}\n\nCmds:\n  {commands}\n\nTopics:\n  {topics}')
     names = [n for n, _, _ in parsed]
     assert names == ['usage', 'summary', 'doc', 'options', 'arguments',
-                     'commands']
+                     'commands', 'topics']
     by = {n: (h, i) for n, h, i in parsed}
     assert by['usage'][0] == 'usage: '
     assert by['options'][0] == '\n\nOpts:\n  '
@@ -4500,10 +4503,10 @@ def test_section_template_more_fails():
     from appeal.presentation import render_help_page
     template = ('usage: {usage}\n\nOpts:\n  {options}\n\n'
                 '{summary}\n\n{doc}\n\nArgs:\n  {arguments}\n\n'
-                'Cmds:\n  {commands}')
+                'Cmds:\n  {commands}\n\nTopics:\n  {topics}')
     corpus = {'summary': _blocks('Sum.'), 'documentation': _blocks('Prose.'),
               'arguments': [('a', _blocks('doc a'), ())],
-              'options': [('-x', [], ())], 'commands': []}
+              'options': [('-x', [], ())], 'commands': [], 'topics': []}
     page = render_help_page(['t', '[-x]', 'a'], corpus, template,
                             stylesheet=False)
     assert page.index('Opts:') < page.index('Sum.') < \
@@ -5932,7 +5935,7 @@ def test_presentation_fiddly_reachable():
     parse_help_template(
         'usage: {usage}\n\n{summary}\n\n{doc}\n\n'
         '## Arguments\n{arguments}\n\n## Options\n{options}\n\n'
-        '## Commands\nX{commands}\n')
+        '## Commands\nX{commands}\n\n## Topics\n{topics}\n')
     # a def-list with a formatted term in PROSE is big's business: it
     # renders (only a special section insists on plain terms)
     from appeal.presentation import render_markdown_help
@@ -7981,7 +7984,8 @@ def test_subcommands_heading_and_hanging_indent():
     app = Appeal(name='t', stylesheet=False, doc='The program.')
     app.templates = ('usage: {usage}\n\n{summary}\n\n{doc}\n\n'
                      'Arguments\n---------\n{arguments}\n\nOptions\n-------\n{options}\n\n'
-                     'Commands\n--------\n{commands}\n')
+                     'Commands\n--------\n{commands}\n\n'
+                     'Topics\n------\n{topics}\n')
     @app.precommand()
     def main(*, verbose=False):
         """

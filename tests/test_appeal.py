@@ -1572,7 +1572,7 @@ def test_wrapped_heading_fuses():
               _blocks("# Heading One which by the way is super duper long "
                       "almost excessively so and it's kind of pointless "
                       "like this"),
-              'arguments': [], 'options': [], 'commands': []}
+              'arguments': [], 'options': [], 'commands': [], 'topics': []}
     pieces = help_page_pieces(['x'], corpus, default_template,
                               suppress=('usage',))
     page = render_baked_help(pieces, margin=70, stylesheet=False)
@@ -1595,7 +1595,7 @@ def test_heading_with_inline_formatting():
     from appeal.presentation import default_template, help_page_pieces, render_baked_help
     corpus = {'summary': [], 'documentation':
               _blocks('# Heading with `code` inside'),
-              'arguments': [], 'options': [], 'commands': []}
+              'arguments': [], 'options': [], 'commands': [], 'topics': []}
     pieces = help_page_pieces(['x'], corpus, default_template,
                               suppress=('usage',))
     page = render_baked_help(pieces, margin=40, stylesheet=False)
@@ -8402,3 +8402,108 @@ def run_tests(run=None):
 if __name__ == '__main__':
     run_tests()
     test.finish()
+
+
+def test_help_topics():
+    import appeal as _appeal
+    # app.topic(name, doc): documentation that isn't a command (Larry,
+    # 2026-09-19, after hg's `hg help revisions`).  The overview lists
+    # topics under Topics:, `help NAME` and `-h NAME` print the page,
+    # the man page and the Markdown docs carry them too.
+    import contextlib, io
+    def run(app, *words):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            try:
+                app.main(list(words))
+            except SystemExit:
+                pass
+        return out.getvalue()
+
+    app = _appeal.Appeal(name='hg', stylesheet=False)
+    @app.command()
+    def commit(*, message=''): "Commit the outstanding changes."
+    app.topic('revisions', """
+        How to name a revision.
+
+        A revision is a number, a hash prefix, a bookmark, or a tag.
+
+        ## Ranges
+
+        `a::b` is every revision between a and b.
+        """)
+    overview = run(app, 'help')
+    assert 'Topics' in overview and 'revisions' in overview
+    assert 'How to name a revision.' in overview
+    assert overview.index('Commands') < overview.index('Topics')
+    page = run(app, 'help', 'revisions')
+    assert page == run(app, '-h', 'revisions') == run(app, '--help', 'revisions')
+    assert page.startswith('How to name a revision.'), page   # no usage line
+    assert 'hash prefix' in page and 'Ranges' in page and 'every revision' in page
+    assert 'usage' not in page
+    # an unknown word suggests topics too, and says what it looked among
+    err = run(app, 'help', 'revision')
+    assert "unknown command or topic 'revision'" in err and "'revisions'" in err, err
+    # the -h row wears Larry's sentence where the head's table shows:
+    # the man page's OPTIONS (the overview hides Appeal's own head)
+    # the man page and the Markdown docs
+    man = app.documentation('troff')
+    assert '.SH TOPICS' in man and '.SS "hg help revisions"' in man
+    assert man.index('.SS "hg commit"') < man.index('.SH TOPICS')
+    assert 'How to name a revision.' in man and 'every revision' in man
+    assert 'about a specific command or topic' in man
+    md = app.documentation('gfm')
+    assert '## hg help revisions' in md and 'every revision' in md
+    # a topic that opens with a heading has no summary row; a
+    # one-paragraph topic has a row and an empty page
+    app.topic('headed', '# Headed\n\nBody.')
+    app.topic('short', 'Just a line.')
+    man = app.documentation('troff')
+    assert '.B headed\n.TP\n.B short\nJust a line.' in man, man
+    assert '.SS "hg help headed"\n.SH Headed\n.PP\nBody.' in man, man
+    assert man.rstrip().endswith('.SS "hg help short"'), man
+    assert 'headed' in run(app, 'help') and 'Body.' in run(app, 'help', 'headed')
+    del app.root._topics['headed'], app.root._topics['short']
+    # a subcommand set's overview lists no topics
+    @app.command('db').command()
+    def start(): "Start."
+    @app.command('db')
+    def db(): "Database."
+    sub = run(app, 'help', 'db')
+    assert 'Topics' not in sub and 'revisions' not in sub
+    # redefinition replaces
+    app.topic('revisions', 'Shorter.')
+    assert run(app, 'help', 'revisions').strip() == 'Shorter.'
+    # the name: [a-z][a-z0-9-]*
+    for bad in ('Revisions', '1st', 'rev_isions', 'rev isions', ''):
+        try:
+            app.topic(bad, 'x')
+            assert False, bad
+        except _appeal.AppealConfigurationError as e:
+            assert 'lowercase letters, digits, and dashes' in str(e)
+    app.topic('rev-2', 'Fine.')
+    # a topic can't share a command's word, in either order
+    try:
+        app.topic('commit', 'x')
+        assert False
+    except _appeal.AppealConfigurationError as e:
+        assert "help topic 'commit' is also a command word" in str(e)
+    late = _appeal.Appeal(name='late', stylesheet=False)
+    late.topic('commit', 'x')
+    @late.command()
+    def commit(): "C."
+    try:
+        run(late, 'help')
+        assert False
+    except _appeal.AppealConfigurationError as e:
+        assert "help topic 'commit' is also a command word" in str(e)
+    # a bare program has no way to reach a topic: refused
+    bare = _appeal.Appeal(name='bare', stylesheet=False)
+    bare.topic('lore', 'x')
+    @bare.precommand()
+    def main(): "M."
+    try:
+        run(bare, '-h')
+        assert False
+    except _appeal.AppealConfigurationError as e:
+        assert 'help topics need commands' in str(e)

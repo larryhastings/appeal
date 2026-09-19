@@ -50,11 +50,18 @@ BACKWARDS = 'backwards'
 PRECOMMAND = 'precommand'
 
 
+import re as _re
+_TOPIC_NAME = _re.compile(r'[a-z][a-z0-9-]*')
+
+
 def _topic(topic: str = ''):
-    # the help option's operand: a command to describe, or '' for the
-    # overview.  (A comment, not a docstring: a one-operand converter's
-    # docstring documents its operand, and Appeal's own has nothing to
-    # say on a user's page.)
+    # the -h/--help operand; a one-operand converter's docstring
+    # documents its operand, so this is the -h row's text (Larry,
+    # 2026-09-19)
+    """
+    Print usage and documentation, about this program, or optionally
+    about a specific command or topic.
+    """
     return topic
 
 
@@ -1341,6 +1348,8 @@ class Appeal:
         # derived from this tree.
         self.parent = None        # set by _child(): the node's parent
         self._children = {}       # command word -> child Appeal
+        self._topics = {}         # help topic name -> its Markdown (the
+                                  # root's; Larry, 2026-09-19, after hg)
         self._anonymous = []      # app.command() nodes not yet named by a
                                   # body (Larry, 2026-09-18); refused at
                                   # finalize if still nameless
@@ -1692,6 +1701,24 @@ class Appeal:
                                   or 'help' in root._children)
         root._derive_method_owners()
         root._refuse_bodyless_parents()
+        root._vet_topics()
+
+    def _vet_topics(self):
+        """
+        A help topic's name is a word you type after `help`, so it
+        can't also be a command word, whichever was declared first;
+        and topics need a command set to be reached through (a bare
+        program has no `help` command, and its -h takes no topic).
+        """
+        root = self.root
+        for name in root._topics:
+            if name in root._children:
+                raise AppealConfigurationError(
+                    f"help topic {name!r} is also a command word")
+        if root._topics and not root._has_commands:
+            raise AppealConfigurationError(
+                "help topics need commands: a program with none has no "
+                "help command, and its -h takes no topic")
 
     def _apply_mapping_requests(self):
         """
@@ -1817,9 +1844,22 @@ class Appeal:
         root = self.root
         table = root._table()
         topic = words[0]
+        from .presentation import help_margin, render_help_page
         if len(words) == 1:
             if topic == 'help':
                 print('Print usage documentation on a specific command.')
+                return
+            if topic in root._topics:
+                # a help topic (Larry, 2026-09-19): its Markdown is the
+                # page--no usage line, there is nothing to type
+                from .presentation import topic_corpus
+                print(render_help_page(
+                    (), topic_corpus(topic, root._topics[topic]),
+                    root.templates,
+                    margin=help_margin(root.margin, _sys.stdout),
+                    file=_sys.stdout, stylesheet=root.stylesheet,
+                    plain_stylesheet=root.plain_stylesheet,
+                    suppress=set(suppress) | {'usage'}).rstrip('\n'))
                 return
             fn = table.get(topic)
             if getattr(fn, '__func__', None) is Appeal.print_version:
@@ -1827,8 +1867,10 @@ class Appeal:
                 print(_inspect.getdoc(fn))
                 return
             if topic not in table:
-                err = UsageError(f"unknown command {quoted(topic, 'command')}"
-                                 f"{did_you_mean(topic, root._visible_table(), 'command')}")
+                kind = 'command or topic' if root._topics else 'command'
+                known = [*root._visible_table(), *root._topics]
+                err = UsageError(f"unknown {kind} {quoted(topic, 'command')}"
+                                 f"{did_you_mean(topic, known, 'command')}")
                 err.usage = _overview_trailer(root)     # the overview page
                 raise err
             node = root._children[topic]
@@ -1852,7 +1894,6 @@ class Appeal:
         # baked-help compile step).  A topic that is itself a command SET shows
         # its subcommand listing (like `prog topic --help`); a leaf shows its
         # command page.
-        from .presentation import help_margin, render_help_page
         if node is not None and node._table():
             from .presentation import summary as _summary, command_set_corpus
             node_table = node._table()
@@ -1861,7 +1902,8 @@ class Appeal:
             corpus = command_set_corpus(
                 node.global_plan, entries,
                 doc=node._page_doc(),
-                tables_wanted=node._global is not None)
+                tables_wanted=node._global is not None,
+                topics=node._page_topics())
             text = render_help_page(
                 node._head_usage_units(),
                 corpus, node.templates, margin=help_margin(node.margin, _sys.stdout),
@@ -2053,6 +2095,34 @@ class Appeal:
         node._node_restriction = restriction
         self._anonymous.append(node)
         return node
+
+    def topic(self, name, doc):
+        """
+        Add a help topic: `help NAME` (and `-h NAME`) prints DOC, and
+        the program's overview lists it under Topics.  A topic is
+        documentation that isn't a command--hg's `hg help revisions`.
+
+        NAME is a word matching [a-z][a-z0-9-]*, and can't also be a
+        command word.  DOC is Markdown, dedented like a docstring:
+        its first paragraph is the summary shown in the listing, the
+        rest is the page.  Naming a topic again replaces it.
+        """
+        if not _TOPIC_NAME.fullmatch(name):
+            raise AppealConfigurationError(
+                f"help topic {name!r}: a topic's name is lowercase "
+                f"letters, digits, and dashes, starting with a letter")
+        root = self.root
+        if name in root._children:
+            raise AppealConfigurationError(
+                f"help topic {name!r} is also a command word")
+        root._topics[name] = doc
+
+    def _page_topics(self):
+        """
+        The help topics an overview lists: the program's, at the root;
+        a subcommand set's overview lists none.
+        """
+        return self._topics if self is self.root else {}
 
     def _visible_table(self):
         "The command table without the hidden words (Larry, 2026-09-10)."
@@ -2388,7 +2458,8 @@ class Appeal:
             corpus = command_set_corpus(
                 self.global_plan, entries,
                 doc=self._page_doc(),
-                tables_wanted=self._global is not None)
+                tables_wanted=self._global is not None,
+                topics=self._page_topics())
             return render_help_page(
                 self._head_usage_units(),
                 corpus, self.templates,
@@ -2428,10 +2499,11 @@ class Appeal:
         Print usage documentation on a specific command.
 
         With no topic, prints the program's overview: its usage line,
-        its documentation, and the list of its commands.  With a
-        topic--one or more command words, `help db stop`--prints that
-        command's page: its usage line, its documentation, and its
-        arguments and options.
+        its documentation, and its lists of commands and topics.  With
+        a command's words, `help db stop`, prints that command's page:
+        its usage line, its documentation, and its arguments and
+        options.  With a topic's name, `help revisions`, prints that
+        topic.
         """
         # (The docstring is the help command's own documentation: its
         # first paragraph is the listing row.)  This method IS the help
@@ -2500,6 +2572,9 @@ class Appeal:
                 d = _inspect.getdoc(fn)
                 if d and d.strip():
                     parts.append(d)
+            for name, d in self._topics.items():
+                parts.append(f'## {prog} help {name}')
+                parts.append(_inspect.cleandoc(d))
             return transform('\n\n'.join(parts))
         if format != 'troff':
             raise AppealConfigurationError(
@@ -2516,7 +2591,8 @@ class Appeal:
         entries = self._listing_entries()
         corpus = command_set_corpus(
             self.global_plan, entries,
-            doc=self._page_doc(), listing=False)
+            doc=self._page_doc(), listing=False,
+            topics=self._page_topics())
         # a subsection per command at EVERY depth, in tree order, each
         # after its parent (Larry, 2026-09-19): the corpus its help
         # page renders--a set's listing, a leaf's tables--in troff
@@ -2529,14 +2605,19 @@ class Appeal:
                     page = command_set_corpus(
                         child.global_plan, child._listing_entries(),
                         doc=child._page_doc(),
-                        tables_wanted=child._global is not None)
+                        tables_wanted=child._global is not None,
+                        topics=child._page_topics())
                 else:
                     page = merge_docs(child.plan)
                 pages.append((' '.join(path), child._head_usage_markup(), page))
                 walk(child, path)
         walk(self, ())
+        from .presentation import topic_corpus
+        topics = [(name, topic_corpus(name, doc))
+                  for name, doc in self._topics.items()]
         return man_page(prog, corpus, self._head_usage_markup(),
-                        command_pages=pages, version=version)
+                        command_pages=pages, version=version,
+                        topics=topics)
 
     def schema(self, format, version):
         """

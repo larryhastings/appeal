@@ -530,11 +530,14 @@ default_template = (
     '\n'
     '## Commands\n'
     '{commands}\n'
+    '\n'
+    '## Topics\n'
+    '{topics}\n'
 )
 
 
 _TEMPLATE_SECTIONS = ('usage', 'summary', 'doc', 'options',
-                      'arguments', 'commands')
+                      'arguments', 'commands', 'topics')
 
 
 def help_margin(margin=None, file=None):
@@ -623,11 +626,11 @@ def render_baked_help(pieces, margin=79, file=None,
 
 def parse_help_template(template):
     """
-    Partition a help template at its six {section} placeholders.
+    Partition a help template at its seven {section} placeholders.
     Returns [(name, header, indent), ...] in template order:
     header is the text since the previous placeholder (leading
     newlines included); indent is the header text after its last
-    newline--the body's per-line indent.  All six sections must
+    newline--the body's per-line indent.  All seven sections must
     appear exactly once; anything else in braces refuses.
     """
     import re as _re
@@ -797,7 +800,7 @@ def help_page_pieces(usage_units, corpus, templates, suppress=(),
                     for name, header, indent in sections]
     titles, levels = {}, {}
     for name, header, indent in sections:
-        if name in ('arguments', 'options', 'commands'):
+        if name in ('arguments', 'options', 'commands', 'topics'):
             # the template's own heading dresses the nested ones too
             for text, level in _template_headings(header):
                 titles[name], levels[name] = text, level
@@ -822,8 +825,11 @@ def help_page_pieces(usage_units, corpus, templates, suppress=(),
         if not corpus[name]:
             continue
         # a table section is built as nodes, on its own
+        # a listing's words--commands and help topics alike--wear
+        # the 'command' role: both are words you type after `help`
         bake(rows_document(corpus[name], header,
-                           'command' if name == 'commands' else None,
+                           'command' if name in ('commands', 'topics')
+                           else None,
                            titles, levels.get(name, 2)))
     return tuple(pieces)
 
@@ -1349,14 +1355,35 @@ def merge_docs(plan, command_names=None):
         'options': options,
         'commands': [(word, docs.get(word, []), ())
                      for word in command_names],
+        'topics': [],
     }
 
 
+def topic_corpus(name, doc):
+    """
+    A help topic's corpus (Larry, 2026-09-19): app.topic(name, doc)'s
+    text is plain Markdown, dedented like a docstring; its first
+    paragraph is the summary (the listing row), the rest is the page.
+    No special sections: a topic has no arguments, options, or
+    commands, so a heading reading 'Options' is just a heading.
+    """
+    from big.markdown import parse, Paragraph
+    blocks = list(parse(_inspect.cleandoc(doc)).blocks)
+    summary = []
+    if blocks and isinstance(blocks[0], Paragraph):
+        summary = [blocks.pop(0)]
+    return {'summary': summary, 'documentation': blocks,
+            'presentation': None, 'arguments': [], 'options': [],
+            'commands': [], 'topics': []}
+
+
 def command_set_corpus(global_plan, entries, doc=None, listing=True,
-                       tables_wanted=True):
+                       tables_wanted=True, topics=None):
     """
     The corpus for a multi-command program's listing.  entries is
-    a sequence of (word, summary) pairs in declaration order.  The
+    a sequence of (word, summary) pairs in declaration order;
+    topics, the program's help topics ({name: doc}, the root's
+    overview only), become the Topics: rows, each its summary.  The
     command rows' documentation comes from the global command's
     Commands: entries, falling back to each command's own summary.
     The listing shows the head's own Arguments and Options tables
@@ -1402,6 +1429,8 @@ def command_set_corpus(global_plan, entries, doc=None, listing=True,
         (word, lines or (parse(fallback[word]).blocks if fallback.get(word)
                          else []), ())
         for word, lines, nested in corpus['commands']]
+    corpus['topics'] = [(name, topic_corpus(name, doc)['summary'], ())
+                        for name, doc in (topics or {}).items()]
     return corpus
 
 
@@ -1471,14 +1500,17 @@ def _option_display(o, decoration=None):
 
 
 
-def man_page(prog, corpus, usage, command_pages=None, version=None):
+def man_page(prog, corpus, usage, command_pages=None, version=None,
+             topics=None):
     """
     The help corpus in troff clothing: a man(1) page assembled
     from the same predigested rows --help renders.  command_pages,
     for a multi-command program, is [(words, usage, corpus), ...],
     every command at every depth in tree order, `words` its word path
     ('db start')--each becomes a subsection under COMMANDS, and each
-    usage a SYNOPSIS line.  Returns the troff
+    usage a SYNOPSIS line.  topics is [(name, corpus), ...], the
+    program's help topics: a TOPICS section listing them, then a
+    subsection per topic, `prog help name`.  Returns the troff
     text; installing it somewhere is packaging's business, not
     Appeal's.
     """
@@ -1563,4 +1595,15 @@ def man_page(prog, corpus, usage, command_pages=None, version=None):
                 line('.PP')
                 line(f'.B {label}')
                 entries(pairs)
+    if topics:
+        line('.SH TOPICS')
+        for name, page in topics:
+            line('.TP')
+            line(f'.B {esc(name)}')
+            if page['summary']:
+                paragraphs(page['summary'])
+        for name, page in topics:
+            line(f'.SS "{esc(prog)} help {esc(name)}"')
+            if page['documentation']:
+                paragraphs(page['documentation'])
     return '\n'.join(out) + '\n'

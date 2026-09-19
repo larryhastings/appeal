@@ -175,9 +175,9 @@ The fine print:
 ## 3: Reshaping the page: the template
 
 The page's structure is ONE template--a plain string on your
-Appeal instance--naming six sections: `{usage}`, `{summary}`,
-`{doc}`, `{options}`, `{arguments}`, `{commands}`.  All six must
-appear.  The template establishes the page's ORDER, and its text
+Appeal instance--naming seven sections: `{usage}`, `{summary}`,
+`{doc}`, `{options}`, `{arguments}`, `{commands}`, `{topics}`.  All
+seven must appear.  The template establishes the page's ORDER, and its text
 between placeholders is **Markdown**--the section headings, in
 particular, are the template's to dress (`## Options` by
 default).  Replace it to taste:
@@ -200,6 +200,9 @@ default).  Replace it to taste:
         '\n'
         '## Commands\n'
         '{commands}\n'
+        '\n'
+        '## Topics\n'
+        '{topics}\n'
     )
 
     @app.precommand()
