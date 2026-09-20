@@ -918,6 +918,112 @@ def _prose(doc):
     return list(doc['summary']) + list(doc['documentation'])
 
 
+##
+## References in prose (Larry, 2026-09-19, big's bracketed spans):
+## `[c]{.argument}` in a docstring names the operand `c` of the
+## docstring's owner and renders as usage spells it, decoration and
+## all; `[region]{.option}` names the option and renders its strings,
+## `-r|--region`, without oparg or nested options.  A span with any
+## other class is plain tagging--big paints its text in that role
+## unchanged.  A reference wears exactly one class and plain text.
+##
+
+REFERENCE_CLASSES = ('argument', 'option')
+
+
+def resolve_references(doc, lookup, where):
+    """
+    Rewrite the reference spans of a parsed docstring in place--its
+    summary, its prose, and every section entry, recursively.
+    `lookup(kind, name)` returns the reference's markup, or None when
+    the owner has no such parameter; `where` names the docstring.
+    """
+    from big.markdown import Node, Span, StyledText, Text
+
+    def replace(span):
+        (kind,) = span.classes
+        if len(span.children) != 1 or not isinstance(span.children[0], Text):
+            raise AppealConfigurationError(
+                f"{where}: a {kind} reference names a parameter in "
+                f"plain text: [name]{{.{kind}}}")
+        name = span.children[0].text
+        markup = lookup(kind, name)
+        if markup is None:
+            raise AppealConfigurationError(
+                f"{where}: [{name}]{{.{kind}}} names no {kind} of its own")
+        return StyledText(markup)
+
+    def walk(node):
+        for field in node._fields:
+            value = getattr(node, field)
+            if isinstance(value, list):
+                for i, item in enumerate(value):
+                    # a list field holds nodes, never anything else
+                    if (isinstance(item, Span) and len(item.classes) == 1
+                            and item.classes[0] in REFERENCE_CLASSES):
+                        value[i] = replace(item)
+                    else:
+                        walk(item)
+            elif isinstance(value, Node):
+                walk(value)
+
+    for block in doc['summary'] + doc['documentation']:
+        walk(block)
+    for kind in SPECIAL_SECTIONS:
+        for entry in doc[kind].values():
+            resolve_references(entry, lookup, where)
+    return doc
+
+
+def has_references(summary):
+    """
+    Does a summary--[] or [Paragraph], inline nodes whose containers
+    all hold a `children` list--reference a parameter?
+    """
+    from big.markdown import Span
+    def walk(node):
+        if isinstance(node, Span):
+            return len(node.classes) == 1 and node.classes[0] in REFERENCE_CLASSES
+        return any(walk(child) for child in getattr(node, 'children', ()))
+    return any(walk(block) for block in summary)
+
+
+def plan_references(plan):
+    """
+    The lookup for a plan's docstring: its own parameters.  An
+    argument renders as the usage line's placeholder (its usage
+    name, decorated); an option as its strings alone.
+    """
+    def lookup(kind, name):
+        if kind == 'argument':
+            for s in plan.slots:
+                if s.name == name:
+                    return style('argument', decorate_argument(s.usage_name, plan.decoration))
+            return None
+        for o in plan.options:
+            if o.name == name:
+                return '|'.join(style('option', escape_styles(s)) for s in o.strings)
+        return None
+    return lookup
+
+
+def plans_references(plans):
+    "The lookup over several plans--the head's, for the program's documentation."
+    lookups = [plan_references(p) for p in plans]
+    def lookup(kind, name):
+        for one in lookups:
+            markup = one(kind, name)
+            if markup is not None:
+                return markup
+        return None
+    return lookup
+
+
+def no_references(kind, name):
+    "The lookup where nothing can be referenced: a topic's text."
+    return None
+
+
 def merge_docs(plan, command_names=None):
     """
     The merge: walks the plan tree and lays every occurrence's
@@ -1176,21 +1282,30 @@ def merge_docs(plan, command_names=None):
         return getattr(p.callable, '__name__', repr(p.callable))
 
     def own_doc(p, where):
-        return parse_docstring(_inspect.getdoc(p.callable), where)
+        return resolve_references(
+            parse_docstring(_inspect.getdoc(p.callable), where),
+            plan_references(p), where)
 
     def own_doc_of(converter):
-        return parse_docstring(_inspect.getdoc(converter),
-                               getattr(converter, '__name__', repr(converter)))
+        # a converter collapsed to a value option: no plan of its own
+        # for a reference to name
+        where = getattr(converter, '__name__', repr(converter))
+        return resolve_references(
+            parse_docstring(_inspect.getdoc(converter), where),
+            no_references, where)
 
     def replacement(p, name, where):
         # @app.option(doc=)/@app.argument(doc=) on p's callable: the
-        # docstring the parent supplies for the child behind `name`
+        # docstring the parent supplies for the child behind `name`;
+        # its references are p's, whose text it is
         text = p.doc_overrides.get(name)
         if text is None:
             return None
         # written like a docstring, cleaned like one (indentation)
-        return parse_docstring(_inspect.cleandoc(text),
-                               f"{where}: doc= for {name!r}")
+        where = f"{where}: doc= for {name!r}"
+        return resolve_references(
+            parse_docstring(_inspect.cleandoc(text), where),
+            plan_references(p), where)
 
     def apply(p, path, doc, where, argument_edge):
         # top-down: this occurrence's chosen doc lands its entries
@@ -1369,6 +1484,11 @@ def topic_corpus(name, doc):
     """
     from big.markdown import parse, Paragraph
     blocks = list(parse(_inspect.cleandoc(doc)).blocks)
+    # a topic has no parameters: an argument or option reference in
+    # its text is refused, any other span is tagging
+    resolve_references({'summary': [], 'documentation': blocks,
+                        'arguments': {}, 'options': {}, 'commands': {}},
+                       no_references, f'help topic {name!r}')
     summary = []
     if blocks and isinstance(blocks[0], Paragraph):
         summary = [blocks.pop(0)]
@@ -1406,7 +1526,7 @@ def command_set_corpus(global_plan, head_plans, entries, doc=None,
                        listing=True, topics=None):
     """
     The corpus for a multi-command program's listing.  entries is
-    a sequence of (word, summary) pairs in declaration order;
+    a sequence of (word, summary blocks) pairs in declaration order;
     topics, the program's help topics ({name: doc}, the root's
     overview only), become the Topics: rows, each its summary.  The
     command rows' documentation comes from the global command's
@@ -1421,7 +1541,9 @@ def command_set_corpus(global_plan, head_plans, entries, doc=None,
         # constructing module's docstring--Larry, 2026-09-18) supplies
         # the program half: summary, prose, Commands: overrides.  A
         # precommand's docstring documents ITS parameters only.
-        parsed = parse_docstring(doc, '<program documentation>')
+        parsed = resolve_references(
+            parse_docstring(doc, '<program documentation>'),
+            plans_references(head_plans), '<program documentation>')
         known = set(words)
         for name in parsed['commands']:
             if name not in known:
@@ -1442,12 +1564,9 @@ def command_set_corpus(global_plan, head_plans, entries, doc=None,
         # page's prose (the root always passes a doc, '' when the
         # program has none--a precommand's docstring never stands in)
         corpus = page_corpus(global_plan, head_plans, command_names=words)
-    from big.markdown import parse
     fallback = dict(entries)
-    corpus['commands'] = [
-        (word, lines or (parse(fallback[word]).blocks if fallback.get(word)
-                         else []), ())
-        for word, lines, nested in corpus['commands']]
+    corpus['commands'] = [(word, lines or fallback[word], ())
+                          for word, lines, nested in corpus['commands']]
     corpus['topics'] = [(name, topic_corpus(name, doc)['summary'], ())
                         for name, doc in (topics or {}).items()]
     return corpus

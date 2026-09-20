@@ -2147,16 +2147,30 @@ class Appeal:
 
     def _listing_entries(self):
         """
-        The command listing's (word, summary) rows: the visible words,
-        a deprecated one's summary saying so.
+        The command listing's (word, summary) rows, the summary as
+        blocks--the command's merged one, so its references render
+        (Larry, 2026-09-19)--for the visible words, a deprecated one's
+        summary saying so.
         """
-        from .presentation import summary
+        from .presentation import has_references, merge_docs, scan_docstring
+        from big.markdown import Paragraph, Text
         rows = []
-        for word, callable in self._visible_table().items():
-            text = summary(callable)
-            if self._children[word]._node_restriction == 'deprecated':
-                text = f'{text.rstrip()} (deprecated)'.lstrip()
-            rows.append((word, text))
+        for word, child in self._children.items():
+            if word not in self._visible_table():
+                continue
+            # the docstring's own summary, cheaply; a summary that
+            # references a parameter needs the command's plan to
+            # render it, and only then is the plan built
+            doc = _inspect.getdoc(child._command_callable()) or ''
+            blocks = list(scan_docstring(doc, word)['summary'])
+            if has_references(blocks):
+                blocks = list(merge_docs(child.plan)['summary'])
+            if child._node_restriction == 'deprecated':
+                if blocks:
+                    blocks[0].children.append(Text(' (deprecated)'))
+                else:
+                    blocks = [Paragraph([Text('(deprecated)')])]
+            rows.append((word, blocks))
         return rows
 
     def default(self):
@@ -2478,13 +2492,16 @@ class Appeal:
                 plain_stylesheet=self.plain_stylesheet,
                 suppress=suppress,
                 subcommands=self.parent is not None).rstrip('\n')
-        from .presentation import page_corpus, parse_docstring
+        from .presentation import (page_corpus, parse_docstring,
+                                   plans_references, resolve_references)
         corpus = page_corpus(self.plan, self._head_plans())
         override = self.root.doc
         if override is not None:
             # tier 1 overrides a bare app's prose too; the
             # signature-bound sections stay with the command
-            parsed = parse_docstring(override, '<program documentation>')
+            parsed = resolve_references(
+                parse_docstring(override, '<program documentation>'),
+                plans_references(self._head_plans()), '<program documentation>')
             corpus['summary'] = parsed['summary']
             corpus['documentation'] = parsed['documentation']
         return render_help_page(

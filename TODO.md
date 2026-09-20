@@ -19,6 +19,13 @@ Agreed work, not yet built.  Larry's rulings; one entry per item.
   start`.  Help pages build the line from the node and are right;
   the MCP schema's `usage` field uses `plan.usage()` and is wrong
   for subcommands.
+* **The Markdown exports render docstrings raw** (found 2026-09-19,
+  building prose references): `documentation('gfm')` and
+  `'commonmark'` re-spell each docstring's text through big's
+  writers, so a `[src]{.argument}` reference degrades to `src` there
+  (big's other writers drop a span's class), and the gfm headings
+  sit a level too high (the older finding).  Rendering the exports
+  from the merged corpus, as troff does, fixes both.
 * **An optional zero-operand converter prints as empty brackets in
   usage** (found 2026-09-18, rulings walk): `go(a, b='', c: Stamp =
   None, d='')` reads `go <A> [<B>] [] [<D>]`.  A slot with nothing

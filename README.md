@@ -2281,6 +2281,18 @@ Appeal decides whether color actually appears the same way
 CPython does, and layout never moves--a colored page strips
 back to the monochrome page byte-for-byte).
 
+**Naming your arguments and options in prose.**  Write
+`[src]{.argument}` and Appeal renders the operand the way the
+usage line does, `<SRC>`, in the argument color; write
+`[region]{.option}` and you get the option's strings,
+`-r|--region`, in the option color.  The name is the parameter's,
+so a typo is a configuration error, and the spelling follows
+your theme (a theme that decorates operands differently changes
+every mention at once).  A span with any other class,
+`[careful]{.warning}`, is plain tagging: the text, painted in
+that role.  This is big's bracketed-span syntax, the one
+Pandoc and djot use.
+
 **Help that isn't a command.**  Some things deserve a page of
 their own but aren't commands--how your program names a
 revision, say, the way `hg help revisions` explains it.  Give

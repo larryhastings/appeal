@@ -8517,3 +8517,114 @@ def test_help_topics():
         assert False
     except _appeal.AppealConfigurationError as e:
         assert 'help topics need commands' in str(e)
+
+
+def test_prose_references():
+    # [c]{.argument} and [region]{.option} in a docstring (Larry,
+    # 2026-09-19, big's bracketed spans): an argument renders as usage
+    # spells it, decoration and all; an option as its strings alone.
+    # Any other class is tagging.  Everywhere prose is parsed: a
+    # command's docstring and its entries, doc=, the program's
+    # documentation, the listing row; a topic refuses them.
+    import appeal as _appeal
+    import contextlib, io
+    def run(app, *words):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            try:
+                app.main(list(words))
+            except SystemExit:
+                pass
+        return out.getvalue()
+
+    app = _appeal.Appeal(name='cp', stylesheet=False,
+                         doc='Copies things; every command honors [verbose]{.option}.')
+    @app.precommand()
+    def pre(*, verbose=False): "P."
+    @app.command()
+    @app.argument('dst', doc='Where it lands, unless [force]{.option} says otherwise.')
+    def copy(src, dst, *, region='us', force=False):
+        """
+        Copy [src]{.argument} to [dst]{.argument}.
+
+        With [force]{.option}, [dst]{.argument} is replaced;
+        [region]{.option} picks the [**bold**]{.warning} region.
+
+        Rule
+        : One per [src]{.argument}.
+
+        # Arguments
+        src
+        : The source; see [region]{.option}.
+        # Options
+        region
+        : A region, with [src]{.argument} in mind.
+        """
+    page = run(app, 'help', 'copy')
+    assert 'Copy <SRC> to <DST>.' in page, page
+    assert 'With -f|--force, <DST> is replaced;' in page and '-r|--region picks the bold' in page
+    assert 'The source; see -r|--region.' in page
+    assert 'A region, with <SRC> in mind.' in page
+    assert 'One per <SRC>.' in page
+    assert 'Where it lands, unless -f|--force says otherwise.' in page
+    overview = run(app, 'help')
+    assert 'every command honors -v|--verbose.' in overview, overview
+    assert 'copy  Copy <SRC> to <DST>.' in overview, overview
+    # the markup: the reference wears the role, each option string its own
+    from appeal.presentation import plan_references
+    lookup = plan_references(app.command('copy').plan)
+    assert lookup('argument', 'src') == '⦃argument⦙<SRC>⦄'
+    assert lookup('option', 'region') == '⦃option⦙-r⦄|⦃option⦙--region⦄'
+    assert lookup('argument', 'nope') is None and lookup('option', 'nope') is None
+    # a deprecated command's row still says so, after its summary
+    @app.command(restriction='deprecated')
+    def old(src): "Old [src]{.argument}."
+    @app.command(restriction='deprecated')
+    def wordless(): pass
+    overview = run(app, 'help')
+    assert 'Old <SRC>.  (deprecated)' in overview and 'wordless  (deprecated)' in overview, overview
+    # the man page carries them too
+    man = app.documentation('troff')
+    assert 'With \\-f|\\-\\-force, <DST> is replaced' in man, man
+    # refused: a name the owner doesn't have, a reference that isn't
+    # plain text, and any reference in a topic
+    for doc, message in (
+            ("See [y]{.argument}.", "[y]{.argument} names no argument of its own"),
+            ("See [y]{.option}.", "[y]{.option} names no option of its own"),
+            ("See [**x**]{.argument}.", "names a parameter in plain text: [name]{.argument}")):
+        bad = _appeal.Appeal(name='b', stylesheet=False)
+        def cmd(x): pass
+        cmd.__doc__ = doc
+        bad.command('cmd')(cmd)
+        try:
+            run(bad, 'help', 'cmd')
+            assert False, doc
+        except _appeal.AppealConfigurationError as e:
+            assert message in str(e), (doc, e)
+    nohead = _appeal.Appeal(name='n', stylesheet=False, doc='Honors [nope]{.option}.')
+    nohead.command()(copy)
+    try:
+        run(nohead, 'help')
+        assert False
+    except _appeal.AppealConfigurationError as e:
+        assert "<program documentation>: [nope]{.option} names no option" in str(e), e
+    topical = _appeal.Appeal(name='t', stylesheet=False)
+    topical.command()(copy)
+    topical.topic('lore', 'About [x]{.argument}.')
+    try:
+        run(topical, 'help', 'lore')
+        assert False
+    except _appeal.AppealConfigurationError as e:
+        assert "help topic 'lore': [x]{.argument} names no argument" in str(e), e
+    # a converter collapsed to a value option has no plan to reference
+    def region_name(name: str):
+        "A region; not [name]{.argument}."
+        return name
+    collapsed = _appeal.Appeal(name='c', stylesheet=False)
+    @collapsed.command()
+    def go(*, region: region_name = 'us'): "Go."
+    try:
+        run(collapsed, 'help', 'go')
+        assert False
+    except _appeal.AppealConfigurationError as e:
+        assert "region_name: [name]{.argument} names no argument" in str(e), e
