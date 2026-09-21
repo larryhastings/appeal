@@ -2651,6 +2651,28 @@ end the program politely--`raise AppealError("couldn't reach
 the server")` prints `error: couldn't reach the server` and
 exits 1, no usage (the command line was fine).
 
+**Messages are Markdown.**  An error's message is one paragraph
+of inline Markdown, rendered through the same pipeline as help,
+so the message you raise can look like the messages Appeal
+raises:
+
+    raise UsageError(f"[region]{{.option}} can't be `{escaped(region)}` for [dst]{{.argument}}")
+
+prints `error: -r|--region can't be mars for <DST>`, painted in
+the option and argument colors on a terminal.  `[region]{.option}`
+and `[dst]{.argument}` name the parameters of the command that
+raised, and render as the usage line spells them; Appeal
+resolves them where it catches the error, so a name the command
+doesn't have is a configuration error that quotes your message.
+Data goes in a code span, or through `appeal.escaped()`, which
+backslashes every punctuation character so the text reads back
+as itself; `appeal.quoted(text, role)` is what Appeal's own
+messages use for a token as typed.  `str(e)` is the plain text,
+`e.markdown` the source, `e.document` the parsed tree, and
+`e.render(sheet)` the painted text.  The Markdown is parsed when
+the error is constructed, so a malformed message fails where it
+was written.
+
 (The short spellings `UsageError`, `DataError`, and
 `ConfigurationError` are importable aliases, and both
 spellings are the same classes--catch whichever you like.)

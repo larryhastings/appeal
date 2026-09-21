@@ -113,13 +113,13 @@ class Signature:
             if parameter.kind not in (inspect.Parameter.POSITIONAL_ONLY,
                                       inspect.Parameter.POSITIONAL_OR_KEYWORD):
                 raise AppealConfigurationError(
-                    f"{context}: {what} parameter {parameter.name!r} must be "
+                    f"{context}: {what} parameter {_r(parameter.name)} must be "
                     f"positional (fancier signatures await the streaming driver)")
             if parameter.default is inspect.Parameter.empty:
                 minimum += 1
             elif not allow_defaults:
                 raise AppealConfigurationError(
-                    f"{context}: {what} parameter {parameter.name!r} can't have "
+                    f"{context}: {what} parameter {_r(parameter.name)} can't have "
                     f"a default here")
             annotation = parameter.annotation
             if annotation is inspect.Parameter.empty:
@@ -558,12 +558,12 @@ class OptionRule:
                 args = annotation.__args__
                 if Ellipsis in args:
                     raise AppealConfigurationError(
-                        f"{context}: {annotation!r}--variable-length "
+                        f"{context}: {_r(annotation)}--variable-length "
                         f"tuples aren't in the grammar (use list[T] "
                         f"for a repeatable option)")
                 if not args or args == ((),):
                     raise AppealConfigurationError(
-                        f"{context}: {annotation!r} has no elements")
+                        f"{context}: {_r(annotation)} has no elements")
                 converters = (tuple,) + tuple(
                     _leaf_callable(element, context) for element in args)
                 return finish(Value(strings, name, converters, default))
@@ -795,8 +795,8 @@ class Fold(OptionRule):
                         row = [occurrence[name] for name in parameters]
                     except KeyError as e:
                         raise ValueError(
-                            f"{cls.__name__} occurrence is missing "
-                            f"{e.args[0]!r}") from None
+                            f"{escaped(cls.__name__)} occurrence is missing "
+                            f"{_r(e.args[0])}") from None
                 elif len(elements) == 1:
                     row = [occurrence]
                 else:
@@ -804,7 +804,7 @@ class Fold(OptionRule):
                         occurrence, (list, tuple)) else None
                     if row is None or len(row) != len(elements):
                         raise ValueError(
-                            f"each {cls.__name__} occurrence takes "
+                            f"each {escaped(cls.__name__)} occurrence takes "
                             f"{len(elements)} values")
                 instance.option(*[convert(v) for convert, v
                                   in zip(elements, row)])
@@ -1286,15 +1286,15 @@ class Plan:
                         # path.  A converter that consumes operands is a
                         # window, and its spelling is positional: fine.
                         raise AppealConfigurationError(
-                            f"option {s!r} is declared by {self.name!r} and by "
-                            f"its converter {child.name!r} (through "
-                            f"{slot.name!r}); remap one, e.g. "
-                            f"@app.option({slot.name + '.' + o.name!r}, "
+                            f"option {_r(s)} is declared by {_r(self.name)} and by "
+                            f"its converter {_r(child.name)} (through "
+                            f"{_r(slot.name)}); remap one, e.g. "
+                            f"@app.option({_r(slot.name + '.' + o.name)}, "
                             f"'--{slot.name}-{o.name.replace('_', '-')}')")
                     if s in claimed and claimed[s] != slot.name:
                         raise AppealConfigurationError(
-                            f"option {s!r} of {claimed[s]!r} is unreachable: "
-                            f"{slot.name!r} stomps on it (two zero-operand groups "
+                            f"option {_r(s)} of {_r(claimed[s])} is unreachable: "
+                            f"{_r(slot.name)} stomps on it (two zero-operand groups "
                             f"can't be told apart by position)")
                     claimed[s] = slot.name
 
@@ -1475,7 +1475,7 @@ class Plan:
             owners = [id(owner) for owner, _ in entries]
             if len(set(owners)) != len(owners):
                 raise AppealConfigurationError(
-                    f"option {s!r} is declared twice by one converter; "
+                    f"option {_r(s)} is declared twice by one converter; "
                     f"no position can tell the declarations apart")
             windowed = [owner for owner, _ in entries
                         if owner.windowed]
@@ -1483,7 +1483,7 @@ class Plan:
                         if not owner.windowed)
             if windowed and (total or len(entries) > 1):
                 raise AppealConfigurationError(
-                    f"option {s!r} is declared both by a *args group "
+                    f"option {_r(s)} is declared both by a `*args` group "
                     f"and elsewhere; that mix isn't in the grammar yet")
             if total <= 1:
                 continue
@@ -1492,9 +1492,9 @@ class Plan:
                         for _, o in entries}
             if len(grammars) > 1:
                 names = ' and '.join(sorted(
-                    repr(owner.name) for owner, _ in entries))
+                    _r(owner.name) for owner, _ in entries))
                 raise AppealConfigurationError(
-                    f"option {s!r} is declared with different grammars "
+                    f"option {_r(s)} is declared with different grammars "
                     f"by {names}; scoped options with differing "
                     f"grammars aren't in the grammar yet (the parser "
                     f"couldn't know how many arguments to consume "
@@ -1523,7 +1523,7 @@ class Plan:
         for owner, option in pairs:
             if not option.strings:
                 raise AppealConfigurationError(
-                    f"option {option.name!r} (of {owner.name!r}) has no option "
+                    f"option {_r(option.name)} (of {_r(owner.name)}) has no option "
                     f"strings: its name is too short for a long option and its "
                     f"letter is already taken")
 
@@ -1662,12 +1662,12 @@ class Plan:
             completions = getattr(converter, 'completions', None)
             if completions is None:
                 return
-            where = getattr(converter, '__name__', repr(converter))
+            where = escaped(getattr(converter, '__name__', repr(converter)))
             if not callable(completions):
                 raise AppealConfigurationError(
                     f"{where}.completions must be callable "
                     f"(a (prefix) -> tuple of str), not "
-                    f"{completions!r}")
+                    f"{_r(completions)}")
             # completions must accept exactly the one positional prefix: at least
             # one positional slot must exist (or *args), and none beyond the first
             # may be required.
@@ -1699,9 +1699,9 @@ class Plan:
             check(p.callable)
             if (getattr(p.callable, 'completions', None) is not None
                     and terminal_count(p) != 1):
-                where = getattr(p.callable, '__name__', repr(p.callable))
+                where = escaped(getattr(p.callable, '__name__', repr(p.callable)))
                 raise AppealConfigurationError(
-                    f"{where}.completions: {where!r} consumes "
+                    f"{where}.completions: {where} consumes "
                     f"{terminal_count(p)} arguments, so its completions "
                     f"are ambiguous; put completions on the individual "
                     f"converters")
@@ -1769,11 +1769,11 @@ class Plan:
             return TuplePlan(annotation, parameter.name, build)
         if _generic_origin(annotation) is not None:
             raise AppealConfigurationError(
-                f"parameter {parameter.name!r}: {annotation!r} is only meaningful "
+                f"parameter {_r(parameter.name)}: {_r(annotation)} is only meaningful "
                 f"on an option (a keyword-only parameter with a default)")
         if not callable(annotation):
             raise AppealConfigurationError(
-                f"parameter {parameter.name!r}: annotation {annotation!r} isn't callable")
+                f"parameter {_r(parameter.name)}: annotation {_r(annotation)} isn't callable")
         if _is_leaf(annotation):
             return Terminal(_leaf_converter(annotation))
         # a real converter: introspect it.  uninspectable callables
@@ -1792,7 +1792,7 @@ class Plan:
 
 from . import (
     AppealConfigurationError, Option, accumulator, is_multioption,
-    is_option, mapping, verbatim, boolean,
+    is_option, mapping, verbatim, boolean, escaped, _r,
     )
 
 
@@ -1869,7 +1869,7 @@ def dereference_annotated(annotation):
         if len(arms) != 1:
             from . import AppealConfigurationError
             raise AppealConfigurationError(
-                f"annotation {annotation!r}: a union isn't a converter"
+                f"annotation {_r(annotation)}: a union isn't a converter"
                 f"--only `X | None` is in the grammar (the None arm is "
                 f"for the type checker; X converts)")
         return dereference_annotated(arms[0])
@@ -1966,8 +1966,8 @@ def _refuse_bare_factory(annotation, context):
     factory = getattr(annotation, 'factory', None)
     if factory:
         raise AppealConfigurationError(
-            f"{context}: {annotation.__name__} is a converter factory; "
-            f"call it first, e.g. {factory}")
+            f"{context}: {escaped(annotation.__name__)} is a converter factory; "
+            f"call it first, e.g. {escaped(factory)}")
 
 
 def _leaf_callable(annotation, context):
@@ -1984,11 +1984,11 @@ def _leaf_callable(annotation, context):
     _refuse_bare_factory(annotation, context)
     if getattr(annotation, '__origin__', None) is not None:
         raise AppealConfigurationError(
-            f"{context}: {annotation!r} isn't usable here (generic "
+            f"{context}: {_r(annotation)} isn't usable here (generic "
             f"annotations are only meaningful directly on a parameter)")
     if not callable(annotation):
         raise AppealConfigurationError(
-            f"{context}: {annotation!r} isn't callable")
+            f"{context}: {_r(annotation)} isn't callable")
     if _is_leaf(annotation):
         return _leaf_converter(annotation)
     try:
@@ -2003,7 +2003,7 @@ def _leaf_callable(annotation, context):
         ]
     if len(positional) > 1:
         raise AppealConfigurationError(
-            f"{context}: converter {getattr(annotation, '__name__', annotation)!r} "
+            f"{context}: converter {_r(getattr(annotation, '__name__', annotation))} "
             f"takes {len(positional)} required arguments; multi-parameter "
             f"converters aren't supported here yet")
     return annotation
@@ -2152,7 +2152,7 @@ def validate_option_string(s):
           and (((len(s) == 2) and s[1].isalnum())
                or ((len(s) >= 4) and s.startswith('--'))))
     if not ok:
-        raise AppealConfigurationError(f"{s!r} is not a legal option string")
+        raise AppealConfigurationError(f"{_r(s)} is not a legal option string")
     return s
 
 
@@ -2206,7 +2206,7 @@ class Decorations:
     def add_usage(self, callable, parameter_name, usage):
         if not (isinstance(usage, str) and usage):
             raise AppealConfigurationError(
-                f"@parameter for {parameter_name!r}: usage must be "
+                f"@parameter for {_r(parameter_name)}: usage must be "
                 f"a nonempty string")
         names = self.parameter_usage.setdefault(callable, {})
         names[parameter_name] = usage
@@ -2217,7 +2217,7 @@ class Decorations:
         # as that converter's own would be
         if not isinstance(doc, str):
             raise AppealConfigurationError(
-                f"doc= for {parameter_name!r}: must be a string")
+                f"doc= for {_r(parameter_name)}: must be a string")
         docs = self.parameter_doc.setdefault(callable, {})
         docs[parameter_name] = doc
 
@@ -2241,19 +2241,19 @@ def _refuse_aimed_past(where, param, child, aimed):
     """
     if not aimed:
         return
-    paths = ', '.join(repr(f'{param}.{rest}') for rest in aimed)
+    paths = ', '.join(_r(f'{param}.{rest}') for rest in aimed)
     if child is None or isinstance(child, Terminal):
         raise AppealConfigurationError(
-            f"{where!r}: {paths} reaches nothing--{param!r} takes no "
+            f"{_r(where)}: {paths} reaches nothing--{_r(param)} takes no "
             f"converter with parameters")
     if (child.sole_terminal_slot() is not None
             and any('usage' in said for said in aimed.values())):
-        renamed = ', '.join(repr(f'{param}.{rest}') for rest, said
+        renamed = ', '.join(_r(f'{param}.{rest}') for rest, said
                             in aimed.items() if 'usage' in said)
         raise AppealConfigurationError(
-            f"{where!r}: renaming {renamed} names nothing on the page: "
-            f"{param!r} stands for that one word, and names it; rename "
-            f"{param!r} instead")
+            f"{_r(where)}: renaming {renamed} names nothing on the page: "
+            f"{_r(param)} stands for that one word, and names it; rename "
+            f"{_r(param)} instead")
 
 
 def _suggest_paths(slots, options, names):
@@ -2318,11 +2318,11 @@ class Build:
     def within(self, callable):
         "The context one level down, inside `callable`; a cycle refuses."
         if callable in self.stack:
-            cycle = ' -> '.join(getattr(c, '__name__', repr(c))
+            cycle = ' -> '.join(escaped(getattr(c, '__name__', repr(c)))
                                 for c in self.stack)
             raise AppealConfigurationError(
                 f"converter cycle: {cycle} -> "
-                f"{getattr(callable, '__name__', repr(callable))}")
+                f"{escaped(getattr(callable, '__name__', repr(callable)))}")
         return Build(self.decorations, self.default_options, self.app,
                      self.extra_overrides, self.memo, self.stack + (callable,),
                      self.overlay)
@@ -2373,7 +2373,7 @@ class SignaturePlan(Plan):
             name = getattr(callable, '__name__', None)
             if not name:
                 raise AppealConfigurationError(
-                    f"can't determine a name for {callable!r}")
+                    f"can't determine a name for {_r(callable)}")
         if _is_coroutine_function(callable):
             # refused, never run for them (Larry, 2026-09-10): choosing
             # an event loop is magic, and breaks inside a running one.
@@ -2382,7 +2382,7 @@ class SignaturePlan(Plan):
             fn = getattr(getattr(callable, '__func__', callable),
                          '__name__', name)
             raise AppealConfigurationError(
-                f"{fn!r} is a coroutine function; wrap it in a plain "
+                f"{_r(fn)} is a coroutine function; wrap it in a plain "
                 f"function that calls asyncio.run()")
         build = build.within(callable)
         signature = inspect.signature(callable)
@@ -2461,7 +2461,7 @@ class SignaturePlan(Plan):
                     and not (kind is inspect.Parameter.KEYWORD_ONLY
                              and has_default)):
                 raise AppealConfigurationError(
-                    f"{parameter.name!r}: the \"ignore me\" leading "
+                    f"{_r(parameter.name)}: the \"ignore me\" leading "
                     f"underscore on a parameter name is only allowed for "
                     f"keyword-only parameters with default values")
 
@@ -2474,7 +2474,7 @@ class SignaturePlan(Plan):
                 if renamed and not isinstance(child, Terminal) \
                         and child.sole_terminal_slot() is None:
                     raise AppealConfigurationError(
-                        f"{name!r}: @argument renames {parameter.name!r}, "
+                        f"{_r(name)}: @argument renames {_r(parameter.name)}, "
                         f"which stands for {child.count_terminals()} words "
                         f"on the command line and so names nothing; "
                         f"rename its converter's parameters instead")
@@ -2489,14 +2489,14 @@ class SignaturePlan(Plan):
 
             if kind is inspect.Parameter.VAR_POSITIONAL:
                 annotation = parameter.annotation
-                context = f"parameter *{parameter.name}"
+                context = escaped(f"parameter *{parameter.name}")
                 if annotation is inspect.Parameter.empty:
                     child = Terminal(str)
                 else:
                     annotation = dereference_annotated(annotation)
                     if is_option(annotation):
                         raise AppealConfigurationError(
-                            f"{context}: {annotation.__name__} is an Option "
+                            f"{context}: {escaped(annotation.__name__)} is an Option "
                             f"class; those are only meaningful on options")
                     if getattr(annotation, '__origin__', None) is tuple:
                         # *args: tuple[X, Y, Z] -- each command-line instance
@@ -2510,9 +2510,9 @@ class SignaturePlan(Plan):
                     elif _is_repeat_group(annotation):
                         if not top:
                             raise AppealConfigurationError(
-                                f"converter {name!r}: {context} takes a "
+                                f"converter {_r(name)}: {context} takes a "
                                 f"multi-parameter converter; windowed "
-                                f"groups on *args inside a converter "
+                                f"groups on `*args` inside a converter "
                                 f"aren't in the grammar yet")
                         child = WindowPlan(annotation, context,
                                            build.under(below.get(parameter.name)))
@@ -2603,9 +2603,9 @@ class SignaturePlan(Plan):
                 for declaration in overrides.pop(extra_name):
                     if not declaration['strings']:
                         raise AppealConfigurationError(
-                            f"@option for {extra_name!r}: no option "
+                            f"@option for {_r(extra_name)}: no option "
                             f"strings, and no parameter to unmap--"
-                            f"a **kwargs-delivered option IS its "
+                            f"a `**kwargs`-delivered option IS its "
                             f"strings")
                     rule = OptionRule.build(
                         extra_name, declaration['strings'], True,
@@ -2618,24 +2618,24 @@ class SignaturePlan(Plan):
                     options.append(rule)
 
         if usage_names:
-            leftover = ', '.join(repr(n) for n in usage_names)
+            leftover = ', '.join(_r(n) for n in usage_names)
             raise AppealConfigurationError(
-                f"{name!r}: @argument names parameter(s) {leftover}, "
-                f"which {name!r} doesn't have"
+                f"{_r(name)}: @argument names parameter(s) {leftover}, "
+                f"which {_r(name)} doesn't have"
                 f"{_suggest_paths(slots, options, usage_names)}")
         if below:
-            leftover = ', '.join(repr(n) for n in below)
+            leftover = ', '.join(_r(n) for n in below)
             raise AppealConfigurationError(
-                f"{name!r}: a dotted path starts at parameter(s) "
-                f"{leftover}, which {name!r} doesn't have"
+                f"{_r(name)}: a dotted path starts at parameter(s) "
+                f"{leftover}, which {_r(name)} doesn't have"
                 f"{_suggest_paths(slots, options, below)}")
         if overrides:
-            leftover = ', '.join(repr(n) for n in overrides)
+            leftover = ', '.join(_r(n) for n in overrides)
             raise AppealConfigurationError(
-                f"{name!r}: @option names parameter(s) {leftover}, which "
-                f"aren't keyword-only-with-default parameters of {name!r}--"
-                f"and there's no **kwargs to deliver them into (v1's rule: "
-                f"such options need a **kwargs to land in)")
+                f"{_r(name)}: @option names parameter(s) {leftover}, which "
+                f"aren't keyword-only-with-default parameters of {_r(name)}--"
+                f"and there's no `**kwargs` to deliver them into (v1's rule: "
+                f"such options need a `**kwargs` to land in)")
 
         # uniform end-reservation: a required leaf operand that FOLLOWS an
         # absorbing converter (one that consumes unboundedly -- its own *args)
@@ -2659,8 +2659,8 @@ class SignaturePlan(Plan):
         for param in doc_overrides:
             if param not in names:
                 raise AppealConfigurationError(
-                    f"{name!r}: doc= names parameter {param!r}, which "
-                    f"{name!r} doesn't have"
+                    f"{_r(name)}: doc= names parameter {_r(param)}, which "
+                    f"{_r(name)} doesn't have"
                     f"{_suggest_paths(slots, options, [param])}")
         self.doc_overrides = doc_overrides
         # which of those a level ABOVE said (the merge refuses an entry
@@ -2755,12 +2755,12 @@ class WindowPlan(SignaturePlan):
         for slot in self.slots:
             if not isinstance(slot.child, Terminal):
                 raise AppealConfigurationError(
-                    f"{context}: converter {slot.child.name!r} on "
-                    f"{slot.name!r} inside a *args group awaits the "
+                    f"{context}: converter {_r(slot.child.name)} on "
+                    f"{_r(slot.name)} inside a `*args` group awaits the "
                     f"streaming driver")
         if not self.maximum:
             raise AppealConfigurationError(
-                f"{context}: a *args converter group must be able to "
+                f"{context}: a `*args` converter group must be able to "
                 f"consume at least one argument per instance")
 
 
@@ -2803,12 +2803,12 @@ class TuplePlan(IterablePlan):
         args = getattr(annotation, '__args__', ())
         if Ellipsis in args:
             raise AppealConfigurationError(
-                f"parameter {parameter_name!r}: {annotation!r}--variable-"
-                f"length tuples aren't in the grammar (use *args for "
+                f"parameter {_r(parameter_name)}: {_r(annotation)}--variable-"
+                f"length tuples aren't in the grammar (use `*args` for "
                 f"zero-or-more)")
         if not args or args == ((),):
             raise AppealConfigurationError(
-                f"parameter {parameter_name!r}: {annotation!r} has no elements")
+                f"parameter {_r(parameter_name)}: {_r(annotation)} has no elements")
         slots = []
         for index, element in enumerate(args):
             element_name = f'{parameter_name}_{index}'

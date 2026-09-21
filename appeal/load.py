@@ -25,7 +25,7 @@ from .frontend import build_plan
 from .frontend import Terminal, NO_DEFAULT, Plan, Nullary, Value
 from .converters import boolean
 from . import (
-    AppealConfigurationError, AppealDataError, is_option,
+    AppealConfigurationError, AppealDataError, is_option, _r, escaped,
     )
 
 
@@ -81,14 +81,14 @@ def _path_classes():
 
 def _wrong_type(label, value, path):
     param = path.rpartition('.')[2] if path else None
-    raise AppealDataError(f"{path!r} expected {label}, not {value!r}",
+    raise AppealDataError(f"{_r(path)} expected {label}, not {_r(value)}",
                           param=param)
 
 
 def _not_a_constant(value, path):
     # Larry's wording (2026-09-11): the key first, no "(at ...)" suffix
     param = path.rpartition('.')[2] if path else None
-    raise AppealDataError(f"{path!r} expected True or False, not {value!r}",
+    raise AppealDataError(f"{_r(path)} expected True or False, not {_r(value)}",
                           param=param)
 
 
@@ -380,8 +380,8 @@ def _read_fold(cls, data, strict, text=False):
     # an Option reads a sequence of occurrences
     if not _is_sequence(data):
         raise AppealDataError(
-            f"{cls.__name__} repeats; read it from a sequence "
-            f"of occurrences, got {type(data).__name__}")
+            f"{escaped(cls.__name__)} repeats; read it from a sequence "
+            f"of occurrences, got {escaped(type(data).__name__)}")
     occurrences = data
     instance = cls()
     instance.init(None)
@@ -419,7 +419,7 @@ def read_mapping(callable, mapping, *, strict=True):
     plan = callable if isinstance(callable, Plan) else build_plan(callable)
     if not isinstance(mapping, Mapping):
         raise AppealDataError(
-            f"read_mapping needs a mapping, got {type(mapping).__name__}")
+            f"read_mapping needs a mapping, got {escaped(type(mapping).__name__)}")
     return _read_group(plan, mapping, '', strict)
 
 
@@ -429,15 +429,15 @@ def _reject_unfeedable(plan):
         if slot.trailing:
             raise AppealConfigurationError(
                 f"read_iterable can't position-feed keyword-only "
-                f"parameter {slot.name!r}")
+                f"parameter {_r(slot.name)}")
     for o in plan.options:
         raise AppealConfigurationError(
             f"read_iterable can't position-feed keyword-only "
-            f"parameter {o.name!r}")
+            f"parameter {_r(o.name)}")
     if plan.var_keyword:
         raise AppealConfigurationError(
             f"read_iterable can't position-feed keyword-only "
-            f"parameter {plan.var_keyword!r}")
+            f"parameter {_r(plan.var_keyword)}")
 
 
 def read_iterable(callable, iterable, *, strict=True):
@@ -480,6 +480,6 @@ def read_csv(callable, reader, *, first_row_map=None, strict=True):
         names = [first_row_map[h] for h in headings]
     except KeyError as e:
         raise AppealDataError(
-            f"read_csv: heading {e.args[0]!r} isn't in first_row_map")
+            f"read_csv: heading {_r(e.args[0])} isn't in first_row_map")
     return [_read_group(plan, dict(zip(names, row)), '', strict, text=True)
             for row in rows if row]

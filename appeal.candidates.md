@@ -221,24 +221,6 @@ it so you can decide whether the env should be keyed by plan identity.
 
 ## I: Back-pocket designs (agreed feasible, deliberately not built)
 
-* **Error messages as Markdown** (Larry, 2026-09-20, sleeping on
-  it).  Today a UsageError's message is big's style markup, painted
-  by `render(sheet)` and stripped by `str()`; a user colorizes a
-  token only through `appeal.quoted(text, role)` / `escaped(text)`
-  or the `⦃option⦙--x⦄` syntax.  The proposal: a message is one
-  paragraph of inline Markdown, rendered through the same pipeline
-  as help, so `[region]{.option}` resolves against the command that
-  raised (the processor knows it), backticks and bold work, and
-  Appeal's own messages are rewritten in the same dialect.  Data
-  goes in a code span (`` invalid file `{filename}` ``) or through
-  `escaped()`, which becomes a backslash before every ASCII
-  punctuation character (CommonMark: exactly those may be escaped;
-  big honors it, verified).  Costs: the Markdown parser runs on the
-  error path (as it does for help); a code span breaks on a
-  backtick in the data unless the fence is longer; `str(e)` becomes
-  the plain rendering.  At load, a ConfigurationError has no
-  command to resolve against: tagging only.
-
 * **The emergency brake: two-stage parsing** (Larry, 2026-09-09,
   from the feature-parity review's item 2).  An immediate precommand
   such as `--plugin X` raises a brake exception; Appeal stops, and

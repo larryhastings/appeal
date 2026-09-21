@@ -8628,3 +8628,117 @@ def test_prose_references():
         assert False
     except _appeal.AppealConfigurationError as e:
         assert "region_name: [name]{.argument} names no argument" in str(e), e
+
+
+def test_error_messages_are_markdown():
+    # Larry, 2026-09-21: an error's message is one paragraph of inline
+    # Markdown, parsed on construction.  str() is the plain text,
+    # .markdown the source, .document big's tree, render(sheet) the
+    # painted text; [c]{.argument}/[region]{.option} in a UsageError
+    # raised from a command resolve against that command where Appeal
+    # catches it; quoted() paints a token as typed, never a reference.
+    import appeal as _appeal
+    from appeal import UsageError, CommandError, AppealError, escaped, quoted
+    import contextlib, io, sys
+    from big.markdown import MarkdownDocument, Span
+    e = UsageError("unknown option '[--x]{.option .literal}' near `a*b`, **really**")
+    assert str(e) == "unknown option '--x' near a*b, really"
+    assert e.markdown == e.args[0] == "unknown option '[--x]{.option .literal}' near `a*b`, **really**"
+    assert isinstance(e.document, MarkdownDocument)
+    assert isinstance(e.document.blocks[0].children[1], Span)
+    for name in ('markdown', 'document'):
+        try:
+            setattr(e, name, None)
+            assert False, name
+        except AttributeError:
+            pass
+    from appeal.presentation import resolve_stylesheet
+    plain = resolve_stylesheet(False, sys.stdout, None)
+    assert e.render(plain) == str(e)
+    # the helpers: a token in a role wears .literal; data is backslashed
+    assert quoted('a]b', 'command') == "'[a\\]b]{.command .literal}'"
+    assert quoted('x') == "'x'" and escaped('x_y*z') == 'x\\_y\\*z'
+    assert str(UsageError(f"see {quoted('*a*', 'argument')} and {escaped('**b**')}")) == "see '*a*' and **b**"
+    # an empty message is legal, and nothing
+    assert str(AppealError('')) == '' and AppealError('').document.blocks == []
+    # refused at construction, where the message was written: not a
+    # string, malformed span markup, more than one paragraph
+    for message, text in ((3, "an error message is a string of Markdown, not 3"),
+                          ("see [x]{#id}", "malformed Markdown in an error message, 'see [x]{#id}': bracketed span"),
+                          ("one\n\ntwo", "an error message is one paragraph of inline Markdown, not 'one\\n\\ntwo'"),
+                          ("# heading", "one paragraph of inline Markdown, not '# heading'")):
+        try:
+            CommandError(message)
+            assert False, message
+        except _appeal.AppealConfigurationError as ce:
+            assert text in str(ce), (message, str(ce))
+    # references resolve against the command that raised, at the boundary
+    app = _appeal.Appeal(name='cp', stylesheet=False)
+    @app.command()
+    def copy(src, dst, *, region='us'):
+        "Copy."
+        if region == 'mars':
+            raise UsageError(f"[region]{{.option}} can't be `{escaped(region)}` for [dst]{{.argument}}")
+        if region == 'bad':
+            raise UsageError("[nope]{.option} is wrong")
+        if region == 'done':
+            raise CommandError("**done** with [dst]{.argument}", exit_code=3)
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code = app.run(['copy', 'a', 'b', '--region', 'mars'])
+    assert code == 2 and err.getvalue().startswith("error: -r|--region can't be mars for <DST>\n\nusage: cp copy"), err.getvalue()
+    # process() raises it raw, resolved
+    try:
+        app.process(['copy', 'a', 'b', '--region', 'mars'])
+        assert False
+    except UsageError as ue:
+        assert str(ue) == "-r|--region can't be mars for <DST>"
+        assert ue.markdown == "[region]{.option} can't be `mars` for [dst]{.argument}"
+    # before the boundary, a reference is its name
+    raw = UsageError("[region]{.option} x")
+    assert str(raw) == 'region x'
+    # ...and resolving against no plan refuses it: nothing to reference
+    try:
+        raw._resolve(None)
+        assert False
+    except _appeal.AppealConfigurationError as ce:
+        assert "'[region]{.option} x': [region]{.option} names no option" in str(ce)
+    UsageError("no references here")._resolve(None)
+    # a bad reference is the author's bug, quoting the message
+    try:
+        app.run(['copy', 'a', 'b', '--region', 'bad'])
+        assert False
+    except _appeal.AppealConfigurationError as ce:
+        assert str(ce) == "error message '[nope]{.option} is wrong': [nope]{.option} names no option of its own"
+    # a CommandError has no command to resolve against: tagging only,
+    # painted by main()
+    with contextlib.redirect_stderr(err):
+        code = app.run(['copy', 'a', 'b', '--region', 'done'])
+    assert code == 3 and err.getvalue().endswith("error: done with dst\n"), err.getvalue()
+    # a precommand's error resolves against the precommand
+    pre = _appeal.Appeal(name='pre', stylesheet=False)
+    @pre.precommand()
+    def head(*, jobs: int = 1):
+        if jobs > 4:
+            raise UsageError("[jobs]{.option} is at most 4")
+    @pre.command()
+    def go(): pass
+    try:
+        pre.process(['--jobs', '9', 'go'])
+        assert False
+    except UsageError as ue:
+        assert str(ue) == '-j|--jobs is at most 4'
+    # a default handler's error resolves against the set
+    dflt = _appeal.Appeal(name='d', stylesheet=False)
+    @dflt.precommand()
+    def top(*, verbose=False): pass
+    @dflt.command()
+    def cmd(): pass
+    @dflt.default()
+    def nothing():
+        raise UsageError("say [verbose]{.option} at least")
+    try:
+        dflt.process([])
+        assert False
+    except UsageError as ue:
+        assert str(ue) == 'say -v|--verbose at least'

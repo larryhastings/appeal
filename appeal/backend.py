@@ -8,7 +8,7 @@
 # through them (parcel + convert + dispatch).  The front end
 # (appeal/frontend.py) produces the Plan.
 
-from . import (quoted, escaped, AppealConfigurationError, ConfigurationError,
+from . import (quoted, escaped, _r, AppealConfigurationError, ConfigurationError,
                DataError, UsageError, did_you_mean)
 from .converters import convert, Option, MultiOption, verbatim, boolean
 from .frontend import Terminal, NO_DEFAULT
@@ -217,10 +217,10 @@ def parse_short_options(s, classifiers):
     l = list(s)
     l.reverse()
     if (l[-1] != '-') or (len(l) == 1):
-        raise ValueError(f'parse_short_options: invalid short option {s!r}')
+        raise ValueError(f'parse_short_options: invalid short option {_r(s)}')
     l.pop()
     if l[-1] == '-':
-        raise ValueError(f"parse_short_options: can't handle long option {s!r}")
+        raise ValueError(f"parse_short_options: can't handle long option {_r(s)}")
 
     while l:
         option = l.pop()

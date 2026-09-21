@@ -9,7 +9,7 @@
 # exceptions.
 
 import sys
-from . import (quoted, escaped, AppealConfigurationError, ConfigurationError,
+from . import (quoted, escaped, _r, AppealConfigurationError, ConfigurationError,
                AppealDataError, DataError, UsageError)
 
 
@@ -165,7 +165,7 @@ def split(*separators, strip=False):
         if not (isinstance(separator, str) and separator):
             raise AppealConfigurationError(
                 f"split() separators must be nonempty strings, "
-                f"not {separator!r}")
+                f"not {_r(separator)}")
 
     def split_converter(value):
         if not separators:
@@ -208,7 +208,7 @@ def validate(*values, type=None):
         if len(types) > 1:
             raise AppealConfigurationError(
                 f"validate() called with non-homogeneous values "
-                f"{values!r}; pass type= to disambiguate")
+                f"{_r(values)}; pass type= to disambiguate")
         type = values[0].__class__
 
     if type is bool:
@@ -412,7 +412,7 @@ def file(mode='r', *, buffering=-1, encoding=None, errors=None,
                 stream = sys.stdout
             else:
                 raise ValueError(
-                    f"can't open '-' with mode {mode!r} (the "
+                    f"can't open '-' with mode {_r(mode)} (the "
                     f"standard streams aren't read-write)")
             if 'b' in mode:
                 stream = stream.buffer
@@ -423,7 +423,7 @@ def file(mode='r', *, buffering=-1, encoding=None, errors=None,
                         newline=newline, opener=opener)
         except OSError as e:
             raise ValueError(
-                f"can't open {value!r}: {e.strerror or e}") from None
+                f"can't open {_r(value)}: {e.strerror or e}") from None
     file_converter.__name__ = 'file'
     if opener is None:
         file_converter.recipe = True
@@ -506,10 +506,10 @@ class mapping(MultiOption, metaclass=_Subscriptable):
     def option(self, item):
         key_text, equals, value_text = item.partition('=')
         if not equals:
-            raise ValueError(f"{item!r}: expected KEY=VALUE")
+            raise ValueError(f"{_r(item)}: expected KEY=VALUE")
         key = self._key_converter(key_text)
         if key in self.values:
-            raise ValueError(f"key {key_text!r} defined more than once")
+            raise ValueError(f"key {_r(key_text)} defined more than once")
         self.values[key] = self._value_converter(value_text)
 
     def __call__(self):

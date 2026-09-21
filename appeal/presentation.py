@@ -130,7 +130,7 @@ def scan_blocks(blocks, where=None, heading=None):
         label = '#' * block.level + ' ' + _heading_text(block)
         if sections[name] is not None:
             raise ConfigurationError(
-                f"{prefix}has two {label!r} sections")
+                f"{prefix}has two {_r(label)} sections")
         i += 1
         content = []
         while i < n and not isinstance(blocks[i], Heading):
@@ -313,6 +313,8 @@ _base_theme = {
 
     # inline structure
     'code':       ('T', 'T'),
+    'literal':    ('T', 'T'),  # a token painted as typed: [--x]{.option .literal}
+                               # (see quoted); never a reference
     'codeblock':  ('T', '⦃code⦙T⦄'),        # inherits code
     'link':       ('URL', 'T', 'T'),        # URL is luggage (big >= 0.15)
     'marker':     ('T', 'T'),
@@ -839,7 +841,7 @@ import inspect as _inspect
 import re as _re
 
 from .frontend import Terminal, _is_leaf
-from . import AppealConfigurationError
+from . import AppealConfigurationError, _r, escaped
 
 
 ##
@@ -892,7 +894,7 @@ def _doc_from_scan(scanned, where):
             if name in entries:
                 raise AppealConfigurationError(
                     f"{where}: in the {section} section: "
-                    f"{name!r} is documented twice")
+                    f"{_r(name)} is documented twice")
             entries[name] = _doc_from_scan(entry, where)
         return entries
 
@@ -938,6 +940,18 @@ def resolve_references(doc, lookup, where):
     `lookup(kind, name)` returns the reference's markup, or None when
     the owner has no such parameter; `where` names the docstring.
     """
+    resolve_reference_spans(doc['summary'] + doc['documentation'], lookup, where)
+    for kind in SPECIAL_SECTIONS:
+        for entry in doc[kind].values():
+            resolve_references(entry, lookup, where)
+    return doc
+
+
+def resolve_reference_spans(blocks, lookup, where):
+    """
+    Rewrite the reference spans in blocks (big's nodes) in place: a
+    docstring's prose, or an error message's paragraph.
+    """
     from big.markdown import Node, Span, StyledText, Text
 
     def replace(span):
@@ -945,12 +959,12 @@ def resolve_references(doc, lookup, where):
         if len(span.children) != 1 or not isinstance(span.children[0], Text):
             raise AppealConfigurationError(
                 f"{where}: a {kind} reference names a parameter in "
-                f"plain text: [name]{{.{kind}}}")
+                f"plain text: `[name]{{.{kind}}}`")
         name = span.children[0].text
         markup = lookup(kind, name)
         if markup is None:
             raise AppealConfigurationError(
-                f"{where}: [{name}]{{.{kind}}} names no {kind} of its own")
+                f"{where}: `[{name}]{{.{kind}}}` names no {kind} of its own")
         return StyledText(markup)
 
     def walk(node):
@@ -967,12 +981,24 @@ def resolve_references(doc, lookup, where):
             elif isinstance(value, Node):
                 walk(value)
 
-    for block in doc['summary'] + doc['documentation']:
+    for block in blocks:
         walk(block)
-    for kind in SPECIAL_SECTIONS:
-        for entry in doc[kind].values():
-            resolve_references(entry, lookup, where)
-    return doc
+
+
+def inline_markup(document):
+    """
+    One paragraph of inline Markdown--an error message, a hint--as
+    style markup: big styles the tree and the paragraph's text comes
+    back with the roles baked in; a hard break is a newline.  An
+    empty document is ''.
+    """
+    from big.markdown import style_document, HardBreak
+    styled = style_document(document)
+    if not styled.blocks:
+        return ''
+    (paragraph,) = styled.blocks
+    return ''.join('\n' if isinstance(node, HardBreak) else node.text
+                   for node in paragraph.children)
 
 
 def has_references(summary):
@@ -1237,20 +1263,20 @@ def merge_docs(plan, command_names=None):
         for segment in steps:
             if segment not in namespaces[qpath]:
                 raise AppealConfigurationError(
-                    f"{where}: {dotted!r} (in the {heading} section): "
-                    f"{segment!r} is not a parameter of {label(q)!r}")
+                    f"{where}: {_r(dotted)} (in the {heading} section): "
+                    f"{_r(segment)} is not a parameter of {named(q)}")
             hop = step(q, qpath, segment)
             if hop is None:
                 raise AppealConfigurationError(
-                    f"{where}: {dotted!r} (in the {heading} section): "
-                    f"{segment!r} takes no converter with parameters")
+                    f"{where}: {_r(dotted)} (in the {heading} section): "
+                    f"{_r(segment)} takes no converter with parameters")
             q, qpath = hop
         found = namespaces[qpath].get(last)
         if found is None:
             hint = _suggest_entry_paths(p, path, last) if not steps else ''
             raise AppealConfigurationError(
-                f"{where}: {dotted!r} (in the {heading} section) "
-                f"is not a parameter of {label(q)!r}{hint}")
+                f"{where}: {_r(dotted)} (in the {heading} section) "
+                f"is not a parameter of {named(q)}{hint}")
         return found, q, qpath, last
 
     def _suggest_entry_paths(p, path, name):
@@ -1279,7 +1305,12 @@ def merge_docs(plan, command_names=None):
         return f" (did you mean one of {', '.join(map(repr, found))}?)"
 
     def label(p):
-        return getattr(p.callable, '__name__', repr(p.callable))
+        # a docstring owner's name, escaped for the message it lands in
+        return escaped(getattr(p.callable, '__name__', repr(p.callable)))
+
+    def named(p):
+        # label(p), quoted like a repr (already escaped: not through _r)
+        return f"'{label(p)}'"
 
     def own_doc(p, where):
         return resolve_references(
@@ -1319,34 +1350,34 @@ def merge_docs(plan, command_names=None):
                 aimed = '.' in name
                 if found[0] == 'internal':
                     raise AppealConfigurationError(
-                        f"{where}: {name!r} is not one of the visible "
-                        f"command-line arguments of {label(owner)!r}")
+                        f"{where}: {_r(name)} is not one of the visible "
+                        f"command-line arguments of {named(owner)}")
                 if found[0] != kind[:-1]:
                     raise AppealConfigurationError(
-                        f"{where}: {name!r} (in the {heading} section) "
+                        f"{where}: {_r(name)} (in the {heading} section) "
                         f"is an {found[0]}, not an {kind[:-1]}")
                 if aimed and not found[2]:
                     raise AppealConfigurationError(
-                        f"{where}: {name!r} (in the {heading} section) "
+                        f"{where}: {_r(name)} (in the {heading} section) "
                         f"documents nothing on the page: an outer "
                         f"parameter stands for that one word, and names it")
                 if kind == 'arguments' and entry['requested']:
                     raise AppealConfigurationError(
-                        f"{where}: {name!r} (in the Arguments: section) "
+                        f"{where}: {_r(name)} (in the Arguments: section) "
                         f"has sections of its own; an argument's entry "
                         f"documents the operand--to replace its "
                         f"converter's docstring, use "
-                        f"@app.argument({name!r}, doc=...)")
+                        f"@app.argument({_r(name)}, doc=...)")
                 if aimed and last in owner.doc_overlaid:
                     raise AppealConfigurationError(
-                        f"{where}: {name!r} is documented twice--in the "
+                        f"{where}: {_r(name)} is documented twice--in the "
                         f"{heading} section and by doc=")
                 if kind == 'options' and entry['requested']:
                     target = next(o for o in owner.options if o.name == last)
                     if target.child is None:
                         raise AppealConfigurationError(
-                            f"{where}: {name!r} (in the Options: section) "
-                            f"has sections of its own, but {last!r} takes "
+                            f"{where}: {_r(name)} (in the Options: section) "
+                            f"has sections of its own, but {_r(last)} takes "
                             f"no converter to document")
                     if aimed:
                         # a dotted entry with sections is the whole
@@ -1357,12 +1388,12 @@ def merge_docs(plan, command_names=None):
         if doc['commands']:
             if p is not plan or not command_names:
                 raise AppealConfigurationError(
-                    f"{where}: a Commands: section, but {label(p)!r} "
+                    f"{where}: a Commands: section, but {named(p)} "
                     f"doesn't dispatch to commands")
             for word, entry in doc['commands'].items():
                 if word not in command_names:
                     raise AppealConfigurationError(
-                        f"{where}: {word!r} (in the Commands: section) "
+                        f"{where}: {_r(word)} (in the Commands: section) "
                         f"is not one of the command words")
                 docs[word] = _prose(entry)
         # a converter reached through an argument, consuming exactly
@@ -1388,7 +1419,7 @@ def merge_docs(plan, command_names=None):
             given = replacement(p, o.name, where)
             if entry is not None and given is not None:
                 raise AppealConfigurationError(
-                    f"{where}: {o.name!r} is documented twice--in the "
+                    f"{where}: {_r(o.name)} is documented twice--in the "
                     f"Options: section and by @app.option(doc=)")
             if rowkey in aimed_docs:
                 # a dotted entry from above, with sections: the whole
@@ -1409,8 +1440,8 @@ def merge_docs(plan, command_names=None):
                 if given is not None:
                     if given['requested']:
                         raise AppealConfigurationError(
-                            f"{where}: doc= for {s.name!r} has sections, "
-                            f"but {s.name!r} takes no converter to document")
+                            f"{where}: doc= for {_r(s.name)} has sections, "
+                            f"but {_r(s.name)} takes no converter to document")
                     found = namespaces[path][s.name]
                     docs.setdefault(found[1], _prose(given))
                 continue
@@ -1549,7 +1580,7 @@ def command_set_corpus(global_plan, head_plans, entries, doc=None,
             if name not in known:
                 raise AppealConfigurationError(
                     f"program documentation: 'Commands:' entry "
-                    f"{name!r} isn't a command word")
+                    f"{_r(name)} isn't a command word")
         arguments, options = head_tables(head_plans)
         corpus = {'summary': parsed['summary'],
                   'documentation': parsed['documentation'],

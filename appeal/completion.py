@@ -18,7 +18,7 @@
 import os
 import sys
 from .backend import parse_short_options, is_option_token
-from . import AppealConfigurationError, UsageError
+from . import AppealConfigurationError, UsageError, _r, escaped
 from .frontend import Terminal
 
 
@@ -312,14 +312,14 @@ def _value_candidates(converter, prefix):
     where = getattr(converter, '__name__', repr(converter))
     if not isinstance(values, tuple):
         raise AppealConfigurationError(
-            f"completions for {where!r} returned "
-            f"{type(values).__name__}, must return a tuple of str")
+            f"completions for {_r(where)} returned "
+            f"{escaped(type(values).__name__)}, must return a tuple of str")
     out = []
     for value in values:
         if not isinstance(value, str):
             raise AppealConfigurationError(
-                f"completions for {where!r} returned a "
-                f"{type(value).__name__}, must return a tuple of str")
+                f"completions for {_r(where)} returned a "
+                f"{escaped(type(value).__name__)}, must return a tuple of str")
         if value.startswith(prefix):
             out.append(value)
     return sorted(out)
@@ -543,7 +543,7 @@ def completion_script(shell, prog):
     if shell == 'fish':
         return _FISH_COMPLETION_SCRIPT.format(ident=ident, prog=prog)
     raise AppealConfigurationError(
-        f"unsupported completion shell {shell!r} "
+        f"unsupported completion shell {_r(shell)} "
         f"(supported: 'bash', 'zsh', 'fish')")
 
 

@@ -89,7 +89,7 @@ def _vet_default(callable, words):
     """
     if not builtins_callable(callable):
         raise AppealConfigurationError(
-            f"default must be a callable, not {callable!r}")
+            f"default must be a callable, not {_r(callable)}")
     from .frontend import signature, empty
     name = getattr(callable, '__name__', repr(callable))
     required = 0
@@ -103,7 +103,7 @@ def _vet_default(callable, words):
             accepted = None
         elif p.kind is p.KEYWORD_ONLY and p.default is empty:
             raise AppealConfigurationError(
-                f"default {name!r} requires {p.name!r}, which nothing "
+                f"default {_r(name)} requires {_r(p.name)}, which nothing "
                 f"supplies")
     n = len(words)
     if required > n or (accepted is not None and accepted < n):
@@ -112,12 +112,12 @@ def _vet_default(callable, words):
         elif None in words:             # an anonymous node: depth known, word not
             reach = f"{n} word{'s' if n > 1 else ''}"
         else:
-            reach = ' '.join(repr(w) for w in words)
+            reach = ' '.join(_r(w) for w in words)
         takes = ('any number' if accepted is None
                  else f'{required}' if required == accepted
                  else f'{required} to {accepted}')
         raise AppealConfigurationError(
-            f"default {name!r} takes {takes}; here it is called with "
+            f"default {_r(name)} takes {takes}; here it is called with "
             f"{reach} (the command words that reach it)")
 
 
@@ -142,24 +142,37 @@ def _defined_in_class(callable):
 def quoted(text, role=None):
     """
     A token from the command line, quoted for an error message:
-    repr's quoting, the text escaped for style markup, and--when
-    role is given--wearing that role inside the quotes, so the word
-    is painted as it is on the usage line (Larry, 2026-09-12: color
-    inside the quotes, the whole family).  UsageError messages are
-    style markup; str() strips it.
+    repr's quoting, the text escaped for Markdown, and--when role is
+    given--wearing that role inside the quotes, so the word is painted
+    as it is on the usage line (Larry, 2026-09-12: color inside the
+    quotes, the whole family).  Error messages are Markdown (Larry,
+    2026-09-21); the token is a span in the role, `[--x]{.option
+    .literal}`: painted as typed, never a reference (a span in the
+    argument or option role ALONE names a parameter).
     """
-    from big.stylesheet import escape_styles, style
     r = repr(str(text))
-    inner = escape_styles(r[1:-1])
+    inner = escaped(r[1:-1])
     if role is not None:
-        inner = style(role, inner)
+        inner = f'[{inner}]{{.{role} .literal}}'
     return r[0] + inner + r[0]
 
 
+_PUNCTUATION = frozenset('!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~')
+
+
 def escaped(text):
-    "Text of unknown provenance, made safe to drop into an error's markup."
-    from big.stylesheet import escape_styles
-    return escape_styles(str(text))
+    """
+    Text of unknown provenance, made safe to drop into an error
+    message: a backslash before every ASCII punctuation character
+    (CommonMark: exactly those may be escaped), so the text reads
+    back as itself.
+    """
+    return ''.join('\\' + c if c in _PUNCTUATION else c for c in str(text))
+
+
+def _r(value):
+    "repr(value), escaped: the {x!r} of an error message."
+    return escaped(repr(value))
 
 
 def did_you_mean(word, candidates, role):
@@ -398,7 +411,80 @@ class AppealError(Exception):
     stop the program with a polite message but *without* usage
     (the command line was fine)--main() prints `error: ...` and
     exits 1.
+
+    The message is one paragraph of inline Markdown (Larry,
+    2026-09-21): `**bold**`, `code`, and `[text]{.role}` spans render
+    through the same pipeline as help.  In a UsageError raised from
+    a command, `[src]{.argument}` and `[region]{.option}` name that
+    command's parameters and render as the usage line spells them.
+    Data goes in a code span or through escaped().  str() is the
+    plain text; .markdown is the source; .document is big's tree;
+    render(sheet) paints it.  The Markdown is parsed on construction,
+    so malformed markup raises a ConfigurationError where the message
+    was written.
     """
+    def __init__(self, message, *args):
+        super().__init__(message, *args)
+        self._markdown = message
+        self._document = _message_document(message)
+
+    @property
+    def markdown(self):
+        "The message as written."
+        return self._markdown
+
+    @property
+    def document(self):
+        "The message parsed: big's MarkdownDocument."
+        return self._document
+
+    def __str__(self):
+        from big.stylesheet import strip_styles
+        from .presentation import inline_markup
+        return strip_styles(inline_markup(self._document))
+
+    def render(self, sheet):
+        "The message painted through a stylesheet."
+        from .presentation import inline_markup
+        return sheet.render(inline_markup(self._document))
+
+    def _resolve(self, plan):
+        """
+        The message's references--[c]{.argument}, [region]{.option}--
+        name the parameters of the command that raised: resolved
+        here, once, where Appeal catches the error at its dispatch
+        boundary (where the usage trailer attaches).  Until then
+        str() shows a reference as its name.  A name the command
+        lacks is a ConfigurationError quoting the message.  None: no
+        plan, nothing to reference.
+        """
+        from .presentation import (no_references, plan_references,
+                                   resolve_reference_spans)
+        lookup = plan_references(plan) if plan is not None else no_references
+        resolve_reference_spans(self._document.blocks, lookup,
+                                f"error message {_r(self._markdown)}")
+
+
+def _message_document(message):
+    # an error's Markdown, parsed when the error is made (Larry,
+    # 2026-09-21: early, so a malformed message fails where it was
+    # written).  One paragraph, or nothing.
+    if not isinstance(message, str):
+        raise AppealConfigurationError(
+            f"an error message is a string of Markdown, not {_r(message)}")
+    from big.markdown import parse, Paragraph
+    try:
+        document = parse(message)
+    except ValueError as e:
+        raise AppealConfigurationError(
+            f"malformed Markdown in an error message, {_r(message)}: "
+            f"{escaped(e)}") from e
+    if document.blocks and not (len(document.blocks) == 1
+                                and isinstance(document.blocks[0], Paragraph)):
+        raise AppealConfigurationError(
+            f"an error message is one paragraph of inline Markdown, "
+            f"not {_r(message)}")
+    return document
 
 
 class ConfigurationError(AppealError):
@@ -414,12 +500,8 @@ class DataError(AppealError):
     The data handed to the program is wrong--whatever its
     provenance: a config mapping, a mapping or CSV row being read,
     or (the most common data of all) the command line.  Carries
-    the command's usage text when there is one to show.  The
-    message is plain text (UsageError's is markup).
+    the command's usage text when there is one to show.
     """
-    def render(self, sheet):
-        return str(self)
-
     def __init__(self, message, usage=None, param=None):
         super().__init__(message)
         # usage: the error's TRAILER--a callable usage(file) -> str that
@@ -438,18 +520,10 @@ class DataError(AppealError):
 class UsageError(DataError):
     """
     The command line specifically is wrong.  Printing it shows
-    the message and the command's usage.  The message is style
-    MARKUP: the tokens it names wear the roles they wear on the
-    usage line (see quoted), and any text of unknown provenance
-    in it is escaped.  str() gives the plain text; render(sheet)
-    paints it.
+    the message and the command's usage.  The tokens the message
+    names wear the roles they wear on the usage line (see quoted);
+    text of unknown provenance in it is escaped.
     """
-    def __str__(self):
-        from big.stylesheet import strip_styles
-        return strip_styles(self.args[0])
-
-    def render(self, sheet):
-        return sheet.render(self.args[0])
 
 
 class CommandError(AppealError):
@@ -636,7 +710,7 @@ def __getattr__(name):
     spec = _LAZY_REEXPORTS.get(name)
     if spec is None:
         raise AttributeError(
-            f"module {__name__!r} has no attribute {name!r}")
+            f"module {_r(__name__)} has no attribute {_r(name)}")
     import importlib
     modname, attr = spec if isinstance(spec, tuple) else (spec, name)
     value = getattr(importlib.import_module('.' + modname, __name__), attr)
@@ -721,8 +795,8 @@ def _merge_era_options(plans):
                 if prior is plan:       # scoped within one era: ruled there
                     continue
                 raise AppealConfigurationError(
-                    f"option {s!r} is declared by two precommands "
-                    f"({prior.name!r} and {plan.name!r}); an option string "
+                    f"option {_r(s)} is declared by two precommands "
+                    f"({_r(prior.name)} and {_r(plan.name)}); an option string "
                     f"needs one owner across the precommands")
     claimed = dict(written)
     for plan, option, s in autos:
@@ -777,10 +851,11 @@ def _overview_trailer(node):
         text = _line_trailer(node, node._head_usage_units())(file)
         hint = node._help_hint()
         if hint:
-            from .presentation import resolve_stylesheet
+            from big.markdown import parse
+            from .presentation import inline_markup, resolve_stylesheet
             sheet = resolve_stylesheet(node.stylesheet, file,
                                        node.plain_stylesheet)
-            text += '\n' + sheet.render(hint)
+            text += '\n' + sheet.render(inline_markup(parse(hint)))
         return text
     return trailer
 
@@ -832,12 +907,12 @@ def _config_vet(plan, table_words, config, command_plan_for,
                     if not strict:
                         continue
                     raise AppealDataError(
-                        f"config: {where!r} is a converter group; its "
-                        f"section must be a mapping, not {value!r}",
+                        f"config: {_r(where)} is a converter group; its "
+                        f"section must be a mapping, not {_r(value)}",
                         param=key)
                 if here is None:
                     raise AppealConfigurationError(
-                        f"config: {where!r} is a converter behind a *args "
+                        f"config: {_r(where)} is a converter behind a `*args` "
                         f"slot; a mapping can't say which window")
                 walk(slot.child, value, steps + (('slot', slot, here),), where)
                 continue
@@ -845,14 +920,14 @@ def _config_vet(plan, table_words, config, command_plan_for,
                 continue
             if slot is not None:
                 raise AppealDataError(
-                    f"config: {where!r} is a positional argument; config "
+                    f"config: {_r(where)} is a positional argument; config "
                     f"supplies only options", param=key)
             # say where the key actually lives, if anywhere
             owner = _config_owner_of(plan, key)
             if owner is not None:
                 raise AppealDataError(
-                    f"config: {key!r} is an option of {owner!r}; put it "
-                    f"in the {owner!r} section", param=key)
+                    f"config: {_r(key)} is an option of {_r(owner)}; put it "
+                    f"in the {_r(owner)} section", param=key)
             for word in table_words:
                 try:
                     p = command_plan_for(word)
@@ -860,16 +935,16 @@ def _config_vet(plan, table_words, config, command_plan_for,
                     continue            # a command that can't build is no help
                 if any(s.name == key for s in p.slots):
                     raise AppealDataError(
-                        f"config: {key!r} is a positional argument "
-                        f"of {word!r}; config supplies only options",
+                        f"config: {_r(key)} is a positional argument "
+                        f"of {_r(word)}; config supplies only options",
                         param=key)
                 if any(o.config_key == key
                        for owner, o in p.all_options()):
                     raise AppealDataError(
-                        f"config: {key!r} is an option of {word!r}; "
-                        f"put it in the {word!r} section", param=key)
+                        f"config: {_r(key)} is an option of {_r(word)}; "
+                        f"put it in the {_r(word)} section", param=key)
             raise AppealDataError(
-                f"config: {key!r} isn't an option here", param=key)
+                f"config: {_r(key)} isn't an option here", param=key)
 
     walk(plan, config, (), '')
     return out
@@ -1009,7 +1084,7 @@ def _refuse_orphan_method(callable):
     qualname = getattr(callable, '__qualname__', '')
     if parameters and parameters[0] == 'self' and '.' in qualname:
         raise AppealConfigurationError(
-            f"{qualname}: first parameter is 'self' but no class "
+            f"{escaped(qualname)}: first parameter is 'self' but no class "
             f"claims this command--did you forget to decorate the "
             f"class?")
 
@@ -1052,7 +1127,7 @@ def _vet_restriction(restriction, where):
     if restriction not in _RESTRICTIONS:
         raise AppealConfigurationError(
             f"{where}: restriction= is None, 'hidden' or 'deprecated', "
-            f"not {restriction!r}")
+            f"not {_r(restriction)}")
 
 
 def _warn_deprecated_options(invoked):
@@ -1105,6 +1180,7 @@ class _Step:
             node = self.node
             e.usage = _line_trailer(
                 node, node._children[self.word]._head_usage_units())
+            e._resolve(self.cls.plan)
 
     def execute(self, holder, env):
         assert not self.done
@@ -1128,6 +1204,7 @@ class _Step:
             except AppealDataError as e:
                 if e.usage is None:             # outside any command's era:
                     e.usage = _global_trailer(node)     # global usage
+                    e._resolve(self.plan)
                 raise
             if plan.constructs is not None:     # a global class-as-app: its
                 env[plan.constructs] = result   # methods bind to this
@@ -1145,6 +1222,7 @@ class _Step:
             except AppealDataError as e:
                 if e.usage is None:
                     e.usage = _overview_trailer(node)
+                    e._resolve(node.plan)
                 raise
             holder.instances.append((None, None))
             return result
@@ -1411,7 +1489,7 @@ class Appeal:
         if default_options is not None and not callable(default_options):
             raise AppealConfigurationError(
                 f"default_options must be callable or None, "
-                f"not {default_options!r}")
+                f"not {_r(default_options)}")
         self.default_options = default_options
         # the program-level defaults pass (Larry's design,
         # 2026-07-19): default_mappings(app) runs ONCE, at first
@@ -1424,7 +1502,7 @@ class Appeal:
         if default_mappings is not None and not callable(default_mappings):
             raise AppealConfigurationError(
                 f"default_mappings must be callable or None, "
-                f"not {default_mappings!r}")
+                f"not {_r(default_mappings)}")
         self.default_mappings = default_mappings
         self._finalized = False
         self._precommand_options = {}   # param -> (strings...)
@@ -1455,7 +1533,7 @@ class Appeal:
         if errors is not None and not hasattr(errors, 'write'):
             raise AppealConfigurationError(
                 f"errors= must be a writable file object "
-                f"(sys.stderr, sys.stdout, ...), not {errors!r}")
+                f"(sys.stderr, sys.stdout, ...), not {_r(errors)}")
         self.errors = errors
         # cycling is PER NODE (ruled 2026-08-22; Larry confirmed
         # 2026-09-17): `repeat` on a node means its
@@ -1487,7 +1565,7 @@ class Appeal:
         if margin is not None and (not isinstance(margin, int)
                                    or margin <= 0):
             raise AppealConfigurationError(
-                f"margin must be None or a positive int, not {margin!r}")
+                f"margin must be None or a positive int, not {_r(margin)}")
         self.margin = margin
         # the help template: ONE string, six {sections}, its headings
         # Markdown, yours to replace.  Loaded lazily (it lives in render, which
@@ -1548,7 +1626,7 @@ class Appeal:
         """
         if self is self.root and word in self._topics:
             raise AppealConfigurationError(
-                f"help topic {word!r} is also a command word")
+                f"help topic {_r(word)} is also a command word")
 
     def _child(self, word):
         "Fetch-or-create the child Appeal for a command word."
@@ -1608,8 +1686,8 @@ class Appeal:
                 # one word, refused
                 if self._children or self._node_default is not None:
                     raise AppealConfigurationError(
-                        f"command {word!r} already exists under "
-                        f"{parent._prog()!r}; use app.command({word!r}) "
+                        f"command {_r(word)} already exists under "
+                        f"{_r(parent._prog())}; use app.command({_r(word)}) "
                         f"to reach it")
                 existing._node_repeat = existing._node_repeat or self._node_repeat
                 existing._node_share = existing._node_share or self._node_share
@@ -1781,7 +1859,7 @@ class Appeal:
             raise AppealConfigurationError(
                 f"{kind[:-len('_options')] if kind.endswith('_options') else kind}"
                 f": only the program maps these, not the command "
-                f"{self._prog()!r}")
+                f"{_r(self._prog())}")
         self._mapping_requests.append((kind, value))
         self._invalidate()
 
@@ -1830,15 +1908,15 @@ class Appeal:
             if (node._impl is None
                     and (node._children or node._node_default is not None)):
                 raise AppealConfigurationError(
-                    f"command {node._prog()!r} has subcommands or a default "
+                    f"command {_r(node._prog())} has subcommands or a default "
                     f"but no body: decorate a function with "
-                    f"@app.command({word!r}) (Appeal never synthesizes one)")
+                    f"@app.command({_r(word)}) (Appeal never synthesizes one)")
         # an anonymous node never named: nothing on the line can reach
         # it, and nothing it was given can run
         for parent in (self,) + tuple(node for _, node in self._iter_nodes()):
             for node in parent._anonymous:
                 raise AppealConfigurationError(
-                    f"a command of {parent._prog()!r} was made with "
+                    f"a command of {_r(parent._prog())} was made with "
                     f"app.command() but never given a body: decorate a "
                     f"function with it, which names it")
 
@@ -2015,7 +2093,7 @@ class Appeal:
         for word, node in self._iter_set_nodes():
             if word in out:
                 raise AppealConfigurationError(
-                    f"two nested command sets named {word!r}")
+                    f"two nested command sets named {_r(word)}")
             out[word] = [(w, c._command_callable())
                          for w, c in node._children.items()
                          if c._command_callable() is not None]
@@ -2046,7 +2124,7 @@ class Appeal:
         word = name if name is not None else callable.__name__.replace('_', '-')
         if word.startswith('-'):
             raise AppealConfigurationError(
-                f"a command name can't start with a dash: {word!r} "
+                f"a command name can't start with a dash: {_r(word)} "
                 f"(commands are words, not options)")
         return word
 
@@ -2080,7 +2158,7 @@ class Appeal:
             if not isinstance(name, str):
                 raise AppealConfigurationError(
                     f"command(): the command word must be a "
-                    f"string, not {name!r}")
+                    f"string, not {_r(name)}")
             node = self._child(self._command_word(name))
             if repeat and not node._node_repeat:
                 node._node_repeat = True
@@ -2121,12 +2199,12 @@ class Appeal:
         """
         if not _TOPIC_NAME.fullmatch(name):
             raise AppealConfigurationError(
-                f"help topic {name!r}: a topic's name is lowercase "
+                f"help topic {_r(name)}: a topic's name is lowercase "
                 f"letters, digits, and dashes, starting with a letter")
         root = self.root
         if name in root._children:
             raise AppealConfigurationError(
-                f"help topic {name!r} is also a command word")
+                f"help topic {_r(name)} is also a command word")
         root._topics[name] = doc
 
     def _page_topics(self):
@@ -2230,10 +2308,10 @@ class Appeal:
             # from the user's side (Larry, 2026-09-09).  In the back pocket.
             raise AppealConfigurationError(
                 f"precommand(): only the program has precommands, not the "
-                f"command {self._prog()!r}")
+                f"command {_r(self._prog())}")
         if not isinstance(share, bool):
             raise AppealConfigurationError(
-                f"precommand(): share= is True or False, not {share!r}")
+                f"precommand(): share= is True or False, not {_r(share)}")
         def decorator(callable):
             if index == -1:
                 self._precommands.append(callable)
@@ -2260,12 +2338,12 @@ class Appeal:
         def decorator(cls):
             if not isinstance(cls, type):
                 raise AppealConfigurationError(
-                    f"app(): a class, not {cls!r}--a function is a "
+                    f"app(): a class, not {_r(cls)}--a function is a "
                     f"precommand: @app.precommand()")
             if self._class_app is not None:
                 raise AppealConfigurationError(
                     f"app(): the program is already the class "
-                    f"{self._class_app.__name__!r}")
+                    f"{_r(self._class_app.__name__)}")
             self._class_app = cls
             return self.precommand()(cls)
         return decorator
@@ -2304,8 +2382,8 @@ class Appeal:
             if prior is not None and prior != key:
                 names = sorted(k.rsplit('.', 1)[-1] for k in (prior, key))
                 raise AppealConfigurationError(
-                    f"{fn.__name__!r} is a method of both {names[0]!r} and "
-                    f"{names[1]!r}; a command function belongs to one class")
+                    f"{_r(fn.__name__)} is a method of both {_r(names[0])} and "
+                    f"{_r(names[1])}; a command function belongs to one class")
             owners[id(fn)] = key
         def add_class(fn, mount):
             # a class mounted in ANY slot (precommand era, command, default);
@@ -2347,9 +2425,9 @@ class Appeal:
                                      if mount is self else
                                      f"{key!r}'s own mount")
                             raise AppealConfigurationError(
-                                f"{fn.__name__!r} is a method of "
-                                f"{key!r}, but it's mounted under "
-                                f"{where!r}; a method mounts only "
+                                f"{_r(fn.__name__)} is a method of "
+                                f"{_r(key)}, but it's mounted under "
+                                f"{_r(where)}; a method mounts only "
                                 f"at {place} (the same-world "
                                 f"rule)")
                     claim(child)
@@ -2399,7 +2477,7 @@ class Appeal:
                 if name not in ('version', 'help'):
                     raise AppealConfigurationError(
                         f"option: the precommand has no parameter "
-                        f"{name!r} (only 'help' and 'version')")
+                        f"{_r(name)} (only 'help' and 'version')")
                 root = callable.__self__.root
                 root._precommand_options[name] = tuple(options)
                 root._precommand_overrides[name] = (annotation, default)
@@ -2418,8 +2496,8 @@ class Appeal:
                 named = code.co_argcount + code.co_kwonlyargcount
                 if name not in code.co_varnames[1:named]:
                     raise AppealConfigurationError(
-                        f"option: {callable.__func__.__name__} has "
-                        f"no parameter {name!r}")
+                        f"option: {escaped(callable.__func__.__name__)} has "
+                        f"no parameter {_r(name)}")
                 root = callable.__self__.root
                 root._decorations.add_option(
                     callable, name, options,
@@ -2605,7 +2683,7 @@ class Appeal:
             return transform('\n\n'.join(parts))
         if format != 'troff':
             raise AppealConfigurationError(
-                f"documentation format {format!r} isn't supported "
+                f"documentation format {_r(format)} isn't supported "
                 f"(only 'gfm', 'commonmark', and 'troff', for now)")
         from .presentation import command_set_corpus, man_page, page_corpus
         prog = self._prog()
@@ -2673,7 +2751,7 @@ class Appeal:
             if version not in _APPEAL_VERSIONS:
                 raise AppealConfigurationError(
                     f"schema(): unknown 'appeal' schema version "
-                    f"{version!r}; this Appeal renders "
+                    f"{_r(version)}; this Appeal renders "
                     f"{', '.join(map(repr, _APPEAL_VERSIONS))}")
             if not table:
                 return describe(self.plan)
@@ -2683,14 +2761,14 @@ class Appeal:
             if version not in _MCP_VERSIONS:
                 raise AppealConfigurationError(
                     f"schema(): unknown 'mcp' schema version "
-                    f"{version!r}; this Appeal renders "
+                    f"{_r(version)}; this Appeal renders "
                     f"{', '.join(map(repr, _MCP_VERSIONS))}")
             if not table:
                 return {self._prog(): mcp_input_schema(self.plan)}
             return {word: mcp_input_schema(self._children[word].plan)
                     for word in table}
         raise AppealConfigurationError(
-            f"schema(): unknown format {format!r}; the formats are "
+            f"schema(): unknown format {_r(format)}; the formats are "
             f"'appeal' and 'mcp'")
 
     def read_mapping(self, callable, mapping, *, strict=True):
@@ -2735,7 +2813,7 @@ class Appeal:
         """
         if usage is None and doc is None:
             raise AppealConfigurationError(
-                f"argument({parameter_name!r}): give usage= or doc=")
+                f"argument({_r(parameter_name)}): give usage= or doc=")
         def decorator(callable):
             if usage is not None:
                 self.root._decorations.add_usage(callable,
@@ -2786,7 +2864,7 @@ class Appeal:
                  if node._command_callable() is not None}
         if self._global is not None and self._global.__name__ in table:
             raise AppealConfigurationError(
-                f"the precommand {self._global.__name__!r} has the "
+                f"the precommand {_r(self._global.__name__)} has the "
                 f"same name as a command")
         if not table and self._global is None:
             raise AppealConfigurationError(
@@ -2851,7 +2929,7 @@ class Appeal:
             callable = node._command_callable()
             if callable is None:
                 raise AppealConfigurationError(
-                    f"no command named {word!r}")
+                    f"no command named {_r(word)}")
             owner = self._method_owner.get(id(callable))
             if owner is None:
                 _refuse_orphan_method(callable)
@@ -2874,10 +2952,10 @@ class Appeal:
                                     and plan.maximum < n):
                 # the handler is called with the words that reach the
                 # node (Larry, 2026-09-18); a method's self is bound
-                reach = (' '.join(repr(w) for w in self._words())
+                reach = (' '.join(_r(w) for w in self._words())
                          if n else 'no arguments')
                 raise AppealConfigurationError(
-                    f"default {plan.name!r} takes {plan.minimum}"
+                    f"default {_r(plan.name)} takes {plan.minimum}"
                     f"{'' if plan.maximum == plan.minimum else ' or more' if plan.maximum is None else f' to {plan.maximum}'}"
                     f"; here it is called with {reach} (the command words "
                     f"that reach it)")
@@ -3229,8 +3307,8 @@ class Appeal:
                         or any(id(order[i]) in explicit
                                for i in members if i < ci)):
                     raise AppealConfigurationError(
-                        f"precommand ordering conflict: {name(cls)!r} builds "
-                        f"the instance its member {name(order[first])!r} "
+                        f"precommand ordering conflict: {_r(name(cls))} builds "
+                        f"the instance its member {_r(name(order[first]))} "
                         f"needs, so it must run first, but an explicit index= "
                         f"places the member ahead of it")
                 order.pop(ci)
@@ -3325,10 +3403,10 @@ class Appeal:
         except CommandError as e:
             # the command failed on purpose: message, its chosen
             # code, no usage (the command line was fine)
-            print(f"{error_prefix()} {e}", file=error_stream())
+            print(f"{error_prefix()} {e.render(sheet())}", file=error_stream())
             return e.exit_code
         except AppealError as e:
-            print(f"{error_prefix()} {e}", file=error_stream())
+            print(f"{error_prefix()} {e.render(sheet())}", file=error_stream())
             return 1
         # the same reading as backend._halts: an exit status is an int
         # that isn't a bool.  True/False are answers, not verdicts--a
@@ -3516,6 +3594,7 @@ class Appeal:
                 # execute, in pass 2
                 assert e.usage is None
                 e.usage = _global_trailer(self)
+                e._resolve(self.plan)
             else:
                 step.attach_usage(e)
             raise
@@ -3544,8 +3623,8 @@ class Appeal:
             if key in table:
                 if not isinstance(value, Mapping):
                     raise AppealDataError(
-                        f"config: {key!r} is a command; its section must "
-                        f"be a mapping, not {value!r}")
+                        f"config: {_r(key)} is a command; its section must "
+                        f"be a mapping, not {_r(value)}")
                 sections[key] = value
             else:
                 own[key] = value
@@ -3567,8 +3646,8 @@ class Appeal:
                     other = owners.setdefault(o.config_key, plan)
                     if other is not plan:
                         raise AppealConfigurationError(
-                            f"config: {o.config_key!r} is an option of two "
-                            f"precommands, {other.name!r} and {plan.name!r}")
+                            f"config: {_r(o.config_key)} is an option of two "
+                            f"precommands, {_r(other.name)} and {_r(plan.name)}")
         per_plan = {}
         for key, value in own.items():
             plan = owners.get(key)
@@ -3576,7 +3655,7 @@ class Appeal:
                 if not plans:
                     if self.strict:
                         raise AppealDataError(
-                            f"config: {key!r} isn't an option here")
+                            f"config: {_r(key)} isn't an option here")
                     continue
                 plan = plans[-1]
             per_plan.setdefault(id(plan), {})[key] = value
@@ -3764,7 +3843,7 @@ class Appeal:
             if config is not None:
                 raise AppealConfigurationError(
                     "mcp(): config feeds a class-based program's "
-                    "__init__ at server startup; this program has "
+                    "`__init__` at server startup; this program has "
                     "no class to construct")
             return None
         _config_vet(global_plan, frozenset(table), config or {},
@@ -3784,7 +3863,7 @@ class Appeal:
             # exist only under a class global, whose instance always
             # constructs at startup; belt and braces
             raise AppealConfigurationError(
-                f"{word!r}: bound to {plan.binds!r}, and no startup "
+                f"{_r(word)}: bound to {_r(plan.binds)}, and no startup "
                 f"instance provides it")
         if plan.constructs is not None:
             # a bound inner class: construction goes through the
@@ -3904,11 +3983,12 @@ class Appeal:
                 if text:
                     print(text)
             except AppealConfigurationError as e:
-                print(f"{sheet.render(style('error', 'configuration error:'))} {e}")
+                print(f"{sheet.render(style('error', 'configuration error:'))} "
+                      f"{e.render(sheet)}")
             except AppealError as e:
                 # CommandError and kin: the command said no.  Its exit
                 # code means nothing to a session that isn't exiting.
-                print(f"{sheet.render(style('error', 'error:'))} {e}")
+                print(f"{sheet.render(style('error', 'error:'))} {e.render(sheet)}")
             except SystemExit:
                 pass        # -h/--version printed their page already
             except KeyboardInterrupt:
