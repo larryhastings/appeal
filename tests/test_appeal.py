@@ -5787,6 +5787,10 @@ def test_documentation_man():
     assert '.B mytool greet [\\-h|\\-\\-help] [\\-s|\\-\\-shout] <NAME>' in text, text
     assert '.SH OPTIONS' in text and 'Print a trace' in text
     assert '.SS "mytool greet"' in text
+    # full mode (Larry, 2026-09-22): no listing rows under COMMANDS,
+    # every subsection opens with its summary
+    assert '.SH COMMANDS\n.SS "mytool greet"' in text, text
+    assert '.SS "mytool greet"\n.B mytool greet [\\-h|\\-\\-help] [\\-s|\\-\\-shout] <NAME>\n.PP\nGreets a name.' in text, text
     # every depth gets a subsection and a SYNOPSIS line (Larry,
     # 2026-09-19); Appeal's own help command shows its documentation,
     # never implementation notes, and its -h operand says nothing
@@ -5807,8 +5811,8 @@ def test_documentation_man():
     assert '.SS "deep db start"' in page and page.index('.SS "deep db"') < page.index('.SS "deep db start"')
     assert 'Which port.' in page
     # a set's subsection lists its commands, like its help page
-    assert page.index('.SS "deep db"') < page.index('.B Commands:') < page.index('.SS "deep db start"')
-    assert 'Start the database.' in page
+    assert '.B Commands:' not in page       # the subsections are the listing
+    assert '.SS "deep db start"\n.B deep db start [\\-h|\\-\\-help] [<PORT>]\n.PP\nStart the database.' in page, page
     assert 'knobs' not in page and 'post-it' not in page and 'Larry' not in page, page
     assert "The help option's operand" not in page
     assert '.B \\-s|\\-\\-shout' in text and 'LOUDER.' in text
@@ -8459,9 +8463,9 @@ def test_help_topics():
     app.topic('headed', '# Headed\n\nBody.')
     app.topic('short', 'Just a line.')
     man = app.documentation('troff')
-    assert '.B headed\n.TP\n.B short\nJust a line.' in man, man
+    assert '.TP\n.B headed' not in man and '.TP\n.B short' not in man
     assert '.SS "hg help headed"\n.SH Headed\n.PP\nBody.' in man, man
-    assert man.rstrip().endswith('.SS "hg help short"'), man
+    assert man.rstrip().endswith('.SS "hg help short"\nJust a line.'), man
     assert 'headed' in run(app, 'help') and 'Body.' in run(app, 'help', 'headed')
     del app.root._topics['headed'], app.root._topics['short']
     # a subcommand set's overview lists no topics

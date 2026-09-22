@@ -1709,10 +1709,10 @@ def man_page(prog, corpus, usage, command_pages=None, version=None,
     from the same predigested rows --help renders.  command_pages,
     for a multi-command program, is [(words, usage, corpus), ...],
     every command at every depth in tree order, `words` its word path
-    ('db start')--each becomes a subsection under COMMANDS, and each
-    usage a SYNOPSIS line.  topics is [(name, corpus), ...], the
-    program's help topics: a TOPICS section listing them, then a
-    subsection per topic, `prog help name`.  Returns the troff
+    ('db start')--each becomes a subsection under COMMANDS (its whole
+    page: summary, prose, tables), and each usage a SYNOPSIS line.
+    topics is [(name, corpus), ...], the program's help topics: a
+    subsection per topic under TOPICS, `prog help name`.  Returns the troff
     text; installing it somewhere is packaging's business, not
     Appeal's.
     """
@@ -1776,22 +1776,23 @@ def man_page(prog, corpus, usage, command_pages=None, version=None,
         paragraphs(corpus['documentation'])
     rows('ARGUMENTS', corpus['arguments'])
     rows('OPTIONS', corpus['options'])
+    # full mode (Larry, 2026-09-22): an output either lists commands
+    # with their summaries, or documents every command in full--never
+    # both carved up.  The man page is the full one: a subsection per
+    # command at every depth, each its whole page (summary first), no
+    # listing rows above and no Commands: block within (the
+    # subsections that follow ARE the listing).  Topics the same.
     if command_pages:
         line('.SH COMMANDS')
-        for word, lines, nested in corpus['commands']:
-            line('.TP')
-            line(f'.B {esc(word)}')
-            if lines:
-                paragraphs(lines)
         for word, sub_usage, sub_corpus in command_pages:
             line(f'.SS "{esc(prog)} {esc(word)}"')
             line(f'.B {opt(sub_usage)}')
-            if sub_corpus['documentation']:
-                line('.PP')
-                paragraphs(sub_corpus['documentation'])
+            for blocks in (sub_corpus['summary'], sub_corpus['documentation']):
+                if blocks:
+                    line('.PP')
+                    paragraphs(blocks)
             for label, pairs in (('Arguments:', sub_corpus['arguments']),
-                                 ('Options:', sub_corpus['options']),
-                                 ('Commands:', sub_corpus['commands'])):
+                                 ('Options:', sub_corpus['options'])):
                 if not pairs:
                     continue
                 line('.PP')
@@ -1800,12 +1801,8 @@ def man_page(prog, corpus, usage, command_pages=None, version=None,
     if topics:
         line('.SH TOPICS')
         for name, page in topics:
-            line('.TP')
-            line(f'.B {esc(name)}')
-            if page['summary']:
-                paragraphs(page['summary'])
-        for name, page in topics:
             line(f'.SS "{esc(prog)} help {esc(name)}"')
-            if page['documentation']:
-                paragraphs(page['documentation'])
+            for blocks in (page['summary'], page['documentation']):
+                if blocks:
+                    paragraphs(blocks)
     return '\n'.join(out) + '\n'
