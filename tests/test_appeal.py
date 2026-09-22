@@ -8631,8 +8631,8 @@ def test_prose_references():
 
 
 def test_error_messages_are_markdown():
-    # Larry, 2026-09-21: an error's message is one paragraph of inline
-    # Markdown, parsed on construction.  str() is the plain text,
+    # Larry, 2026-09-21: an error's message is Markdown, parsed on
+    # construction; any blocks at all, never wrapped by Appeal.  str() is the plain text,
     # .markdown the source, .document big's tree, render(sheet) the
     # painted text; [c]{.argument}/[region]{.option} in a UsageError
     # raised from a command resolve against that command where Appeal
@@ -8661,12 +8661,14 @@ def test_error_messages_are_markdown():
     assert str(UsageError(f"see {quoted('*a*', 'argument')} and {escaped('**b**')}")) == "see '*a*' and **b**"
     # an empty message is legal, and nothing
     assert str(AppealError('')) == '' and AppealError('').document.blocks == []
+    # any blocks: paragraphs, a list--laid out, sentences one space
+    # apart, never wrapped (the terminal does that)
+    many = CommandError("Two sentences.  Joined\nsoftly.\n\n- one\n- two\n\n" + "long " * 40 + "line")
+    assert str(many) == "Two sentences. Joined softly.\n\n• one\n• two\n\n" + "long " * 40 + "line"
     # refused at construction, where the message was written: not a
-    # string, malformed span markup, more than one paragraph
+    # string, malformed span markup
     for message, text in ((3, "an error message is a string of Markdown, not 3"),
-                          ("see [x]{#id}", "malformed Markdown in an error message, 'see [x]{#id}': bracketed span"),
-                          ("one\n\ntwo", "an error message is one paragraph of inline Markdown, not 'one\\n\\ntwo'"),
-                          ("# heading", "one paragraph of inline Markdown, not '# heading'")):
+                          ("see [x]{#id}", "malformed Markdown in an error message, 'see [x]{#id}': bracketed span")):
         try:
             CommandError(message)
             assert False, message

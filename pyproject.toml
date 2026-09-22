@@ -51,6 +51,7 @@ test = ['perky', 'tomli', 'flit_core']
 # tests/test_coverage.py::test_no_debris_ships holds the same line: a
 # new tracked file must be classified there or excluded here.
 exclude = [
+    "sample/deploy.py",                 # the Markdown-errors demo (README shows it)
     "appeal.opus.4.6.review.txt",       # review transcripts
     "appeal.opus.4.8.review.txt",
     "appeal.fable.5.review.notes.md",

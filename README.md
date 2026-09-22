@@ -2651,10 +2651,10 @@ end the program politely--`raise AppealError("couldn't reach
 the server")` prints `error: couldn't reach the server` and
 exits 1, no usage (the command line was fine).
 
-**Messages are Markdown.**  An error's message is one paragraph
-of inline Markdown, rendered through the same pipeline as help,
-so the message you raise can look like the messages Appeal
-raises:
+**Messages are Markdown.**  An error's message is Markdown,
+rendered through the same pipeline as help (any blocks you like;
+Appeal never wraps a message, your terminal does), so the message
+you raise can look like the messages Appeal raises:
 
     raise UsageError(f"[region]{{.option}} can't be `{escaped(region)}` for [dst]{{.argument}}")
 

@@ -985,20 +985,25 @@ def resolve_reference_spans(blocks, lookup, where):
         walk(block)
 
 
-def inline_markup(document):
+def message_markup(document):
     """
-    One paragraph of inline Markdown--an error message, a hint--as
-    style markup: big styles the tree and the paragraph's text comes
-    back with the roles baked in; a hard break is a newline.  An
-    empty document is ''.
+    A Markdown document--an error message, a hint--laid out as style
+    markup, ready for a sheet: big's whole pipeline (style, split,
+    layout, join), the one help rides, at a margin nothing reaches:
+    Appeal never wraps a message, the terminal does (Larry,
+    2026-09-22: format and print what the author wrote, any blocks
+    at all).  A paragraph's soft line breaks join, as in a docstring;
+    sentences get one space.  An empty document is ''.
     """
-    from big.markdown import style_document, HardBreak
-    styled = style_document(document)
-    if not styled.blocks:
+    from big.markdown import (layout_document, split_styles_document,
+                              style_document)
+    from big.stylesheet import join_styles, strip_styles
+    from big.text import wrap_words
+    if not document.blocks:
         return ''
-    (paragraph,) = styled.blocks
-    return ''.join('\n' if isinstance(node, HardBreak) else node.text
-                   for node in paragraph.children)
+    layout = layout_document(split_styles_document(style_document(document)))
+    return join_styles(wrap_words(layout, margin=1 << 30, two_spaces=False,
+                                  raw=strip_styles))
 
 
 def has_references(summary):

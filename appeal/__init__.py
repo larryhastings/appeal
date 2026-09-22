@@ -412,16 +412,17 @@ class AppealError(Exception):
     (the command line was fine)--main() prints `error: ...` and
     exits 1.
 
-    The message is one paragraph of inline Markdown (Larry,
-    2026-09-21): `**bold**`, `code`, and `[text]{.role}` spans render
-    through the same pipeline as help.  In a UsageError raised from
-    a command, `[src]{.argument}` and `[region]{.option}` name that
-    command's parameters and render as the usage line spells them.
-    Data goes in a code span or through escaped().  str() is the
-    plain text; .markdown is the source; .document is big's tree;
-    render(sheet) paints it.  The Markdown is parsed on construction,
-    so malformed markup raises a ConfigurationError where the message
-    was written.
+    The message is Markdown (Larry, 2026-09-21): `**bold**`, `code`,
+    `[text]{.role}` spans, paragraphs, lists--whatever you write
+    renders through the same pipeline as help.  In a UsageError
+    raised from a command, `[src]{.argument}` and `[region]{.option}`
+    name that command's parameters and render as the usage line
+    spells them.  Data goes in a code span or through escaped().
+    str() is the plain text; .markdown is the source; .document is
+    big's tree; render(sheet) paints it.  Appeal never wraps a
+    message--the terminal does.  The Markdown is parsed on
+    construction, so malformed markup raises a ConfigurationError
+    where the message was written.
     """
     def __init__(self, message, *args):
         super().__init__(message, *args)
@@ -439,14 +440,13 @@ class AppealError(Exception):
         return self._document
 
     def __str__(self):
-        from big.stylesheet import strip_styles
-        from .presentation import inline_markup
-        return strip_styles(inline_markup(self._document))
+        from .presentation import message_markup, resolve_stylesheet
+        return resolve_stylesheet(False).render(message_markup(self._document))
 
     def render(self, sheet):
         "The message painted through a stylesheet."
-        from .presentation import inline_markup
-        return sheet.render(inline_markup(self._document))
+        from .presentation import message_markup
+        return sheet.render(message_markup(self._document))
 
     def _resolve(self, plan):
         """
@@ -469,22 +469,17 @@ class AppealError(Exception):
 def _message_document(message):
     # an error's Markdown, parsed when the error is made (Larry,
     # 2026-09-21: early, so a malformed message fails where it was
-    # written).  One paragraph, or nothing.
+    # written)
     if not isinstance(message, str):
         raise AppealConfigurationError(
             f"an error message is a string of Markdown, not {_r(message)}")
-    from big.markdown import parse, Paragraph
+    from big.markdown import parse
     try:
         document = parse(message)
     except ValueError as e:
         raise AppealConfigurationError(
             f"malformed Markdown in an error message, {_r(message)}: "
             f"{escaped(e)}") from e
-    if document.blocks and not (len(document.blocks) == 1
-                                and isinstance(document.blocks[0], Paragraph)):
-        raise AppealConfigurationError(
-            f"an error message is one paragraph of inline Markdown, "
-            f"not {_r(message)}")
     return document
 
 
@@ -853,10 +848,10 @@ def _overview_trailer(node):
         hint = node._help_hint()
         if hint:
             from big.markdown import parse
-            from .presentation import inline_markup, resolve_stylesheet
+            from .presentation import message_markup, resolve_stylesheet
             sheet = resolve_stylesheet(node.stylesheet, file,
                                        node.plain_stylesheet)
-            text += '\n' + sheet.render(inline_markup(parse(hint)))
+            text += '\n' + sheet.render(message_markup(parse(hint)))
         return text
     return trailer
 
