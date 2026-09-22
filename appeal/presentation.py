@@ -1019,34 +1019,24 @@ def has_references(summary):
     return any(walk(block) for block in summary)
 
 
-def plan_references(plan):
+def plans_references(plans, where):
     """
-    The lookup for a plan's docstring: its own parameters.  An
-    argument renders as the usage line's placeholder (its usage
-    name, decorated); an option as its strings alone.
+    The lookup over several plans--the head's, for the program's
+    documentation: the first plan that has the name answers; none
+    having it is refused naming them all.
     """
-    def lookup(kind, name):
-        if kind == 'argument':
-            for s in plan.slots:
-                if s.name == name:
-                    return style('argument', decorate_argument(s.usage_name, plan.decoration))
-            return None
-        for o in plan.options:
-            if o.name == name:
-                return '|'.join(style('option', escape_styles(s)) for s in o.strings)
-        return None
-    return lookup
-
-
-def plans_references(plans):
-    "The lookup over several plans--the head's, for the program's documentation."
-    lookups = [plan_references(p) for p in plans]
+    lookups = [merge_docs(p)['references'](where) for p in plans]
     def lookup(kind, name):
         for one in lookups:
-            markup = one(kind, name)
-            if markup is not None:
-                return markup
-        return None
+            try:
+                return one(kind, name)
+            except AppealConfigurationError:
+                continue
+        names = ', '.join(f"'{escaped(getattr(p.callable, '__name__', repr(p.callable)))}'"
+                          for p in plans)
+        raise AppealConfigurationError(
+            f"{where}: `[{name}]{{.{kind}}}` is not a parameter of the "
+            f"head ({names})")
     return lookup
 
 
@@ -1118,6 +1108,7 @@ def merge_docs(plan, command_names=None):
     surface gets a row; undocumented rows carry empty blocks.
     """
     docs = {}              # rowkey -> blocks, nearest scope first
+    displays = {}          # argument rowkey -> its placeholder, as the row shows it
     deprecated = set()     # rowkeys of deprecated options: noted in the row
     requested = {}         # option rowkey -> the sections its chosen doc wrote
     aimed_docs = {}        # option rowkey -> (doc, where): a dotted entry
@@ -1215,6 +1206,7 @@ def merge_docs(plan, command_names=None):
                     rowkey, display = here, arg_name(s)
                     namespace.setdefault(s.name, ('argument', rowkey, True))
                 level.arguments.append((rowkey, display))
+                displays[rowkey] = display
                 if p.sole_terminal_slot() is s:
                     sole[path] = rowkey
                 continue
@@ -1259,28 +1251,29 @@ def merge_docs(plan, command_names=None):
                 return o.child, path + (id(o),)
         assert False, f"{segment!r} is in the namespace but not the plan"  # pragma: no cover
 
-    def resolve(p, path, dotted, where, heading):
-        # a section entry's name: bare (this docstring's own parameter)
-        # or dotted (a walk down the converters).  Returns (found,
-        # owner plan, owner path, final name)
+    def resolve(p, path, dotted, where, context):
+        # a section entry's or a reference's name: bare (this
+        # docstring's own parameter) or dotted (a walk down the
+        # converters); `context` says which, for the message.  Returns
+        # (found, owner plan, owner path, final name)
         *steps, last = dotted.split('.')
         q, qpath = p, path
         for segment in steps:
             if segment not in namespaces[qpath]:
                 raise AppealConfigurationError(
-                    f"{where}: {_r(dotted)} (in the {heading} section): "
+                    f"{where}: {_r(dotted)} ({context}): "
                     f"{_r(segment)} is not a parameter of {named(q)}")
             hop = step(q, qpath, segment)
             if hop is None:
                 raise AppealConfigurationError(
-                    f"{where}: {_r(dotted)} (in the {heading} section): "
+                    f"{where}: {_r(dotted)} ({context}): "
                     f"{_r(segment)} takes no converter with parameters")
             q, qpath = hop
         found = namespaces[qpath].get(last)
         if found is None:
             hint = _suggest_entry_paths(p, path, last) if not steps else ''
             raise AppealConfigurationError(
-                f"{where}: {_r(dotted)} (in the {heading} section) "
+                f"{where}: {_r(dotted)} ({context}) "
                 f"is not a parameter of {named(q)}{hint}")
         return found, q, qpath, last
 
@@ -1317,10 +1310,40 @@ def merge_docs(plan, command_names=None):
         # label(p), quoted like a repr (already escaped: not through _r)
         return f"'{label(p)}'"
 
-    def own_doc(p, where):
+    def references(p, path, where):
+        # the lookup for the [name]{.argument} / [name]{.option}
+        # references in p's docstring (Larry, 2026-09-22, strict): a
+        # name resolves like a section entry--bare or dotted, through
+        # the namespace--and must be an argument that is a word on the
+        # line (rendered as its row's placeholder, nearest name and
+        # all) or an option (rendered as its strings alone)
+        def lookup(kind, dotted):
+            found, owner, owner_path, last = resolve(p, path, dotted, where,
+                                                     'as a reference')
+            span = f"`[{dotted}]{{.{kind}}}`"
+            if found[0] == 'internal':
+                raise AppealConfigurationError(
+                    f"{where}: {span} is not one of the visible "
+                    f"command-line arguments of {named(owner)}")
+            if found[0] != kind:
+                raise AppealConfigurationError(
+                    f"{where}: {span} is an {found[0]}, not an {kind}")
+            if '.' in dotted and not found[2]:
+                # the nearest name: an outer parameter stands for that
+                # one word, as for a section entry
+                raise AppealConfigurationError(
+                    f"{where}: {span} names nothing on the page: an outer "
+                    f"parameter stands for that one word, and names it")
+            if kind == 'argument':
+                return displays[found[1]]
+            o = next(o for o in owner.options if o.name == last)
+            return '|'.join(style('option', escape_styles(s)) for s in o.strings)
+        return lookup
+
+    def own_doc(p, path, where):
         return resolve_references(
             parse_docstring(_inspect.getdoc(p.callable), where),
-            plan_references(p), where)
+            references(p, path, where), where)
 
     def own_doc_of(converter):
         # a converter collapsed to a value option: no plan of its own
@@ -1330,7 +1353,7 @@ def merge_docs(plan, command_names=None):
             parse_docstring(_inspect.getdoc(converter), where),
             no_references, where)
 
-    def replacement(p, name, where):
+    def replacement(p, path, name, where):
         # @app.option(doc=)/@app.argument(doc=) on p's callable: the
         # docstring the parent supplies for the child behind `name`;
         # its references are p's, whose text it is
@@ -1341,7 +1364,7 @@ def merge_docs(plan, command_names=None):
         where = f"{where}: doc= for {name!r}"
         return resolve_references(
             parse_docstring(_inspect.cleandoc(text), where),
-            plan_references(p), where)
+            references(p, path, where), where)
 
     def apply(p, path, doc, where, argument_edge):
         # top-down: this occurrence's chosen doc lands its entries
@@ -1350,8 +1373,8 @@ def merge_docs(plan, command_names=None):
         for kind, heading in (('arguments', 'Arguments:'),
                               ('options', 'Options:')):
             for name, entry in doc[kind].items():
-                found, owner, owner_path, last = resolve(p, path, name,
-                                                         where, heading)
+                found, owner, owner_path, last = resolve(
+                    p, path, name, where, f"in the {heading} section")
                 aimed = '.' in name
                 if found[0] == 'internal':
                     raise AppealConfigurationError(
@@ -1421,7 +1444,7 @@ def merge_docs(plan, command_names=None):
                 continue
             rowkey = path + (id(o),)
             entry = doc['options'].get(o.name)
-            given = replacement(p, o.name, where)
+            given = replacement(p, path, o.name, where)
             if entry is not None and given is not None:
                 raise AppealConfigurationError(
                     f"{where}: {_r(o.name)} is documented twice--in the "
@@ -1435,13 +1458,13 @@ def merge_docs(plan, command_names=None):
             elif given is not None:
                 chosen, child_where = given, f"{where}: doc= for {o.name!r}"
             else:
-                chosen, child_where = own_doc(o.child, label(o.child)), label(o.child)
+                chosen, child_where = own_doc(o.child, rowkey, label(o.child)), label(o.child)
             requested[rowkey] = chosen['requested']
             docs.setdefault(rowkey, _prose(chosen))
             apply(o.child, rowkey, chosen, child_where, False)
         for s in p.slots:
             if isinstance(s.child, Terminal):
-                given = replacement(p, s.name, where)
+                given = replacement(p, path, s.name, where)
                 if given is not None:
                     if given['requested']:
                         raise AppealConfigurationError(
@@ -1451,11 +1474,11 @@ def merge_docs(plan, command_names=None):
                     docs.setdefault(found[1], _prose(given))
                 continue
             here = path + (id(s),)
-            given = replacement(p, s.name, where)
+            given = replacement(p, path, s.name, where)
             if given is not None:
                 chosen, child_where = given, f"{where}: doc= for {s.name!r}"
             else:
-                chosen, child_where = own_doc(s.child, label(s.child)), label(s.child)
+                chosen, child_where = own_doc(s.child, here, label(s.child)), label(s.child)
             apply(s.child, here, chosen, child_where, True)
         return doc
 
@@ -1495,7 +1518,7 @@ def merge_docs(plan, command_names=None):
 
     top = Level()
     walk(plan, top)
-    parsed = apply(plan, (), own_doc(plan, label(plan)), label(plan), False)
+    parsed = apply(plan, (), own_doc(plan, (), label(plan)), label(plan), False)
     arguments, options = assemble(top)
 
     return {
@@ -1507,6 +1530,10 @@ def merge_docs(plan, command_names=None):
         'commands': [(word, docs.get(word, []), ())
                      for word in command_names],
         'topics': [],
+        # references(where): the lookup for references in text about
+        # this plan that isn't its docstring--an error message it
+        # raised, the program's documentation; `where` names that text
+        'references': lambda where: references(plan, (), where),
     }
 
 
@@ -1579,7 +1606,8 @@ def command_set_corpus(global_plan, head_plans, entries, doc=None,
         # precommand's docstring documents ITS parameters only.
         parsed = resolve_references(
             parse_docstring(doc, '<program documentation>'),
-            plans_references(head_plans), '<program documentation>')
+            plans_references(head_plans, '<program documentation>'),
+            '<program documentation>')
         known = set(words)
         for name in parsed['commands']:
             if name not in known:

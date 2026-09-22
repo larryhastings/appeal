@@ -8571,11 +8571,15 @@ def test_prose_references():
     assert 'every command honors -v|--verbose.' in overview, overview
     assert 'copy  Copy <SRC> to <DST>.' in overview, overview
     # the markup: the reference wears the role, each option string its own
-    from appeal.presentation import plan_references
-    lookup = plan_references(app.command('copy').plan)
+    from appeal.presentation import merge_docs
+    lookup = merge_docs(app.command('copy').plan)['references']('here')
     assert lookup('argument', 'src') == '⦃argument⦙<SRC>⦄'
     assert lookup('option', 'region') == '⦃option⦙-r⦄|⦃option⦙--region⦄'
-    assert lookup('argument', 'nope') is None and lookup('option', 'nope') is None
+    try:
+        lookup('argument', 'nope')
+        assert False
+    except _appeal.AppealConfigurationError as e:
+        assert str(e).startswith("here: 'nope' (as a reference) is not a parameter of 'copy'"), e
     # a deprecated command's row still says so, after its summary
     @app.command(restriction='deprecated')
     def old(src): "Old [src]{.argument}."
@@ -8589,8 +8593,8 @@ def test_prose_references():
     # refused: a name the owner doesn't have, a reference that isn't
     # plain text, and any reference in a topic
     for doc, message in (
-            ("See [y]{.argument}.", "[y]{.argument} names no argument of its own"),
-            ("See [y]{.option}.", "[y]{.option} names no option of its own"),
+            ("See [y]{.argument}.", "cmd: 'y' (as a reference) is not a parameter of 'cmd'"),
+            ("See [y]{.option}.", "cmd: 'y' (as a reference) is not a parameter of 'cmd'"),
             ("See [**x**]{.argument}.", "names a parameter in plain text: [name]{.argument}")):
         bad = _appeal.Appeal(name='b', stylesheet=False)
         def cmd(x): pass
@@ -8607,7 +8611,7 @@ def test_prose_references():
         run(nohead, 'help')
         assert False
     except _appeal.AppealConfigurationError as e:
-        assert "<program documentation>: [nope]{.option} names no option" in str(e), e
+        assert "<program documentation>: [nope]{.option} is not a parameter of the head ('precommand')" in str(e), e
     topical = _appeal.Appeal(name='t', stylesheet=False)
     topical.command()(copy)
     topical.topic('lore', 'About [x]{.argument}.')
@@ -8616,6 +8620,37 @@ def test_prose_references():
         assert False
     except _appeal.AppealConfigurationError as e:
         assert "help topic 'lore': [x]{.argument} names no argument" in str(e), e
+    # strict (Larry, 2026-09-22): a reference resolves like a section
+    # entry.  An argument must be a word on the line--a group whose
+    # operands are spelled out is refused; a dotted path reaches the
+    # operand behind a converter; a transparent chain wears the nearest
+    # name; the kinds must match
+    def rgb(r: float, g: float, b: float): return (r, g, b)
+    def hue(h: str): return h
+    strict = _appeal.Appeal(name='s', stylesheet=False)
+    @strict.command()
+    def paint(color: rgb, tint: hue, *, level: int = 1):
+        """
+        Paint [color.r]{.argument} then [tint]{.argument} at [level]{.option}.
+        """
+    page = run(strict, 'help', 'paint')
+    assert 'Paint <R> then <TINT> at -l|--level.' in page, page
+    for doc, message in (
+            ("See [color]{.argument}.", "[color]{.argument} is not one of the visible command-line arguments of 'paint2'"),
+            ("See [level]{.argument}.", "[level]{.argument} is an option, not an argument"),
+            ("See [tint]{.option}.", "[tint]{.option} is an argument, not an option"),
+            ("See [color.x]{.argument}.", "'color.x' (as a reference) is not a parameter of 'rgb'"),
+            ("See [tint.h]{.argument}.", "[tint.h]{.argument} names nothing on the page: an outer parameter stands for that one word, and names it"),
+            ("See [level.x]{.option}.", "'level.x' (as a reference): 'level' takes no converter with parameters")):
+        wrong = _appeal.Appeal(name='w', stylesheet=False)
+        def paint2(color: rgb, tint: hue, *, level: int = 1): pass
+        paint2.__doc__ = doc
+        wrong.command('paint')(paint2)
+        try:
+            run(wrong, 'help', 'paint')
+            assert False, doc
+        except _appeal.AppealConfigurationError as e:
+            assert message in str(e), (doc, str(e))
     # a converter collapsed to a value option has no plan to reference
     def region_name(name: str):
         "A region; not [name]{.argument}."
@@ -8711,7 +8746,7 @@ def test_error_messages_are_markdown():
         app.run(['copy', 'a', 'b', '--region', 'bad'])
         assert False
     except _appeal.AppealConfigurationError as ce:
-        assert str(ce) == "error message '[nope]{.option} is wrong': [nope]{.option} names no option of its own"
+        assert str(ce) == "error message '[nope]{.option} is wrong': 'nope' (as a reference) is not a parameter of 'copy'"
     # a CommandError raised from the command resolves too (no usage:
     # the line was fine), painted by main()
     with contextlib.redirect_stderr(err):

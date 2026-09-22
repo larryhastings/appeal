@@ -459,11 +459,12 @@ class AppealError(Exception):
         plan, nothing to reference.  Resolving twice is a no-op: a
         resolved reference is text, not a span.
         """
-        from .presentation import (no_references, plan_references,
+        from .presentation import (merge_docs, no_references,
                                    resolve_reference_spans)
-        lookup = plan_references(plan) if plan is not None else no_references
-        resolve_reference_spans(self._document.blocks, lookup,
-                                f"error message {_r(self._markdown)}")
+        where = f"error message {_r(self._markdown)}"
+        lookup = (merge_docs(plan)['references'](where) if plan is not None
+                  else no_references)
+        resolve_reference_spans(self._document.blocks, lookup, where)
 
 
 def _message_document(message):
@@ -2580,7 +2581,8 @@ class Appeal:
             # signature-bound sections stay with the command
             parsed = resolve_references(
                 parse_docstring(override, '<program documentation>'),
-                plans_references(self._head_plans()), '<program documentation>')
+                plans_references(self._head_plans(), '<program documentation>'),
+                '<program documentation>')
             corpus['summary'] = parsed['summary']
             corpus['documentation'] = parsed['documentation']
         return render_help_page(
