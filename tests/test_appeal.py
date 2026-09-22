@@ -8783,3 +8783,71 @@ def test_error_messages_are_markdown():
         assert False
     except UsageError as ue:
         assert str(ue) == 'say -v|--verbose at least'
+
+
+def test_promotion_across_precommand_eras():
+    # Larry, 2026-09-22: the head's precommands are one linear run
+    # for arity.  first(a, b=None) then second(c, d=None): b is
+    # promoted--usage says <A> <B> <C> [<D>], and `pp 1` is missing b,
+    # not c.  A later era with no required operand promotes nothing;
+    # promotion carries across an era that has no operands at all.
+    import appeal as _appeal
+    from big.stylesheet import strip_styles
+    log = []
+    app = _appeal.Appeal(name='pp', stylesheet=False)
+    @app.precommand()
+    def first(a, b=None): log.append(('first', a, b))
+    @app.precommand()
+    def second(c, d=None): log.append(('second', c, d))
+    @app.command()
+    def go(): log.append('go')
+    usage = strip_styles(' '.join(app._head_usage_markup().split()))
+    assert usage == 'pp [-h|--help [<SUBJECT>]] <A> <B> <C> [<D>] <COMMAND>', usage
+    assert app.process(['1', '2', '3', '4', 'go']).result is None
+    assert log == [('first', '1', '2'), ('second', '3', '4'), 'go']
+    # too few operands: the fill is greedy left to right, so the
+    # shortage shows at the last required operand--`c`--exactly as a
+    # promoted converter group's does within one signature (y, in
+    # f(first: opt2, x, y) given three)
+    for argv, missing in (([], 'a'), (['1'], 'c'), (['1', '2'], 'c')):
+        try:
+            app.process(argv)
+            assert False, argv
+        except _appeal.AppealUsageError as e:
+            assert str(e) == f"missing argument '{missing}'", (argv, str(e))
+    # the schema agrees, and describes the whole head (it described the
+    # last precommand alone): b is required
+    described = app.schema('appeal', '1.0')
+    assert [(o['name'], o['required']) for o in described['global']['operands']] == \
+        [('a', True), ('b', True), ('c', True), ('d', False)]
+    assert [o['name'] for o in described['global']['options']] == ['subject']
+    assert described['global']['operand_counts'] == {'minimum': 3, 'maximum': 4, 'valid': [3, 4]}
+    # an unbounded era makes the head unbounded, from the others'
+    # minimums plus its own threshold
+    wide = _appeal.Appeal(name='wide', stylesheet=False)
+    @wide.precommand()
+    def w1(a, b=None): pass
+    @wide.precommand()
+    def w2(c, *rest, d=None): pass
+    wide.command()(go)
+    assert wide.schema('appeal', '1.0')['global']['operand_counts'] == \
+        {'minimum': 3, 'maximum': None, 'valid': [], 'unbounded_from': 3}
+    # nothing required later: nothing promoted
+    calm = _appeal.Appeal(name='calm', stylesheet=False)
+    @calm.precommand()
+    def one(a, b=None): pass
+    @calm.precommand()
+    def two(c=None): pass
+    calm.command()(go)
+    assert '<A> [<B>] [<C>]' in strip_styles(calm._head_usage_markup())
+    # across an operand-less era, and into a converter group's default
+    def pair(x, y=None): return (x, y)
+    deep = _appeal.Appeal(name='deep', stylesheet=False)
+    @deep.precommand()
+    def alpha(p: pair): pass
+    @deep.precommand()
+    def beta(*, flag=False): pass
+    @deep.precommand()
+    def gamma(z): pass
+    deep.command()(go)
+    assert '<X> <Y> [-f|--flag] <Z>' in strip_styles(deep._head_usage_markup()), deep._head_usage_markup()

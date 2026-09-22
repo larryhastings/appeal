@@ -155,16 +155,52 @@ def describe(callable):
     return _plan_schema(plan)
 
 
-def describe_set(commands, global_plan=None, prog=None):
-    "The schema of a multi-command program."
+def describe_set(commands, global_plan=None, prog=None, head_plans=()):
+    """
+    The schema of a multi-command program.  Its 'global' entry is the
+    HEAD: named and summarized by global_plan (the program's own
+    precommand), its operands, options, and counts those of every
+    head era in order (Larry, 2026-09-22: the head is one linear run,
+    so the schema describes all of it--Appeal's -h and --version, and
+    every precommand's parameters, not the last one's alone).
+    """
     entry = {
         'name': prog or 'program',
         'commands': {word: _plan_schema(plan)
                      for word, plan in commands.items()},
     }
     if global_plan is not None:
-        entry['global'] = _plan_schema(global_plan)
+        head = _plan_schema(global_plan)
+        parts = [_plan_schema(p) for p in (head_plans or (global_plan,))]
+        head['operands'] = [o for part in parts for o in part['operands']]
+        head['options'] = [o for part in parts for o in part['options']]
+        head['operand_counts'] = _head_counts(head_plans or (global_plan,))
+        entry['global'] = head
     return entry
+
+
+def _head_counts(plans):
+    """
+    The head's operand counts as one linear run: the eras' valid
+    counts summed every way; unbounded once any era is, from the sum
+    of the others' minimums and that era's unbounded_from.
+    """
+    valid = {0}
+    unbounded_from = None
+    for plan in plans:
+        valid = {a + b for a in valid for b in plan.valid_counts}
+        if plan.unbounded_from is not None:
+            others = sum(p.minimum for p in plans if p is not plan)
+            here = others + plan.unbounded_from
+            unbounded_from = here if unbounded_from is None else min(unbounded_from, here)
+    if unbounded_from is not None:
+        valid = {c for c in valid if c < unbounded_from}
+        counts = {'minimum': min(valid) if valid else unbounded_from, 'maximum': None,
+                  'valid': sorted(valid), 'unbounded_from': unbounded_from}
+    else:
+        counts = {'minimum': min(valid), 'maximum': max(valid),
+                  'valid': sorted(valid)}
+    return counts
 
 
 _JSON_TYPES = {'str': 'string', 'int': 'integer', 'float': 'number',

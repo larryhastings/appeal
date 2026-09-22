@@ -303,9 +303,12 @@ From the linear order of terminal slots, group boundaries are computed:
 
 * An optional that sits **before** a required sibling *in the same
   linear run* is promoted to required (you can't skip the middle of
-  a call).  Note this can only arise through converter recursion--
-  Python syntax already forbids a defaulted positional before a
-  required one in a single signature.
+  a call).  Within one signature this can only arise through
+  converter recursion--Python forbids a defaulted positional before
+  a required one--but the head's precommands are one linear run too
+  (Larry, 2026-09-22): `first(a, b=None)` followed by `second(c,
+  d=None)` reads `<A> <B> <C> [<D>]`, since `c` must be filled and
+  nothing skips `b` to reach it.
 * A required leaf operand that **follows an absorbing converter**
   (one with its own `*args`) is a **trailing operand**: it **reserves**
   its count from the end.  In `cp(src, dst)` with `src` an absorbing

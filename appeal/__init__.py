@@ -756,6 +756,31 @@ def _stamp_decoration(plan, entry):
             _stamp_decoration(o.child, entry)
 
 
+def _promote_across_eras(plans):
+    """
+    The head's precommands are one linear run for arity (Larry,
+    2026-09-22): a required operand in a later precommand promotes
+    every optional operand before it, across the eras, exactly as a
+    required operand promotes a converter group's defaults ahead of it
+    within one signature.  `first(a, b=None)` then `second(c, d=None)`
+    reads `<A> <B> <C> [<D>]`--b can't be skipped, c must be filled--
+    and `pp 1` is missing b, not c.  Right to left, each era's
+    shallowest required optionality carries into the era before it; a
+    plan that moves is un-shared (its converter subtrees may be
+    memoized) and re-analyzed.
+    """
+    from .frontend import _PROMOTE_INF
+    lowest = _PROMOTE_INF
+    for plan in reversed(plans):
+        flag = [False]
+        returned = plan.promote(0, lowest, False, flag)     # detect
+        if flag[0]:
+            plan.unshare(set())
+            plan.promote(0, lowest, True, [False])          # apply
+            plan.reanalyze()
+        lowest = returned
+
+
 def _merge_era_options(plans):
     """
     One owner per option string across the whole head: the precommand
@@ -2759,7 +2784,7 @@ class Appeal:
             if not table:
                 return describe(self.plan)
             return describe_set(self._visible_plans(), self.global_plan,
-                                self._prog())
+                                self._prog(), head_plans=self._head_plans())
         if format == 'mcp':
             if version not in _MCP_VERSIONS:
                 raise AppealConfigurationError(
@@ -3276,6 +3301,7 @@ class Appeal:
             plan.share, plan.immediate = flags.get(
                 id(plan.callable), (PRECOMMAND, False))
         _merge_era_options(plans)               # one owner per string
+        _promote_across_eras(plans)             # one linear run for arity
         self._era_plans = plans
         return self._era_plans
 

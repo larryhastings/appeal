@@ -19,6 +19,13 @@ Agreed work, not yet built.  Larry's rulings; one entry per item.
   start`.  Help pages build the line from the node and are right;
   the MCP schema's `usage` field uses `plan.usage()` and is wrong
   for subcommands.
+* **Completion's head table describes one precommand** (found
+  2026-09-22, promoting across eras): `completion_set_table` builds
+  its 'global' entry from `global_plan` alone, so with two
+  precommands only the last one's options and operands complete at
+  the head.  The schema's 'global' now walks every head era; the
+  completion table should too (its values/verbatim/hidden maps merge
+  the same way).
 * **The Markdown exports render docstrings raw** (found 2026-09-19,
   building prose references): `documentation('gfm')` and
   `'commonmark'` re-spell each docstring's text through big's
