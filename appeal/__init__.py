@@ -456,7 +456,8 @@ class AppealError(Exception):
         boundary (where the usage trailer attaches).  Until then
         str() shows a reference as its name.  A name the command
         lacks is a ConfigurationError quoting the message.  None: no
-        plan, nothing to reference.
+        plan, nothing to reference.  Resolving twice is a no-op: a
+        resolved reference is text, not a span.
         """
         from .presentation import (no_references, plan_references,
                                    resolve_reference_spans)
@@ -1175,12 +1176,17 @@ class _Step:
         self.done = False
 
     def attach_usage(self, e):
-        "A command's error wears its usage line (deepest-command-wins)."
-        if e.usage is None:
+        """
+        A command's error wears its usage line (deepest-command-wins),
+        and its references name the command's parameters--any
+        AppealError's: a CommandError names them too, it just shows
+        no usage.
+        """
+        if isinstance(e, AppealDataError) and e.usage is None:
             node = self.node
             e.usage = _line_trailer(
                 node, node._children[self.word]._head_usage_units())
-            e._resolve(self.cls.plan)
+        e._resolve(self.cls.plan)
 
     def execute(self, holder, env):
         assert not self.done
@@ -1201,10 +1207,10 @@ class _Step:
                                   self.config[0], node._plan_of, self.config[1])
                 self.proc.resolve()             # the merged era's records
                 result = conv()
-            except AppealDataError as e:
-                if e.usage is None:             # outside any command's era:
-                    e.usage = _global_trailer(node)     # global usage
-                    e._resolve(self.plan)
+            except AppealError as e:
+                if isinstance(e, AppealDataError) and e.usage is None:
+                    e.usage = _global_trailer(node)     # outside any command's
+                e._resolve(self.plan)                   # era: global usage
                 raise
             if plan.constructs is not None:     # a global class-as-app: its
                 env[plan.constructs] = result   # methods bind to this
@@ -1219,10 +1225,10 @@ class _Step:
             # subcommands listed) below (Larry's rule, 2026-09-09)
             try:
                 result = self.proc.execute()
-            except AppealDataError as e:
-                if e.usage is None:
+            except AppealError as e:
+                if isinstance(e, AppealDataError) and e.usage is None:
                     e.usage = _overview_trailer(node)
-                    e._resolve(node.plan)
+                e._resolve(node.plan)
                 raise
             holder.instances.append((None, None))
             return result
@@ -1241,7 +1247,7 @@ class _Step:
                 _config_apply(conv, child._table(), plan,
                               self.config[0], child._plan_of, self.config[1])
             result = self.proc.execute()
-        except AppealDataError as e:
+        except AppealError as e:
             self.attach_usage(e)
             raise
         if plan.constructs is not None:         # a class command: stash instance

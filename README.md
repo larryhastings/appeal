@@ -2664,7 +2664,8 @@ and `[dst]{.argument}` name the parameters of the command that
 raised, and render as the usage line spells them; Appeal
 resolves them where it catches the error, so a name the command
 doesn't have is a configuration error that quotes your message.
-Data goes in a code span, or through `appeal.escaped()`, which
+Data goes in a code span (which escapes nothing inside: `` `{filename}` ``
+shows it as typed) or, in prose, through `appeal.escaped()`, which
 backslashes every punctuation character so the text reads back
 as itself; `appeal.quoted(text, role)` is what Appeal's own
 messages use for a token as typed.  `str(e)` is the plain text,

@@ -8710,11 +8710,11 @@ def test_error_messages_are_markdown():
         assert False
     except _appeal.AppealConfigurationError as ce:
         assert str(ce) == "error message '[nope]{.option} is wrong': [nope]{.option} names no option of its own"
-    # a CommandError has no command to resolve against: tagging only,
-    # painted by main()
+    # a CommandError raised from the command resolves too (no usage:
+    # the line was fine), painted by main()
     with contextlib.redirect_stderr(err):
         code = app.run(['copy', 'a', 'b', '--region', 'done'])
-    assert code == 3 and err.getvalue().endswith("error: done with dst\n"), err.getvalue()
+    assert code == 3 and err.getvalue().endswith("error: done with <DST>\n"), err.getvalue()
     # a precommand's error resolves against the precommand
     pre = _appeal.Appeal(name='pre', stylesheet=False)
     @pre.precommand()
