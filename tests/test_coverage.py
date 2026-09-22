@@ -1836,7 +1836,7 @@ def test_help_hint_names_the_best_way_in():
         # (default_command_mappings: -h and --help), not the program's
         (only_h, "(run 'tool -h' for a list of commands)",
                  "(run 'tool db --help' for a list of commands)"),
-        (None, 'usage: tool <COMMAND>', 'usage: tool db <COMMAND>'),
+        (None, 'usage: tool <COMMAND>', 'usage: tool db [<COMMAND>]'),
         )
     for mappings, at_root, at_db in cases:
         app = program(mappings)
@@ -5930,7 +5930,7 @@ def test_presentation_fiddly_reachable():
             app.main([])
         except SystemExit:
             pass
-    assert 'Commands' in strip_styles(out.getvalue())
+    assert 'no command specified' in strip_styles(out.getvalue())
     # parse_help_template: non-whitespace before a {section} resets the
     # section's indent to '' (a complete template, all six sections)
     from appeal.presentation import parse_help_template
@@ -6488,7 +6488,7 @@ def test_help_reaches_subcommands_by_word_path():
         assert False, f'expected AppealUsageError for {argv!r}'
     # the shallow page lists the subcommands (git-style)...
     lines = page(['help', 'db'])
-    assert lines[0] == 'usage: tool db [-h|--help] [-u|--url <URL>] <COMMAND>', lines
+    assert lines[0] == 'usage: tool db [-h|--help] [-u|--url <URL>] [<COMMAND>]', lines
     assert any(l.startswith('stop ') for l in lines), lines
     # ...and the path reaches the subcommand's own page
     lines = page(['help', 'db', 'stop'])
@@ -6506,7 +6506,7 @@ def test_help_reaches_subcommands_by_word_path():
         "unknown command 'x' of 'tool db stop'"
     assert refused(['help', 'dbb']) == "unknown command 'dbb' (did you mean 'db'?)"
     # -h takes one word, never a path
-    assert page(['-h', 'db'])[0] == 'usage: tool db [-h|--help] [-u|--url <URL>] <COMMAND>'
+    assert page(['-h', 'db'])[0] == 'usage: tool db [-h|--help] [-u|--url <URL>] [<COMMAND>]'
     assert refused(['-h', 'db stop']) == "unknown command 'db stop'"
     # the API spelling
     out = io.StringIO()
@@ -6618,7 +6618,7 @@ def test_per_command_help_era():
         'usage: tool db stop [-h|--help] [-f|--force]'
     assert seen == [], seen                  # quiet and db never ran
     assert page(tool, ['db', '-h']) == \
-        'usage: tool db [-h|--help] [-u|--url <URL>] <COMMAND>'
+        'usage: tool db [-h|--help] [-u|--url <URL>] [<COMMAND>]'
     assert page(tool, ['bare', '-h']) == 'usage: tool bare [-h|--help]'
     assert refused(tool, ['build', '--help=x']) == \
         "option '--help': 'x' isn't a boolean, expected true/false, yes/no, on/off, or 1/0"
@@ -6711,7 +6711,7 @@ def test_one_word_too_many():
     # where subcommands are expected, a stray word IS an unknown command
     assert error(t, ['db', 'psuh']) == [
         "error: unknown command 'psuh' of 'tool db' (did you mean 'push'?)", '',
-        'usage: tool db [-h|--help] <COMMAND>']
+        'usage: tool db [-h|--help] [<COMMAND>]']
     # a dash token is still an option problem, with the program usage
     assert error(t, ['commit', 'hello', '--nope'])[0] == \
         "error: unknown option '--nope'"
@@ -6785,11 +6785,12 @@ def test_default_command_and_subcommand_handlers():
         @app.command()
         def status(): ran.append('status'); return 0
         return app
-    # the stock default command: usage and the summary, stdout, exit 1,
-    # after the head has run
+    # the stock default command: the polite refusal, exit 2, after the
+    # head has run (Larry, 2026-09-22: the command is required)
     code, out, err = cli(make(), [])
-    assert code == 1 and err == '', err
-    assert out.startswith('usage: tool ') and 'Commands\n--------' in out, out
+    assert code == 2 and out == '', out
+    assert err.startswith('error: no command specified\n\nusage: tool ') and \
+        err.rstrip().endswith("(run 'tool help' for a list of commands)"), err
     assert ran == [('tool', False)]
     # @app.default(): a real command, run after the head
     app = make()
@@ -6809,7 +6810,7 @@ def test_default_command_and_subcommand_handlers():
     code, out, err = cli(app, ['db'])
     assert code == 2, err
     assert err == ('error: no subcommand specified\n\n'
-                   'usage: tool db [-h|--help] <COMMAND>\n'
+                   'usage: tool db [-h|--help] [<COMMAND>]\n'
                    "(run 'tool help db' for a list of commands)\n"), err
     assert ran == [('tool', False), 'db'], ran
     # ...and a command with no subcommands never consults a default
@@ -8028,7 +8029,7 @@ db    Database things.
 help  Print usage documentation on a specific subject.
 """
     assert page('db') == """\
-usage: t db [-h|--help] [-u|--url <URL>] <COMMAND>
+usage: t db [-h|--help] [-u|--url <URL>] [<COMMAND>]
 
 Database things.
 

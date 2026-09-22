@@ -756,7 +756,7 @@ def _stamp_decoration(plan, entry):
             _stamp_decoration(o.child, entry)
 
 
-def _promote_across_eras(plans):
+def _promote_before_required(plans, lowest):
     """
     The head's precommands are one linear run for arity (Larry,
     2026-09-22): a required operand in a later precommand promotes
@@ -764,13 +764,14 @@ def _promote_across_eras(plans):
     required operand promotes a converter group's defaults ahead of it
     within one signature.  `first(a, b=None)` then `second(c, d=None)`
     reads `<A> <B> <C> [<D>]`--b can't be skipped, c must be filled--
-    and `pp 1` is missing b, not c.  Right to left, each era's
-    shallowest required optionality carries into the era before it; a
-    plan that moves is un-shared (its converter subtrees may be
+    and `pp 1` is missing b, not c.  `lowest` is what follows the run:
+    0 when a required <COMMAND> does (the set's default isn't a valid
+    way to run the program), so every optional operand is promoted;
+    unbounded when nothing required follows.  Right to left, each
+    era's shallowest required optionality carries into the era before
+    it; a plan that moves is un-shared (its converter subtrees may be
     memoized) and re-analyzed.
     """
-    from .frontend import _PROMOTE_INF
-    lowest = _PROMOTE_INF
     for plan in reversed(plans):
         flag = [False]
         returned = plan.promote(0, lowest, False, flag)     # detect
@@ -1471,6 +1472,8 @@ class Appeal:
                                            # when the path resolves
                                            # mapping (filled by the user later)
         self._node_default = None # this node's default command
+        self._node_default_valid = True   # @default(valid=): a line stopping
+                                          # here is a valid way to run the program
         self._node_repeat = False # this node's set cycles
         self._node_restriction = None   # 'hidden' / 'deprecated' (Larry,
                                         # 2026-09-10): command(restriction=)
@@ -2093,19 +2096,21 @@ class Appeal:
     def _default(self):
         """
         The handler for a line that stops at this node: the node's own
-        (@node.default()), else the stock--at the root, print the
-        program's usage (Larry, 2026-09-09: a bare line is a request for
-        orientation, not an error); at a command, nothing (Larry,
+        (@node.default()), else the stock--at the root, the polite
+        refusal (Larry, 2026-09-22, reversing 2026-09-09's orientation
+        page: the command is required, so its absence is an error like
+        any missing operand's); at a command, nothing (Larry,
         2026-09-18: a local decision, never a program-wide knob).
         """
         if self._node_default is not None:
             return self._node_default
-        return self._print_usage if self is self.root else run_nothing
+        return self._require_command if self is self.root else run_nothing
 
-    def _print_usage(self):
-        "The stock default command: the program's usage and command summary."
-        self.help()
-        return 1                        # orientation, git-style: not success
+    def _require_command(self):
+        # the stock root default: a usage error, which the dispatch
+        # boundary dresses in the overview trailer (the usage line and
+        # the pointer at the command list)
+        raise UsageError("no command specified")
 
     @property
     def _subs(self):
@@ -2278,17 +2283,26 @@ class Appeal:
             rows.append((word, blocks))
         return rows
 
-    def default(self):
+    def default(self, *, valid=True):
         """
         The command run when the line stops at this node--for the
         root, a line naming no command (replacing the stock one,
-        which prints the program's usage and command summary); for
-        a subcommand node (db_command = app.command('db');
-        @db_command.default()), a line ending at the parent (replacing
-        the stock nothing).  Called with the command words that reach
-        the node, splatted--none at the root, 'db' under db--so
-        `def show(*words): app.help(*words)` serves any node (Larry,
-        2026-09-18).  Never a string.
+        which reports that no command was given); for a subcommand
+        node (db_command = app.command('db'); @db_command.default()),
+        a line ending at the parent (replacing the stock nothing).
+        Called with the command words that reach the node, splatted--
+        none at the root, 'db' under db--so `def show(*words):
+        app.help(*words)` serves any node (Larry, 2026-09-18).  Never
+        a string.
+
+        valid (Larry, 2026-09-22) says whether a line that stops here
+        is a valid way to run the program.  True: the command is
+        optional--usage brackets it, `[<COMMAND>]`, and nothing before
+        it is promoted to required on its account.  False: the handler
+        is there to chide--usage shows `<COMMAND>` unbracketed, a
+        required operand, so every optional operand before it is
+        promoted.  The stock root default is valid=False; a
+        subcommand set's stock nothing is valid=True.
         """
         def decorator(callable):
             # vetted here, at decoration, for a function or a lambda:
@@ -2300,10 +2314,22 @@ class Appeal:
             if not _defined_in_class(callable):
                 _vet_default(callable, self._words())
             self._node_default = callable
+            self._node_default_valid = valid
             self._invalidate()
             return callable
         return decorator
     default_command = default           # the old spelling (deprecated)
+
+    @property
+    def _default_valid(self):
+        """
+        Is a line that stops at this node a valid way to run the
+        program?  The handler's word (@default(valid=)); the stock
+        root handler says no, a set's stock nothing says yes.
+        """
+        if self._node_default is not None:
+            return self._node_default_valid
+        return self is not self.root
 
     def precommand(self, *, index=-1, share=False, immediate=False):
         """
@@ -2964,6 +2990,10 @@ class Appeal:
             plan = self._build(callable, name=word, method_of=owner)
             plan.argv0 = self.root._prog()
             plan.share = FORWARDS if node._node_share else False
+            if node._has_commands and not node._default_valid:
+                # a required subcommand follows the command's operands
+                # (Larry, 2026-09-22): its optionals are promoted
+                _promote_before_required([plan], 0)
             plan = self._plans.setdefault(id(node), plan)
         return plan
 
@@ -3176,9 +3206,11 @@ class Appeal:
             # 2026-09-12, trying it; it wore the command role from
             # 2026-09-07 to cross-reference the listing below)
             from .presentation import decorate_argument
-            units.append(style('argument',
-                               decorate_argument('command',
-                                                 self._decoration_entry())))
+            text = style('argument', decorate_argument('command',
+                                                       self._decoration_entry()))
+            # bracketed when a line stopping here is valid (Larry,
+            # 2026-09-22: the default handler says whether it is)
+            units.append(f'[{text}]' if self._default_valid else text)
         return units
 
     def _precommand_plan(self):
@@ -3301,7 +3333,11 @@ class Appeal:
             plan.share, plan.immediate = flags.get(
                 id(plan.callable), (PRECOMMAND, False))
         _merge_era_options(plans)               # one owner per string
-        _promote_across_eras(plans)             # one linear run for arity
+        from .frontend import _PROMOTE_INF
+        _promote_before_required(               # one linear run for arity,
+            plans, 0 if (self._has_commands     # ending in a required
+                         and not self._default_valid)  # <COMMAND> or not
+            else _PROMOTE_INF)
         self._era_plans = plans
         return self._era_plans
 

@@ -216,37 +216,9 @@ def check(make, drives, **kw):
 TRON_CONFIG = {'jobs': 4, 'deploy': {'region': 'eu'}, 'db': {'url': 'postgres://db'}}
 
 TRON = [
-    ([], 1,
-     """\
-usage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]
-            [-j|--jobs <JOBS>] <COMMAND>
-
-Manage containers.
-
-Every command respects --verbose.
-
-Options
--------
-
--h|--help [<SUBJECT>]  Print usage and documentation, about this program, or
-                       optionally about a specific subject.  A subject can be a
-                       command name or a topic.
---version              Print the program's version.
--v|--verbose           Say what's happening.
--j|--jobs <JOBS>       How many things to do at once.
-
-Commands
---------
-
-status    Show what's running.
-run       Run a command inside the container.
-deploy    Deploy to a target.
-db        Database things.
-sync-all  Sync everything (the old spelling of sync).  (deprecated)
-version   Print the program's version.
-help      Print usage documentation on a specific subject.
-""",
+    ([], 2,
      '',
+     "error: no command specified\n\nusage: tron [-h|--help [<SUBJECT>]] [--version] [-v|--verbose]\n            [-j|--jobs <JOBS>] <COMMAND>\n(run 'tron help' for a list of commands)\n",
      [('tron', False, 4)]),
     (['-h'], 0,
      """\
@@ -282,7 +254,7 @@ help      Print usage documentation on a specific subject.
      []),
     (['help', 'db'], 0,
      """\
-usage: tron db [-h|--help] [-u|--url <URL>] <COMMAND>
+usage: tron db [-h|--help] [-u|--url <URL>] [<COMMAND>]
 
 Database things.
 
@@ -379,7 +351,7 @@ Options
      """\
 error: unknown command 'psuh' of 'tron db'
 
-usage: tron db [-h|--help] [-u|--url <URL>] <COMMAND>
+usage: tron db [-h|--help] [-u|--url <URL>] [<COMMAND>]
 (run 'tron help db' for a list of commands)
 """,
      []),
@@ -567,28 +539,9 @@ usage: dl [-h|--help] [--version] [-o|--out <OUT>] [-q|--quality <QUALITY>]
 ]
 
 TOOL = [
-    ([], 1,
-     """\
-usage: tool [-h|--help [<SUBJECT>]] [-v|--verbose] <COMMAND>
-
-A tool built from a class.
-
-Options
--------
-
--h|--help [<SUBJECT>]  Print usage and documentation, about this program, or
-                       optionally about a specific subject.  A subject can be a
-                       command name or a topic.
--v|--verbose           Say more.
-
-Commands
---------
-
-add   Add two numbers.
-Db    A database, named.
-help  Print usage documentation on a specific subject.
-""",
+    ([], 2,
      '',
+     "error: no command specified\n\nusage: tool [-h|--help [<SUBJECT>]] [-v|--verbose] <COMMAND>\n(run 'tool help' for a list of commands)\n",
      [('Tool', False)]),
     (['-h'], 0,
      """\
@@ -631,7 +584,7 @@ help  Print usage documentation on a specific subject.
      [('Tool', False), ('Db', 'main')]),
     (['help', 'Db'], 0,
      """\
-usage: tool Db [-h|--help] <NAME> <COMMAND>
+usage: tool Db [-h|--help] <NAME> [<COMMAND>]
 
 A database, named.
 
@@ -698,7 +651,7 @@ usage: tool add [-h|--help] <A> <B>
      """\
 error: missing argument 'name'
 
-usage: tool Db [-h|--help] <NAME> <COMMAND>
+usage: tool Db [-h|--help] <NAME> [<COMMAND>]
 """,
      []),
 ]

@@ -263,9 +263,16 @@ All v1 semantics, empirically probed and kept:
   under db's splunk--one `def show(*words): app.help(*words)` serves
   every node; a handler whose positionals can't take exactly its
   node's words is refused at decoration (a method's at build, where
-  its owner is known); never a string.  The stock one prints the program's usage
-  line and command summary to stdout and exits 1--orientation, not an
-  error (Larry, 2026-09-09).  It runs where a command would, so the
+  its owner is known); never a string.  The stock one is the polite
+  refusal, `error: no command specified` with the usage trailer, exit
+  2 (Larry, 2026-09-22, reversing 2026-09-09's orientation page): the
+  command is required.  `@app.default(valid=)` says whether a line
+  stopping at the node is a valid way to run the program: True (the
+  default when you decorate) brackets the placeholder, `[<COMMAND>]`;
+  False keeps `<COMMAND>` required, and a required operand promotes
+  every optional operand before it--the head's, as one linear run.
+  The stock root handler is valid=False, a set's stock nothing
+  valid=True.  It runs where a command would, so the
   precommands have already run.  A program with no commands at all
   never consults it.  A line that stops at a command with subcommands
   runs that command's **default** after its body: `@db_command.default()`

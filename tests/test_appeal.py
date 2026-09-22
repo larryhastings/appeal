@@ -1236,7 +1236,7 @@ def test_main_exits_the_process():
     @app.command()
     def fail(): return 3
     for argv, expected in ([['ok'], 0], [['fail'], 3],
-                           [['bogus'], 2], [[], 1]):
+                           [['bogus'], 2], [[], 2]):
         try:
             with contextlib.redirect_stdout(io.StringIO()), \
                  contextlib.redirect_stderr(io.StringIO()):
@@ -2539,11 +2539,8 @@ def test_command_dispatch():
     # usage and command summary (stdout) and yields 1--orientation, not
     # an error (Larry, 2026-09-09)
     import contextlib, io
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        got = run_both_set([add_item, remove], None, [])
-    assert got == ('ok', 1), got
-    assert 'Commands\n--------' in out.getvalue()
+    got = run_both_set([add_item, remove], None, [])
+    assert got == ('usage', 'no command specified'), got
 
 def test_global_command_dispatch():
     calls = []
@@ -2680,13 +2677,14 @@ def test_appeal_facade_dispatch():
     with contextlib.redirect_stderr(io.StringIO()) as err:
         assert exit_code(lambda: app.main(['bogus'])) == 2
     assert 'unknown command' in err.getvalue()
-    # a bare line: the stock default command prints usage and the
-    # command summary to stdout, no error, exit 1 (Larry, 2026-09-09)
+    # a bare line: the stock default command is the polite refusal--
+    # the command is required (Larry, 2026-09-22): error, the usage
+    # trailer with the pointer at the listing, exit 2, nothing on stdout
     with contextlib.redirect_stderr(io.StringIO()) as err, \
             contextlib.redirect_stdout(io.StringIO()) as out:
-        assert exit_code(lambda: app.main([])) == 1
-    assert err.getvalue() == ''
-    assert 'Commands\n--------' in out.getvalue()
+        assert exit_code(lambda: app.main([])) == 2
+    assert err.getvalue().startswith('error: no command specified\n\nusage: '), err.getvalue()
+    assert "for a list of commands)" in err.getvalue() and out.getvalue() == ''
 
 def test_command_sys_exit_message():
     import contextlib, io
@@ -3007,11 +3005,11 @@ def test_command_set_help():
     def user_help(topic=''):
         return ('user help', topic)
     assert app2.process(['help', 'x']).result == ('user help', 'x')
-    # a bare line prints the listing, which shows the user's help
-    # command, not the automatic one's row
+    # the listing shows the user's help command, not the automatic
+    # one's row
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        assert app2.process([]).result == 1
+        app2.help()
     assert 'Print usage documentation' not in out.getvalue()
 
 
@@ -8801,8 +8799,10 @@ def test_promotion_across_precommand_eras():
     def second(c, d=None): log.append(('second', c, d))
     @app.command()
     def go(): log.append('go')
+    # ...and the stock root default makes the command required, which
+    # promotes d as well (Larry, 2026-09-22)
     usage = strip_styles(' '.join(app._head_usage_markup().split()))
-    assert usage == 'pp [-h|--help [<SUBJECT>]] <A> <B> <C> [<D>] <COMMAND>', usage
+    assert usage == 'pp [-h|--help [<SUBJECT>]] <A> <B> <C> <D> <COMMAND>', usage
     assert app.process(['1', '2', '3', '4', 'go']).result is None
     assert log == [('first', '1', '2'), ('second', '3', '4'), 'go']
     # too few operands: the fill is greedy left to right, so the
@@ -8819,9 +8819,9 @@ def test_promotion_across_precommand_eras():
     # last precommand alone): b is required
     described = app.schema('appeal', '1.0')
     assert [(o['name'], o['required']) for o in described['global']['operands']] == \
-        [('a', True), ('b', True), ('c', True), ('d', False)]
+        [('a', True), ('b', True), ('c', True), ('d', True)]
     assert [o['name'] for o in described['global']['options']] == ['subject']
-    assert described['global']['operand_counts'] == {'minimum': 3, 'maximum': 4, 'valid': [3, 4]}
+    assert described['global']['operand_counts'] == {'minimum': 4, 'maximum': 4, 'valid': [4]}
     # an unbounded era makes the head unbounded, from the others'
     # minimums plus its own threshold
     wide = _appeal.Appeal(name='wide', stylesheet=False)
@@ -8832,14 +8832,41 @@ def test_promotion_across_precommand_eras():
     wide.command()(go)
     assert wide.schema('appeal', '1.0')['global']['operand_counts'] == \
         {'minimum': 3, 'maximum': None, 'valid': [], 'unbounded_from': 3}
-    # nothing required later: nothing promoted
+    # nothing required later--a valid default, so the command isn't:
+    # nothing promoted, and the placeholder is bracketed
     calm = _appeal.Appeal(name='calm', stylesheet=False)
     @calm.precommand()
     def one(a, b=None): pass
     @calm.precommand()
     def two(c=None): pass
     calm.command()(go)
-    assert '<A> [<B>] [<C>]' in strip_styles(calm._head_usage_markup())
+    @calm.default()
+    def fine(): pass
+    assert '<A> [<B>] [<C>] [<COMMAND>]' in strip_styles(calm._head_usage_markup())
+    # the same program with a chiding default: everything promoted
+    @calm.default(valid=False)
+    def chide(): raise _appeal.CommandError('say a command')
+    assert '<A> <B> <C> <COMMAND>' in strip_styles(calm._head_usage_markup())
+    # a subcommand set: its stock nothing is valid, so its operands stay
+    # optional and the placeholder is bracketed; a chiding default on
+    # the set promotes the command's own operands
+    sets = _appeal.Appeal(name='sets', stylesheet=False)
+    @sets.command()
+    def db(port=None): pass
+    @sets.command('db').command()
+    def start(): pass
+    assert strip_styles(sets.command('db')._head_usage_markup()) == 'sets db [-h|--help] [<PORT>] [<COMMAND>]'
+    strict = _appeal.Appeal(name='strict', stylesheet=False)
+    strict.command()(db)
+    strict.command('db').command()(start)
+    @strict.command('db').default(valid=False)
+    def chide_db(db): raise _appeal.UsageError('db needs a subcommand')
+    assert strip_styles(strict.command('db')._head_usage_markup()) == 'strict db [-h|--help] <PORT> <COMMAND>'
+    try:
+        strict.process(['db', '5'])
+        assert False
+    except _appeal.AppealUsageError as e:
+        assert str(e) == 'db needs a subcommand'
     # across an operand-less era, and into a converter group's default
     def pair(x, y=None): return (x, y)
     deep = _appeal.Appeal(name='deep', stylesheet=False)

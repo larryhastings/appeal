@@ -796,10 +796,11 @@ its own little command set--then the subcommand.  Running
 
 What should Appeal do if your program takes commands, but the
 user doesn't supply one?  It runs the *default command*.  The
-stock one prints the program's usage line and the list of
-commands, to standard output, and exits with status 1--an
-orientation page, not an error.  Any callable can replace it;
-decorate it with `@app.default()`:
+stock one says `error: no command specified`, shows the usage
+line and where the list of commands is, and exits with status 2:
+the command was required, and it's missing like any other
+required operand.  Any callable can replace it; decorate it with
+`@app.default()`:
 
 ```Python
 @app.default()
@@ -807,12 +808,23 @@ def default():
     return status()
 ```
 
+Decorating says something about your program: a line with no
+command is a perfectly good way to run it.  So usage now reads
+`[<COMMAND>]`, bracketed like any optional operand.  If your
+handler is there to chide the user instead--print something
+sterner than the stock refusal, say--tell Appeal the line isn't
+valid, `@app.default(valid=False)`: usage keeps `<COMMAND>`
+unbracketed, and because a required operand follows them, every
+optional operand before the command is promoted to required, as
+it is anywhere else in the grammar.
+
 The same question one level down: the line stops at `db`, which
 has subcommands.  By default `db` simply runs and that's that--
-subcommands are never required.  `@db_command.default()` on the
-command's node (`db_commands` above) names what runs after `db`'s
-body in that case, for `db` alone; it's a local decision, and
-there is no program-wide setting for it.
+subcommands are never required, so `db`'s usage reads
+`[<COMMAND>]`.  `@db_command.default()` on the command's node
+(`db_commands` above) names what runs after `db`'s body in that
+case, for `db` alone; it's a local decision, and there is no
+program-wide setting for it.  `valid=False` works there too.
 
 A default handler is called with the command words that reach its
 node, as positional arguments: none at the root, `'db'` under
