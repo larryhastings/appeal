@@ -8641,9 +8641,9 @@ def test_error_messages_are_markdown():
     from appeal import UsageError, CommandError, AppealError, escaped, quoted
     import contextlib, io, sys
     from big.markdown import MarkdownDocument, Span
-    e = UsageError("unknown option '[--x]{.option .literal}' near `a*b`, **really**")
+    e = UsageError("unknown option '[--x]{.option .quoted}' near `a*b`, **really**")
     assert str(e) == "unknown option '--x' near a*b, really"
-    assert e.markdown == e.args[0] == "unknown option '[--x]{.option .literal}' near `a*b`, **really**"
+    assert e.markdown == e.args[0] == "unknown option '[--x]{.option .quoted}' near `a*b`, **really**"
     assert isinstance(e.document, MarkdownDocument)
     assert isinstance(e.document.blocks[0].children[1], Span)
     for name in ('markdown', 'document'):
@@ -8655,8 +8655,8 @@ def test_error_messages_are_markdown():
     from appeal.presentation import resolve_stylesheet
     plain = resolve_stylesheet(False, sys.stdout, None)
     assert e.render(plain) == str(e)
-    # the helpers: a token in a role wears .literal; data is backslashed
-    assert quoted('a]b', 'command') == "'[a\\]b]{.command .literal}'"
+    # the helpers: a token in a role wears .quoted; data is backslashed
+    assert quoted('a]b', 'command') == "'[a\\]b]{.command .quoted}'"
     assert quoted('x') == "'x'" and escaped('x_y*z') == 'x\\_y\\*z'
     assert str(UsageError(f"see {quoted('*a*', 'argument')} and {escaped('**b**')}")) == "see '*a*' and **b**"
     # an empty message is legal, and nothing

@@ -147,13 +147,13 @@ def quoted(text, role=None):
     as it is on the usage line (Larry, 2026-09-12: color inside the
     quotes, the whole family).  Error messages are Markdown (Larry,
     2026-09-21); the token is a span in the role, `[--x]{.option
-    .literal}`: painted as typed, never a reference (a span in the
+    .quoted}`: painted as typed, never a reference (a span in the
     argument or option role ALONE names a parameter).
     """
     r = repr(str(text))
     inner = escaped(r[1:-1])
     if role is not None:
-        inner = f'[{inner}]{{.{role} .literal}}'
+        inner = f'[{inner}]{{.{role} .quoted}}'
     return r[0] + inner + r[0]
 
 

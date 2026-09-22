@@ -313,8 +313,8 @@ _base_theme = {
 
     # inline structure
     'code':       ('T', 'T'),
-    'literal':    ('T', 'T'),  # a token painted as typed: [--x]{.option .literal}
-                               # (see quoted); never a reference
+    'quoted':     ('T', 'T'),  # a token as typed, by quoted(): [--x]{.option .quoted};
+                               # the second class says it is paint, not a reference
     'codeblock':  ('T', '⦃code⦙T⦄'),        # inherits code
     'link':       ('URL', 'T', 'T'),        # URL is luggage (big >= 0.15)
     'marker':     ('T', 'T'),
